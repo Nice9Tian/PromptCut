@@ -1,11 +1,19 @@
 import { MessageHistory } from './history.mjs';
 import { modelToolName } from '../tools/ui-names.mjs';
+import { resolveCodeCacheRefs, CODE_CACHE_REF } from '../tools/code-cache.mjs';
+import { salvageTruncation } from './truncation.mjs';
 
 const canonical = value => JSON.stringify(value, (_key, v) => v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
 /** 各家「写到单次输出上限被截断」的停止原因：OpenAI 兼容口 `length`、Anthropic `max_tokens`、Gemini `MAX_TOKENS` */
 const TRUNCATED = new Set(['length', 'max_tokens', 'MAX_TOKENS']);
-/** 连续截断几次以后不再让它接着写，明说没做成 */
+/** 连续几次截断都没留下能接着写的内容，就不再让它接着写，明说没做成 */
 const MAX_TRUNCATIONS = 2;
+/**
+ * 一轮里最多接着写几次（每次截断都把写了一半的内容存进了代码块、有进展的那种）。〔裁：output-cache 2026-10-22〕
+ * 有进展就让它接着写，但不能无限重试烧额度（2026-10-22 用户定的方向）：6 次单次输出上限（Gemini 65536、Claude 128K）
+ * 足够写完任何一张卡的源码；再多多半是模型每次都写得太长、自己在追着截断跑。
+ */
+const MAX_SALVAGED_TRUNCATIONS = 6;
 const checkAbort = signal => { if (signal?.aborted) throw Object.assign(new Error('已停止'), { name: 'AbortError' }); };
 /** 交给用户看的进度汇报工具（各家前缀不同，只认以它结尾的名字，规则同 src/ai/progressReport.ts 的 isReportTool） */
 const isReportTool = name => typeof name === 'string' && (name === 'report_progress' || /(?:__|[.:/])report_progress$/.test(name));
@@ -59,8 +67,13 @@ export class Agent {
    * maxInputTokens:单次请求的输入 token 预算。给了就按每轮 API 报回的真实 token 数截断
    * (见 history.fitTokens),不给就还是老的按字符数截。
    */
-  constructor({ provider, system, tools, maxIterations = 24, deepAuto = false, maxInputTokens = 0, onEvent, signal, history, onModelCall = null }) {
+  constructor({ provider, system, tools, maxIterations = 24, deepAuto = false, maxInputTokens = 0, onEvent, signal, history, onModelCall = null, codeCache = null }) {
     Object.assign(this, { provider, system, tools, maxIterations, deepAuto, maxInputTokens, signal });
+    /*
+     * 代码块空间（server/tools/code-cache.mjs，A07 2026-10-22）：给了就①工具参数里整个写成 `@code_cache:名字` 的字符串在调用前换成内容；
+     * ②回复被截断时把没写完的工具参数存进代码块，让模型接着写。不给时与原来相同。
+     */
+    this.codeCache = codeCache;
     /*
      * 有没有「对用户说话」的工具(send_message 的 to: "user")。有的话执行规则里让模型用它说明在做什么;
      * 2026-10-19 起的「没交收尾汇报就按文字回复代交一份」已撤掉(2026-10-20):用户定了气泡里显示 Agent 说的话,
@@ -89,8 +102,13 @@ export class Agent {
     const speak = this.canSpeak
       ? '每组操作前调用 send_message（to 填 "user"）用一两句话告诉用户接下来要做什么，做完一组再用它说一句做好了什么；它和这一组的工具调用放在同一次回复里，不要单独占一轮；收尾仍调 final 为 true 的 report_progress'
       : '每组操作前用一句简短的话说明将做什么';
-    const system = this.system + `\n\n执行规则：${speak}；需要做多件事时，在同一次回复里一次返回多个工具调用，它们会在同一轮内依次执行。依赖上一步返回值的操作留到下一轮。后台作业由工具自动等待，请勿反复启动或紧密轮询。遇到重复错误应改变方法或说明阻碍。工具返回成功后核对一次即可，完成后向用户总结结果。`;
-    let summaryReason = '', truncations = 0;
+    const cacheRule = this.codeCache
+      ? `单次回复有输出上限：要写很长的源码或文本（几百行以上）时，先分几次写进代码块（code_cache_write 写开头、code_cache_append 接着写），最后在工具参数里整个写成 "${CODE_CACHE_REF}名字" 交给工具；回复被截断时按系统消息的提示接着写。`
+      : '';
+    const system = this.system + `\n\n执行规则：${speak}；需要做多件事时，在同一次回复里一次返回多个工具调用，它们会在同一轮内依次执行。依赖上一步返回值的操作留到下一轮。后台作业由工具自动等待，请勿反复启动或紧密轮询。遇到重复错误应改变方法或说明阻碍。工具返回成功后核对一次即可，完成后向用户总结结果。${cacheRule}`;
+    // truncations：连续几次截断没留下内容；salvaged：这一轮里有几次截断留下了内容；truncTotal：这一轮一共截断几次；cutBlocks：截断时存进的代码块
+    let summaryReason = '', truncations = 0, salvaged = 0, truncTotal = 0;
+    const cutBlocks = new Set();
     // 这一轮有没有交过收尾汇报、有没有用 send_message 对用户说过话:说过的话就是给用户的交代,最后一次空回复不算出错
     let reported = false, spoke = false;
 
@@ -105,7 +123,7 @@ export class Agent {
       const roundText = Number.isFinite(this.maxIterations) ? `第 ${round}/${this.maxIterations} 轮` : `第 ${round} 轮`;
       progress(round, summarizing ? 'summarizing' : 'requesting', summarizing ? '正在整理执行结果和未完成事项…' : `${roundText}：正在等待模型响应…`);
       this.onEvent({ type: 'diagnostic', stage: 'request', data: { round, summaryOnly: summarizing, messages: this.history.get().length, tools: summarizing ? 0 : this.tools.length } });
-      const content = [], calls = [];
+      const content = [], calls = [], partials = [];
       let text = '', current = '', lastInput = 0, stopReason = null;
       const flush = () => { if (current) { content.push({ type: 'text', text: current }); current = ''; } };
       if (this.onModelCall) {
@@ -141,6 +159,12 @@ export class Agent {
             if (calls.some(c => c.id === call.id)) throw new Error('API 返回了重复的工具调用 ID，已停止以免重复执行。');
             calls.push(call);
             content.push({ type: 'tool_use', id: call.id, name: call.name, input: call.input });
+          } else if (ev.type === 'tool_use_partial') {
+            // 写到输出上限时没写完的工具调用：不进历史、不执行，收尾后存代码块（见下面截断那一支）
+            if (!summarizing) partials.push(ev);
+          } else if (ev.type === 'notice') {
+            // provider 的提示（输出上限 400 降档、换字段）：进运行日志与诊断
+            this.onEvent({ type: 'diagnostic', stage: ev.stage || 'provider', data: { round, ...(ev.data || {}) } });
           } else if (ev.type === 'stop') {
             stopReason = ev.reason;
             this.onEvent({ type: 'diagnostic', stage: 'response', data: { round, stopReason: ev.reason, toolCalls: calls.length } });
@@ -182,26 +206,38 @@ export class Agent {
         break;
       }
       if (content.length) this.history.append({ role: 'assistant', content });
-      if (!calls.length && TRUNCATED.has(stopReason)) {
+      /** 截断时要跟在这一轮工具结果后面告诉模型的话（有写完的工具调用、又有没写完的那种） */
+      let truncationNote = '';
+      if (TRUNCATED.has(stopReason) && (partials.length || !calls.length)) {
         /*
-         * 回复写到单次输出上限被截断、一个工具都没调：不能当成「说完了」收工（2026-10-17 实跑：模型把 4096 个 token
-         * 全花在打草稿和写一个巨大的工具参数上，网关把没写完的工具调用整个丢掉，这一轮就以 0 次操作「完成」了，用户什么也没看到）。
-         * 让它接着做，并提示拆小；连续截断到第 MAX_TRUNCATIONS 次就明说没做成，结束这一轮。
+         * 回复写到单次输出上限被截断：不能当成「说完了」收工（2026-10-17 实跑：模型把 4096 个 token 全花在打草稿和写一个
+         * 巨大的工具参数上，没写完的工具调用整个丢掉，这一轮就以 0 次操作「完成」了，用户什么也没看到）。
+         * A07（2026-10-22 用户定）：没写完的工具调用里已经写出的内容存进代码块，告诉模型存在哪、写到哪了、怎么接着写。
+         * 有进展（存下了内容）就让它接着写，一轮最多 MAX_SALVAGED_TRUNCATIONS 次；连续 MAX_TRUNCATIONS 次什么也没留下，
+         * 或者到了轮次上限，就明说没做成，结束这一轮。
          */
-        truncations++;
-        if (truncations > MAX_TRUNCATIONS || round >= this.maxIterations) {
-          throw new Error(`${truncations > 1 ? `模型的回复连续 ${truncations} 次` : '模型的回复'}超过单次输出上限被截断，这一轮没能完成。可以把要求拆小一点再发，或请管理员调大单次输出上限。`);
+        truncTotal++;
+        const s = salvageTruncation(partials, this.codeCache);
+        for (const x of s.saved) cutBlocks.add(x.block);
+        if (s.progress) { salvaged++; truncations = 0; } else truncations++;
+        this.onEvent({ type: 'diagnostic', stage: 'truncated', data: { round, stopReason, partials: partials.map((p) => p.name), saved: s.saved, salvaged, stalled: truncations } });
+        if (truncations > MAX_TRUNCATIONS || salvaged > MAX_SALVAGED_TRUNCATIONS || round >= this.maxIterations) {
+          const kept = cutBlocks.size ? `已经写出的部分存在代码块 ${[...cutBlocks].join('、')} 里，下一条消息可以让它接着写。` : '';
+          throw new Error(`${truncTotal > 1 ? `模型的回复连续 ${truncTotal} 次` : '模型的回复'}超过单次输出上限被截断，这一轮没能完成。${kept}可以把要求拆小一点再发，或请管理员调大单次输出上限。`);
         }
-        this.onEvent({ type: 'status', text: '模型这次回复超过单次输出上限被截断了，没有执行任何操作；已让它接着做。' });
-        this.history.appendUserText('（系统）你上一条回复超过了单次输出上限，被截断了，其中没写完的工具调用没有执行。不要重复已经写过的内容，直接接着做：要写大段代码或长文本时，拆成几次较小的工具调用。');
-        continue;
+        this.onEvent({ type: 'status', text: s.status });
+        if (!calls.length) {
+          this.history.appendUserText(s.note);
+          continue;
+        }
+        truncationNote = s.note;
       }
       if (!calls.length) {
         // 已经交过收尾汇报、或用 send_message 对用户说过话,最后这次没说话也算说完了
         if (!text.trim() && !reported && !spoke) throw new Error('API 没有返回文字或工具调用，请检查模型和接口协议设置。');
         break;
       }
-      truncations = 0;
+      if (!truncationNote) { truncations = 0; truncTotal = 0; }
       progress(round, 'executing', `本轮收到 ${calls.length} 个工具调用，正在执行…`);
       const results = [];
       // 工具返回的图片不留在 tool_result 里，改挂到同一条 user 消息的末尾。
@@ -225,7 +261,9 @@ export class Agent {
           if (!tool) throw new Error(`未知工具 ${call.name}，请使用已提供的工具名称。`);
           if (!call.input || typeof call.input !== 'object' || Array.isArray(call.input)) throw new Error('工具参数必须是 JSON 对象。');
           for (const key of tool.inputSchema?.required || []) if (call.input[key] === undefined) throw new Error(`缺少必填参数 ${key}。`);
-          result = await tool.execute(call.input, { signal: this.signal, callId: call.id, round });
+          // 参数里整个写成 `@code_cache:名字` 的字符串换成代码块的内容再交给工具;历史和事件里留的还是引用,不撑大
+          const input = this.codeCache ? resolveCodeCacheRefs(call.input, this.codeCache) : call.input;
+          result = await tool.execute(input, { signal: this.signal, callId: call.id, round });
           if (result?.ok === false || result?.isError === true) ok = false;
           checkAbort(this.signal);
         } catch (err) {
@@ -257,11 +295,15 @@ export class Agent {
       // 图片跟工具结果放在同一条 user 消息里、排在所有 tool_result 之后。
       // 不另起一条的原因：那会造成两条连着的 user 消息，而三家 API 对连续同角色
       // 消息的容忍度不一样。挂在同一条上是三家都明确支持的形状。
-      this.history.append({ role: 'user', content: images.length ? [
+      this.history.append({ role: 'user', content: [
         ...results,
-        ...images.map(im => ({ type: 'image', mime: im.mime || 'image/png', data: im.base64 })),
-        { type: 'text', text: `以上是 ${images.map(i => i.name).join('、')} 截到的画面。照着画面判断，不要凭源码想象效果。` },
-      ] : results });
+        ...(images.length ? [
+          ...images.map(im => ({ type: 'image', mime: im.mime || 'image/png', data: im.base64 })),
+          { type: 'text', text: `以上是 ${images.map(i => i.name).join('、')} 截到的画面。照着画面判断，不要凭源码想象效果。` },
+        ] : []),
+        // 这一次回复里还有没写完的工具调用(截断):怎么接着写的那段话跟在工具结果后面,同一条消息里
+        ...(truncationNote ? [{ type: 'text', text: truncationNote }] : []),
+      ] });
       const fingerprint = canonical(calls.map((c, index) => ({ name: c.name, input: c.input, result: results[index].content })));
       recent.push(fingerprint);
       if (recent.length > 6) recent.shift();

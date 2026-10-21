@@ -11,6 +11,8 @@
  * - { type: 'usage', input: number, output: number, cacheRead?: number }
  *   input 是这一轮完整的输入长度(含命中缓存的部分);cacheRead 是其中命中缓存的量,报得出来的家才有
  * - { type: 'stop', reason: string }
+ * - { type: 'tool_use_partial', id, name, args: string }  写到输出上限时没写完的工具调用,args 是收到的参数原文(A07)
+ * - { type: 'notice', stage: string, data: object }       给运行日志的提示(输出上限 400 降档、换字段)
  */
 
 /**

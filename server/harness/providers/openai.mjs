@@ -3,6 +3,8 @@
 import { readSse, assertOk } from './base.mjs';
 import { toolToVendor } from '../schema.mjs';
 import { createThinkSplitter } from '../think-tags.mjs';
+import { resolveMaxOutput, usesMaxCompletionTokens, lowerOutputAfter400, swapOutputParamAfter400 } from '../model-limits.mjs';
+import { noteOutputFallback, asRead } from './output-fallback.mjs';
 
 /** 这条 400 是不是「工具 + reasoning_effort 不兼容」那一种 */
 function isEffortWithToolsRejection(text) {
@@ -108,11 +110,17 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
         }
       }
 
+      /*
+       * 单次输出上限按模型取(model-limits.mjs,A07 2026-10-22)。o 系、GPT-5 及以后的推理模型发 `max_completion_tokens`
+       * (openlux 文档:推理模型主要认它,没设时才可能沿用 `max_tokens`;思考也算进输出),其余发 `max_tokens`;两个不同时带。
+       */
+      let outputParam = usesMaxCompletionTokens(cfg.model) ? 'max_completion_tokens' : 'max_tokens';
+      let maxOutput = resolveMaxOutput(cfg);
       const body = {
         model: cfg.model,
         messages: openaiMessages,
         stream: true,
-        max_tokens: cfg.maxTokens || 4096,
+        [outputParam]: maxOutput,
         stream_options: { include_usage: true }
       };
 
@@ -151,9 +159,8 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
         body: JSON.stringify(b),
         signal
       });
-      /** 把已经读走正文的错误响应包回一个壳,好让 assertOk 照常报出那句话 */
-      const asRead = (r, text) => ({ ok: false, status: r.status, headers: r.headers, text: async () => text });
-
+      /** 最后一次发出去的请求体(思考档被去掉、输出字段换过之后,下一次重发以它为准) */
+      let sentBody = body;
       let response = await post(body);
 
       if (response.status === 400 && cfg.effort && openaiTools.length > 0) {
@@ -191,8 +198,36 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
           if (response.status === 400 && isEffortWithToolsRejection(text)) {
             const retryBody = { ...body };
             delete retryBody.reasoning_effort;
+            sentBody = retryBody;
             response = await post(retryBody);
           }
+        }
+      }
+
+      /*
+       * 输出上限引起的 400(A07):字段名不对就换另一个字段重发一次;数太大就降一档重发一次。各至多一次,记日志。
+       * 别的 400 原样交给 assertOk 报。
+       */
+      if (response.status === 400) {
+        let text = '';
+        try { text = await response.text(); } catch { /* 读不到就当不是 */ }
+        response = asRead(response, text);
+        const swapTo = swapOutputParamAfter400(text, outputParam);
+        if (swapTo) {
+          const next = { ...sentBody };
+          delete next[outputParam];
+          next[swapTo] = maxOutput;
+          yield noteOutputFallback({ vendor: 'openai', model: cfg.model, action: 'swap-param', from: outputParam, to: swapTo });
+          outputParam = swapTo; sentBody = next;
+          response = await post(next);
+          if (response.status === 400) { try { text = await response.text(); } catch { text = ''; } response = asRead(response, text); }
+        }
+        const lower = response.status === 400 ? lowerOutputAfter400(text, maxOutput) : null;
+        if (lower) {
+          yield noteOutputFallback({ vendor: 'openai', model: cfg.model, action: 'lower', from: maxOutput, to: lower });
+          maxOutput = lower;
+          sentBody = { ...sentBody, [outputParam]: lower };
+          response = await post(sentBody);
         }
       }
 
@@ -289,6 +324,15 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
                try {
                  input = JSON.parse(pt.args || '{}');
                } catch (error) {
+                 /*
+                  * 写到输出上限(`length`)时没写完的那一个:不执行,把已经收到的参数原文交给 agent.mjs,
+                  * 由它从半截 JSON 里取出写了一半的字段存进代码块,让模型接着写(A07,2026-10-22 用户定)。
+                  * 不是截断引起的坏 JSON 照旧按参数错误报回模型。
+                  */
+                 if (choice.finish_reason === 'length') {
+                   yield { type: 'tool_use_partial', id: pt.id, name: pt.name, args: pt.args || '' };
+                   continue;
+                 }
                  yield { type: 'tool_use', id: pt.id, name: pt.name, input: {}, inputError: `工具参数 JSON 不完整：${error.message}。请缩小批量或提高输出长度后重试。` };
                  continue;
                }
@@ -300,9 +344,8 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
       }
 
       if (!stopReason) throw new Error('API 响应流提前结束或未返回 SSE 数据，请检查接口协议。');
-      // 写到长度上限、工具参数没写完：没写完的调用不交出去（参数不完整，执行了也是错的），照常报 `length` 收尾，
-      // 由 `agent.mjs` 让模型接着做、连续截断再明说没做成。原来在这里直接抛错，这一轮的用量也就记不上了。
-      if (stopReason === 'length') partialToolCalls = {};
+      // 写到长度上限时没写完的工具调用已在上面 finish_reason 那一支交成 tool_use_partial;照常报 `length` 收尾,
+      // 由 `agent.mjs` 存代码块、让模型接着写,连续截断超限再明说没做成。
       yield { type: 'usage', input: promptTokens, output: completionTokens, cacheRead };
       // 收尾:扣住的尾巴要放出来(可能是半个标签,也可能就是正常正文)
       for (const ev of think.flush()) {

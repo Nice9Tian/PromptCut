@@ -5,12 +5,13 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { injectCardParams, injectPartParams } from '../../card-params-schema.mjs';
 import { isUserMessageCall } from '../agent.mjs';
 import { userMessageTool, answerUserMessage } from './userMessage.mjs';
+import { codeCacheTools } from '../../tools/code-cache.mjs';
 
 /**
  * `only`:给了就只把名单里的工具交给模型(托管档的开放清单);`localTools: false` 不带读写本地文件的 text_editor。
  * 两个都不给时与原来相同。
  */
-export async function buildTools({ callTool, workspaceDir, onEvent = () => {}, pollIntervalMs = 3000, jobTimeoutMs = 600000, only = null, localTools = true }) {
+export async function buildTools({ callTool, workspaceDir, onEvent = () => {}, pollIntervalMs = 3000, jobTimeoutMs = 600000, only = null, localTools = true, codeCache = null }) {
   async function waitForJob(name, input, initial, context) {
     const workflow = name === 'auto_workflow' && initial?.running === true || name === 'auto_workflow_status' && initial?.done === false;
     const background = ['stt_install', 'transcribe_media'].includes(name) && initial?.jobId;
@@ -52,6 +53,11 @@ export async function buildTools({ callTool, workspaceDir, onEvent = () => {}, p
   } else result.push(userMessageTool());
   result.push(thinkTool);
   if (localTools) result.push(createTextEditorTool(workspaceDir));
+  /*
+   * 代码块空间(A07,2026-10-22):本机与云端都给,不受托管档开放清单(only)限制——它只读写这个项目的代码块目录,
+   * 不碰项目、素材和别的文件。目录由宿主定(runners/api.mjs 的 codeCacheDir)。
+   */
+  if (codeCache) result.push(...codeCacheTools(codeCache));
 
   // 把 add_clip / update_clip 的 params 换成按 cardId 分支的真实 schema。
   // 不做这一步的话它是个自由对象,模型看到的是「没有任何字段」,一个卡片参数都传不出去

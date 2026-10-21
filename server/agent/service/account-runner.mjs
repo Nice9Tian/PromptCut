@@ -353,6 +353,8 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
           pageState: { selection: record.selectionSnapshot?.selection?.clipIds ?? [] },
           ...options,
           apiConfig: cfg, model, historyFile: path.join(dir, 'history.json'),
+          // 代码块空间按项目放(A07,2026-10-22 用户:「给项目一个代码块空间」):和这个项目的对话目录同级,各代任务进程共用
+          codeCacheDir: path.join(dataDir, 'tenants', grant.projectId, 'code-cache'),
           sessionKey: `account-v2-${grant.conversationId}`, onModelCall: async (phase, info) => {
             if (phase === 'before') {
               await onModelCall({ phase, info });

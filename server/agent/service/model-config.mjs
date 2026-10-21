@@ -1,7 +1,7 @@
 /**
  * 托管档的模型配置(契约 `docs/plan/cloud-agent-contract.md` 第 8 节)。
  *
- *   <数据目录>/config/ai.json           厂商、接口地址、模型清单(`a|b|c`)、maxTokens,0600
+ *   <数据目录>/config/ai.json           厂商、接口地址、模型清单(`a|b|c`)、maxTokens(单次输出上限的上限;0 或不写 = 按模型),0600
  *   <数据目录>/config/keys/custom.key   模型 Key 的密文(`server/runners/config-crypt.mjs` 的 PCENC1 封装),0600
  *
  * 路径只由数据目录定,不读 `PROMPTCUT_AI_CONFIG`、不读这台机器上用户自己的 `ai.json`——同一台机器上装着桌面版时两边互不相干。
@@ -53,13 +53,14 @@ export function readModelConfig(dataDir) {
     vendor: api.vendor,
     baseUrl: typeof api.baseUrl === 'string' ? api.baseUrl : '',
     model: typeof api.model === 'string' ? api.model : '',
-    maxTokens: Number.isSafeInteger(api.maxTokens) && api.maxTokens > 0 ? api.maxTokens : 4096,
+    // 0 = 没配,单次输出上限按模型定(harness/model-limits.mjs,A07 2026-10-22);配了就是上限的上限
+    maxTokens: Number.isSafeInteger(api.maxTokens) && api.maxTokens > 0 ? api.maxTokens : 0,
     apiKey,
   };
 }
 
 /** 写配置;`key` 给了(非空字符串)就封装后写进 Key 文件,`null` 表示不动 Key 文件 */
-export function writeModelConfig(dataDir, { vendor, baseUrl = '', model = '', maxTokens = 4096 }, key = null) {
+export function writeModelConfig(dataDir, { vendor, baseUrl = '', model = '', maxTokens = 0 }, key = null) {
   if (!MODEL_VENDORS.includes(vendor)) throw new Error(`厂商只能是 ${MODEL_VENDORS.join(' / ')}`);
   const { file, keyFile } = modelConfigPaths(dataDir);
   if (typeof key === 'string' && key) writePrivate(keyFile, `${sealKey(key, 'custom')}\n`);

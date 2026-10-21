@@ -2,6 +2,8 @@
 // 本家 API 要点: GenerateContent 接口，role 为 user/model，工具用 functionDeclarations/functionCall/functionResponse，SSE 解析 candidates。
 import { readSse, assertOk } from './base.mjs';
 import { toolToVendor } from '../schema.mjs';
+import { resolveMaxOutput, lowerOutputAfter400 } from '../model-limits.mjs';
+import { noteOutputFallback, asRead } from './output-fallback.mjs';
 
 export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
   let toolUseCounter = 0;
@@ -77,10 +79,12 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
         }
       }
 
+      // 单次输出上限按模型取(model-limits.mjs,A07 2026-10-22):gemini-2.5 及以后 65536;思考也算进输出
+      let maxOutput = resolveMaxOutput(cfg);
       const body = {
         contents: geminiMessages,
         generationConfig: {
-          maxOutputTokens: cfg.maxTokens || 4096
+          maxOutputTokens: maxOutput
         }
       };
 
@@ -117,10 +121,25 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
        * 所以碰到 400 就去掉它重发一次:少一个思考档,总好过整条对话红在那儿。
        * (和 openai.mjs 里那段「思考档 + 工具被拒就去掉重发」是同一个思路。)
        */
-      if (response.status === 400 && body.generationConfig.thinkingConfig) {
-        const retry = { ...body, generationConfig: { ...body.generationConfig } };
-        delete retry.generationConfig.thinkingConfig;
-        response = await post(retry);
+      let sent = body;
+      if (response.status === 400) {
+        let text = '';
+        try { text = await response.text(); } catch { /* 读不到就当不是 */ }
+        response = asRead(response, text);
+        // 先看是不是输出上限太大(A07):是就降一档重发一次、记日志;不是再按原来的做法去掉思考档重发
+        const lower = lowerOutputAfter400(text, maxOutput);
+        if (lower) {
+          yield noteOutputFallback({ vendor: 'gemini', model: cfg.model, action: 'lower', from: maxOutput, to: lower });
+          maxOutput = lower;
+          sent = { ...body, generationConfig: { ...body.generationConfig, maxOutputTokens: lower } };
+          response = await post(sent);
+          if (response.status === 400) { try { text = await response.text(); } catch { text = ''; } response = asRead(response, text); }
+        }
+        if (response.status === 400 && sent.generationConfig.thinkingConfig) {
+          const retry = { ...sent, generationConfig: { ...sent.generationConfig } };
+          delete retry.generationConfig.thinkingConfig;
+          response = await post(retry);
+        }
       }
 
       await assertOk(response, 'gemini');

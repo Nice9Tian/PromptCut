@@ -2,6 +2,8 @@
 // 本家 API 要点: Messages API, role 为 user/assistant, content 是 block 数组 (text/tool_use/tool_result).
 import { readSse, assertOk } from './base.mjs';
 import { toolToVendor } from '../schema.mjs';
+import { resolveMaxOutput, lowerOutputAfter400 } from '../model-limits.mjs';
+import { noteOutputFallback, asRead } from './output-fallback.mjs';
 
 export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
   return {
@@ -38,9 +40,11 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
         return newMsg;
       });
 
+      // 单次输出上限按模型取(model-limits.mjs,A07 2026-10-22):当前各型号 128K;本来就是流式,大数不会撞 HTTP 超时
+      let maxOutput = resolveMaxOutput(cfg);
       const body = {
         model: cfg.model,
-        max_tokens: cfg.maxTokens || 4096,
+        max_tokens: maxOutput,
         messages: anthropicMessages,
         stream: true
       };
@@ -53,12 +57,21 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
         body.tools = anthropicTools;
       }
 
-      const response = await fetchImpl(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-        signal
-      });
+      const post = (b) => fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(b), signal });
+      let response = await post(body);
+
+      // 数太大被拒(「max_tokens: 200000 > 128000 …」):降一档重发一次,记日志(A07)
+      if (response.status === 400) {
+        let text = '';
+        try { text = await response.text(); } catch { /* 读不到就当不是 */ }
+        response = asRead(response, text);
+        const lower = lowerOutputAfter400(text, maxOutput);
+        if (lower) {
+          yield noteOutputFallback({ vendor: 'anthropic', model: cfg.model, action: 'lower', from: maxOutput, to: lower });
+          maxOutput = lower;
+          response = await post({ ...body, max_tokens: lower });
+        }
+      }
 
       await assertOk(response, 'anthropic');
 
@@ -67,6 +80,8 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
       let stopReason = null;
       let receivedStop = false;
       let partialTools = {};
+      /** 参数 JSON 解不开的工具调用,等收尾时按停止原因决定怎么交 */
+      const broken = [];
 
       for await (const { event, data } of readSse(response, { signal })) {
         if (data === '[DONE]') continue;
@@ -109,7 +124,11 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
             try {
               input = JSON.parse(tool.partialJson || '{}');
             } catch (error) {
-              yield { type: 'tool_use', id: tool.id, name: tool.name, input: {}, inputError: `工具参数 JSON 不完整：${error.message}` };
+              /*
+               * 坏 JSON 先扣住:是不是写到上限被截断要等后面的 message_delta 才知道。是截断就交成 tool_use_partial
+               * (agent.mjs 存代码块、让模型接着写,A07),不是就照旧按参数错误报回模型。
+               */
+              broken.push({ ...tool, error: error.message });
               delete partialTools[parsed.index];
               continue;
             }
@@ -125,6 +144,13 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
           }
         } else if (event === 'message_stop' || parsed.type === 'message_stop') {
           receivedStop = true;
+          const truncated = stopReason === 'max_tokens';
+          // 连 content_block_stop 都没等到的那一个(截断时可能这样)也算没写完
+          for (const tool of [...broken, ...Object.values(partialTools)]) {
+            if (truncated) yield { type: 'tool_use_partial', id: tool.id, name: tool.name, args: tool.partialJson || '' };
+            else yield { type: 'tool_use', id: tool.id, name: tool.name, input: {}, inputError: `工具参数 JSON 不完整：${tool.error || '没有收到结尾'}` };
+          }
+          broken.length = 0; partialTools = {};
           yield { type: 'usage', input: inputTokens, output: outputTokens };
           yield { type: 'stop', reason: stopReason || 'end_turn' };
         }
