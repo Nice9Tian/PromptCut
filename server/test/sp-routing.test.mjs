@@ -620,7 +620,7 @@ function sourceFiles() {
     && !/(^|\/)node_modules\//.test(f));
 }
 
-test('SPR-6a 守门：源码里托管端的 IP（现用的与换下来的）只出现在 server/auth/hosted-default.mjs（测试、文档、探针除外）', () => {
+test('SPR-6a 守门：源码里托管端换下来的两个 IP 只出现在 server/auth/hosted-default.mjs（测试、文档、探针除外）；缺省地址是域名', () => {
   const retired = ['8', '219', '80', '16'].join('.');
   {
     const hitsRetired = sourceFiles().filter((f) => { try { return fs.readFileSync(path.join(ROOT, f), 'utf8').includes(retired); } catch { return false; } });
@@ -636,7 +636,7 @@ test('SPR-6a 守门：源码里托管端的 IP（现用的与换下来的）只�
   assert.deepEqual(hits, ['server/auth/hosted-default.mjs']);
   const text = fs.readFileSync(path.join(ROOT, 'server/auth/hosted-default.mjs'), 'utf8');
   assert.equal(text.split(ip).length - 1, 1, '只定义一次');
-  assert.equal(DEFAULT_HOSTED_URL, `http://${ip}:8787`);
+  assert.equal(DEFAULT_HOSTED_URL, 'https://hosted.visuhive.com/hosted');
 });
 
 test('SPR-6b 覆盖顺序：界面值 → PROMPTCUT_HOSTED_URL → 缺省；空值往下找；写错的地址抛错不回落', () => {

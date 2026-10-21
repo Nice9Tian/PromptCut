@@ -1,8 +1,8 @@
 /**
  * 缺省托管地址（契约 `docs/plan/shared-project-contract.md` 第 3 节、验收 SP6）。
  *
- * `DEFAULT_HOSTED_URL` 是源码里**唯一**写出阿里云托管端 IP 的地方（守门测试 `sp-routing.test.mjs` 的 SPR-6 扫全仓源码，
- * 测试、文档、探针除外）。别处要托管地址，一律经 `resolveHostedUrl` 取。
+ * 托管端的地址（现在的域名，以及换下来的 IP 与 sslip.io 名字）只写在本文件（守门测试 `sp-routing.test.mjs` 的 SPR-6、
+ * `sp-route.test.mjs` 的 SPC6-3 扫全仓源码，测试、文档、探针除外）。别处要托管地址，一律经 `resolveHostedUrl` 取。
  *
  * 覆盖顺序（先到先得）：
  * 1. 界面上改过的值（C6.5 接上，调用方以 `ui` 传进来）；
@@ -15,31 +15,51 @@
  * 浏览器与 Node 通用：不引任何模块；浏览器里没有 `process`，第 2 级自然跳过。
  */
 
-const HOSTED_HOST = '149.88.94.84';
+/** 托管服务的自有域名（2026-10-22 用户定）：以后换机器只改它的 DNS 记录，不用再发客户端 */
+const HOSTED_HOST = 'hosted.visuhive.com';
 
-export const DEFAULT_HOSTED_URL = `http://${HOSTED_HOST}:8787`;
+/** 经节点上 nginx 的 `/hosted` 入口到文档服务；素材服务在同一个源的 `/media` 下 */
+export const DEFAULT_HOSTED_URL = `https://${HOSTED_HOST}/hosted`;
 
 /**
- * 换下来的托管端（2026-10-06 用户定：阿里云到期不续，托管端换到新云节点，数据已整体拷过去）。
- * 旧项目文件、本机记的恢复凭证与托管地址里写的是旧主机名；读进来时一律换成新主机名（协议、端口、路径不变），
- * 用户不用重新认证，存回去时写的就是新地址。只换主机名这一段：IP 形式与 sslip.io 形式（含 s1.、s2. 舞台子域）各一条。
+ * 换下来的托管端地址。旧项目文件、本机记的恢复凭证与托管地址里写的是它们；读进来时一律换成现在的，
+ * 用户不用重新认证，存回去时写的就是新地址。
+ * - 2026-10-06：阿里云到期不续，托管端换到新云节点（数据整体拷过去）；
+ * - 2026-10-22：托管地址从新云节点的 IP 换成自有域名（用户定）。节点上 8787（文档服务）、8788（素材服务）已不对外，
+ *   只经 nginx 走 https，所以「IP:8787」「IP:8788」换成新域名下的 `/hosted`、`/media`，协议跟着换成 https / wss；
+ *   别的写法（sslip.io 名字、不带这两个端口的 IP）只换主机名，协议、端口、路径不变；
+ *   sslip.io 的 s1.、s2. 舞台子域换成 `s1.visuhive.com`、`s2.visuhive.com`。
  */
-export const RETIRED_HOSTED_HOSTS = Object.freeze([
-  ['8.219.80.16', HOSTED_HOST],
-  ['8-219-80-16.sslip.io', '149-88-94-84.sslip.io'],
-]);
+const RETIRED_IPS = ['149.88.94.84', '8.219.80.16'];
+const sslipName = (ip) => `${ip.split('.').join('-')}.sslip.io`;
+const RETIRED_NAMES = RETIRED_IPS.map(sslipName);
+const STAGE_HOSTS = Object.freeze({ s1: 's1.visuhive.com', s2: 's2.visuhive.com' });
+const PORT_PATHS = Object.freeze({ 8787: '/hosted', 8788: '/media' });
 
-const RETIRED_RE = /(^|[/@.])(8\.219\.80\.16|8-219-80-16\.sslip\.io)(?=[:/"\\]|$)/g;
-const RETIRED_MAP = new Map(RETIRED_HOSTED_HOSTS);
+/** 主机名一级的对照；直连端口那两种另按 `PORT_PATHS` 换（见上） */
+export const RETIRED_HOSTED_HOSTS = Object.freeze([...RETIRED_IPS, ...RETIRED_NAMES].map((host) => [host, HOSTED_HOST]));
 
-/** 一个字符串里出现的旧托管主机名换成新的；不含旧主机名的原样返回 */
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const IPS = RETIRED_IPS.map(escapeRe).join('|');
+const NAMES = RETIRED_NAMES.map(escapeRe).join('|');
+// 主机名后面只能跟：端口、路径、查询、片段、引号、反斜杠（JSON 里再转义一层）、空白、分隔符，或串尾
+const END = String.raw`(?=[:/?#"'\\\s,;)\]}<>]|$)`;
+const PORT_RE = new RegExp(String.raw`\b(https?|wss?)://(${IPS}):(8787|8788)(?!\d)`, 'g');
+const STAGE_RE = new RegExp(String.raw`(^|[/@.])(s[12])\.(${NAMES})${END}`, 'g');
+const HOST_RE = new RegExp(String.raw`(^|[/@.])(${IPS}|${NAMES})${END}`, 'g');
+const MARKERS = [...RETIRED_IPS, ...RETIRED_NAMES];
+
+/** 一个字符串里出现的旧托管地址换成现在的；不含旧地址的原样返回 */
 export function migrateHostedText(text) {
-  if (typeof text !== 'string' || !(text.includes('8.219.80.16') || text.includes('8-219-80-16.sslip.io'))) return text;
-  return text.replace(RETIRED_RE, (_, pre, host) => pre + RETIRED_MAP.get(host));
+  if (typeof text !== 'string' || !MARKERS.some((m) => text.includes(m))) return text;
+  return text
+    .replace(PORT_RE, (_, scheme, _ip, port) => `${scheme.startsWith('ws') ? 'wss' : 'https'}://${HOSTED_HOST}${PORT_PATHS[port]}`)
+    .replace(STAGE_RE, (_, pre, stage) => pre + STAGE_HOSTS[stage])
+    .replace(HOST_RE, (_, pre) => pre + HOSTED_HOST);
 }
 
 /**
- * 深拷一份，把其中所有字符串（含对象的键：恢复记录的键是 JSON 串，里面带服务地址）里的旧托管主机名换成新的。
+ * 深拷一份，把其中所有字符串（含对象的键：恢复记录的键是 JSON 串，里面带服务地址）里的旧托管地址换成现在的。
  * 没有要换的就返回原值本身。
  */
 export function migrateHostedDeep(value) {

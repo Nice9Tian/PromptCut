@@ -41,9 +41,9 @@ export const TRUSTED_GONE_AUTHORITIES = deepFreeze([
   {
     authorityId: 'doc-node-20261009-037d8e0d-2c1e-495a-b19d-501ffbf49909',
     origin: 'https://visuhive.com',
+    // 换下来的 IP 与 sslip.io 写法读文件时已经换成 DEFAULT_HOSTED_URL（hosted-default.mjs），不再单列
     services: [
       DEFAULT_HOSTED_URL,
-      'https://149-88-94-84.sslip.io/hosted',
       'https://visuhive.com/hosted',
     ],
     keys: {
