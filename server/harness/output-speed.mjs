@@ -153,16 +153,22 @@ export function outputSpeedBookFor(file, opts = {}) {
 export function _resetOutputSpeedBooks() { books.clear(); }
 
 /**
- * 包一层 provider:每次 stream 前报一条 notice(这次按什么速度、上限多少),结束后按用量记样本。
+ * 包一层 provider:上限变了就在这次 stream 前报一条 notice(按什么速度、上限多少),结束后按用量记样本。
  * 用时从 provider 报的 `response_open.sentAt`(最后一次真正发出请求的时刻,重试与 400 重发之后)算起;没报就从开始调 stream 算。
  */
 export function withOutputSpeed(provider, book, model) {
+  /** 上次报过的上限:没变就不再报(账号模式下每条事件都要写进文档服务,别每次请求都多一条) */
+  let lastCap = null;
   return {
     ...provider,
     async *stream(...args) {
       let startedAt = Date.now();
       const sp = book.speedOf(model);
-      yield { type: 'notice', stage: 'output-speed', data: { model, tps: sp.tps, samples: sp.samples, cap: book.capFor(model), budgetSeconds: OUTPUT_TIME_BUDGET_S } };
+      const cap = book.capFor(model);
+      if (cap !== lastCap) {
+        lastCap = cap;
+        yield { type: 'notice', stage: 'output-speed', data: { model, tps: sp.tps, samples: sp.samples, cap, budgetSeconds: OUTPUT_TIME_BUDGET_S } };
+      }
       let output = 0, chars = 0, stop = null;
       for await (const ev of provider.stream(...args)) {
         if (ev?.type === 'response_open') { if (Number.isFinite(ev.sentAt)) startedAt = ev.sentAt; continue; }
