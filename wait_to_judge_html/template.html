@@ -1,0 +1,458 @@
+<title>__PAGE_TITLE__</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<!-- 〔裁〕总审页面的样式和交互。页面标题和全部条目数据由 build.py 填进来，内容改 source/ 下的 Markdown，不改这里。 -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<style>
+/* Layout: a docket — a filterable ledger of rulings grouped by area; each opens into its own case page with the verdict buttons on top. */
+:root {
+  --bg: #f3f6f7;
+  --surface: #ffffff;
+  --ink: #13212a;
+  --muted: #566872;
+  --faint: #8a9aa3;
+  --line: #d6e0e4;
+  --accent: #0b7f8c;
+  --accent-ink: #ffffff;
+  --accent-soft: #dff1f3;
+  --pending: #9a5a00;
+  --pending-soft: #fdefd3;
+  --ok: #2a7347;
+  --ok-soft: #e1f2e7;
+  --void: #6c777d;
+  --void-soft: #e9eef0;
+  --lvl2: #8f2f61;
+  --lvl2-soft: #f6e3ee;
+  --mark: #e5484d;
+  --code-bg: #eef3f5;
+  --shadow: 0 1px 2px rgba(19, 33, 42, .06), 0 8px 24px rgba(19, 33, 42, .06);
+  --font-display: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "SimSun", serif;
+  --font-body: "Noto Sans SC", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --step--1: .8125rem;
+  --step-0: .9375rem;
+  --step-1: 1.0625rem;
+  --step-2: 1.375rem;
+  --step-3: 1.875rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1418; --surface: #151d22; --ink: #e4edf1; --muted: #98a9b2; --faint: #6d7e87; --line: #25323a;
+    --accent: #3cc9d6; --accent-ink: #062126; --accent-soft: #0f3338;
+    --pending: #f2b453; --pending-soft: #3a2a0d; --ok: #74d39a; --ok-soft: #11301e; --void: #8d989e; --void-soft: #1d262b;
+    --lvl2: #f08cc0; --lvl2-soft: #3a1729; --mark: #ff6b6f; --code-bg: #1c262c;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .25);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1418; --surface: #151d22; --ink: #e4edf1; --muted: #98a9b2; --faint: #6d7e87; --line: #25323a;
+  --accent: #3cc9d6; --accent-ink: #062126; --accent-soft: #0f3338;
+  --pending: #f2b453; --pending-soft: #3a2a0d; --ok: #74d39a; --ok-soft: #11301e; --void: #8d989e; --void-soft: #1d262b;
+  --lvl2: #f08cc0; --lvl2-soft: #3a1729; --mark: #ff6b6f; --code-bg: #1c262c;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .25);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body.in-case .masthead, body.in-case .filters, body.in-case footer.scope { display: none; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: var(--step-0);
+  line-height: 1.7;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 96px;
+}
+.wrap { max-width: 1040px; margin: 0 auto; display: flex; flex-direction: column; gap: 28px; }
+h1, h2, h3 { text-wrap: balance; margin: 0; }
+code, .mono { font-family: var(--font-mono); font-size: .86em; }
+code { background: var(--code-bg); padding: .08em .35em; border-radius: 4px; overflow-wrap: anywhere; }
+a { color: var(--accent); }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---------- masthead ---------- */
+.masthead { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 340px); gap: 24px; align-items: start; }
+.eyebrow { font-size: var(--step--1); letter-spacing: .08em; color: var(--muted); margin: 0 0 6px; }
+.masthead h1 { font-family: var(--font-display); font-size: var(--step-3); line-height: 1.25; font-weight: 700; }
+.masthead h1 .bracket { color: var(--accent); }
+.lede { color: var(--muted); margin: 10px 0 0; max-width: 62ch; }
+.lede p { margin: 0 0 .5em; }
+.lede p:last-child { margin-bottom: 0; }
+.tally { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 14px 0 0; padding: 0; list-style: none; font-variant-numeric: tabular-nums; }
+.tally li { display: flex; align-items: baseline; gap: 6px; }
+.tally b { font-size: var(--step-2); font-family: var(--font-mono); font-weight: 600; }
+.tally .p b { color: var(--pending); }
+.tally .k b { color: var(--lvl2); }
+.howto { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; font-size: var(--step--1); box-shadow: var(--shadow); }
+.howto h2 { font-size: var(--step-0); margin-bottom: 6px; }
+.howto p { margin: 0 0 8px; }
+.howto pre { margin: 0; font-family: var(--font-mono); font-size: .8rem; background: var(--code-bg); padding: 8px 10px; border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ---------- filters ---------- */
+.filters { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; padding: 12px 0; border-block: 1px solid var(--line);
+  position: sticky; top: env(safe-area-inset-top, 0px); background: var(--bg); z-index: 5; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+.fgroup { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.fgroup > span { font-size: var(--step--1); color: var(--muted); margin-right: 2px; }
+.chip { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 2px 11px; font-size: var(--step--1); cursor: pointer; line-height: 1.6; }
+.chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.search { flex: 1 1 200px; min-width: 0; display: flex; }
+.search input { width: 100%; min-width: 0; border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 8px; padding: 5px 10px; font: inherit; font-size: var(--step--1); }
+
+/* ---------- ledger ---------- */
+.area { display: flex; flex-direction: column; gap: 10px; }
+.area-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.area-head h2 { font-family: var(--font-display); font-size: var(--step-2); font-weight: 600; }
+.area-head .count { color: var(--muted); font-size: var(--step--1); font-variant-numeric: tabular-nums; }
+.area-head .scope { color: var(--faint); font-size: var(--step--1); flex-basis: 100%; }
+.ledger { list-style: none; margin: 0; padding: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.ledger li + li { border-top: 1px solid var(--line); }
+.row { display: grid; grid-template-columns: 4.2rem minmax(0, 1fr) auto; gap: 4px 14px; align-items: center; width: 100%; text-align: left;
+  background: none; border: 0; padding: 11px 14px; cursor: pointer; }
+.row:hover { background: var(--accent-soft); }
+.row .id { font-family: var(--font-mono); font-weight: 600; color: var(--accent); font-size: var(--step-0); }
+.row .t { min-width: 0; }
+.row .t strong { font-weight: 500; display: block; }
+.row .t small { color: var(--muted); display: block; font-size: var(--step--1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .tags { display: flex; gap: 6px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+.row .mine { font-size: var(--step--1); font-weight: 600; color: var(--accent); }
+.empty { color: var(--muted); padding: 24px; text-align: center; background: var(--surface); border: 1px dashed var(--line); border-radius: 10px; }
+
+.pill { font-size: .75rem; border-radius: 4px; padding: 0 6px; line-height: 1.7; white-space: nowrap; border: 1px solid transparent; }
+.pill.lvl2 { background: var(--lvl2-soft); color: var(--lvl2); }
+.pill.lvl3 { background: var(--void-soft); color: var(--muted); }
+.pill.pending { background: var(--pending-soft); color: var(--pending); }
+.pill.ok { background: var(--ok-soft); color: var(--ok); }
+.pill.void { background: var(--void-soft); color: var(--void); text-decoration: line-through; }
+.pill.shot { border-color: var(--mark); color: var(--mark); }
+
+/* ---------- case page ---------- */
+.case { display: flex; flex-direction: column; gap: 22px; }
+.case-nav { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.linkbtn { background: none; border: 1px solid var(--line); border-radius: 8px; padding: 4px 12px; cursor: pointer; font-size: var(--step--1); }
+.linkbtn:hover { border-color: var(--accent); color: var(--accent); }
+.case-head { display: flex; flex-direction: column; gap: 8px; }
+.case-head .idline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.case-head .bigid { font-family: var(--font-mono); font-size: var(--step-2); font-weight: 600; color: var(--accent); }
+.case-head h2 { font-family: var(--font-display); font-size: var(--step-3); line-height: 1.3; font-weight: 700; }
+.case-head .meta { color: var(--muted); font-size: var(--step--1); }
+.verdict { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 12px; }
+.verdict .rec { display: flex; flex-direction: column; gap: 2px; }
+.verdict .rec span { font-size: var(--step--1); color: var(--muted); }
+.verdict .rec p { margin: 0; font-size: var(--step-1); font-weight: 500; }
+.vbtns { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.decided { border-top: 1px solid var(--line); padding-top: 10px; display: flex; flex-direction: column; gap: 2px; }
+.decided span { font-size: var(--step--1); color: var(--ok); }
+.decided p { margin: 0; }
+.pill.mine-done { background: var(--ok-soft); color: var(--ok); }
+.vbtn { border: 1px solid var(--line); background: var(--bg); border-radius: 8px; padding: 5px 14px; cursor: pointer; }
+.vbtn[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.vnote { flex: 1 1 260px; min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font: inherit; background: var(--bg); color: var(--ink); }
+.sections { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
+.sec { display: grid; grid-template-columns: 8.5rem minmax(0, 1fr); gap: 4px 20px; border-top: 1px solid var(--line); padding-top: 14px; }
+.sec h3 { font-size: var(--step--1); color: var(--muted); font-weight: 500; letter-spacing: .04em; padding-top: 3px; }
+.sec .body { min-width: 0; max-width: 70ch; }
+.sec .body p { margin: 0 0 .6em; }
+.sec .body p:last-child { margin-bottom: 0; }
+.sec .body ul { margin: 0; padding-left: 1.2em; }
+.diff { display: grid; gap: 8px; }
+.diff div { border-radius: 8px; padding: 8px 12px; border: 1px solid var(--line); }
+.diff .before { background: var(--void-soft); }
+.diff .after { background: var(--accent-soft); }
+.diff b { display: block; font-size: var(--step--1); color: var(--muted); font-weight: 500; }
+blockquote { margin: 0; padding: 4px 0 4px 14px; border-left: 3px solid var(--accent); color: var(--muted); }
+.refs { font-family: var(--font-mono); font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
+figure { margin: 0; display: flex; flex-direction: column; gap: 8px; }
+figure img { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 8px; cursor: zoom-in; background: var(--surface); }
+figcaption { font-size: var(--step--1); color: var(--muted); }
+figcaption .boxkey { display: inline-block; width: .9em; height: .9em; border: 2px solid var(--mark); border-radius: 2px; vertical-align: -.1em; margin-right: 4px; }
+
+.lightbox { position: fixed; inset: 0; background: rgba(0, 0, 0, .85); z-index: 50; display: flex; align-items: center; justify-content: center;
+  padding: max(16px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) max(16px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); cursor: zoom-out; }
+.lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; }
+
+/* ---------- reply bar ---------- */
+.replybar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; background: var(--surface); border-top: 1px solid var(--line); box-shadow: var(--shadow);
+  padding: 10px max(16px, env(safe-area-inset-right, 0px)) calc(10px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); }
+.replybar .in { max-width: 1040px; margin: 0 auto; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.replybar .sum { flex: 1 1 220px; min-width: 0; font-size: var(--step--1); color: var(--muted); }
+.replybar .primary { background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 8px; padding: 6px 16px; cursor: pointer; font-weight: 500; }
+.replybar textarea { flex-basis: 100%; min-height: 90px; font-family: var(--font-mono); font-size: .8rem; border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: var(--bg); color: var(--ink); }
+.toast { font-size: var(--step--1); color: var(--ok); }
+
+footer.scope { color: var(--muted); font-size: var(--step--1); border-top: 1px solid var(--line); padding-top: 16px; }
+footer.scope h2 { font-size: var(--step-0); color: var(--ink); margin-bottom: 6px; }
+footer.scope ul { margin: 0; padding-left: 1.2em; }
+footer.scope .built { margin: 10px 0 0; color: var(--faint); }
+
+@media (max-width: 760px) {
+  .masthead { grid-template-columns: minmax(0, 1fr); }
+  .row { grid-template-columns: 3.4rem minmax(0, 1fr); }
+  .row .tags { grid-column: 2; justify-content: flex-start; }
+  .sec { grid-template-columns: minmax(0, 1fr); }
+  .filters { position: static; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .row, .chip, .vbtn { transition: background-color .12s, border-color .12s; }
+}
+</style>
+
+<div class="wrap">
+  <header class="masthead">
+    <div>
+      <p class="eyebrow" id="eyebrow"></p>
+      <h1 id="title"></h1>
+      <div class="lede" id="lede"></div>
+      <ul class="tally" id="tally"></ul>
+    </div>
+    <aside class="howto">
+      <h2>怎么回复</h2>
+      <p>在对话里按编号回就行，一行一条：</p>
+      <pre>A03 维持
+R07 推翻
+H02 改成：……</pre>
+      <p style="margin:8px 0 0">也可以点开每一条，用上面的按钮选，最后在页面底部「复制回复」，贴回对话。选择只存在你这台浏览器里。</p>
+    </aside>
+  </header>
+
+  <nav class="filters" aria-label="筛选">
+    <div class="fgroup" id="f-status"><span>状态</span></div>
+    <div class="fgroup" id="f-level"><span>级别</span></div>
+    <div class="fgroup" id="f-shot"><span>截图</span></div>
+    <label class="search"><input id="q" type="search" placeholder="搜编号、标题、文件名" aria-label="搜索"></label>
+  </nav>
+
+  <main id="list"></main>
+  <article id="case" class="case" hidden></article>
+
+  <footer class="scope" id="scope"></footer>
+</div>
+
+<div class="replybar" id="replybar" hidden>
+  <div class="in">
+    <div class="sum" id="replysum"></div>
+    <span class="toast" id="toast" aria-live="polite"></span>
+    <button type="button" class="linkbtn" id="clearall">清空选择</button>
+    <button type="button" class="primary" id="copyreply">复制回复</button>
+    <textarea id="replytext" readonly hidden aria-label="回复文字"></textarea>
+  </div>
+</div>
+
+<script id="data" type="application/json">/*__DATA__*/</script>
+<script>
+(() => {
+  const DATA = JSON.parse(document.getElementById("data").textContent);
+  const ITEMS = DATA.items;
+  const BYID = Object.fromEntries(ITEMS.map((it) => [it.id, it]));
+  const STORE_KEY = DATA.storeKey || "pc-cai-verdicts-v1";
+
+  const store = {
+    load() { try { return JSON.parse(localStorage.getItem(STORE_KEY) || "{}") || {}; } catch { return {}; } },
+    save(v) { try { localStorage.setItem(STORE_KEY, JSON.stringify(v)); } catch { /* 私密窗口等存不了，页面照常用 */ } },
+  };
+  let verdicts = store.load();
+
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  // 行内：`代码`、**加粗**
+  const inline = (s) => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  // 段落与列表：以「- 」「* 」「1. 」开头的行成列表
+  const block = (s) => {
+    const lines = String(s ?? "").split(/\n/).map((l) => l.trimEnd()).filter((l) => l.trim() !== "");
+    let html = "", list = null;
+    for (const l of lines) {
+      const m = l.match(/^\s*(?:[-*]|\d+[.、])\s+(.*)$/);
+      if (m) { if (!list) { list = []; } list.push(`<li>${inline(m[1])}</li>`); continue; }
+      if (list) { html += `<ul>${list.join("")}</ul>`; list = null; }
+      html += `<p>${inline(l)}</p>`;
+    }
+    if (list) html += `<ul>${list.join("")}</ul>`;
+    return html;
+  };
+
+  const STATUS = [["待审", "pending"], ["已审", "ok"], ["已失效", "void"]];
+  const LEVELS = [["二级", "lvl2"], ["三级", "lvl3"]];
+  const filt = { status: new Set(["待审"]), level: new Set(), shot: false, q: "" };
+
+  const pillStatus = (s) => { const c = (STATUS.find((x) => x[0] === s) || [s, "void"])[1]; return `<span class="pill ${c}">${esc(s)}</span>`; };
+  const pillLevel = (l) => l ? `<span class="pill ${l === "二级" ? "lvl2" : "lvl3"}">${esc(l)}</span>` : "";
+
+  function chip(group, label, pressed, onClick) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "chip"; b.textContent = label; b.setAttribute("aria-pressed", String(pressed));
+    b.addEventListener("click", () => { onClick(); b.setAttribute("aria-pressed", String(!(b.getAttribute("aria-pressed") === "true"))); render(); });
+    document.getElementById(group).appendChild(b);
+  }
+  const countBy = (pred) => ITEMS.filter(pred).length;
+  for (const [s] of STATUS) chip("f-status", `${s} ${countBy((i) => i.status === s)}`, filt.status.has(s), () => { filt.status.has(s) ? filt.status.delete(s) : filt.status.add(s); });
+  for (const [l] of LEVELS) chip("f-level", l, false, () => { filt.level.has(l) ? filt.level.delete(l) : filt.level.add(l); });
+  chip("f-shot", `有截图 ${countBy((i) => i.shot)}`, false, () => { filt.shot = !filt.shot; });
+  document.getElementById("q").addEventListener("input", (e) => { filt.q = e.target.value.trim().toLowerCase(); render(); });
+
+  const visible = () => ITEMS.filter((i) =>
+    (filt.status.size === 0 || filt.status.has(i.status)) &&
+    (filt.level.size === 0 || filt.level.has(i.level)) &&
+    (!filt.shot || i.shot) &&
+    (!filt.q || [i.id, i.title, i.refs, i.what, i.involve].join(" ").toLowerCase().includes(filt.q)));
+
+  // ---------- 页头、页脚 ----------
+  const pend = ITEMS.filter((i) => i.status === "待审");
+  const eyebrow = document.getElementById("eyebrow");
+  eyebrow.textContent = DATA.eyebrow || "";
+  eyebrow.hidden = !DATA.eyebrow;
+  document.getElementById("title").innerHTML = inline(DATA.title).replace(/[〔〕]/g, (c) => `<span class="bracket">${c}</span>`);
+  document.getElementById("lede").innerHTML = block(DATA.lede);
+  document.getElementById("tally").innerHTML = [
+    `<li class="p"><b>${pend.length}</b>条待审</li>`,
+    `<li class="k"><b>${pend.filter((i) => i.level === "二级").length}</b>条二级（你看得出区别）</li>`,
+    `<li><b>${countBy((i) => i.status === "已审")}</b>条已审</li>`,
+    `<li><b>${countBy((i) => i.status === "已失效")}</b>条已失效</li>`,
+  ].join("");
+  const built = [DATA.generated && `条目整理于 ${DATA.generated}`, DATA.built && `本页生成于 ${DATA.built}`].filter(Boolean).join("，");
+  document.getElementById("scope").innerHTML = (DATA.scope ? `<h2>范围与做法</h2>${block(DATA.scope)}` : "") +
+    (built ? `<p class="built">${esc(built)}。</p>` : "");
+
+  // ---------- 清单 ----------
+  function render() {
+    const list = document.getElementById("list");
+    const vis = visible();
+    if (!vis.length) { list.innerHTML = `<p class="empty">没有符合筛选的条目。点上面的状态或级别换一个组合。</p>`; return; }
+    let html = "";
+    for (const area of DATA.areas) {
+      const rows = vis.filter((i) => i.area === area.key);
+      if (!rows.length) continue;
+      html += `<section class="area" aria-labelledby="h-${area.key}"><div class="area-head"><h2 id="h-${area.key}">${esc(area.name)}</h2>` +
+        `<span class="count">${rows.length} 条</span><span class="scope">${inline(area.scope)}</span></div><ol class="ledger">`;
+      for (const i of rows) {
+        const v = verdicts[i.id];
+        html += `<li><button type="button" class="row" data-id="${esc(i.id)}"><span class="id">${esc(i.id)}</span>` +
+          `<span class="t"><strong>${esc(i.title)}</strong><small>${esc(i.oneLine)}</small></span>` +
+          `<span class="tags">${i.decided ? `<span class="pill mine-done">已定：${esc(i.decided.v)}</span>` : v ? `<span class="mine">已选：${esc(v.v)}</span>` : ""}${i.shot ? `<span class="pill shot">截图</span>` : ""}${pillLevel(i.level)}${pillStatus(i.status)}</span></button></li>`;
+      }
+      html += `</ol></section>`;
+    }
+    list.innerHTML = html;
+  }
+  document.getElementById("list").addEventListener("click", (e) => {
+    const b = e.target.closest(".row"); if (b) open(b.dataset.id);
+  });
+
+  // ---------- 单条 ----------
+  const SECTIONS = [
+    ["what", "是什么"], ["why", "当时为什么这样定"], ["now", "现在代码怎么做"], ["diff", "修改前 → 修改后"],
+    ["visible", "你看得到的差别"], ["options", "选项"], ["shot", "截图"], ["quote", "裁定原文"], ["refs", "出处"],
+  ];
+  let scrollBack = 0;
+  function open(id, push = true) {
+    const i = BYID[id]; if (!i) return;
+    if (push) scrollBack = window.scrollY;
+    const order = visible().map((x) => x.id);
+    const idx = order.indexOf(id);
+    const prev = idx > 0 ? order[idx - 1] : null, next = idx >= 0 && idx < order.length - 1 ? order[idx + 1] : null;
+    const area = DATA.areas.find((a) => a.key === i.area);
+    let secs = "";
+    for (const [k, label] of SECTIONS) {
+      let body = "";
+      if (k === "diff") {
+        if (i.diff && (i.diff.before || i.diff.after)) {
+          body = `<div class="diff">${i.diff.before ? `<div class="before"><b>修改前</b>${block(i.diff.before)}</div>` : ""}${i.diff.after ? `<div class="after"><b>修改后</b>${block(i.diff.after)}</div>` : ""}</div>`;
+        } else if (i.diffRaw) body = block(i.diffRaw);
+      } else if (k === "shot") {
+        if (i.shot) body = `<figure><img src="${esc(i.shot.src)}" alt="${esc(i.shot.alt || i.title)}" loading="lazy"><figcaption><span class="boxkey" aria-hidden="true"></span>${inline(i.shot.caption).replace(/\n+/g, "<br>")}</figcaption></figure>`;
+        else if (i.shotNote) body = block(i.shotNote);
+      } else if (k === "quote") {
+        if (i.quote) body = `<blockquote>${block(i.quote)}</blockquote>`;
+      } else if (k === "refs") {
+        if (i.refs) body = `<div class="refs">${block(i.refs)}</div>`;
+      } else if (i[k]) body = block(i[k]);
+      if (body) secs += `<section class="sec"><h3>${label}</h3><div class="body">${body}</div></section>`;
+    }
+    const v = verdicts[i.id] || {};
+    const el = document.getElementById("case");
+    el.innerHTML =
+      `<div class="case-nav"><button type="button" class="linkbtn" data-act="back">← 回清单</button><span>` +
+      `${prev ? `<button type="button" class="linkbtn" data-go="${prev}">← ${esc(prev)}</button> ` : ""}` +
+      `${next ? `<button type="button" class="linkbtn" data-go="${next}">${esc(next)} →</button>` : ""}</span></div>` +
+      `<header class="case-head"><div class="idline"><span class="bigid">${esc(i.id)}</span>${pillLevel(i.level)}${pillStatus(i.status)}</div>` +
+      `<h2>${esc(i.title)}</h2><div class="meta">${esc(area ? area.name : "")}${i.involve ? " · 涉及 " + esc(i.involve) : ""}</div></header>` +
+      `<div class="verdict"><div class="rec"><span>建议</span><p>${inline(i.rec || "（没有写建议）")}</p></div>` +
+      (i.status === "待审" ? `<div class="vbtns" role="group" aria-label="你的决定">` +
+        ["维持", "推翻", "改成", "先不定"].map((x) => `<button type="button" class="vbtn" data-v="${x}" aria-pressed="${v.v === x}">${x}</button>`).join("") +
+        `<input class="vnote" id="vnote" type="text" placeholder="补一句（选「改成」时写改成什么）" value="${esc(v.note || "")}"></div>`
+        : i.decided ? `<div class="decided"><span>你的决定（${esc(i.decided.date)}）</span><p><strong>${esc(i.decided.v)}</strong>${i.decided.note ? "：" + inline(i.decided.note) : ""}</p></div>`
+        : `<div class="meta">这一条${i.status === "已审" ? "你以前已经定过" : "已经被后来的决定取代"}，列在这里备查，不用再回。</div>`) +
+      `</div><div class="sections">${secs}</div>`;
+    document.getElementById("list").hidden = true;
+    document.body.classList.add("in-case");
+    el.hidden = false;
+    try { if (location.hash !== "#" + id) history.replaceState(null, "", "#" + id); } catch { /* 改不了地址也不影响 */ }
+    window.scrollTo(0, 0);
+  }
+  function back() {
+    document.getElementById("case").hidden = true;
+    document.getElementById("list").hidden = false;
+    document.body.classList.remove("in-case");
+    render();
+    try { history.replaceState(null, "", location.pathname + location.search); } catch { }
+    window.scrollTo(0, scrollBack);
+  }
+  document.getElementById("case").addEventListener("click", (e) => {
+    const t = e.target;
+    if (t.closest("[data-act=back]")) return back();
+    const go = t.closest("[data-go]"); if (go) return open(go.dataset.go, false);
+    const vb = t.closest(".vbtn");
+    if (vb) {
+      const id = document.querySelector(".bigid").textContent;
+      const cur = verdicts[id];
+      if (cur && cur.v === vb.dataset.v) delete verdicts[id];
+      else verdicts[id] = { v: vb.dataset.v, note: (document.getElementById("vnote") || {}).value || "" };
+      store.save(verdicts);
+      document.querySelectorAll(".vbtn").forEach((b) => b.setAttribute("aria-pressed", String(!!verdicts[id] && verdicts[id].v === b.dataset.v)));
+      syncBar();
+      return;
+    }
+    const img = t.closest("figure img");
+    if (img) { const lb = document.createElement("div"); lb.className = "lightbox"; lb.innerHTML = `<img src="${img.getAttribute("src")}" alt="${esc(img.alt)}">`; lb.addEventListener("click", () => lb.remove()); document.body.appendChild(lb); }
+  });
+  document.getElementById("case").addEventListener("input", (e) => {
+    if (e.target.id !== "vnote") return;
+    const id = document.querySelector(".bigid").textContent;
+    verdicts[id] = { v: (verdicts[id] && verdicts[id].v) || "改成", note: e.target.value };
+    store.save(verdicts);
+    document.querySelectorAll(".vbtn").forEach((b) => b.setAttribute("aria-pressed", String(verdicts[id].v === b.dataset.v)));
+    syncBar();
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { const lb = document.querySelector(".lightbox"); if (lb) lb.remove(); else if (!document.getElementById("case").hidden) back(); } });
+
+  // ---------- 回复条 ----------
+  const replyText = () => ITEMS.filter((i) => verdicts[i.id]).map((i) => {
+    const v = verdicts[i.id];
+    if (v.v === "改成") return `${i.id} 改成：${v.note || "（没写）"}`;
+    return `${i.id} ${v.v}${v.note ? "：" + v.note : ""}`;
+  }).join("\n");
+  function syncBar() {
+    const n = Object.keys(verdicts).filter((k) => BYID[k]).length;
+    const bar = document.getElementById("replybar");
+    bar.hidden = n === 0;
+    document.getElementById("replysum").textContent = `已选 ${n} 条（${pend.length} 条待审里）`;
+  }
+  document.getElementById("copyreply").addEventListener("click", async () => {
+    const text = replyText();
+    const ta = document.getElementById("replytext");
+    const toast = document.getElementById("toast");
+    try { await navigator.clipboard.writeText(text); toast.textContent = "已复制，贴回对话即可"; ta.hidden = true; }
+    catch { ta.value = text; ta.hidden = false; ta.focus(); ta.select(); toast.textContent = "浏览器不让直接复制，文字已选中，按 Ctrl+C"; }
+  });
+  document.getElementById("clearall").addEventListener("click", () => { verdicts = {}; store.save(verdicts); syncBar(); render(); document.getElementById("toast").textContent = ""; });
+
+  render();
+  syncBar();
+  const h = (location.hash || "").replace(/^#/, "");
+  if (h && BYID[h]) open(h);
+})();
+</script>
