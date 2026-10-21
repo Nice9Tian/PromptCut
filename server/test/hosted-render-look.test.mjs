@@ -5,7 +5,7 @@
  * HR39 路由：没有卡片源码的项目走常驻工作进程；有卡片源码的只走隔离工作进程，而且要等它这一轮正是这个项目、卡片同步到位；
  *      绝不把一个项目的内容交给正在跑另一个项目的隔离工作进程；项目不在目录里、渲染节点或云端 Agent 的开关关着、整条路关着时要不到。
  * HR40 并发与时限：同一时刻只转发一个，其余排队（不回忙）；背压暂停时排着等；到时限回「这次没看成」，不挂着。
- * HR41 隔离工作进程的编排：要看画面的项目没有任务等着也算候选并排最前；出图的半路上不因闲置、轮换而结束；有人等着看画面也不提前让位。
+ * HR41 隔离工作进程的编排：要看画面的项目没有任务等着也算候选并排最前；出图的半路上不换走；看画面的需求一排上，装着的产流项目做完手里那一个就让（0.7.19 多项目模式）。
  * （排队、重试、让位、重启接续的用例在 `hosted-render-queue.test.mjs`。）
  * HR42 代理口上的 `/look`：浏览器形状的请求 403；工作进程的口令要不到画面；Agent 服务的签名要不到清单与票据。
  * HR43 工作进程的页面请求闸：看画面的那批接口，Node 一侧的请求也要带这个工作进程自己的口令；浏览器发来的照旧 403。
@@ -254,11 +254,11 @@ test('HR40 并发与时限：同一时刻只转发一个，其余排队（不回
   assert.equal(s.waiting, 0);
 });
 
-test('HR41 隔离工作进程的编排：要看画面的项目没有任务也算候选并排最前；出图的半路上不结束、不轮换；有需求就不算闲置；有人等着看画面也不提前让位', async () => {
+test('HR41 隔离工作进程的编排：要看画面的项目没有任务也算候选并排最前；出图的半路上不换走；看画面的需求一排上，装着的产流项目做完手里那一个就让（不等五分钟）', async () => {
   const directory = [{ projectId: P1, enabled: true, active: true, members: false, since: 1 }, { projectId: P2, enabled: true, active: true, members: true, since: 2 }];
   const residentNodes = [{ projectId: P2, cards: { state: 'some' }, pending: 2, pendingKey: 'k2' }];
   assert.deepEqual(isolationCandidates({ directory, residentNodes }).map((c) => c.projectId), [P2]);
-  // 甲没有任务、常驻的也还没报它有卡：有看画面的需求就是候选，而且排在有成员在线的乙前面
+  // 甲没有任务、常驻的也还没报它有卡：有看画面的需求就是候选，而且排在只有产流任务的乙前面
   const withLook = isolationCandidates({ directory, residentNodes, looks: new Map([[P1, 7]]) });
   assert.deepEqual(withLook.map((c) => [c.projectId, c.look === true, c.pendingKey]), [[P1, true, '|look:7'], [P2, false, 'k2']]);
   // 开关关着、没活的项目：有需求也不是候选
@@ -268,7 +268,7 @@ test('HR41 隔离工作进程的编排：要看画面的项目没有任务也算
   const calls = [];
   let exited = false;
   const iso = createIsolation({
-    nodeIdOf: (id) => `iso/${id.slice(3, 5)}`, now: () => at, idleMs: 1000, sliceMs: 10_000, drainMs: 500,
+    nodeIdOf: (id) => `iso/${id.slice(3, 5)}`, now: () => at, cacheMs: 1000, drainMs: 500,
     runner: {
       async prepare(id) { calls.push(`prepare:${id.slice(3, 5)}`); },
       start(id) { calls.push(`start:${id.slice(3, 5)}`); exited = false; },
@@ -280,54 +280,45 @@ test('HR41 隔离工作进程的编排：要看画面的项目没有任务也算
   const report = (projectId, extra = {}) => ({ at, queue: { nodes: [{ projectId, held: [], running: [], claimable: 0, claimed: 0, ...extra }] } });
   const settle = async () => { await iso.settled(); await sleep(0); };
 
-  // 两个候选：乙有任务，甲只为看画面——先起甲
+  // 两个候选：乙有产流任务，甲只为看画面——先起甲
   iso.tick({ candidates: withLook });
   await settle();
   assert.deepEqual(calls, ['prepare:aa', 'start:aa']);
   at = 100;
   iso.tick({ candidates: withLook, report: report(P1), looks: { wanted: () => true, busy: null } });
   assert.equal(iso.current.phase, 'running');
-  // 一直有需求：超过闲置时限也不结束
+  // 一直有需求：超过缓存时限也不结束
   at = 2500;
   iso.tick({ candidates: withLook, report: report(P1), looks: { wanted: () => true, busy: null } });
   assert.equal(iso.current?.projectId, P1);
-  // 正在出图：到了轮换的时刻也不走（乙在等）
+  // 正在出图：乙排第一了也不走
   at = 20_000;
-  iso.tick({ candidates: withLook, report: report(P1), looks: { wanted: () => true, busy: P1 } });
-  assert.equal(iso.current.phase, 'running', '出图的半路上不轮换');
+  const onlyB = isolationCandidates({ directory, residentNodes });
+  iso.tick({ candidates: onlyB, report: report(P1), looks: { wanted: () => false, busy: P1 } });
+  assert.equal(iso.current.phase, 'running', '出图的半路上不换走');
   assert.equal(iso.current.worked, true, '出过图算这一轮干了活');
-  // 出完了：乙在等，轮换；手里没有任务就结束，换乙
-  iso.tick({ candidates: withLook, report: report(P1), looks: { wanted: () => true, busy: null } });
+  // 出完了：排第一的是乙 → 排空，手里没有任务就结束，换乙
+  iso.tick({ candidates: onlyB, report: report(P1), looks: { wanted: () => false, busy: null } });
   await settle();
   assert.ok(calls.includes('stop:rotated'));
   assert.equal(iso.current, null);
 
-  // 乙在跑（一直有活）、甲要看画面在等：不提前让位（原来 45 秒就换，2026-10-09 用户定取消），连续做满 sliceMs 才排空
+  // 乙在产流（手里一个任务）、甲来要看画面：看画面先于产流——乙立刻不再认领新的，手里那一个做完就让（不等五分钟）
   calls.length = 0;
-  const onlyB = isolationCandidates({ directory, residentNodes });
   iso.tick({ candidates: onlyB });
   await settle();
   assert.deepEqual(calls, ['prepare:bb', 'start:bb']);
   at = 21_000;
-  iso.tick({ candidates: onlyB, report: report(P2, { held: ['t1'] }) });
+  iso.tick({ candidates: onlyB, report: report(P2, { held: ['t1'], claimed: 1 }) });
   assert.equal(iso.current.phase, 'running');
-  at = 23_000;
-  iso.tick({ candidates: withLook, report: report(P2, { held: ['t1'] }), looks: { wanted: (id) => id === P1, busy: null } });
-  assert.equal(iso.current.phase, 'running');
-  at = 24_500;
-  iso.tick({ candidates: withLook, report: report(P2, { held: ['t1'] }), looks: { wanted: (id) => id === P1, busy: null } });
-  assert.equal(iso.current.phase, 'running', '有人等着看画面：也不提前让位');
-  at = 30_900;
-  iso.tick({ candidates: withLook, report: report(P2, { held: ['t1'] }), looks: { wanted: (id) => id === P1, busy: null } });
-  assert.equal(iso.current.phase, 'running', '还不到 sliceMs');
-  at = 31_000;
-  iso.tick({ candidates: withLook, report: report(P2, { held: ['t1'] }), looks: { wanted: (id) => id === P1, busy: null } });
-  assert.equal(iso.current.phase, 'draining', '一直有活、连续做满 sliceMs：排空让位');
-  iso.tick({ candidates: withLook, report: report(P2, { held: [] }), looks: { wanted: (id) => id === P1, busy: null } });
+  at = 21_500;
+  iso.tick({ candidates: withLook, report: report(P2, { held: ['t1'], claimed: 1 }), looks: { wanted: (id) => id === P1, busy: null } });
+  assert.equal(iso.current.phase, 'draining', '有看画面的需求排第一：马上排空');
+  iso.tick({ candidates: withLook, report: report(P2, { held: [], claimed: 1 }), looks: { wanted: (id) => id === P1, busy: null } });
   await settle();
   assert.ok(calls.includes('stop:rotated'));
 
-  // 需求过期、没有任务：照旧按闲置结束
+  // 需求过期、没有任务、没人排队：留作缓存，到期结束
   calls.length = 0;
   iso.tick({ candidates: withLook });
   await settle();

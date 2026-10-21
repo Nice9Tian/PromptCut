@@ -26,7 +26,7 @@
  *   PROMPTCUT_RENDER_USER_CARDS       isolated（缺省）| off。isolated：内容库里有卡片源码的项目由按项目隔离的工作进程做（契约第 7.5 节）；
  *                                     off：不起隔离工作进程，含用户卡的任务渲染服务不认领（常驻工作进程两种取值下都不同步卡）
  *   PROMPTCUT_RENDER_ISO_PORT         隔离工作进程的端口（另占 +1、+2），缺省 PROMPTCUT_RENDER_PORT + 10。它的数据目录是 <PROMPTCUT_RENDER_DATA>/iso
- *   PROMPTCUT_RENDER_ISO_IDLE_MS / _ISO_SLICE_MS   测试与演练用：隔离工作进程空闲多久才结束让位（缺省 300000，五分钟）、另有项目在等而它一直有活时最多连续做多久（缺省 300000）
+ *   PROMPTCUT_RENDER_ISO_IDLE_MS      没人排队时隔离工作进程装着的项目留作缓存多久（缺省 300000，五分钟；多项目模式下别的项目一排上就不等它，见 isolation.mjs）
  *   PROMPTCUT_RENDER_LOOK             on（缺省）| off。看画面的口子（契约第 8a 节，`look.mjs`）：云端 Agent 服务凭服务身份向本进程要一帧画面。
  *                                     off：这条路整个不在（回 404），云端 Agent 的看画面工具回「这次没看成」
  *   PROMPTCUT_RENDER_LOOK_QUEUE       看画面请求的队列落盘的目录（`render-requests.mjs`），缺省 <PROMPTCUT_RENDER_DATA>/look-queue。里面有排着的请求带来的
@@ -101,8 +101,7 @@ export function renderServiceConfig(env = process.env) {
     port: intOf(env.PROMPTCUT_RENDER_PORT, 5400, 1, 65533),
     isoPort: intOf(env.PROMPTCUT_RENDER_ISO_PORT, Math.min(65533, intOf(env.PROMPTCUT_RENDER_PORT, 5400, 1, 65533) + 10), 1, 65533),
     isoDataDir: path.join(path.resolve(env.PROMPTCUT_RENDER_DATA || '/var/lib/promptcut/render'), 'iso'),
-    isoIdleMs: intOf(env.PROMPTCUT_RENDER_ISO_IDLE_MS, ISOLATION_DEFAULTS.IDLE_MS, 1000, 3_600_000),
-    isoSliceMs: intOf(env.PROMPTCUT_RENDER_ISO_SLICE_MS, ISOLATION_DEFAULTS.SLICE_MS, 1000, 86_400_000),
+    isoIdleMs: intOf(env.PROMPTCUT_RENDER_ISO_IDLE_MS, ISOLATION_DEFAULTS.CACHE_MS, 1000, 3_600_000),
     statusPort: intOf(env.PROMPTCUT_RENDER_STATUS_PORT, 5399, 0, 65535),
     maxConcurrent: intOf(env.PROMPTCUT_RENDER_MAX_CONCURRENT, LIMIT_DEFAULTS.maxConcurrent, 1, 4),
     maxProjects: intOf(env.PROMPTCUT_RENDER_MAX_PROJECTS, LIMIT_DEFAULTS.maxProjects, 1, 1000),
@@ -342,7 +341,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
    * 内容库里有卡片源码的项目，常驻工作进程连着但不认领（它不执行任何项目带来的代码），由这里起一个**只做这一个项目**的工作进程：
    *   - 同一时刻最多一个；口令每一轮现生成，代理口凭它只给这一个项目的清单与票据（`broker.mjs`）；
    *   - 自己的数据目录（`<数据目录>/iso`）与端口，开卡片同步，报 `userCards: true`，并发 1；
-   *   - 空闲满 `isoIdleMs`（5 分钟）才结束让位，别的项目在排队也不提前；一直有活而别的项目在等时最多连续做 `isoSliceMs`（5 分钟）；
+   *   - 多项目模式（0.7.19）：装哪个项目只看排队的请求谁排第一（看画面先于产流、各项目轮流、项目内先来先做）；排第一的换成别的项目时
+   *     不等它空闲，手里那一个做完就换；没人排队时留作缓存 `isoIdleMs`（见 `isolation.mjs` 文件头）；
    *   - **每一轮前后都把数据目录整个清空**：装进来的卡（改动层）、帧库、临时目录、Chrome 的用户数据目录、Vite 的依赖缓存全在里面；
    *   - 结束时带走整棵进程树（`worker.mjs`）。
    * 检出目录与常驻工作进程共用、不另拷：卡片同步只写数据目录下的改动层，Vite 的缓存、导出目录、临时目录也都指到了数据目录，
@@ -378,8 +378,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   }
   const isolation = !isoEnabled ? null : createIsolation({
     nodeIdOf: (projectId) => isoNodeIdFor(key.instanceId, projectId),
-    idleMs: config.isoIdleMs,
-    sliceMs: config.isoSliceMs,
+    cacheMs: config.isoIdleMs,
     log: isoLog,
     runner: {
       async prepare() {
@@ -455,8 +454,10 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   function isoTick() {
     if (!isolation || stopping) return;
     const dir = directory.list();
+    // 要隔离的看画面需求，按看画面队列的出队次序（多项目模式：各项目轮流）；刚出完图、需求还没过期的排在后面
     const looks = new Map();
-    for (const [projectId, w] of [...lookWants]) { if (lookWanted(projectId)) looks.set(projectId, w.seq); }
+    for (const projectId of look.isoOrder()) looks.set(projectId, lookWants.get(projectId)?.seq ?? 0);
+    for (const [projectId, w] of [...lookWants]) { if (!looks.has(projectId) && lookWanted(projectId)) looks.set(projectId, w.seq); }
     // 背压暂停时不新起（已经在跑的照旧，它自己不认领新的）；排着的看画面请求留在队列里，背压过去后先轮到它们
     // 管理进程刚起来、第一次采样还没做完时不知道机器吃不吃紧：也先不新起（不然内存本来就低的机器上，重启后会抢在背压生效前起一轮）
     const holdOff = backpressure.paused || readings.at === null;
@@ -466,6 +467,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       eligible: (projectId) => dir.some((p) => p.projectId === projectId && p.enabled && p.active),
       report: isoReport ? { at: isoReportAt, queue: isoReport.queue } : null,
       looks: { wanted: lookWanted, busy: look.busyOn() === 'isolated' ? look.busyProject() : null },
+      // 内存吃紧：装着的项目空着就结束，不留缓存（机制「缓存……内存不够时随时清掉」）
+      memoryLow: backpressure.paused,
     });
   }
 
@@ -477,7 +480,6 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     enabled: config.look === 'on',
     verify: createLookVerifier({ registry: lookRegistry }),
     requests: lookRequests,
-    isolation,
     limits: { attemptMs: config.lookAttemptMs, retries: config.lookRetries, maxQueueMs: config.lookMaxQueueMs, orphanMs: config.lookOrphanMs },
     project: (projectId) => directory.get(projectId),
     // 刚起来、目录清单还没拿到：接回来的请求先排着（这时「目录里没有」不等于项目不在了）

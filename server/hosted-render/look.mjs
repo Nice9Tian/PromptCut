@@ -36,7 +36,12 @@
  *   「排着等」，等的原因记在请求的 `blockedReason` 里，状态口看得到；等的那件事过去了自动接着做；
  * - 同一时刻只转发一个，在途时占一个并发名额；排着的请求里有常驻工作进程该出的，也先替它留出一个名额（`reserveOn()`）——
  *   **云端 Agent 要看画面的请求优先于预渲染任务**：已经在做的任务不打断，只是不再认领新的；
- * - 排着的按登记先后做，但排在前面的那个此刻做不了（它的项目还没轮到隔离工作进程）时不挡后面做得了的；
+ * - 排着的按多项目模式的次序做（0.7.19，`server/render-node/multi-queue.mjs`）：**各项目轮流**（一个项目出了一个请求就排到最后），
+ *   **同一项目内先来先做**；排在前面的那个此刻做不了（它的项目还没装进隔离工作进程）时不挡后面做得了的；
+ * - **只加载用到的**（0.7.19，`server/render-node/expand.mjs`）：轮到时把请求里的项目按这个请求要的帧展开成只含用到的片段、
+ *   依赖与素材的那一份，再转给工作进程；画面与整份项目逐像素相同（`scripts/probes/multi-project-expand-probe.mjs`）；
+ * - 不让哪个项目占着：0.7.18 的「云端 Agent 按轮占用」（一轮从第一次看画面占到收尾、心跳）已取消。`/look/release`、
+ *   `/look/heartbeat` 两条只为还没升级的 Agent 服务留着：认身份，然后什么都不做、回 200；
  * - **一分钟乘三次**（2026-10-09 用户定，`docs/plan/account-binding-task.md`「即时渲染卡住」）：转给工作进程之后，渲染这一段每次最多等
  *   `attemptMs`（一分钟）；到点没出来、工作进程出错、隔离工作进程那一轮没起成，都自动重试，最多重试 `retries`（三）次；都没成才回
  *   「这次没看成」。一分钟只算渲染本身，不含排队和把项目装进隔离工作进程的时间；
@@ -59,6 +64,8 @@ import { createHash, createPrivateKey, randomBytes, sign, verify } from 'node:cr
 import { publicKeyOf, SERVICE_SIG_BYTES } from '../auth/service-identity.mjs';
 import { createRenderRequests, isFinal, REQUEST_ID_RE } from './render-requests.mjs';
 import { createHostedAudioJsHandler, HOSTED_AUDIO_JS_ROUTE } from './audio-js.mjs';
+import { createRotation, orderByPolicy } from '../render-node/multi-queue.mjs';
+import { expandLookBody } from '../render-node/expand.mjs';
 
 export { createHostedAudioJsHandler, HOSTED_AUDIO_JS_ROUTE };
 
@@ -92,8 +99,7 @@ export const LOOK_DEFAULTS = Object.freeze({
   maxBodyBytes: 48 * 1024 * 1024,
   /**
    * 「要看画面」的需求登记一次管多久。排着、在做的请求会一直续（调度每一拍、在途每 5 秒），所以它只要比续的间隔长。
-   * 〔裁，三级〕原来是 90 秒（最后一次请求之后隔离工作进程多留 90 秒，等模型再看一眼）；闲置回收改成五分钟之后这层保留没有用了，
-   * 留着只会让「空闲满五分钟才让位」变成五分钟加 90 秒。现在出完图最多再算 15 秒有需求，之后开始算空闲
+   * 出完图之后再算 15 秒有需求，之后隔离工作进程照「没人排队留作缓存」办（`isolation.mjs`）
    */
   holdMs: 15_000,
   /** 等常驻工作进程报出这个项目、报出它带没带卡，最多多久 */
@@ -217,13 +223,13 @@ const fail = (status, look, extra = '', debug = null) => ({
   },
 });
 
-const pending202 = (requests, e) => ({
+const pending202 = (positionOf, e) => ({
   status: 202,
   body: {
     ok: true,
     requestId: e.id,
     state: e.state,
-    queuePosition: requests.position(e),
+    queuePosition: positionOf(e),
     attempts: e.attempts,
     ...(e.blockedReason ? { blockedReason: e.blockedReason } : {}),
   },
@@ -248,7 +254,7 @@ const pending202 = (requests, e) => ({
  */
 export function createLook({
   enabled = true, verify: verifyAuth, project, directoryReady = () => true, paused = () => false, storagePaused = () => false, resident, iso, want = () => {},
-  requests: requestsIn = null, isolation = null, audioJs: audioJsIn = null,
+  requests: requestsIn = null, audioJs: audioJsIn = null,
   fetch: fetchImpl = globalThis.fetch, now = Date.now, log = () => {}, limits: limitsIn = {},
 } = {}) {
   const limits = { ...LOOK_DEFAULTS, ...limitsIn };
@@ -263,6 +269,16 @@ export function createLook({
   let current = null;
   let timer = null;
   let syncSeq = 0;
+  /** 看画面这一类的轮流记账（多项目模式：各项目轮流） */
+  const rotation = createRotation();
+  /** 排着的请求按多项目模式的次序 */
+  const ordered = () => orderByPolicy(requests.queued().map((e) => ({ e, projectId: e.projectId, kind: 'look', seq: e.seq })), rotation).map((x) => x.e);
+  /** 排在它前面的还有几个（在做的那个也算）；它不在排队回 0 */
+  const positionOf = (e) => {
+    if (e.state !== 'queued') return 0;
+    const i = ordered().indexOf(e);
+    return (i < 0 ? 0 : i) + (requests.running() ? 1 : 0);
+  };
 
   /** 隔离工作进程这一轮对这个项目是不是可以出图了；回 `{ ready, stale? }` */
   function isoReadyFor(projectId, cards, readySince) {
@@ -310,18 +326,6 @@ export function createLook({
       // 排着的时候需求一直登记着：隔离工作进程的编排据此把这个项目当候选（并排在只有预渲染任务的项目前面）
       want(projectId, now() + limits.holdMs);
       e.isoSince ??= now();
-
-      const runId = e.run?.runId ?? null;
-      const turnAcquired = isolation?.acquireTurn ? isolation.acquireTurn({
-        projectId: e.projectId,
-        runId,
-        runGrantId: e.run?.runGrantId,
-        conversationId: e.run?.conversationId,
-        hasOtherQueued: requests.queued().some(q => q.needIso && q.projectId !== e.projectId),
-      }) : { ok: true, active: true };
-      if (!turnAcquired.ok) {
-        return { wait: 'iso-other-project' };
-      }
 
       // 为它起过、又没起成（起不来、内存超限、进程自己没了）：算一次没成；还有重试次数就再要一轮
       if (!s.current && s.lastRun && s.lastRun.projectId === projectId && s.lastRun.at >= e.isoSince && ['prepare-failed', 'start-timeout', 'oom', 'exit'].includes(s.lastRun.reason)) {
@@ -380,7 +384,18 @@ export function createLook({
     const { projectId } = e;
     const abort = new AbortController();
     requests.start(e);
+    // 这个项目出了一个请求：在看画面这一类里排到最后（各项目轮流）
+    rotation.served('look', projectId);
     current = { id: e.id, projectId, worker: target.worker, since: now(), abort };
+    // 只加载用到的：按这个请求要的帧展开（认不出的接口原样转发）
+    let sendBody = e.body;
+    try {
+      const x = expandLookBody(e.path, e.body);
+      sendBody = x.body;
+      if (x.expanded) log('look.expanded', { id: e.id.slice(0, 8), projectId, tool: e.tool, clips: x.expanded.clipIds.length, cards: x.expanded.cardIds.length, media: x.expanded.mediaIds.length });
+    } catch (err) {
+      log('look.expand-failed', { id: e.id.slice(0, 8), projectId, message: String(err?.message ?? err).slice(0, 120) });
+    }
     const room = e.deadline ? Math.max(1000, e.deadline - now()) : Infinity;
     const limit = Math.min(e.attemptMs ?? limits.attemptMs, room);
     // 在途期间需求不过期（隔离工作进程不会在出图的半路上因为闲置被结束）
@@ -392,7 +407,7 @@ export function createLook({
       const r = await fetchImpl(`http://127.0.0.1:${target.port}${e.path}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', [LOOK_KEY_HEADER]: target.key },
-        body: JSON.stringify(e.body),
+        body: JSON.stringify(sendBody),
         signal: AbortSignal.any([AbortSignal.timeout(limit), abort.signal]),
       });
       const data = await r.json().catch(() => null);
@@ -456,13 +471,10 @@ export function createLook({
       const activelyRendering = !!current || (isoStatus?.current?.phase === 'running' && isoStatus.current.projectId === oldest.projectId && (isoStatus.queue?.nodes?.[0]?.running?.length ?? 0) > 0);
       if (!activelyRendering && (at - oldest.queuedAt >= (limits.queueStallMs ?? 600_000))) {
         log('look.queue-stalled', { id: oldest.id.slice(0, 8), queuedMs: at - oldest.queuedAt });
-        if (isolation?.unlockProject) {
-          try { isolation.unlockProject(oldest.projectId); } catch {}
-        }
         settle(oldest, 'failed', fail(503, 'queue-stalled'));
       }
     }
-    for (const e of requests.queued()) {
+    for (const e of ordered()) {
       // 「登记了再来问」的：调用方很久没来问（它自己没了），撤掉，不占着队列
       if (e.persist && at - e.lastPollAt >= limits.orphanMs) { log('look.orphaned', { id: e.id.slice(0, 8), projectId: e.projectId }); settle(e, 'cancelled', fail(499, 'cancelled')); continue; }
       if (e.deadline ? at >= e.deadline : (limits.maxQueueMs && at - e.queuedAt >= limits.maxQueueMs)) { settle(e, 'failed', waitedOut(e)); continue; }
@@ -553,9 +565,9 @@ export function createLook({
       if (added.full) { stats.refused += 1; log('look.refused', { projectId: msg.projectId, reason: 'queue-full' }); return fail(503, 'busy'); }
       const e = added.entry;
       requests.touch(e);
-      if (added.created) log('look.queued', { id: e.id.slice(0, 8), projectId: e.projectId, tool: e.tool, mode: queued ? 'poll' : 'sync', position: requests.position(e), persisted: e.persisted, ...(e.run ? { runGrant: e.run.runGrantId.slice(0, 12) } : {}) });
+      if (added.created) log('look.queued', { id: e.id.slice(0, 8), projectId: e.projectId, tool: e.tool, mode: queued ? 'poll' : 'sync', position: positionOf(e), persisted: e.persisted, ...(e.run ? { runGrant: e.run.runGrantId.slice(0, 12) } : {}) });
       kick();
-      if (queued) return isFinal(e.state) ? deliver(e) : pending202(requests, e);
+      if (queued) return isFinal(e.state) ? deliver(e) : pending202(positionOf, e);
       // 同步等：连接一直挂到出结果。到点由 pump 按时限结掉
       while (!isFinal(e.state)) await requests.wait(e, 1000);
       return deliver(e);
@@ -577,7 +589,7 @@ export function createLook({
       const waitMs = Math.min(limits.maxPollMs, Math.max(0, Number.isFinite(msg.waitMs) ? msg.waitMs : 0));
       const until = now() + waitMs;
       while (!isFinal(e.state) && now() < until) { await requests.wait(e, Math.min(until - now(), 5000)); requests.touch(e); }
-      return isFinal(e.state) ? deliver(e) : pending202(requests, e);
+      return isFinal(e.state) ? deliver(e) : pending202(positionOf, e);
     },
 
     /** `POST /look/cancel { requestId }`：撤回。排着的直接撤；在做的那一个掐掉 */
@@ -591,30 +603,26 @@ export function createLook({
       if (!isFinal(e.state)) {
         log('look.cancelled', { id: e.id.slice(0, 8), projectId: e.projectId, was: e.state });
         const mine = e.state === 'running' && current?.id === e.id ? current : null;
-        if (e.run?.runId) isolation?.cancelTurn?.(e.run.runId);
         settle(e, 'cancelled', fail(499, 'cancelled'));
         mine?.abort.abort();
       }
       return { status: 200, body: { ok: true, requestId: e.id, state: e.state } };
     },
 
+    /**
+     * `POST /look/release`、`POST /look/heartbeat`：0.7.18「云端 Agent 按轮占用」的收尾通知与心跳。多项目模式没有「一轮占着」，
+     * 这两条什么都不做；只为还没升级的 Agent 服务（滚动部署时旧版本还在跑）留着：照样认身份，回 200，不回 404 让它记错。
+     * 0.7.19 的 Agent 服务不再发；节点上不再有 0.7.18 的 Agent 服务之后可以删掉这两条。
+     */
     async release({ auth, bodyText }) {
       const a = admit(auth, bodyText);
       if (a.out) return a.out;
-      const { who, msg } = a;
-      const projectId = msg?.projectId;
-      const runId = msg?.runId;
-      isolation?.releaseTurn?.({ projectId, runId, aborted: msg?.aborted === true });
-      kick();
-      return { status: 200, body: { ok: true } };
+      return { status: 200, body: { ok: true, ignored: true } };
     },
-
     async heartbeat({ auth, bodyText }) {
       const a = admit(auth, bodyText);
       if (a.out) return a.out;
-      const { who, msg } = a;
-      isolation?.heartbeat?.({ projectId: msg?.projectId, runId: msg?.runId });
-      return { status: 200, body: { ok: true } };
+      return { status: 200, body: { ok: true, ignored: true } };
     },
 
     /** 管理进程起来、把盘上的队列接回来之后调一次：让调度转起来 */
@@ -637,6 +645,16 @@ export function createLook({
     busyProject: () => current?.projectId ?? null,
     /** 排着的请求里有没有该由常驻工作进程出的（管理进程据此先替它留出一个并发名额：看画面优先于预渲染任务） */
     reserveOn: () => (requests.queued().some((e) => e.needIso === false) ? 'resident' : null),
+    /**
+     * 要隔离工作进程出的请求（排着的与在做的）是哪几个项目，**按出队次序**、去重：在做的那个项目在最前，其余按多项目模式的次序。
+     * 管理进程据此定隔离工作进程下一个装哪个项目（`isolation.mjs` 的 `isolationCandidates` 的 `looks`）。
+     */
+    isoOrder: () => {
+      const out = [];
+      if (current && current.worker === 'isolated') out.push(current.projectId);
+      for (const e of ordered()) if (e.needIso === true && !out.includes(e.projectId)) out.push(e.projectId);
+      return out;
+    },
     /** 这个项目有没有排着或在做的请求 */
     wanted: (projectId) => current?.projectId === projectId || requests.queued().some((e) => e.projectId === projectId),
     status: () => {

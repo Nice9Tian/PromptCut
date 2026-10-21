@@ -5,7 +5,8 @@
  * 接线（主机搁着不认领、代理口分口令、闸装到开发服务器上、同步文件预检）的单测在 `hosted-render-usercards.test.mjs`；
  * 端到端的验收是 `scripts/probes/hosted-render-isolation-probe.mjs`。
  *
- *   HR23  隔离工作进程的编排（状态机）：一次只做一个项目；空闲满 5 分钟（没有它能做的任务）才结束；一直有活而别的项目在等时最多连续做 5 分钟；
+ *   HR23  隔离工作进程的编排（状态机，0.7.19 多项目模式）：一次只装一个项目；装哪个只看排队的请求谁排第一（看画面先于产流、
+ *         产流各项目轮流）；别的项目排第一就不等空闲、手里那一个做完就换；没人排队时留作缓存；内存吃紧不留缓存；
  *         换项目之前清空；起不来、什么都没认领到的不反复重来；检出副本与数据目录的建与清（只清带记号的目录、Windows 上不建链接）
  *         清空清到一半失败（某一项删不掉）：记号还在、再调一次能清完、没有记号的非空目录照旧不清（`wipeDir` 先清记号以外的每一项，记号最后才动）
  *   HR28  页面请求闸（纯函数）：浏览器发来的请求——编辑器的 Vite 一律拒；预渲染的 Vite 只认同源，`/api/**` 只放行表里的几条；
@@ -25,7 +26,7 @@ import { nodeIdFor } from '../hosted-render/broker.mjs';
 
 /* ------------------------------------------------------------------ HR23 */
 
-test('HR23 要隔离且有活等着的项目：开关开着、有活、常驻工作进程报了有卡且有任务等着；有成员在线的在前', () => {
+test('HR23 要隔离且有活等着的项目：开关开着、有活、常驻工作进程报了有卡且有任务等着；按变成有活的先后（多项目模式不按成员在线排）', () => {
   const directory = [
     { projectId: 'sp_a', enabled: true, active: true, members: false, since: 1 },
     { projectId: 'sp_b', enabled: true, active: true, members: true, since: 2 },
@@ -43,9 +44,12 @@ test('HR23 要隔离且有活等着的项目：开关开着、有活、常驻工
     { projectId: 'sp_f', cards: { state: 'some', count: 1 }, pending: 0, pendingKey: '' },   // 有卡但没任务等着
   ];
   assert.deepEqual(isolationCandidates({ directory, residentNodes }), [
-    { projectId: 'sp_b', members: true, pending: 1, pendingKey: 'kb' },
-    { projectId: 'sp_a', members: false, pending: 3, pendingKey: 'ka' },
+    { projectId: 'sp_a', members: false, pending: 3, pendingKey: 'ka', since: 1 },
+    { projectId: 'sp_b', members: true, pending: 1, pendingKey: 'kb', since: 2 },
   ]);
+  // 要看画面的项目排在最前，彼此按看画面队列给的次序
+  const looks = isolationCandidates({ directory, residentNodes, looks: ['sp_f', 'sp_b'] });
+  assert.deepEqual(looks.map((c) => [c.projectId, c.look === true]), [['sp_f', true], ['sp_b', true], ['sp_a', false]]);
   assert.deepEqual(isolationCandidates({ directory, residentNodes: [] }), []);
   assert.notEqual(isoNodeIdFor('inst-0123456789abcdef', 'sp_abcdefgh1234'), nodeIdFor('inst-0123456789abcdef', 'sp_abcdefgh1234'), '与常驻工作进程的节点 id 不同');
 });
@@ -66,7 +70,7 @@ function isoRig(overrides = {}) {
   };
   const iso = createIsolation({ runner, nodeIdOf: (p) => `iso/${p}`, now: () => t, log: (event, fields) => logs.push({ event, ...fields }), ...overrides });
   const flush = async () => { for (let i = 0; i < 6; i += 1) await new Promise((r) => setImmediate(r)); };
-  const cand = (projectId, extra = {}) => ({ projectId, members: true, pending: 1, pendingKey: `k-${projectId}`, ...extra });
+  const cand = (projectId, extra = {}) => ({ projectId, members: true, pending: 1, pendingKey: `k-${projectId}`, since: 0, ...extra });
   const report = (projectId, node = {}) => ({ at: t, queue: { nodes: [{ projectId, held: [], running: [], claimable: 0, claimed: 0, ...node }] } });
   return {
     iso, calls, logs, flush, cand, report,
@@ -76,83 +80,116 @@ function isoRig(overrides = {}) {
   };
 }
 
-test('HR23 一次只做一个项目：先清空再起；空闲满五分钟（没有它能做的任务）才结束，结束后再清一遍；清单里最多一项', async () => {
+test('HR23 一次只装一个项目：先清空再起；清单里最多一项；没人排队时留作缓存，空满 cacheMs 才结束，结束后再清一遍', async () => {
   const r = isoRig();
-  const IDLE = ISOLATION_DEFAULTS.IDLE_MS;
-  assert.equal(IDLE, 5 * 60_000, '2026-10-09 用户定：空闲满五分钟才让位');
+  const CACHE = ISOLATION_DEFAULTS.CACHE_MS;
+  assert.equal(ISOLATION_DEFAULTS.SLICE_MS, undefined, '多项目模式没有「连续做满多久才让位」');
+  assert.equal(ISOLATION_DEFAULTS.HEARTBEAT_TIMEOUT_MS, undefined, '0.7.18 的心跳没有了');
   assert.deepEqual(r.iso.listing(), []);
-  r.iso.tick({ candidates: [r.cand('pA'), r.cand('pB')] });
+  r.iso.tick({ candidates: [r.cand('pA')] });
   await r.flush();
   assert.deepEqual(r.calls, ['prepare:pA', 'start:pA'], '先清空（prepare）再起');
   assert.deepEqual(r.iso.listing(), [{ projectId: 'pA', members: true, drain: false, nodeId: 'iso/pA' }], '只给这一个项目');
-  // 另一个项目在等，但当前这个没结束之前不起第二个
-  r.iso.tick({ candidates: [r.cand('pA'), r.cand('pB')] });
-  await r.flush();
-  assert.equal(r.calls.filter((c) => c.startsWith('start:')).length, 1);
+  r.iso.tick({ candidates: [r.cand('pA')] });
   assert.equal(r.iso.current.phase, 'starting', '还没交过诊断：算没起来');
-
-  // 交了诊断：算起来了。手里有活就不算闲
+  // 交了诊断：算起来了。做了一个任务，然后没人排队
   r.advance(20_000);
-  r.iso.tick({ candidates: [r.cand('pB')], report: r.report('pA', { held: ['t1'], claimed: 1 }) });
+  r.iso.tick({ candidates: [r.cand('pA')], report: r.report('pA', { held: ['t1'], claimed: 1 }) });
   assert.equal(r.iso.current.phase, 'running');
-  r.advance(60_000);
-  r.iso.tick({ candidates: [r.cand('pB')], report: r.report('pA', { held: ['t1'], claimed: 1 }) });
-  r.advance(60_000);
-  r.iso.tick({ candidates: [r.cand('pB')], report: r.report('pA', { claimable: 1, claimed: 1 }) });
-  assert.equal(r.iso.current.phase, 'running', '还有可认领的任务：不算闲');
-  // 既没有手里的、也没有可认领的：闲了一分钟（原来的时限）不结束，pB 在等也不提前；闲满五分钟才结束
-  r.advance(60_000);
-  r.iso.tick({ candidates: [r.cand('pB')], report: r.report('pA', { claimed: 1 }) });
-  assert.equal(r.iso.current.phase, 'running', '闲了一分钟：不让位');
-  r.advance(IDLE - 60_000 - 1000);
-  r.iso.tick({ candidates: [r.cand('pB')], report: r.report('pA', { claimed: 1 }) });
-  assert.equal(r.iso.current.phase, 'running', '差一秒满五分钟：不让位，别的项目在排队也一样');
-  r.advance(1_000);
-  r.iso.tick({ candidates: [r.cand('pB')], report: r.report('pA', { claimed: 1 }) });
+  r.advance(1000);
+  r.iso.tick({ candidates: [], report: r.report('pA', { claimed: 1 }) });
+  r.advance(CACHE - 2000);
+  r.iso.tick({ candidates: [], report: r.report('pA', { claimed: 1 }) });
+  assert.equal(r.iso.current.phase, 'running', '缓存还没到期：留着给同一项目的下一个请求');
+  // 同一项目又来了一个：接着在装好的上面做，不重装
+  r.iso.tick({ candidates: [r.cand('pA', { pendingKey: 'k2' })], report: r.report('pA', { held: ['t2'], claimed: 2 }) });
+  assert.equal(r.calls.filter((c) => c.startsWith('start:')).length, 1, '缓存命中');
+  r.advance(1000);
+  r.iso.tick({ candidates: [], report: r.report('pA', { claimed: 2 }) });
+  r.advance(CACHE);
+  r.iso.tick({ candidates: [], report: r.report('pA', { claimed: 2 }) });
   await r.flush();
-  assert.deepEqual(r.calls.slice(2), ['stop:idle', 'cleanup:pA'], '结束后清空');
-  assert.equal(r.iso.current, null);
-  assert.equal(r.iso.status().lastRun.reason, 'idle');
-  assert.equal(r.iso.status().lastRun.worked, true);
-
-  // 下一拍才轮到 pB：同样先清空再起
-  r.iso.tick({ candidates: [r.cand('pB')] });
-  await r.flush();
-  assert.deepEqual(r.calls.slice(4), ['prepare:pB', 'start:pB']);
-  assert.deepEqual(r.iso.listing().map((p) => p.projectId), ['pB']);
+  assert.deepEqual(r.calls.slice(2), ['stop:idle', 'cleanup:pA'], '缓存到期结束，结束后清空');
+  assert.equal(r.iso.status().lastRun.served, 2);
 });
 
-test('HR23 轮流：另有项目在等时每个最多 5 分钟；到点先排空（不再认领、手里的做完）再换；排空超时就让掉；没人等就不换', async () => {
+test('HR23 不让哪个项目占着：别的项目排第一就不等空闲——标排空、手里那一个做完就换；排空超时让掉；等的那个不等了就接着做', async () => {
   const r = isoRig();
   r.iso.tick({ candidates: [r.cand('pA')] });
   await r.flush();
   r.iso.tick({ candidates: [r.cand('pA')], report: r.report('pA', { held: ['t'], claimed: 1 }) });
-  // 没有别的项目在等：过了 5 分钟也不换
-  r.advance(ISOLATION_DEFAULTS.SLICE_MS + 1000);
-  r.iso.tick({ candidates: [r.cand('pA')], report: r.report('pA', { held: ['t'], claimed: 5 }) });
   assert.equal(r.iso.current.phase, 'running');
-  // pB 来等了：这一轮已经超过 5 分钟 → 排空
-  r.iso.tick({ candidates: [r.cand('pA'), r.cand('pB')], report: r.report('pA', { held: ['t'], claimed: 5 }) });
+  // pB 有人要看画面：排第一的是 pB → pA 立刻标排空（不等它空闲、不等五分钟）
+  r.advance(1000);
+  r.iso.tick({ candidates: [r.cand('pB', { look: true }), r.cand('pA')], report: r.report('pA', { held: ['t'], claimed: 1 }) });
   assert.equal(r.iso.current.phase, 'draining');
   assert.equal(r.iso.listing()[0].drain, true, '清单上标排空：工作进程不再认领新的');
-  assert.deepEqual(r.iso.status().waiting, ['pB']);
-  // 手里的做完 → 结束、清空，下一拍轮到 pB（不是又回到 pA）
-  r.iso.tick({ candidates: [r.cand('pA'), r.cand('pB')], report: r.report('pA', { claimed: 6 }) });
+  // pB 撤回了：pA 接着做，不白清一遍
+  r.iso.tick({ candidates: [r.cand('pA')], report: r.report('pA', { held: ['t'], claimed: 1 }) });
+  assert.equal(r.iso.current.phase, 'running');
+  // 再来：手里那一个做完 → 结束、清空，下一拍装 pB
+  r.iso.tick({ candidates: [r.cand('pB', { look: true }), r.cand('pA')], report: r.report('pA', { held: ['t'], claimed: 1 }) });
+  r.iso.tick({ candidates: [r.cand('pB', { look: true }), r.cand('pA')], report: r.report('pA', { claimed: 1 }) });
   await r.flush();
   assert.deepEqual(r.calls.slice(2), ['stop:rotated', 'cleanup:pA']);
-  r.iso.tick({ candidates: [r.cand('pA'), r.cand('pB')] });
+  r.iso.tick({ candidates: [r.cand('pB', { look: true }), r.cand('pA')] });
   await r.flush();
-  assert.deepEqual(r.calls.slice(4), ['prepare:pB', 'start:pB'], '轮流：上一轮做的排到最后');
-
-  // pB 排空超时：到点让掉
-  r.iso.tick({ candidates: [r.cand('pA')], report: r.report('pB', { held: ['x'], claimed: 1 }) });
-  r.advance(ISOLATION_DEFAULTS.SLICE_MS);
-  r.iso.tick({ candidates: [r.cand('pA')], report: r.report('pB', { held: ['x'], claimed: 1 }) });
+  assert.deepEqual(r.calls.slice(4), ['prepare:pB', 'start:pB']);
+  // 出图的半路上不换走
+  r.iso.tick({ candidates: [r.cand('pC', { look: true }), r.cand('pB', { look: true })], report: r.report('pB'), looks: { wanted: () => true, busy: 'pB' } });
+  assert.equal(r.iso.current.phase, 'running', '正在出图：不标排空');
+  assert.equal(r.iso.current.worked, true);
+  // 出完了、pC 排第一：排空；手里一直有任务没完：到点让掉
+  r.iso.tick({ candidates: [r.cand('pC', { look: true })], report: r.report('pB', { held: ['x'] }), looks: { wanted: () => false, busy: null } });
   assert.equal(r.iso.current.phase, 'draining');
   r.advance(ISOLATION_DEFAULTS.DRAIN_MS);
-  r.iso.tick({ candidates: [r.cand('pA')], report: r.report('pB', { held: ['x'], claimed: 1 }) });
+  r.iso.tick({ candidates: [r.cand('pC', { look: true })], report: r.report('pB', { held: ['x'] }) });
   await r.flush();
   assert.deepEqual(r.calls.slice(6), ['stop:rotate-timeout', 'cleanup:pB']);
+});
+
+test('HR23 产流各项目轮流：一个项目做了一个任务（认领数涨了）就换下一个；刚装上的先做完它那一个；按请求轮，不按时间', async () => {
+  const r = isoRig();
+  const all = () => [r.cand('pA', { since: 1 }), r.cand('pB', { since: 2 }), r.cand('pC', { since: 3 })];
+  const loaded = [];
+  let claimed = 0;
+  // 三个项目都有很多产流任务排着；每装上一个，它认领、做完一个任务，再看下一拍装谁
+  for (let round = 0; round < 6; round += 1) {
+    r.iso.tick({ candidates: all() });
+    await r.flush();
+    const p = r.iso.current.projectId;
+    loaded.push(p);
+    claimed = 0;
+    r.iso.tick({ candidates: all(), report: r.report(p) });
+    assert.equal(r.iso.current.phase, 'running', '刚装上、还没做到一个：不换');
+    claimed = 1;
+    r.iso.tick({ candidates: all(), report: r.report(p, { held: ['t'], claimed }) });
+    assert.equal(r.iso.current.phase, 'draining', `${p} 做了一个任务：轮到别的项目，不再认领新的`);
+    r.iso.tick({ candidates: all(), report: r.report(p, { claimed }) });
+    await r.flush();
+  }
+  console.log('[HR23-RR] 隔离工作进程依次装的项目', loaded.join(' → '));
+  assert.deepEqual(loaded, ['pA', 'pB', 'pC', 'pA', 'pB', 'pC']);
+  // 只有一个项目有活：一直做，不来回装
+  r.iso.tick({ candidates: [r.cand('pA')] });
+  await r.flush();
+  const starts = r.calls.filter((c) => c.startsWith('start:')).length;
+  for (let n = 1; n <= 5; n += 1) r.iso.tick({ candidates: [r.cand('pA')], report: r.report('pA', { held: ['t'], claimed: n }) });
+  assert.equal(r.iso.current.phase, 'running');
+  assert.equal(r.calls.filter((c) => c.startsWith('start:')).length, starts, '只有它一个在排：不换');
+  assert.equal(r.iso.current.served, 5);
+});
+
+test('HR23 内存吃紧：没人排队时装着的项目空着就结束，不留缓存；有活时不打断', async () => {
+  const r = isoRig();
+  r.iso.tick({ candidates: [r.cand('pA')] });
+  await r.flush();
+  r.iso.tick({ candidates: [r.cand('pA')], report: r.report('pA', { held: ['t'], claimed: 1 }) });
+  r.iso.tick({ candidates: [], report: r.report('pA', { held: ['t'], claimed: 1 }), memoryLow: true });
+  assert.equal(r.iso.current.phase, 'running', '手里有任务：不打断');
+  r.iso.tick({ candidates: [], report: r.report('pA', { claimed: 1 }), memoryLow: true });
+  await r.flush();
+  assert.deepEqual(r.calls.slice(2), ['stop:memory', 'cleanup:pA']);
 });
 
 test('HR23 不反复重来：一轮下来什么都没认领到（等着的任务它做不了）就先不再为同一批任务起；任务变了才再起；起不来、进程自己没了、项目被关掉都收尾并清空', async () => {
@@ -160,7 +197,8 @@ test('HR23 不反复重来：一轮下来什么都没认领到（等着的任务
   r.iso.tick({ candidates: [r.cand('pA')] });
   await r.flush();
   r.iso.tick({ candidates: [r.cand('pA')], report: r.report('pA') });
-  r.advance(ISOLATION_DEFAULTS.IDLE_MS);
+  r.advance(ISOLATION_DEFAULTS.CACHE_MS);
+  // 等着的任务它一个也认领不了（工作进程报可认领 0）：空满 cacheMs 结束
   r.iso.tick({ candidates: [r.cand('pA')], report: r.report('pA') });
   await r.flush();
   assert.deepEqual(r.calls, ['prepare:pA', 'start:pA', 'stop:idle', 'cleanup:pA']);
@@ -196,7 +234,7 @@ test('HR23 不反复重来：一轮下来什么都没认领到（等着的任务
   await r.flush();
   assert.deepEqual(r.calls.slice(12), ['prepare:pC', 'start:pC', 'stop:not-listed', 'cleanup:pC']);
 
-  // 准备阶段失败（副本建不出来）：不起、清一遍、这一批先不再试
+  // 准备阶段失败（数据目录清不干净）：不起、清一遍、这一批先不再试
   r.setFailPrepare(true);
   r.iso.tick({ candidates: [r.cand('pD')] });
   await r.flush();
@@ -214,6 +252,7 @@ test('HR23 不反复重来：一轮下来什么都没认领到（等着的任务
   assert.deepEqual(r.calls.slice(18), ['prepare:pE', 'start:pE', 'stop:shutdown', 'cleanup:pE']);
   assert.equal(r.iso.active, false);
 });
+
 
 test('HR23 检出副本与数据目录：只拷源码、不拷依赖与数据；清空只清带记号的目录；副本在依赖所在目录之内时不建链接，之外时 Windows 上拒绝', (t) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-hr23-'));
