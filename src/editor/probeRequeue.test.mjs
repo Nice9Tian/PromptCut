@@ -111,7 +111,7 @@ test('Changing the cost backend still loads and measures the same source identit
 });
 
 test('A changed stage device still measures the same source for its new device', async () => {
-  device = 'new-device'; stageCaps = { lowMemory: true, offscreenGl: true };
+  device = 'new-device'; stageCaps = { compact: true, offscreenGl: true };
   R.requeueProbeRun(project);
   await until(() => R.probeSettledFor(project));
   assert.equal(jobs, 1);

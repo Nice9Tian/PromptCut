@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFakeIndexedDB } from "../testing/fakeIndexedDB.mjs";
 import {
-  openL2, mergeRanges, l2LimitOf, L2_SOFT_LIMIT_NORMAL, L2_SOFT_LIMIT_LOW, L2_RECLAIM_MIN, L2_RECLAIM_MAX, L2_DB_NAME, L2_STORES, MiB,
+  openL2, mergeRanges, l2LimitOf, L2_SOFT_LIMIT_DEFAULT, L2_SOFT_LIMIT_MIN, L2_SOFT_LIMIT_MAX, l2LimitByMemory, L2_RECLAIM_MIN, L2_RECLAIM_MAX, L2_DB_NAME, L2_STORES, MiB,
 } from "./l2.ts";
 
 const bytes = (n, fill = 1) => new Uint8Array(n).fill(fill);
@@ -50,35 +50,46 @@ test("C10-L2-02 写入即就绪:putRange 落定就通知订阅方,区间合并;�
   assert.deepEqual(mergeRanges([[5, 6], [0, 2], [3, 4]]), [[0, 6]]);
 });
 
-test("C10-L2-03 软上限:普通档 256 MiB、低内存档 64 MiB;estimate() 拿得到时取上限与剩余额度 10% 的较小者", async () => {
-  assert.equal(L2_SOFT_LIMIT_NORMAL, 256 * MiB);
-  assert.equal(L2_SOFT_LIMIT_LOW, 64 * MiB);
-  assert.equal(await l2LimitOf(false), 256 * MiB);
-  assert.equal(await l2LimitOf(true), 64 * MiB);
-  assert.equal(await l2LimitOf(false, async () => ({ quota: 10 * 1024 * MiB, usage: 0 })), 256 * MiB);
-  assert.equal(await l2LimitOf(false, async () => ({ quota: 1000 * MiB, usage: 200 * MiB })), 80 * MiB);
-  assert.equal(await l2LimitOf(true, async () => ({ quota: 2000 * MiB, usage: 0 })), 64 * MiB);
-  assert.equal(await l2LimitOf(false, async () => { throw new Error("no"); }), 256 * MiB);
-  assert.equal(await l2LimitOf(false, async () => ({})), 256 * MiB);
+test("C10-L2-03 软上限按实测到的环境分配(不按身份或档位定固定数):额度拿得到取剩余额度的 10% 夹在 [32 MiB, 1 GiB];拿不到按内存;都没有 128 MiB", async () => {
+  assert.equal(L2_SOFT_LIMIT_DEFAULT, 128 * MiB);
+  assert.equal(L2_SOFT_LIMIT_MIN, 32 * MiB);
+  assert.equal(L2_SOFT_LIMIT_MAX, 1024 * MiB);
+  // 拿不到额度:按内存(GiB × 32 MiB,夹在 64～256 MiB);内存也读不到(Safari、Firefox)取缺省
+  assert.equal(await l2LimitOf(), 128 * MiB);
+  assert.equal(await l2LimitOf(undefined, 1), 64 * MiB, "1 GB:夹到下界");
+  assert.equal(await l2LimitOf(undefined, 4), 128 * MiB);
+  assert.equal(await l2LimitOf(undefined, 8), 256 * MiB);
+  assert.equal(await l2LimitOf(undefined, 32), 256 * MiB, "夹到上界");
+  assert.equal(l2LimitByMemory(undefined), 128 * MiB);
+  assert.equal(l2LimitByMemory(-1), 128 * MiB);
+  // 额度拿得到:剩余额度的 10%,夹在 [32 MiB, 1 GiB]
+  assert.equal(await l2LimitOf(async () => ({ quota: 100 * 1024 * MiB, usage: 0 })), 1024 * MiB, "电脑上额度很大:1 GiB 封顶");
+  assert.equal(await l2LimitOf(async () => ({ quota: 1000 * MiB, usage: 200 * MiB })), 80 * MiB);
+  assert.equal(await l2LimitOf(async () => ({ quota: 100 * MiB, usage: 0 })), 32 * MiB, "额度小:不低于 32 MiB");
+  assert.equal(await l2LimitOf(async () => ({ quota: 40 * MiB, usage: 20 * MiB })), 20 * MiB, "下界也不超过剩余额度本身");
+  assert.equal(await l2LimitOf(async () => ({ quota: 1000 * MiB, usage: 200 * MiB }), 1), 80 * MiB, "额度拿得到时不看内存");
+  // 额度问不出:退回按内存
+  assert.equal(await l2LimitOf(async () => { throw new Error("no"); }, 8), 256 * MiB);
+  assert.equal(await l2LimitOf(async () => ({})), 128 * MiB);
 });
 
 test("C10-L2-04 自有 LRU:超软上限时同一个事务里先删最久没用的块;读命中刷新次序;costs 不参与淘汰", async () => {
   const idb = createFakeIndexedDB();
-  // 剩余额度 100 MiB → 上限 10 MiB
+  // 剩余额度 100 MiB → 10% 是 10 MiB,夹到下界 32 MiB
   const l2 = await openL2({ indexedDB: idb, estimate: async () => ({ quota: 100 * MiB, usage: 0 }), now: clock() });
-  assert.equal(l2.limit(), 10 * MiB);
+  assert.equal(l2.limit(), 32 * MiB);
   await l2.putCost("c1", { stepMs: 1 });
-  for (let i = 1; i <= 3; i++) await l2.putBlock(key(i), bytes(3 * MiB));
+  for (let i = 1; i <= 3; i++) await l2.putBlock(key(i), bytes(10 * MiB));
   // 读 1:1 变成最近用过的
   assert.ok(await l2.getBlock(key(1)));
   const before = idb.log.length;
-  await l2.putBlock(key(4), bytes(3 * MiB));
+  await l2.putBlock(key(4), bytes(10 * MiB));
   const tx = idb.log.slice(before).find((t) => t.mode === "readwrite");
   assert.deepEqual(tx.ops.map((o) => o.op), ["delete", "put"], "删与写在同一个事务里");
   assert.deepEqual(tx.ops.filter((o) => o.op === "delete").map((o) => o.key), [key(2)]);
   assert.ok(l2.hasBlock(key(1)) && l2.hasBlock(key(3)) && l2.hasBlock(key(4)));
   assert.ok(!l2.hasBlock(key(2)));
-  assert.ok(l2.stats().bytes <= 10 * MiB);
+  assert.ok(l2.stats().bytes <= 32 * MiB);
   assert.deepEqual(await l2.getCost("c1"), { stepMs: 1 }, "costs 不参与淘汰");
   l2.close();
 });
@@ -146,13 +157,13 @@ test("C10-L2-07 事务 abort 也接住(不挂):非配额错误的写失败退回
   assert.notEqual(got, "hang");
 });
 
-test("C10-L2-08 重开不丢块;低内存档的上限 64 MiB;没有 IndexedDB 时退回只放内存", async () => {
+test("C10-L2-08 重开不丢块;上限跟环境走(内存 2 GB、拿不到额度 → 64 MiB);没有 IndexedDB 时退回只放内存", async () => {
   const idb = createFakeIndexedDB();
-  const a = await openL2({ indexedDB: idb, lowMemory: true, now: clock() });
+  const a = await openL2({ indexedDB: idb, deviceMemory: 2, estimate: async () => ({}), now: clock() });
   assert.equal(a.limit(), 64 * MiB);
   await a.putBlock("px/" + "a".repeat(64), bytes(100, 3), "image/webp");
   a.close();
-  const b = await openL2({ indexedDB: idb, lowMemory: true });
+  const b = await openL2({ indexedDB: idb });
   assert.ok(b.hasBlock("px/" + "a".repeat(64)));
   assert.equal((await b.getBlock("px/" + "a".repeat(64))).type, "image/webp");
   b.close();

@@ -3,9 +3,9 @@
  * 跑：node --test server/test/c10-l2.test.mjs
  *
  *   C10-L2-01 一个库、三张表（costs、snapshots、ranges），没有 backups（浏览器本地只放能重新拉回的缓存）；
- *   C10-L2-02 软上限的两个数 256 MiB、64 MiB 由 L2 模块导出；
- *   C10-L2-03 软上限取「上限」与「剩余额度的 10%」的较小者，由页面自己的 LRU 守住（普通档，剩余 200 MiB → 20 MiB）；
- *   C10-L2-04 低内存档 64 MiB（剩余额度很大时）；
+ *   C10-L2-02 软上限按环境分配的几个数（32 MiB、1 GiB、128 MiB）由 L2 模块导出（2026-10-22 起不按档定固定数，原来是 256 / 64 MiB）；
+ *   C10-L2-03 软上限取「剩余额度的 10%」夹在 [32 MiB, 1 GiB]，由页面自己的 LRU 守住（剩余 320 MiB → 32 MiB）；
+ *   C10-L2-04 拿不到额度时按内存：报 2 GB → 64 MiB；
  *   C10-L2-05 LRU：读过的块比没读过的晚淘汰；留下的总是最近用过的；
  *   C10-L2-06 costs 不参与淘汰；
  *   C10-L2-07/08 QuotaExceededError（请求报错 / 只有事务 abort 两种）：一个事务回收 16～64 MiB 再试一次，成功；
@@ -34,15 +34,15 @@ const restores = [];
 afterEach(() => { while (restores.length) restores.pop()(); });
 
 /** 装桩并打开 L2；`remaining` 是 `estimate()` 报的剩余额度 */
-async function setup({ lowMemory = false, remaining = 10 * 1024 * MiB, quotaBytes = Infinity, quotaMode = 'request' } = {}) {
+async function setup({ deviceMemory, remaining = 10 * 1024 * MiB, noEstimate = false, quotaBytes = Infinity, quotaMode = 'request' } = {}) {
   const factory = new FakeIDBFactory({ quotaBytes, quotaMode });
   restores.push(installFakeIndexedDB(factory));
-  const estimate = async () => ({ quota: factory.usage() + remaining, usage: factory.usage() });
-  const nav = { ...(globalThis.navigator ?? {}), storage: { estimate, persist: async () => false, persisted: async () => false } };
+  const estimate = noEstimate ? undefined : async () => ({ quota: factory.usage() + remaining, usage: factory.usage() });
+  const nav = { ...(globalThis.navigator ?? {}), ...(deviceMemory ? { deviceMemory } : {}), storage: noEstimate ? { persist: async () => false } : { estimate, persist: async () => false, persisted: async () => false } };
   restores.push(stubGlobal('navigator', nav));
   let clock = 1_000_000;
   const now = () => (clock += 1);
-  const l2 = await openL2(gate, { indexedDB: factory, lowMemory, estimate, now });
+  const l2 = await openL2(gate, { indexedDB: factory, deviceMemory, estimate, now });
   restores.push(() => { try { l2.close(); } catch { /* 忽略 */ } });
   return { factory, l2 };
 }
@@ -59,52 +59,51 @@ it('C10-L2-01 一个库、三张表：costs、snapshots、ranges；没有 backup
   assert.deepEqual(factory.storeNamesOf(l2DbName(factory)), L2_TABLES);
 });
 
-it('C10-L2-02 软上限的两个数：256 MiB（普通档）、64 MiB（低内存档）由 L2 模块导出', async () => {
+it('C10-L2-02 软上限按环境分配的几个数由 L2 模块导出（不按档定固定数）', async () => {
   const mod = await importRepo(gate.file);
   const nums = exportedNumbers(mod);
-  assert.ok(nums.includes(L2_SOFT_LIMIT.normal), `L2 模块导出里没有 256 MiB（${L2_SOFT_LIMIT.normal}）：${JSON.stringify(nums)}`);
-  assert.ok(nums.includes(L2_SOFT_LIMIT.low), `L2 模块导出里没有 64 MiB（${L2_SOFT_LIMIT.low}）：${JSON.stringify(nums)}`);
+  for (const [name, v] of Object.entries(L2_SOFT_LIMIT)) assert.ok(nums.includes(v), `L2 模块导出里没有 ${name}（${v / MiB} MiB）：${JSON.stringify(nums)}`);
 });
 
-it('C10-L2-03 普通档：剩余 200 MiB 时软上限是 20 MiB（取 256 MiB 与剩余 10% 的较小者），LRU 守住', async () => {
-  const { factory, l2 } = await setup({ remaining: 200 * MiB });
-  const limit = 20 * MiB;
+it('C10-L2-03 剩余 320 MiB 时软上限是 32 MiB（剩余 10%，夹在 [32 MiB, 1 GiB]），LRU 守住', async () => {
+  const { factory, l2 } = await setup({ remaining: 320 * MiB });
+  const limit = 32 * MiB;
   const keys = [];
   for (let i = 0; i < 12; i++) {
     keys.push(snapKey(i));
     await l2.putBlock(keys[i], block(4 * MiB));
-    assert.ok(storedBlockBytes(factory) <= limit, `写第 ${i + 1} 块之后库里 ${storedBlockBytes(factory) / MiB} MiB，超过软上限 20 MiB`);
+    assert.ok(storedBlockBytes(factory) <= limit, `写第 ${i + 1} 块之后库里 ${storedBlockBytes(factory) / MiB} MiB，超过软上限 32 MiB`);
   }
   assert.ok(blockRecords(factory, keys.at(-1)).length > 0, '最新写的块在库里');
-  assert.ok(storedBlockBytes(factory) >= 12 * MiB, `淘汰过头：只剩 ${storedBlockBytes(factory) / MiB} MiB（软上限 20 MiB，4 MiB 一块至少该留 3 块）`);
+  assert.ok(storedBlockBytes(factory) >= 24 * MiB, `淘汰过头：只剩 ${storedBlockBytes(factory) / MiB} MiB（软上限 32 MiB，4 MiB 一块至少该留 6 块）`);
   // 留下的是最近写的一段后缀
   const kept = keys.map((k) => blockRecords(factory, k).length > 0);
   const firstKept = kept.indexOf(true);
   assert.ok(kept.slice(firstKept).every(Boolean), `留下的不是最近写的那一段：${JSON.stringify(kept)}`);
 });
 
-it('C10-L2-04 低内存档：剩余额度很大时软上限 64 MiB', async () => {
-  const { factory, l2 } = await setup({ lowMemory: true, remaining: 10 * 1024 * MiB });
+it('C10-L2-04 拿不到额度（没有 storage.estimate）时按内存：报 2 GB → 64 MiB', async () => {
+  const { factory, l2 } = await setup({ deviceMemory: 2, noEstimate: true });
   for (let i = 0; i < 20; i++) {
     await l2.putBlock(snapKey(i), block(4 * MiB));
-    assert.ok(storedBlockBytes(factory) <= L2_SOFT_LIMIT.low, `写第 ${i + 1} 块之后库里 ${storedBlockBytes(factory) / MiB} MiB，超过 64 MiB`);
+    assert.ok(storedBlockBytes(factory) <= L2_SOFT_LIMIT.memoryMin, `写第 ${i + 1} 块之后库里 ${storedBlockBytes(factory) / MiB} MiB，超过 64 MiB`);
   }
   assert.ok(storedBlockBytes(factory) >= 48 * MiB, `淘汰过头：只剩 ${storedBlockBytes(factory) / MiB} MiB`);
 });
 
 it('C10-L2-05 LRU：读过的块比没读过的晚淘汰', async () => {
-  const { factory, l2 } = await setup({ remaining: 200 * MiB }); // 软上限 20 MiB
+  const { factory, l2 } = await setup({ remaining: 320 * MiB }); // 软上限 32 MiB
   const k = (i) => snapKey(i, 'c');
-  for (let i = 0; i < 5; i++) await l2.putBlock(k(i), block(4 * MiB)); // 正好 20 MiB
+  for (let i = 0; i < 8; i++) await l2.putBlock(k(i), block(4 * MiB)); // 正好 32 MiB
   assert.equal(lenOf(await l2.getBlock(k(0))), 4 * MiB, '第 0 块读得回来');
-  await l2.putBlock(k(5), block(4 * MiB));
+  await l2.putBlock(k(8), block(4 * MiB));
   assert.ok(blockRecords(factory, k(0)).length > 0, '刚读过的第 0 块不该被淘汰');
   assert.equal(blockRecords(factory, k(1)).length, 0, '最久没用的第 1 块该先被淘汰');
-  assert.ok(blockRecords(factory, k(5)).length > 0);
+  assert.ok(blockRecords(factory, k(8)).length > 0);
 });
 
 it('C10-L2-06 costs 不参与淘汰', async () => {
-  const { factory, l2 } = await setup({ remaining: 200 * MiB });
+  const { factory, l2 } = await setup({ remaining: 320 * MiB });
   for (let i = 0; i < 40; i++) await l2.putCost(`card-${i}|env-1`, { stepMs: i, kind: 'random' });
   for (let i = 0; i < 12; i++) await l2.putBlock(snapKey(i, 'd'), block(4 * MiB));
   assert.equal(factory.records(l2DbName(factory), 'costs').length, 40, 'costs 表 40 条一条不少');

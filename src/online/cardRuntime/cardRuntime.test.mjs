@@ -312,19 +312,18 @@ test("OCE-T-08 运行状态:摊到卡上;编辑页面一侧的先后;面板说�
   assert.deepEqual([...states], [["a", { state: "ready" }], ["a2", { state: "ready" }], ["b", { state: "load-error", detail: "炸了" }]]);
   const cards = [{ id: "a", name: "a", source: `${U}a.tsx` }, { id: "b", name: "b", source: `${U}b.tsx` }, { id: "c", name: "c", source: `${U}c.tsx` }, { id: "d", name: "d", source: `${U}d.tsx` }];
   const bundles = [{ ok: true, entry: `${U}a.tsx`, bundle: { generation: "gen-a-1" } }, { ok: false, entry: `${U}b.tsx`, state: { state: "missing-module", detail: "lodash" } }, { ok: true, entry: `${U}c.tsx`, bundle: { generation: "gen-c-1" } }];
-  const st = (extra) => Object.fromEntries([...ERS.editorRunStates({ cards, lowMemory: false, available: true, bundles, ...extra })].map(([id, s]) => [id, s.state]));
-  assert.deepEqual(st({ lowMemory: true }), { a: "low-memory", b: "low-memory", c: "low-memory", d: "low-memory" }, "低内存档排最前");
+  const st = (extra) => Object.fromEntries([...ERS.editorRunStates({ cards, available: true, bundles, ...extra })].map(([id, s]) => [id, s.state]));
   assert.deepEqual(st({ available: false }), { a: "not-isolated", b: "not-isolated", c: "not-isolated", d: "not-isolated" });
   assert.deepEqual(st({}), { a: "loading", b: "missing-module", c: "loading", d: "loading" }, "转译不成的用转译的;舞台还没报的、还没转的在载入");
   const A = new Map([["a", { state: "ready" }], ["c", { state: "ready" }]]), B = new Map([["a", { state: "ready" }], ["c", { state: "gpu" }]]);
   assert.deepEqual(st({ stages: [A, null, B] }), { a: "ready", b: "missing-module", c: "gpu", d: "loading" }, "两台舞台不一样时取运行不了的那个");
   // 能运行的带上这一代的短签名(成本身份里的源码版本用它):同一代同一个,换代换一个
-  const verOf = (gen) => ERS.editorRunStates({ cards, lowMemory: false, available: true, stages: [A], bundles: [{ ok: true, entry: `${U}a.tsx`, bundle: { generation: gen } }] }).get("a").version;
+  const verOf = (gen) => ERS.editorRunStates({ cards, available: true, stages: [A], bundles: [{ ok: true, entry: `${U}a.tsx`, bundle: { generation: gen } }] }).get("a").version;
   assert.equal(typeof verOf("gen-a-1"), "string");
   assert.equal(verOf("gen-a-1"), verOf("gen-a-1"));
   assert.notEqual(verOf("gen-a-1"), verOf("gen-a-2"));
-  assert.equal(ERS.editorRunStates({ cards, lowMemory: false, available: false, blockedDetail: "这个站点没有开启在线运行用户卡与素材效果卡", bundles: [] }).get("a").detail, "这个站点没有开启在线运行用户卡与素材效果卡");
-  // 十种状态各有说明(ready、loading 不出)
+  assert.equal(ERS.editorRunStates({ cards, available: false, blockedDetail: "这个站点没有开启在线运行用户卡与素材效果卡", bundles: [] }).get("a").detail, "这个站点没有开启在线运行用户卡与素材效果卡");
+  // 九种状态各有说明(ready、loading 不出;原来的第十种随旧档位 2026-10-22 删掉)
   const msg = (s) => ERS.runStateMessage(s);
   assert.equal(msg({ state: "ready" }), null);
   assert.equal(msg({ state: "loading" }), null);
@@ -337,8 +336,7 @@ test("OCE-T-08 运行状态:摊到卡上;编辑页面一侧的先后;面板说�
   assert.equal(msg({ state: "runtime-error" }), "这张卡在在线浏览器里运行出错,本次改由渲染节点提供画面。");
   assert.equal(msg({ state: "not-isolated" }), "这个页面没有隔离的运行环境,用户卡与素材效果卡的画面由渲染节点提供。");
   assert.equal(msg({ state: "not-isolated", detail: "这个站点没有开启在线运行用户卡与素材效果卡" }), "这个站点没有开启在线运行用户卡与素材效果卡,用户卡与素材效果卡的画面由渲染节点提供。");
-  assert.equal(msg({ state: "low-memory" }), "这台设备在低内存档,不运行同步来的用户卡与素材效果卡的代码,画面由渲染节点提供。");
-  assert.equal(R.CARD_RUN_STATES.length, 10);
+  assert.equal(R.CARD_RUN_STATES.length, 9);
   for (const s of R.CARD_RUN_STATES) if (s !== "ready" && s !== "loading") assert.ok(msg({ state: s }), s);
 });
 

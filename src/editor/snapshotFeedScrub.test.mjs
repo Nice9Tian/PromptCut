@@ -7,7 +7,7 @@
  *   - **有流不读快照**:就算快照表盖着这一帧,也不选帧、不取字节、不点名 `awaiting`、不报缺口;
  *   - 这一帧所在分段没就绪 / 根本没有流的卡,落回快照这条路(现状),不抑制;
  *   - 追到精确活渲(`settled`)的卡不再抑制,但流平面照发(把播放头下这一帧先解好);下一次 `setTime`、起播照常;
- *   - 组流整条判;超出解码器预算的层抑制着、落到快照;低内存档暂停着照现状不发流平面;
+ *   - 组流整条判;超出解码器预算的层抑制着、落到快照;最低一档(只有一个舞台)暂停着照现状不发流平面;
  *   - 片段不从 15 的倍数帧开始:按这条流自己的第一帧换算。
  */
 import { srcUrl } from "../testing/registerTs.mjs";
@@ -177,49 +177,49 @@ test("大于 1080p 或高于 60 帧的项目:同屏 6 条以内不看像素,都�
   }
 });
 
-test("低内存档:播放、暂停、拖动都发流平面,每条带 first(只解分段第一帧);快照已退役不选小尺寸", () => {
+test("最低一档:播放、暂停、拖动都发流平面,每条带 first(只解分段第一帧);快照已退役不选小尺寸", () => {
   const p = project([card("h"), card("n")]);
   plan = heavyEverywhere("h", "n");
   src.push(html("h", [[0, 299]]));
   src.push(html("n", [[0, 299]]));
   src.push(stream("h", [[0, 19]]));
   for (const playing of [false, true]) {
-    const f = planFeed({ project: p, t: at(37), playing, lowMemory: true });
+    const f = planFeed({ project: p, t: at(37), playing, single: true, lowest: true });
     assert.deepEqual(f.streamPlanes, [{ clipIds: ["h"], key: "s-h", ranges: [[0, 19]], originFrame: 0, first: true }], `playing=${playing}`);
     assert.deepEqual(f.overPlanes, []);
     assert.equal(f.picks.size, 0, "小尺寸快照退役");
   }
-  // 普通档的流平面不带 first(照常逐帧解)
+  // 别的档的流平面不带 first(照常逐帧解)
   assert.deepEqual(planFeed({ project: p, t: at(37), playing: true }).streamPlanes, [{ clipIds: ["h"], key: "s-h", ranges: [[0, 19]], originFrame: 0 }]);
   // 这一帧所在分段的流还没就绪(只有第 0、1 段,播放头在第 2 段):不发流平面,不选小尺寸
   src.push(stream("h", [[0, 1]]));
-  const late = planFeed({ project: p, t: at(37), playing: false, lowMemory: true });
+  const late = planFeed({ project: p, t: at(37), playing: false, single: true, lowest: true });
   assert.deepEqual(late.streamPlanes, []);
   assert.equal(late.picks.size, 0);
   assert.deepEqual(late.scrub, ["h", "n"]);
 });
 
-test("低内存档的预算:小卡同屏只放 4 条(解码器个数),满屏卡只放 2 条(画幅之和);超出的标 over;普通档同样的卡都放得下", () => {
+test("最低一档的预算:小卡同屏只放 4 条(解码器个数),满屏卡只放 2 条(画幅之和);超出的标 over;别的档同样的卡都放得下", () => {
   const ids = ["a", "b", "c", "d", "e", "f"];
   const head = (p, extra = {}) => ({ project: p, t: at(37), playing: true, ...extra });
   // 六张小卡(框 320×240)
   const small = project(ids.map((id) => ({ ...card(id), frame: { x: 0, y: 0, w: 320, h: 240 } })));
   plan = heavyEverywhere(...ids);
   for (const id of ids) { src.push(html(id, [[0, 299]])); src.push(stream(id, [[0, 19]])); }
-  const s = planFeed(head(small, { lowMemory: true }));
+  const s = planFeed(head(small, { single: true, lowest: true }));
   assert.deepEqual(s.streamPlanes.map((x) => x.clipIds[0]), ["a", "b", "c", "d"]);
   assert.ok(s.streamPlanes.every((x) => x.first === true));
   assert.deepEqual(s.overPlanes.map((x) => [x.clipIds[0], x.over, "first" in x]), [["e", true, false], ["f", true, false]]);
   assert.equal(s.picks.size, 0, "小尺寸快照退役");
-  assert.equal(streamPlanesAt(head(small, { lowMemory: true })).length, 6, "发给舞台的是放行的 4 条加超出的 2 条(只为摆占位符)");
-  assert.equal(planFeed(head(small)).streamPlanes.length, 6, "普通档:6 条都放");
-  // 六张满屏卡:低内存档放 2 条;60 帧每秒的项目也是 2 条(开销不乘项目帧率)
+  assert.equal(streamPlanesAt(head(small, { single: true, lowest: true })).length, 6, "发给舞台的是放行的 4 条加超出的 2 条(只为摆占位符)");
+  assert.equal(planFeed(head(small)).streamPlanes.length, 6, "别的档:6 条都放");
+  // 六张满屏卡:最低一档放 2 条;60 帧每秒的项目也是 2 条(开销不乘项目帧率)
   for (const fps of [30, 60]) {
     const full = { ...project(ids.map((id) => card(id))), fps };
-    const f = planFeed({ project: full, t: 1, playing: true, lowMemory: true });
+    const f = planFeed({ project: full, t: 1, playing: true, single: true, lowest: true });
     assert.deepEqual(f.streamPlanes.map((x) => x.clipIds[0]), ["a", "b"], `fps ${fps}`);
     assert.equal(f.overPlanes.length, 4);
-    assert.equal(planFeed({ project: full, t: 1, playing: true }).streamPlanes.length, 6, "普通档:6 条以内不看像素");
+    assert.equal(planFeed({ project: full, t: 1, playing: true }).streamPlanes.length, 6, "别的档:6 条以内不看像素");
   }
 });
 

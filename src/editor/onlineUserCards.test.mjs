@@ -66,7 +66,7 @@ test("OU-01 clipIdentityOf:在线时本页运行不了的卡没有身份,能运�
     assert.equal(on2.identityKeys.x, undefined, "两边都没有的 id 照旧没有身份");
     assert.equal(CI.clipIdentityOf(p), on2, "没变就用记忆");
     // 运行状态:只有 ready 才有身份;源码版本取这一代的短签名,换代换键
-    for (const state of ["loading", "unsupported-syntax", "missing-module", "load-error", "gpu", "media", "runtime-error", "not-isolated", "low-memory"]) {
+    for (const state of ["loading", "unsupported-syntax", "missing-module", "load-error", "gpu", "media", "runtime-error", "not-isolated"]) {
       R.setCardRunStates([["synced-card", { state }]]);
       assert.equal(CI.clipIdentityOf(p).identityKeys.s, undefined, `${state}:本页运行不了,没有身份`);
     }
@@ -76,13 +76,15 @@ test("OU-01 clipIdentityOf:在线时本页运行不了的卡没有身份,能运�
     assert.equal(ready1.capabilities.has("s"), true);
     R.setCardRunStates([["synced-card", { state: "ready", version: "g2" }]]);
     assert.notEqual(CI.clipIdentityOf(p).identityKeys.s, ready1.identityKeys.s, "源码换代:身份跟着换(重新测量)");
-    // 2026-10-21 起低内存档不另挡用户卡:构建时的用户卡本页能运行,低内存档里照内置卡有身份(停下追精确帧)
-    D.setPlanLowMemory(true);
+    // 2026-10-21 起不按档另挡用户卡:构建时的用户卡本页能运行,最低一档、按界限搜索判时都照内置卡有身份(停下追精确帧)
+    D.setPlanLowest(true);
+    D.setPlanSearch(true);
     const low = CI.clipIdentityOf(p);
-    assert.ok(low.identityKeys.u, "低内存档:构建时的用户卡照旧有身份");
-    assert.ok(low.identityKeys.b, "低内存档:内置卡照旧有身份");
-    D.setPlanLowMemory(false);
-    assert.ok(CI.clipIdentityOf(p).identityKeys.u, "回到普通档:照旧有");
+    assert.ok(low.identityKeys.u, "最低一档:构建时的用户卡照旧有身份");
+    assert.ok(low.identityKeys.b, "最低一档:内置卡照旧有身份");
+    D.setPlanLowest(false);
+    D.setPlanSearch(false);
+    assert.ok(CI.clipIdentityOf(p).identityKeys.u, "两样都关:照旧有");
   } finally {
     H.setOnlineBrowserMode(false);
     R.setSyncedUserCards([]);
@@ -134,12 +136,12 @@ test("OU-02 planDispatch:在线时本页运行不了的卡一律判重、进预�
     R.setCardRunStates([["synced-card", { state: "unsupported-syntax", detail: "namespace" }]]);
     await settle();
     assert.deepEqual([...D.currentPlan().prerenderSet], ["g", "s"], "运行不了:判重");
-    // 低内存档(2026-10-21 起不另挡用户卡):构建时的用户卡照内置卡按界限搜索的结果判
-    D.setPlanLowMemory(true);
-    D.setPlanLowMemoryLight([keys.b, keys.u]);
+    // 只有一个舞台按界限搜索判时(2026-10-21 起不按档另挡用户卡):构建时的用户卡照内置卡按界限搜索的结果判
+    D.setPlanSearch(true);
+    D.setPlanSearchLight([keys.b, keys.u]);
     await settle();
-    assert.equal(D.judgedPlan().prerenderSet.has("u"), false, "低内存档:构建时的用户卡照界限搜索的结果判轻");
-    assert.equal(D.judgedPlan().prerenderSet.has("b"), false, "低内存档:内置卡照界限搜索的结果判轻");
+    assert.equal(D.judgedPlan().prerenderSet.has("u"), false, "按界限搜索判:构建时的用户卡照界限搜索的结果判轻");
+    assert.equal(D.judgedPlan().prerenderSet.has("b"), false, "按界限搜索判:内置卡照界限搜索的结果判轻");
   } finally {
     H.setOnlineBrowserMode(false);
     R.setSyncedUserCards([]);
@@ -170,13 +172,15 @@ test("OU-05 未知卡片(两边都没有定义):桌面与在线都不测、不�
       const tag = online ? "在线" : "桌面";
       assert.equal(CI.clipIdentityOf(p).identityKeys.x, undefined, `${tag}:未知卡片没有身份(测量不挑它)`);
       assert.ok(CI.clipIdentityOf(p).identityKeys.b, `${tag}:内置卡照旧有身份`);
-      assert.equal(D.currentPlan().prerenderSet.has("x"), false, `${tag}:不进预渲染集合(清单计划、低内存档预渲染重试都不含它)`);
+      assert.equal(D.currentPlan().prerenderSet.has("x"), false, `${tag}:不进预渲染集合(清单计划不含它)`);
       assert.ok(!D.currentPlan().segments.some((sg) => sg.heavy.has("x") || sg.light.has("x")), `${tag}:分派表里没有它`);
-      D.setPlanLowMemory(true);
+      D.setPlanLowest(true);
+      D.setPlanSearch(true);
       await settle();
-      assert.equal(D.currentPlan().prerenderSet.has("x"), false, `${tag}:低内存档全部判重的显示表里也没有它`);
-      assert.equal(D.judgedPlan().prerenderSet.has("x"), false, `${tag}:低内存档判定表里也没有它`);
-      D.setPlanLowMemory(false);
+      assert.equal(D.currentPlan().prerenderSet.has("x"), false, `${tag}:最低一档全部判重的显示表里也没有它`);
+      assert.equal(D.judgedPlan().prerenderSet.has("x"), false, `${tag}:按界限搜索判的判定表里也没有它`);
+      D.setPlanLowest(false);
+      D.setPlanSearch(false);
       await settle();
     } finally {
       H.setOnlineBrowserMode(false);

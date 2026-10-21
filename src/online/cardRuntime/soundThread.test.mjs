@@ -11,7 +11,7 @@
  *   OCE-A-04 编辑页面的分派(`cardAudio.ts`):内置卡在页面里求值,同步来的卡只交给隔离的声音宿主;没有宿主、载入不成、要读素材、
  *            两种卡串在一起的合成不了并说明原因;宿主回的坏块不要;编辑页面里同步卡的替身一调就抛;桌面运行环境不变
  *   OCE-A-05 轻重与生成:同步来的卡的声音照 B 的规则测量(只经宿主拿采样块,不建音频上下文、不播)、判轻合成、判重不合成;
- *            低内存档不测不合成(现有规则不动);生成持久产物的采样全部来自宿主
+ *            生成持久产物的采样全部来自宿主(原来按档不测不合成的那条 2026-10-07 撤销)
  *   OCE-A-06 守门:编辑页面、导出页、声音适配层的源码不引加载器与声音线程;声音线程的包名与白名单一致;线程入口放开用户卡的声音
  */
 import { srcUrl } from "../../testing/registerTs.mjs";
@@ -389,15 +389,14 @@ test("OCE-A-04 编辑页面的分派:内置卡在页面里求值,同步来的卡
   } finally { editorCleanup(); }
 });
 
-test("OCE-A-05 轻重与生成:测量只经宿主拿采样块(不出声),判轻合成、判重不合成;低内存档不测;持久产物的采样来自宿主", async () => {
+test("OCE-A-05 轻重与生成:测量只经宿主拿采样块(不出声),判轻合成、判重不合成;持久产物的采样来自宿主", async () => {
   editorSetup();
   const audioLog = [];
   const realAC = globalThis.AudioContext, realURL = globalThis.URL.createObjectURL;
   globalThis.AudioContext = class { constructor() { audioLog.push("AudioContext"); } };
   globalThis.URL.createObjectURL = (...a) => { audioLog.push("createObjectURL"); return realURL ? realURL.apply(globalThis.URL, a) : "blob:x"; };
   const store = SC.createMemorySoundCostStore();
-  let lowMemory = false;
-  const restore = J.configureOnlineSoundJudge({ online: () => true, lowMemory: () => lowMemory, store: () => store, device: () => "test-device" });
+  const restore = J.configureOnlineSoundJudge({ online: () => true, store: () => store, device: () => "test-device" });
   try {
     const p = editorProject();
     const s = p.tracks[0].clips.find((c) => c.id === "s"), x = p.tracks[0].clips.find((c) => c.id === "x");
@@ -423,18 +422,10 @@ test("OCE-A-05 轻重与生成:测量只经宿主拿采样块(不出声),判轻�
     const key = J.soundTargetOf(p, s).soundKey;
     await store.putCost(SC.soundCostStoreKey(key, "test-device"), { soundKey: key, kind: "card", device: "test-device", blockMs: 200, blockMaxMs: 220, blockFrames: 4096, sampleRate: 48000, samples: 16, measuredAt: 1 });
     J.configureOnlineSoundJudge({})();
-    const restore2 = J.configureOnlineSoundJudge({ online: () => true, lowMemory: () => lowMemory, store: () => store, device: () => "test-device" });
+    const restore2 = J.configureOnlineSoundJudge({ online: () => true, store: () => store, device: () => "test-device" });
     d = await J.decideClipSound(p, s);
     assert.deepEqual([d.synth, d.reason], [false, "heavy"]);
     restore2();
-    // 低内存档:不测、不合成(它现有的规则)
-    lowMemory = true;
-    const before = iso.calls.length;
-    const p2 = editorProject();
-    d = await J.decideClipSound(p2, p2.tracks[0].clips.find((c) => c.id === "s"));
-    assert.deepEqual([d.synth, d.reason], [false, "low-memory"]);
-    assert.equal(iso.calls.length, before, "低内存档不去宿主");
-    lowMemory = false;
 
     // 生成持久产物:整段采样来自宿主,WAV 的声道数、帧数对
     const iso2 = fakeIsolated({ value: 0.5, channels: 2 });

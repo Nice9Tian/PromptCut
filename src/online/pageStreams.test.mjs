@@ -20,9 +20,9 @@
  *          这一轮之后再调马上回;换一轮时钟重来
  *   PS-15  测量时的那一份记账在清单计划发出来之前留着;计划发出来就换成计划的,测量时产的稀疏版查得到、不重产,之后才补满密度
  *   PS-16  测量时本页还没当上节点:等 MEASURE_READY_WAIT_MS,等到了照常产,等不到回 incapable(归闲时)
- *   PS-17  低内存模式下 isConfigSupported 通过时只产稀疏版、不产满密度版
- *   PS-18  低内存模式下 isConfigSupported 返回不支持时停产退回
- *   PS-19  低内存模式下编码连错 3 次时停产退回
+ *   PS-17  只为本页产稀疏版(身份为手机、只有一个舞台)时 isConfigSupported 通过:只产稀疏版、不产满密度版
+ *   PS-18  只为本页产稀疏版时 isConfigSupported 返回不支持:停产退回
+ *   PS-19  只为本页产稀疏版时编码连错 3 次:停产退回
  *
  * 跑:npm test -- src/online/pageStreams.test.mjs
  */
@@ -569,10 +569,10 @@ test("PS-16 测量时本页还没当上节点:等一会儿,等到了照常产,�
   assert.equal(never.w.produced.length, 0);
 });
 
-test("PS-17 低内存模式下 isConfigSupported 通过时只产稀疏版、不产满密度版", async () => {
+test("PS-17 只为本页产稀疏版时 isConfigSupported 通过:只产稀疏版、不产满密度版", async () => {
   let checkedConfig = null;
   const { w, pages, run, finish } = rig({
-    lowMemory: true,
+    sparseOnly: true,
     passes: undefined,
     isConfigSupported: async (cfg) => { checkedConfig = cfg; return true; },
   });
@@ -593,12 +593,12 @@ test("PS-17 低内存模式下 isConfigSupported 通过时只产稀疏版、不�
   assert.equal(w.produced.length, 2, "绝不产满密度版 (不会开工 dense)");
   const dbg = pages.debug();
   assert.equal(dbg.state, "done");
-  assert.ok(dbg.jobs.every((j) => j.pass === "sparse"), "低内存模式下任务清单里只有稀疏版");
+  assert.ok(dbg.jobs.every((j) => j.pass === "sparse"), "只为本页产稀疏版:任务清单里只有稀疏版");
 });
 
-test("PS-18 低内存模式下 isConfigSupported 返回不支持时停产退回", async () => {
+test("PS-18 只为本页产稀疏版时 isConfigSupported 返回不支持:停产退回", async () => {
   const { w, pages, run } = rig({
-    lowMemory: true,
+    sparseOnly: true,
     passes: undefined,
     isConfigSupported: async () => false,
   });
@@ -613,7 +613,7 @@ test("PS-18 低内存模式下 isConfigSupported 返回不支持时停产退回"
 
   // 2. 测量趟入口
   const measureRig = rig({
-    lowMemory: true,
+    sparseOnly: true,
     passes: undefined,
     isConfigSupported: async () => false,
   });
@@ -623,10 +623,10 @@ test("PS-18 低内存模式下 isConfigSupported 返回不支持时停产退回"
   assert.equal(measureRig.w.produced.length, 0, "测量趟不支持时不产流");
 });
 
-test("PS-19 低内存模式下编码连错 3 次时停产退回", async () => {
+test("PS-19 只为本页产稀疏版时编码连错 3 次:停产退回", async () => {
   let produceCalls = 0;
   const { w, pages, run } = rig({
-    lowMemory: true,
+    sparseOnly: true,
     passes: undefined,
     isConfigSupported: async () => true,
     produce: () => {
@@ -647,7 +647,7 @@ test("PS-19 低内存模式下编码连错 3 次时停产退回", async () => {
   // 测量趟中连续失败 3 次停产并回 failed
   let measureProduceCalls = 0;
   const measureRig = rig({
-    lowMemory: true,
+    sparseOnly: true,
     passes: undefined,
     isConfigSupported: async () => true,
     produce: () => {

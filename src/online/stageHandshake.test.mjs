@@ -1,5 +1,5 @@
 /**
- * 在线普通档两个跨源舞台的首次握手计时(`stageHandshake.ts`,〔裁〕2026-09-30 `claude/stage-handshake`):
+ * 在线页面两个跨源舞台的首次握手计时(`stageHandshake.ts`,〔裁〕2026-09-30 `claude/stage-handshake`):
  * 每台从自己 iframe 的 `load` 起算 20 秒,另有自打开起的总上限;慢加载不退回,加载完握不上照旧退回。
  * 跑:node --test src/online/stageHandshake.test.mjs
  */
@@ -9,7 +9,7 @@ import { createStageHandshake, STAGE_HANDSHAKE_TOTAL_MS, STAGE_INTERIM_AFTER_MS 
 import { markStageHandshake, onlineStageState, resetOnlineStagesForTest, stageLayout, STAGE_HANDSHAKE_TIMEOUT_MS } from "./stageOrigins.ts";
 
 const origins = { A: "https://s1.x.io", B: "https://s2.x.io" };
-const layout = () => stageLayout({ lowMemory: false, origins, handshake: onlineStageState().handshake });
+const layout = () => stageLayout({ single: false, origins, handshake: onlineStageState().handshake });
 
 function fakeClock() {
   let t = 0;

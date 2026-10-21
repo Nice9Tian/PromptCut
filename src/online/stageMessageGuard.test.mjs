@@ -138,10 +138,10 @@ test("OCS-M-05 RPC 回包:只许普通对象、数组、字符串、布尔、nul
 });
 
 test("OCS-M-06 握手里的宿主能力表:只认六项、各按类型收;多出来的字段不带", () => {
-  assert.deepEqual(sanitizeHostCapabilities({ prerender: true, offscreenGl: true, lowMemory: false, measure: true, catchUp: true, stageId: "B", ticket: "v1.a.b" }),
-    { prerender: true, offscreenGl: true, lowMemory: false, measure: true, catchUp: true, stageId: "B" });
-  assert.deepEqual(sanitizeHostCapabilities({ prerender: "yes", offscreenGl: 1, lowMemory: { a: 1 }, measure: [], catchUp: null, stageId: "Z" }),
-    { prerender: false, offscreenGl: false, lowMemory: false, measure: false, catchUp: false, stageId: "A" });
+  assert.deepEqual(sanitizeHostCapabilities({ prerender: true, offscreenGl: true, compact: true, glRoute: "shared", lowest: true, measure: true, catchUp: true, stageId: "B", ticket: "v1.a.b" }),
+    { prerender: true, offscreenGl: true, compact: true, glRoute: "shared", lowest: true, measure: true, catchUp: true, stageId: "B" });
+  assert.deepEqual(sanitizeHostCapabilities({ prerender: "yes", offscreenGl: 1, compact: { a: 1 }, glRoute: "evil", lowest: "1", measure: [], catchUp: null, stageId: "Z" }),
+    { prerender: false, offscreenGl: false, compact: false, glRoute: null, lowest: false, measure: false, catchUp: false, stageId: "A" });
   for (const bad of [null, undefined, "caps", 42, [], "x".repeat(1024 * 1024)]) assert.equal(sanitizeHostCapabilities(bad), null);
 });
 

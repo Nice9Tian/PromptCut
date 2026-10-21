@@ -1,8 +1,9 @@
 /**
- * 低内存档贴轨道流:每个分段只解第一帧(`streamPlayer.ts` 的 `presentFirst`;用户 2026-10-13 定:手机、平板身份的在线浏览器改贴轨道流的稀疏版)。
+ * 最低一档贴轨道流:每个分段只解第一帧(`streamPlayer.ts` 的 `presentFirst`;用户 2026-10-13 定「性能不足时只贴稀疏版、同时活着的解码器给得少」,
+ * 2026-10-22 起归最低一档)。
  * 跑:npm test -- src/render/streamFirstFrame.test.mjs
  *
- * 真解码要浏览器,端到端在 `scripts/probes/page-stream-probe.mjs --only lowmem`。这里解码器、画布、时钟是假的,分段是真的
+ * 真解码要浏览器,端到端在 `scripts/probes/page-stream-probe.mjs --only lowest`。这里解码器、画布、时钟是假的,分段是真的
  * (`streamMux.ts` 封的 fMP4),钉住:
  *
  *   - 帧号换算只有一处(`streamSegments.mjs` 的 `streamFirstFrameOf`),片段不从 15 的倍数帧开始也对;
@@ -11,7 +12,7 @@
  *   - 解码帧:稳态每条流只留画布上那一张,换分段的那一下两张;停下全部关掉;
  *   - 这一段的字节没到:留着上一张,最多一个分段的时长,到时清空;
  *   - 浏览器没有 `VideoDecoder`、解码器连着报错:不贴(不再试),不抛错;
- *   - 低内存档的预算(`streamBudget.mjs` 的 `sparseStreamBudget`):条数、画幅之和、头一条不看像素;
+ *   - 最低一档的预算(`streamBudget.mjs` 的 `sparseStreamBudget`):条数、画幅之和、头一条不看像素;
  *   - 父页给舞台发流平面时 `first` 原样带到(`StreamPlaneSender`)。
  */
 import { test, beforeEach } from 'node:test';
@@ -345,7 +346,7 @@ test('报错一次以后解出来了:失败次数清零,照常贴', async () => 
   assert.equal(p.track().firstFailures, 0);
 });
 
-test('不带 first 的流平面照旧逐帧解(普通档不受影响)', async () => {
+test('不带 first 的流平面照旧逐帧解(别的档不受影响)', async () => {
   const s = streamOf(0, 44, { first: false });
   const p = playerFor(s);
   p.seek(7);
@@ -359,7 +360,7 @@ test('不带 first 的流平面照旧逐帧解(普通档不受影响)', async ()
 
 /* ---------------------------------------------------------------- 预算 */
 
-test('低内存档的预算:解码器不超过 4 个;画幅之和不超过两张 1080p 满屏卡;头一条不看像素', () => {
+test('最低一档的预算:解码器不超过 4 个;画幅之和不超过两张 1080p 满屏卡;头一条不看像素', () => {
   const budget = sparseStreamBudget();
   assert.deepEqual(budget, { count: SPARSE_STREAM_COUNT, pixelRate: SPARSE_STREAM_PIXELS * STREAM_BUDGET_MIN_FPS, free: SPARSE_STREAM_FREE });
   assert.equal(SPARSE_STREAM_COUNT, 4);
@@ -381,7 +382,7 @@ test('低内存档的预算:解码器不超过 4 个;画幅之和不超过两张
   assert.deepEqual(pass(['a', 'b'].map(plane), { a: uhd, b: small }), ['a']);
   // 项目帧率不进这一档的开销:60 帧的项目放的和 30 帧一样多(调用方传的是 STREAM_BUDGET_MIN_FPS)
   assert.deepEqual(planesWithinBudget(['a', 'b', 'c'].map(plane), STREAM_BUDGET_MIN_FPS, () => full, budget).length, 2);
-  // 不给预算就是普通档的那一组数(6 条以内不看像素)
+  // 不给预算就是别的档的那一组数(6 条以内不看像素)
   assert.equal(planesWithinBudget(['a', 'b', 'c', 'd', 'e', 'f'].map(plane), 60, () => full).length, 6);
 });
 

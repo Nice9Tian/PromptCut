@@ -19,7 +19,7 @@
  */
 
 import { ONLINE } from "../online/mode";
-import { lowestTier, singleStageTier, tierGlRoute } from "../online/onlineTier";
+import { singleStageTier, tierStart } from "../online/onlineTier";
 import { onlineStageState, stageLayout } from "../online/stageOrigins";
 import { STAGE_ENTRY_FILE } from "../online/isolation/stageGuard";
 
@@ -138,7 +138,8 @@ export function stageSrc(id: StageId, opts: { dual?: boolean } = {}): string {
    * (图集按小的上限开)、`lowest=1` 最低一档(素材起手只用小尺寸,不等父页的取档策略到了才改)。
    */
   const dualFlag = dual ? "&dual=1" : "";
-  const tier = ONLINE ? `&gl=${tierGlRoute()}${dual ? "" : "&compact=1"}${lowestTier() ? "&lowest=1" : ""}` : "";
+  // 只按页面载入时定下的起手样子拼(`tierStart`):试的途中换路线走 RPC `setGlRoute`,基准卡判出最低一档走取档策略,都不改地址(改了 iframe 就重新载入)
+  const tier = ONLINE ? `&gl=${tierStart().route}${dual ? "" : "&compact=1"}${tierStart().lowest ? "&lowest=1" : ""}` : "";
   /*
    * 在线的跨源舞台载单独的舞台入口 `stage.html`(同一份脚本包;契约 `online-card-exec-contract.md` 第 3.3 节):它带舞台的内容安全策略
    * (`<meta>` 兜底),加固与自检按这个路径认它(`isolation/stageGuard.ts`)。桌面运行环境端口未起时的退回地址一个字不变。

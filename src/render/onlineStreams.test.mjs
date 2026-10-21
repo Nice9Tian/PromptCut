@@ -421,7 +421,7 @@ test('新订阅方:先 reset,再把手里已有的流的层全量发一遍;层�
   src.stop();
 });
 
-test('低内存档、浏览器没有 VideoDecoder:不消费流 —— streams 表在,也不取流清单、不发流的层(照没有流办)', async () => {
+test('最低一档、浏览器没有 VideoDecoder:不消费流 —— streams 表在,也不取流清单、不发流的层(照没有流办)', async () => {
   const w = world();
   const rk = RK(0xa);
   w.putStream(rk, 0, 7);
@@ -441,7 +441,7 @@ test('低内存档、浏览器没有 VideoDecoder:不消费流 —— streams �
   }
 });
 
-test('低内存档、浏览器解得了:照普通档的路取流(层表、清单、分段),发同样的就绪消息;流字节的内存上限用小的那一个', async () => {
+test('最低一档、浏览器解得了:照别的档的路取流(层表、清单、分段),发同样的就绪消息;流字节的内存上限用小的那一个', async () => {
   const w = world();
   const rk = RK(0xa);
   const put = w.putStream(rk, 0, 7);
@@ -460,7 +460,7 @@ test('低内存档、浏览器解得了:照普通档的路取流(层表、清单
   const plane = low.src.streamPlane(rk);
   assert.ok(plane && plane.blocks.has(put.initHash) && plane.blocks.has(put.hashes[0]));
   assert.equal(plane.manifest.segments['0'].file, put.hashes[0], '分段整段取(块按哈希存取)');
-  // 和普通档取到的是同一批东西
+  // 和别的档取到的是同一批东西
   const w2 = world();
   w2.putStream(rk, 0, 7);
   w2.putMap([row()]);
@@ -475,7 +475,7 @@ test('低内存档、浏览器解得了:照普通档的路取流(层表、清单
   normal.src.stop();
 });
 
-test('低内存档、这条流的编码配置浏览器不支持:清单照取,但分段的字节不取、不算就绪(父页照没有流办:小尺寸 → 占位符)', async () => {
+test('最低一档、这条流的编码配置浏览器不支持:清单照取,但分段的字节不取、不算就绪(父页照没有流办:落到占位符)', async () => {
   const w = world();
   const rk = RK(0xa);
   const put = w.putStream(rk, 0, 7);
@@ -640,7 +640,7 @@ test('BO-stale 依赖下层的流过期:下层或目标卡改了,旧流撤掉、
   src.stop();
 });
 
-test('BO-lowmem 低内存档:浏览器没有 VideoDecoder 时不消费依赖下层的流;解得了就照普通档同一套(带 streamKind 与输入签名)', async () => {
+test('BO-lowest 最低一档:浏览器没有 VideoDecoder 时不消费依赖下层的流;解得了就照别的档同一套(带 streamKind 与输入签名)', async () => {
   const w = world();
   const rk = RK(0xb);
   w.putStream(rk, 0, 7, { clipIds: ['glass'], kind: 'below' });
@@ -657,9 +657,9 @@ test('BO-lowmem 低内存档:浏览器没有 VideoDecoder 时不消费依赖下�
   await w.settle(normal.src);
   await w.settle(normal.src);
   const a = last(low.streamMessages()), b = last(normal.streamMessages());
-  assert.ok(a && a.ranges.length, '低内存档取到了依赖下层的流');
+  assert.ok(a && a.ranges.length, '最低一档取到了依赖下层的流');
   assert.equal(a.streamKind, 'below');
-  assert.deepEqual(a, b, '和普通档发的是同一条就绪消息');
+  assert.deepEqual(a, b, '和别的档发的是同一条就绪消息');
   low.src.stop();
   normal.src.stop();
 });

@@ -10,7 +10,7 @@ import { actions, getState, useStore } from "../store/project";
 import { findClip, type Project } from "../kernel/project";
 import { nudgeFrame } from "../kernel/layout";
 import { createStageRpc, type HostCapabilities, type StageGraphCapability, type StageMediaPolicy, type StageRpcClient } from "../render/stageRpc";
-import { frontStage, onStageEvent, pushProject, releaseStageClient, setStageClient, swapStageClients, syncProject } from "./stageBridge";
+import { frontStage, onStageEvent, pushProject, releaseStageClient, setStageClient, swapStageClients, syncProject, whenStageReady } from "./stageBridge";
 import { bindStageCards, noteStageCards, noteStageFresh } from "./stageCards";
 import { INITIAL_ROLE_OF, STAGE_IDS, dualStage, interimStage, liveStage, singleLiveStage, stageOrigins, stageSrc, stageTargetOrigin, type StageId } from "./previewMode";
 import { ControlBar } from "./preview/ControlBar";
@@ -34,7 +34,10 @@ import { useUserEditing } from "./userEditing";
 import { createSharedGl, type SharedGl } from "../render/gl/glParent";
 import { resolveGlRoute } from "../render/costDevice.mjs";
 import { ONLINE } from "../online/mode";
-import { lowestTier, phoneIdentity, singleStageTier, subscribeTier, tierGlRoute, tierState } from "../online/onlineTier";
+import { lowestTier, phoneIdentity, subscribeTier, tierGlRoute, tierState } from "../online/onlineTier";
+import { stageGate } from "../online/stageGate";
+import { TierBubble } from "./TierBubble";
+import { GateViewer, gateViewerWanted } from "./GateViewer";
 import { setMediaTierPolicy, type MediaTierPolicy } from "../render/mediaTier";
 import { assetAuthHeaders, docRequest, hasDocLink, remoteAssetBase, remoteAssetTicket, remoteAssetTicketInfo, setNoEditorProcess, subscribeRemoteAssets } from "./media/assetTiers";
 import { currentDocProjectId, currentSharedLink, getSyncView, pageSession, pushToast, subscribeQueueEvents } from "./sync/syncManager";
@@ -146,6 +149,11 @@ function mediaGatePolicy(lowest: boolean): Pick<MediaTierPolicy, "smallOnly" | "
   return { smallOnly: lowest, decodeMaxPixels: null, smallFirst: true };
 }
 
+/** 查看口:素材闸门的结果(第四步接上) */
+function mediaGateSnapshot(): unknown {
+  return null;
+}
+
 function l2SearchCostStore(): CostStore {
   const fallback = createMemoryCostStore();
   const l2 = () => pageL2().catch(() => null);
@@ -218,7 +226,12 @@ export function Preview(props: { variant?: "mobile" } = {}) {
    * 状态变了要重渲(`dualStage()` 读的是这一份)。运行配置还没取完时先不挂舞台 iframe,免得先按同源挂上、再换源重载一次。
    */
   const onlineStages = useSyncExternalStore(subscribeOnlineStages, onlineStageState, onlineStageState);
-  const stagesPending = ONLINE && onlineStages.config !== "done";
+  /*
+   * 在线浏览器这一次的档位(`src/online/onlineTier.ts`):舞台闸门在页面载入时定下(`online/stageGate.ts`,`boot.ts` 开),
+   * 定下之前(要问别的标签页、读崩溃记录)和运行配置还没取完一样,先不挂舞台。
+   */
+  const tierNow = useSyncExternalStore(subscribeTier, tierState, tierState);
+  const stagesPending = ONLINE && (onlineStages.config !== "done" || !tierNow.online);
   const dual = dualStage();
   /**
    * 首次握手的过渡期(`stageHandshake.ts` 的 `interim`,〔裁〕2026-09-30 `claude/stage-handshake`):可见舞台 A 挂上 20 秒还没握上,
@@ -251,7 +264,6 @@ export function Preview(props: { variant?: "mobile" } = {}) {
    * - `lowest`:最低一档:播放时不做任何即时渲染(显示用的表全部判重)、素材只用小尺寸、轨道流只贴稀疏版。
    * 桌面恒为假。
    */
-  const tierNow = useSyncExternalStore(subscribeTier, tierState, tierState);
   const lowest = ONLINE && lowestTier(tierNow);
   const lowestRef = useRef(lowest);
   lowestRef.current = lowest;
@@ -926,8 +938,70 @@ export function Preview(props: { variant?: "mobile" } = {}) {
   /** 跨源舞台 iframe 的 `load`(跨源也触发;预热期间也是它):首次握手按它起算;A 加载完才挂 B */
   const onStageFrameLoad = useCallback((id: StageId) => {
     handshakeRef.current?.loaded(id);
-    if (id === "A") setBackStageMount(true);
+    // 在线页面的后台舞台由舞台闸门挂(可见舞台就绪、载入项目之后才试后台舞台,下面那个 effect);桌面照旧 A 加载完就挂
+    if (id === "A" && !ONLINE) setBackStageMount(true);
   }, []);
+  /*
+   * 舞台闸门(语义 `product/platforms.md`「在线浏览器」;做法 `mechanism/platforms.md`「舞台闸门的步骤」第 2～5 条):
+   * 可见舞台握上手、载入项目 → 记「可见舞台就绪」;要试第二级就记「开始试后台舞台」再挂 B,两个舞台都握上手并载入项目后记「双舞台已载入」;
+   * 要试第三级就记「开始试每个舞台各一套渲染器」,两台原地换到路线 1(`setGlRoute`,不重建舞台),回包后记下;走完之后这次使用期间
+   * 停在到达的那一级。护栏内、崩过、安卓不到 8 GB 的(`fixed`)不试,只把舞台按那一级挂好。每一步的记录写在崩溃记录里(`stageGate.ts`)。
+   * 握手容错(握不上、握上又断就退回单舞台)只管当次、不留崩溃记录(下面另一个 effect)。
+   */
+  const gateRunRef = useRef(false);
+  const [gateDiag, setGateDiag] = useState<string>("");
+  useEffect(() => {
+    if (!ONLINE || !stageReady || gateRunRef.current) return;
+    const g = stageGate();
+    if (!g) return;
+    gateRunRef.current = true;
+    const trying = !g.decision.fixed;
+    const mark = (what: Parameters<typeof g.stage>[0]) => { if (trying) g.stage(what); };
+    void (async () => {
+      try {
+        await syncProject("front", getState().project);
+        mark("visible-ready");
+        g.reached(1);
+        if (tierState().target < 2 || !dualRef.current) { g.done(); return; }
+        mark("try-back");
+        setBackStageMount(true);
+        const back = await whenStageReady("back");
+        if (!dualRef.current) return; // 握手失败退回了单舞台(下面那个 effect 收摊)
+        await syncProject("back", getState().project);
+        mark("dual-loaded");
+        g.reached(2);
+        if (tierState().target < 3) { g.done(); return; }
+        mark("try-separate");
+        const front = frontStage();
+        const results = await Promise.all([front, back].map((c) => c?.setGlRoute("perDocument").catch(() => null) ?? Promise.resolve(null)));
+        if (!dualRef.current) return;
+        if (results.some((r) => !r)) { g.done(); return; } // 换不过去(舞台在换):这次停在第二级
+        mark("separate-ready");
+        g.reached(3);
+        // 共用的那一个 Worker 不再有人用:放掉(第三级每个舞台各一套)
+        sharedGlRef.current?.dispose();
+        sharedGlRef.current = null;
+        g.done();
+      } catch (e) {
+        setGateDiag(String((e as Error)?.message ?? e).slice(0, 200));
+        stageGate()?.done();
+      }
+    })();
+  }, [stageReady]);
+  /* 握手容错:握不上手、握上又断而退回单舞台(只管当次,不留崩溃记录;语义「三道闸门」的握手容错照旧) */
+  useEffect(() => {
+    if (!ONLINE || onlineStages.handshake !== "failed") return;
+    const g = stageGate();
+    if (g && tierState().target !== 1) g.fallback(1);
+  }, [onlineStages.handshake]);
+  /* 查看口与探针:此刻各闸门的结果与崩溃记录(不含凭证;`?gates=1` 的面板读同一份) */
+  useEffect(() => {
+    if (!ONLINE) return;
+    const w = window as unknown as Record<string, unknown>;
+    w.__pcGates = () => ({ ...(stageGate()?.snapshot() ?? null), media: mediaGateSnapshot(), driverError: gateDiag || null });
+    return () => { delete w.__pcGates; };
+  }, [gateDiag]);
+
   /*
    * 过渡期之后换回双舞台(只换一次):两个预热 iframe 已经接任 A / B(同一个元素,没重新加载),照它们预热时发来的
    * `pc-stage-ready` 补一遍握手(建 RPC、定角色、灌项目);同源单舞台留作盖板,直到新的可见舞台画好当前这一帧。
@@ -2373,6 +2447,7 @@ export function Preview(props: { variant?: "mobile" } = {}) {
         ))}
       </div>}
       {online && single && <CostSearchGate />}
+      {online && gateViewerWanted() && <GateViewer />}
 
       {view === "2d" && !mobile && <ToolBar tool={tool} onToolChange={setTool} zoom={cam.scale} fitted={cam.auto} onFit={fitToWindow} />}
 
@@ -2390,6 +2465,8 @@ export function Preview(props: { variant?: "mobile" } = {}) {
         * 藏起来的那一页 `inset: 0` 铺在同一块地方,窗口尺寸不变,切回 2D 不用重新适应缩放。
         */}
       <div style={{ position: "relative", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+      {/* 档位气泡:舞台闸门走完、进入编辑界面后在预览窗口上方显示一次,几秒后自动消失(`TierBubble.tsx`) */}
+      {online && <TierBubble ready={stageReady > 0} />}
       {view === "3d" && (
         <div className="pc-pv-stage" style={{ position: "relative" }}>
           <Scene3DView project={project} t={t} />

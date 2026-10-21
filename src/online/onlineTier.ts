@@ -39,9 +39,14 @@ export interface TierState {
   lowest: null | "stage" | "benchmark";
   /** 身份（iPad 已按到达的级别改判） */
   identity: DeviceKind;
+  /**
+   * 即时渲染闸门的基准卡:还没测(`pending`)、跑得动(`ok`)、跑不动(`slow`,进最低一档)、不测(`skipped`:已经是最低一档、桌面)。
+   * 档位气泡等它有了结论才出(最多等 `BUBBLE_WAIT_MS`)。
+   */
+  benchmark: "pending" | "ok" | "slow" | "skipped";
 }
 
-const DESKTOP: TierState = Object.freeze({ online: false, target: 3, reached: 3, gate: "done", lowest: null, identity: "desktop" }) as TierState;
+const DESKTOP: TierState = Object.freeze({ online: false, target: 3, reached: 3, gate: "done", lowest: null, identity: "desktop", benchmark: "skipped" }) as TierState;
 
 let state: TierState = DESKTOP;
 const listeners = new Set<(s: TierState) => void>();
@@ -51,10 +56,23 @@ function emit(): void {
 }
 
 /** 页面载入时定下（在线页面由 `stageGate.ts` 的 `beginStageGate` 调；桌面不调，恒为桌面的样子） */
-export function initTier(next: Omit<TierState, "reached" | "gate"> & Partial<Pick<TierState, "reached" | "gate">>): void {
-  const reached = next.reached ?? (next.target === 1 ? 1 : 1);
-  state = { online: next.online, target: next.target, reached, gate: next.gate ?? (next.target === reached ? "done" : "trying"), lowest: next.lowest, identity: next.identity };
+export function initTier(next: Omit<TierState, "reached" | "gate" | "benchmark"> & Partial<Pick<TierState, "reached" | "gate" | "benchmark">>): void {
+  const reached = next.reached ?? 1;
+  state = {
+    online: next.online, target: next.target, reached, gate: next.gate ?? (next.target === reached ? "done" : "trying"), lowest: next.lowest, identity: next.identity,
+    benchmark: next.benchmark ?? (next.lowest ? "skipped" : "pending"),
+  };
+  start = { route: next.online && reached < 3 ? "shared" : "perDocument", lowest: next.online && next.lowest !== null };
   emit();
+}
+
+/**
+ * 页面载入时定下的起手样子(舞台 iframe 的地址只按它拼:地址变了 iframe 就得重新载入,试的途中、基准卡出结论之后都不能变)。
+ * 起手的路线:要试的从共用起(第二级);定下停在第三级的各一套。
+ */
+let start: { route: TierGlRoute; lowest: boolean } = { route: "perDocument", lowest: false };
+export function tierStart(): Readonly<typeof start> {
+  return start;
 }
 
 export function tierState(): Readonly<TierState> {
@@ -91,6 +109,18 @@ export function markLowest(reason: "stage" | "benchmark"): void {
   state = { ...state, lowest: reason };
   emit();
 }
+
+/** 基准卡的结论(跑不动的同时进最低一档) */
+export function setBenchmark(result: "ok" | "slow" | "skipped"): void {
+  if (!state.online || state.benchmark === result) return;
+  state = { ...state, benchmark: result, lowest: result === "slow" && !state.lowest ? "benchmark" : state.lowest };
+  emit();
+}
+
+/** 档位气泡最多等基准卡这么久(舞台闸门走完之后算) */
+export const BUBBLE_WAIT_MS = 15_000;
+/** 档位气泡显示多久后自动消失(「几秒后自动消失」,用户定) */
+export const BUBBLE_SHOW_MS = 5_000;
 
 /** 身份改了（iPad 按到达的级别改判） */
 export function setIdentity(identity: DeviceKind): void {
@@ -149,5 +179,6 @@ export const TIER_LABEL: Readonly<Record<TierName, string>> = Object.freeze({
 /** 测试用 */
 export function resetTierForTest(next: TierState | null = null): void {
   state = next ?? DESKTOP;
+  start = { route: state.online && state.reached < 3 ? "shared" : "perDocument", lowest: state.online && state.lowest !== null };
   listeners.clear();
 }

@@ -2,8 +2,8 @@
  * 舞台(`Stage.tsx`)上这台设备跑不了的卡(C10 契约第 9 节,2026-09-29 用户改语义)。服务端渲染出 HTML 来核,跑:
  *   node --test src/render/stageLocalOnly.test.mjs
  *
- *   SL-01 在线浏览器模式:构建时就在包里的用户卡照常挂组件,低内存档也一样(2026-10-21 用户定「暂停时渲染出精确的帧」,
- *         低内存档不再挡本页能运行的卡);同步来的用户卡没有定义时不挂组件,包裹层照内置重卡的路子挂流平面与抑制占位
+ *   SL-01 在线浏览器模式:构建时就在包里的用户卡照常挂组件(2026-10-21 用户定「暂停时渲染出精确的帧」,
+ *         不按档挡本页能运行的卡);同步来的用户卡没有定义时不挂组件,包裹层照内置重卡的路子挂流平面与抑制占位
  *         (撤快照后无快照平面);占位槽位默认 `hidden`(进显隐调度),一律是沙漏(`awaiting`),预览缩到多小都没有
  *         「需要本地 PC 渲染辅助」(2026-10-21 用户定撤掉);沙漏按预览缩放补偿(`fit`);两边都没有的 id 不画
  *   SL-02 模式关着(桌面、导出、预渲染):用户卡、素材效果卡照常挂组件,同步表不起作用,没有 `unsupported`
@@ -47,7 +47,7 @@ async function withStage(fn) {
 /** 某个片段的包裹层(到下一个包裹层为止) */
 const wrapOf = (html, id) => html.match(new RegExp(`<div data-pc-clip="${id}"[\\s\\S]*?(?=<div data-pc-clip=|$)`))?.[0] ?? null;
 
-test("SL-01 在线:本页运行不了的卡不挂组件,照挂流平面与抑制占位,占位一律是沙漏;能运行的用户卡(低内存档也是)照常挂;未知 id 不画", () => withStage(async ({ R, H, render, marker }) => {
+test("SL-01 在线:本页运行不了的卡不挂组件,照挂流平面与抑制占位,占位一律是沙漏;能运行的用户卡照常挂;未知 id 不画", () => withStage(async ({ R, H, render, marker }) => {
   H.setOnlineBrowserMode(true);
   H.setPlaceholdersEnabled(true);
   try {
@@ -57,11 +57,8 @@ test("SL-01 在线:本页运行不了的卡不挂组件,照挂流平面与抑制
     assert.match(b, /data-test-component="builtin"/, "内置卡照常挂组件");
     // 2026-10-06(online-card-exec-contract.md 第 6 节):构建时就在包里的用户卡是页面自己的代码,照内置卡挂组件
     assert.match(wrapOf(html, "u"), /data-test-component="mine"/, "构建时的用户卡照常挂组件");
-    // 2026-10-21:低内存档不再挡本页能运行的用户卡(停下时要画出精确的帧)
-    H.setLocalOnlyLowMemory(true);
+    // 2026-10-21 起不按档挡本页能运行的用户卡(停下时要画出精确的帧);原来那道按档的开关 2026-10-22 删掉
     const lowHtml = render(props);
-    assert.match(wrapOf(lowHtml, "u"), /data-test-component="mine"/, "低内存档:构建时的用户卡照常挂组件");
-    H.setLocalOnlyLowMemory(false);
     // 同步来的卡在舞台里载入成功(运行时注册表里有定义):照常挂组件;没载入的(v)照旧不挂
     R.setRuntimeCards([{ id: "synced-card", name: "同步卡", defaults: {}, controls: [], frameMode: "direct", Component: marker("synced") }]);
     const live = render({ snapshots: new Map(), suppressed: new Set(), awaiting: new Set(), settling: new Map() });
@@ -93,7 +90,6 @@ test("SL-01 在线:本页运行不了的卡不挂组件,照挂流平面与抑制
     const back = render({ snapshots: new Map(), suppressed: new Set() });
     assert.doesNotMatch(wrapOf(back, "v"), /data-test-component|data-pc-placeholder-slot/);
   } finally {
-    H.setLocalOnlyLowMemory(false);
     H.setPlaceholderViewScale(1);
     R.setRuntimeCards([]);
     H.setOnlineBrowserMode(false);

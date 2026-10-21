@@ -215,13 +215,13 @@ test("settled 状态影响 suppressedAt 与 scrub", () => {
 });
 
 /*
- * c10a 契约第 17 节「停下追当前一帧」取代了原来的「低内存档不追活渲」:低内存档停下时舞台把当前这一帧追一次,
- * 画好的层收 `settled`,和普通档一样暂停中不再抑制;下一次 setTime / 播放照常进入抑制。
+ * c10a 契约第 17 节「停下追当前一帧」(2026-10-22 起归「只有一个舞台」):停下时舞台在可见舞台里把当前这一帧逐层追一次,
+ * 画好的层收 `settled`,和双舞台一样暂停中不再抑制;下一次 setTime / 播放照常进入抑制。
  */
-test("低内存档停下追一帧画好的层(settled)暂停中不再抑制;下一次 setTime 照常进入抑制", () => {
+test("单舞台停下追一帧画好的层(settled)暂停中不再抑制;下一次 setTime 照常进入抑制", () => {
   const p = project([card("h", 0, 10)]);
   plan = heavyEverywhere("h");
-  const head = { project: p, t: 1, playing: false, lowMemory: true };
+  const head = { project: p, t: 1, playing: false, single: true, lowest: true };
   assert.deepEqual(suppressedAt(head), ["h"]);
   noteSettled("front", ["h"]);
   assert.deepEqual(suppressedAt(head), []);
@@ -250,11 +250,11 @@ test("快照退役后不再向预渲染进程上报 wanted 缺口", () => {
   assert.deepEqual(wantedPushed, []);
 });
 
-test("低内存档:小尺寸快照退役,picks 恒为空,未就绪重卡在暂停时进 scrub 占位", () => {
+test("最低一档:小尺寸快照退役,picks 恒为空,未就绪重卡在暂停时进 scrub 占位", () => {
   const p = project([card("h", 0, 10)]);
   plan = heavyEverywhere("h");
   src.push(layer("h", [[1, 27], [32, 119]]));
-  const f = planFeed({ project: p, t: 1, playing: false, lowMemory: true });
+  const f = planFeed({ project: p, t: 1, playing: false, single: true, lowest: true });
   assert.equal(f.picks.size, 0);
   assert.deepEqual(f.scrub, ["h"]);
 });

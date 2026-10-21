@@ -11,8 +11,8 @@ import { captureInviteFromLocation } from "./invite";
 import { markOnlinePage } from "./pageFlag";
 import { loadStageConfig } from "./stageOrigins";
 import { bootStageGuard } from "./isolation/stageGuard";
-import { initTier } from "./onlineTier";
-import { currentDeviceKind } from "./deviceKind";
+import { bootStageGate, forcedTierOf } from "./stageGate";
+import { CODE_VERSION } from "./buildInfo";
 
 // 跨源舞台(在线构建的 `stage.html`):加固与自检排在别的模块求值之前、任何卡片代码之前(契约 `online-card-exec-contract.md` 第 3 节)。
 // 桌面运行环境、编辑器页、同源单舞台不做事
@@ -23,5 +23,5 @@ bootApiGuard(ONLINE, { base: import.meta.env.BASE_URL });
 captureInviteFromLocation();
 const editorPage = ONLINE && typeof location !== "undefined" && !new URLSearchParams(location.search).has("stage");
 if (editorPage) void loadStageConfig({ base: import.meta.env.BASE_URL });
-// 在线浏览器这一次的档位(`onlineTier.ts`):舞台闸门接上之前按两个舞台各一套渲染器(原来的在线页面就是这样)
-if (editorPage) initTier({ online: true, target: 3, reached: 3, gate: "done", lowest: null, identity: currentDeviceKind().kind });
+// 舞台闸门(`stageGate.ts`):读崩溃记录、定这次试到哪一级,结果交给 `onlineTier.ts`;`?tier=` 只给开发和验收用
+if (editorPage) void bootStageGate({ version: CODE_VERSION ?? "dev", env: { forced: forcedTierOf(location.search) } });

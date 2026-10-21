@@ -3,7 +3,7 @@
  * 跑:node --test src/online/modeImportGuard.test.mjs
  *
  * `mode.ts` 的内容按 C10a 契约第 2 节逐字节固定:`import.meta.env.VITE_PC_ONLINE === "1"`。Node 里没有 `import.meta.env`,
- * 谁在 Node 里载到它就当场抛 TypeError(c10a-lowmem 中途踩过:`C65B-V7-01` 载 `io/index.ts` 挂了)。所以:
+ * 谁在 Node 里载到它就当场抛 TypeError(c10a 实现中途踩过:`C65B-V7-01` 载 `io/index.ts` 挂了)。所以:
  *   - 会被单测载入的模块要用 `ONLINE` 的,按需 `await import(".../online/mode")`,或由调用方把 `online` 传进来;
  *   - 单测自己要载一个静态引了 `mode.ts` 的模块,就先 `mock.module(srcUrl("online/mode.ts"), …)` 换成桩。
  *
