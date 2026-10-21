@@ -101,7 +101,13 @@
 
 ### 4. 全量
 
-（见下一节补记。）
+带 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT`、`PROMPTCUT_PASSWORD_ORDER_MODULE` 跑 `npm test`，在提交 `5d63ac83` 的代码上：EXIT=0；tests 7425、pass 7410、fail 0、cancelled 0、skipped 15、todo 0，用时 197 秒，「npm test 最终结果：零失败」。之后只改了本报告。
+
+第一遍全量（改 `api-retry-wiring.test.mjs` 之前）：7425 项 1 败，就是上面第 c 项（旧语义的断言），改后单独重跑 7 项全过、再跑全量零失败。
+
+类型检查在最终提交上再跑一次：`npx tsc -b --force` → `TSC_EXIT=0`。
+
+测试里起的假网关在 5990、5991 上，跑完 `netstat` 只剩 `TIME_WAIT`，没有留下监听的进程；没起别的进程。
 
 ## 四、没做到的与原因
 
