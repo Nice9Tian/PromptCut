@@ -173,4 +173,10 @@ node scripts/probes/account-move-probe.mjs --editor-ports 5860,5865 --fixture-po
 
 ## 全量测试
 
-（待补）
+`npx tsc -b --force` 退出码 0 之后，同一条命令接着跑 `npm test`（设了两个环境变量，在 `e3e09e28` 上，之后只改过报告）：**退出码 1**。7439 条：7423 通过、**1 条失败**、15 跳过、0 取消。
+
+- 失败的是 `server/test/syntax.test.mjs` 的「.mjs 脚本全部能解析」：它对每个 .mjs 起一个 `node --check`，其中 `server/test/hosted-render-process.test.mjs`（我没碰）那一个进程报 `low_level_alloc.cc : 554] RAW: Check new_pages != nullptr failed: VirtualAlloc failed`——Node 自己分配内存失败，不是语法错误。当时机器上另有四个任务在并行跑。
+- 单跑复核 `npm test -- server/test/syntax.test.mjs`：退出码 0，3 条全过。
+- 所以：全量里只有这一条，单跑通过，判为机器内存吃紧时的偶发；**没有拿到一遍零失败的全量**，合入前请主会话在空闲时再跑一遍。本分支加的、改的测试在全量里都过。
+
+完整输出 `out/abandon-move/npm-test.txt`（不入库）。
