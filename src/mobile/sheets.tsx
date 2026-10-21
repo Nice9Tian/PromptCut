@@ -24,6 +24,7 @@ import { Icon } from "./icons";
 import { Sheet, fmtDur, fmtTc, tint, useToast } from "./ui";
 import { ControlField, Slider } from "./controls";
 import { ClipFilterFields, FiltersGrid, filterableClip } from "./filters";
+import { ThumbImg, useThumb } from "./Thumb";
 import type { MembersInfo } from "./useMembers";
 
 /* ======================== 素材库 ======================== */
@@ -101,10 +102,7 @@ export function AssetsSheet(props: { tab: AssetTab; onTab: (t: AssetTab) => void
                   if (!clip) { toast("放不下：没有空着的序列"); return; }
                   props.onPlaced(clip, m);
                 }}>
-                  <div className="pic" style={{ background: `linear-gradient(135deg, ${tint(m.id)}, var(--shade-art))` }}><Icon name={m.kind === "audio" ? "audio" : m.kind === "image" ? "image" : "video"} />
-                    {m.duration ? <span className="dur">{fmtDur(m.duration)}</span> : null}
-                    {m.pending ? <span className="st">上传中</span> : m.transcript ? <span className="st">已转写</span> : null}
-                  </div>
+                  <AssetPic m={m} />
                   <div className="cap">{m.name}<small>{m.kind === "audio" ? "音频" : m.kind === "image" ? "图片" : "视频"}</small></div>
                 </button>
               ))}
@@ -113,6 +111,19 @@ export function AssetsSheet(props: { tab: AssetTab; onTab: (t: AssetTab) => void
         </>
       )}
     </Sheet>
+  );
+}
+
+/** 素材格子的画面:取色底色 + 类型图标打底,取到首帧 / 缩略图就盖上去(`Thumb.tsx`) */
+function AssetPic({ m }: { m: MediaAsset }) {
+  const thumb = useThumb(m);
+  return (
+    <div className="pic" data-thumb={thumb.src ? "ready" : undefined} style={{ background: `linear-gradient(135deg, ${tint(m.id)}, var(--shade-art))` }}>
+      {m.kind !== "audio" && <ThumbImg thumb={thumb} />}
+      <Icon name={m.kind === "audio" ? "audio" : m.kind === "image" ? "image" : "video"} />
+      {m.duration ? <span className="dur">{fmtDur(m.duration)}</span> : null}
+      {m.pending ? <span className="st">上传中</span> : m.transcript ? <span className="st">已转写</span> : null}
+    </div>
   );
 }
 
