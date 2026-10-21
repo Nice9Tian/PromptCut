@@ -1,6 +1,6 @@
 import { buildEnvReport, type EnvInput } from "./envReport";
 import { getSkillSnapshot } from "../skill/skillMode";
-import { getTabs } from "./agentTabs";
+import { getRealTabs } from "./agentTabs";
 import { getState } from "../store/project";
 
 /**
@@ -22,7 +22,7 @@ function clientInput(): EnvInput {
   const p = st.project;
   return {
     skill: (() => { try { return getSkillSnapshot().state; } catch { return null; } })(),
-    agentTabs: (() => { try { return getTabs().length; } catch { return 1; } })(),
+    agentTabs: (() => { try { return getRealTabs().length; } catch { return 1; } })(),
     project: {
       name: p.name,
       filePath: st.filePath,

@@ -20,6 +20,7 @@ import { ThinkingStrip } from "./chat/ThinkingStrip";
 import { CloudQueueList, QueueList } from "./chat/QueueList";
 import { pushToast, setAccountAgentEnabled, useSync } from "../sync/syncManager";
 import { Composer } from "./chat/Composer";
+import { StartHero, useStartPage } from "./chat/StartHero";
 import { CloudModelBar } from "./CloudModelBar";
 import { AgentActivityPanel, useRoundSelection } from "./chat/ActivityPanel";
 import { RemoteAgentsStrip } from "./RemoteAgentsStrip";
@@ -122,7 +123,9 @@ export function CloudAiPanel(props: {
   const { tabs } = useAgentTabs();
   const tabTitle = desktop ? (tabs.find((t) => t.id === tabId)?.title ?? "AI 助手") : "云端 Agent";
   // 页签上的「对话 ID」是给本机 Agent 的多 Agent 通信用的;桌面版里这一页选回本机驱动后还要用它,云端的对话 id 不往里写
-  useEffect(() => { if (!desktop) setTabConversation(tabId, chat.conversationId); }, [tabId, chat.conversationId, desktop]);
+  // 开始页占位页还不是真会话(isDraft):点发送变成真页之后才记得上
+  const isDraft = tabs.find((t) => t.id === tabId)?.draft === true;
+  useEffect(() => { if (!desktop) setTabConversation(tabId, chat.conversationId); }, [tabId, chat.conversationId, desktop, isDraft]);
   const currentMeta = chat.history.items.find(item => item.id === chat.conversationId) ?? null;
   const controlPolicy = cloudConversationControlPolicy({ accountMode: cloud.accountMode, accountId: cloud.accountId,
     creator, conversation: currentMeta, queue: view.queue, senders: view.senders, legacyStreaming: view.streaming });
@@ -150,7 +153,7 @@ export function CloudAiPanel(props: {
   const metadataReady = !cloud.accountMode || chat.history.loaded || metadataReadyKey === metadataKey;
   const creatorReadOnly = controlPolicy.creatorReadOnly;
   const canSwitchVisibility = controlPolicy.canSwitchVisibility;
-  useEffect(() => { setTabBusy(tabId, streaming); }, [tabId, streaming]);
+  useEffect(() => { setTabBusy(tabId, streaming); }, [tabId, streaming, isDraft]);
   useEffect(() => () => setTabBusy(tabId, false), [tabId]);
   useEffect(() => () => { clearQueue(qKey); }, [qKey]);
 
@@ -184,6 +187,8 @@ export function CloudAiPanel(props: {
   /* ---------- 草稿、排队、发送 ---------- */
   const [inputText, setInputText] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // 开始页(本项目一个会话都没有):消息区换成 StartHero;点预设往输入框放那句话,点发送才把占位页变成第一个会话(云端是新建云端对话)
+  const start = useStartPage(tabId, inputText, setInputText, () => { requestAnimationFrame(() => textareaRef.current?.focus()); }, chat.messages.length > 0);
   /* 附件:选文件 → 逐个上传到云端这个对话的工作目录(显示上传中)→ 发消息时把传好的带上。失败给出原因,可点一下重试、可移除 */
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -275,6 +280,8 @@ export function CloudAiPanel(props: {
   const handleSend = async (text: string) => {
     if (creatorReadOnly || view.revoked || (!text.trim() && attachments.length === 0)) return;
     if (off) return;
+    // 开始页上点发送:这时才建第一个会话,这条消息在里面发出去
+    start.commit();
     if (cloud.accountMode && text.trim()) {
       // 账号模式:点发送当场在对话里出气泡、清空输入框(乐观显示,2026-10-19 用户要求);告知确认、放进素材库、发送都在后面做,
       // 没发出去时气泡标「没有发出去」并写原因,原文放回输入框(框里此刻是空的才放)。云端收下前气泡只写「发送中…」,不显示成已发送
@@ -656,19 +663,23 @@ export function CloudAiPanel(props: {
       )}
 
       <RemoteAgentsStrip />
-      <MessageList
-        messages={chat.messages}
-        senders={view.senders}
-        view={viewMode}
-        showThinking={showThinking}
-        installJobs={installJobs}
-        expanded={expanded}
-        openRuns={openRuns}
-        rowHandlers={rowHandlers}
-        onPickExample={setInputText}
-        selectedRound={round.id}
-        onSelectRound={round.select}
-      />
+      {start.draft ? (
+        <StartHero animated={start.animated} onPickPreset={start.pickPreset} />
+      ) : (
+        <MessageList
+          messages={chat.messages}
+          senders={view.senders}
+          view={viewMode}
+          showThinking={showThinking}
+          installJobs={installJobs}
+          expanded={expanded}
+          openRuns={openRuns}
+          rowHandlers={rowHandlers}
+          onPickExample={setInputText}
+          selectedRound={round.id}
+          onSelectRound={round.select}
+        />
+      )}
 
       {/* 「Agent 操作」:这个对话按轮显示的操作与汇报(取代按项目频道列的「Agent 操作记录」,2026-10-20 用户定) */}
       <AgentActivityPanel messages={chat.messages} selectedId={round.id} onSelect={round.select} view={viewMode}
@@ -725,6 +736,7 @@ export function CloudAiPanel(props: {
         onSetProvider={() => {}}
         config={desktop?.config ?? null}
         tabId={tabId}
+        guide={start.guide}
         menu={{
           workflowRoles: [],
           onRunWorkflow: () => {},

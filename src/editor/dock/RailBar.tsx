@@ -170,6 +170,8 @@ export function RailBar({ side, part = "head" }: { side: Side; part?: RailPart }
     const index = tabs.findIndex((t) => t.id === tabId);
     const t = tabs[index];
     if (!t) return null;
+    // 开始页占位(本项目一个会话都没有):画成一项「开始」,没有关闭按钮
+    const draft = t.draft === true;
     const closable = canCloseTab(t.id);
     // 跑的时候头像背景流光;跑完 / 中断且用户还没看这一页时一个小点(蓝 / 黄),见 agentAttention.tsx
     const state = t.busy ? "busy" : attention.get(t.id) ?? "idle";
@@ -180,32 +182,36 @@ export function RailBar({ side, part = "head" }: { side: Side; part?: RailPart }
           type="button"
           aria-pressed={on}
           aria-expanded={expanded}
-          className={`pc-rail-item pc-rr-agent${on ? " is-on" : ""}${t.busy ? " is-busy" : ""}`}
+          className={`pc-rail-item pc-rr-agent${on ? " is-on" : ""}${t.busy ? " is-busy" : ""}${draft ? " is-draft" : ""}`}
           data-pc-agent-tab={t.id}
           data-pc-agent-state={state}
-          title={stateTip ? `${tabTooltip(t)}\n${stateTip}` : tabTooltip(t)}
+          data-pc-agent-draft={draft ? "1" : undefined}
+          title={draft ? "开始页:这个项目还没有 Agent 会话,发出第一条消息后才会建立" : stateTip ? `${tabTooltip(t)}
+${stateTip}` : tabTooltip(t)}
           {...handlers}
         >
-          <span className="pc-rr-glyph" aria-hidden="true">{glyphOf(t, index)}</span>
-          <span className="pc-rr-label">{shortLabel(t.title)}</span>
+          <span className="pc-rr-glyph" aria-hidden="true">{draft ? "✦" : glyphOf(t, index)}</span>
+          <span className="pc-rr-label">{draft ? "开始" : shortLabel(t.title)}</span>
           {(state === "done" || state === "interrupted") && <i className={`pc-rr-state is-${state}`} aria-hidden="true" />}
           {t.unread > 0 && (
             <b className="pc-rr-badge" title={`${t.unread} 条其他 Agent 的消息待处理`}>{t.unread}</b>
           )}
         </button>
-        <button
-          type="button"
-          className="pc-rr-x"
-          aria-label={`关闭 ${t.title}`}
-          disabled={!closable}
-          title={!closable ? "至少保留一个 Agent 标签" : t.busy ? "还在跑,关掉会中断它" : "关闭这一页"}
-          onClick={() => {
-            if (t.busy && !confirm(`${t.title} 还在跑,关掉会中断它。确定关闭?`)) return;
-            closeTab(t.id);
-          }}
-        >
-          ×
-        </button>
+        {!draft && (
+          <button
+            type="button"
+            className="pc-rr-x"
+            aria-label={`关闭 ${t.title}`}
+            disabled={!closable}
+            title={t.busy ? "还在跑,关掉会中断它" : "关闭这一页"}
+            onClick={() => {
+              if (t.busy && !confirm(`${t.title} 还在跑,关掉会中断它。确定关闭?`)) return;
+              closeTab(t.id);
+            }}
+          >
+            ×
+          </button>
+        )}
       </div>
     );
   };

@@ -396,7 +396,8 @@ try {
   page = await browser.newPage();
   page.on('pageerror', (e) => pageErrors.push(String(e?.message ?? e)));
   await page.goto(`${origin}/?editor&aimock=1&nosetup=1`, { waitUntil: 'domcontentloaded' });
-  await waitFor(() => page.$('.ai-messages .ai-empty-state'), 120_000, '新页面的空对话');
+  // 2026-10-22 起新项目没有会话时 AI 栏是开始页(.ai-messages.pc-start),不再是空对话的示例句;从它发第一条消息就建出 Agent 1
+  await waitFor(() => page.$('.ai-messages .ai-empty-state, .ai-messages.pc-start'), 120_000, '新页面的空对话(开始页)');
   const smallSamples = [];
   for (let k = 0; k < 3; k++) {
     await sendMsg(`短对话第 ${k + 1} 条`);

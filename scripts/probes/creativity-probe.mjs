@@ -106,8 +106,9 @@ try {
     await popShot('ai-creativity.png');
     await page.screenshot({ path: path.join(shots, 'ai-panel-full.png'), captureBeyondViewport: false });
   }
-  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('pc.agentTabs') || '[]').find((t) => t.id === 'main')?.creativity);
-  check(saved === 'medium', 'P4 本机页签里存下 medium', saved);
+  // 分页清单按项目分开(2026-10-22):新项目还没有会话时当前页是开始页占位页,等级记在它身上(内存),点发送变成第一个会话时才写存储
+  const saved = await page.evaluate(async () => { const m = await import('/src/ai/agentTabs.ts'); return m.getTabCreativity(m.getActiveTabId()); });
+  check(saved === 'medium', 'P4 本机页签上记下 medium', saved);
   const projectStill = await page.evaluate(async () => (await import('/src/store/project.ts')).getState().project.creativity);
   check(projectStill === 'low', 'P4 对话覆盖不改项目的默认', projectStill);
 
@@ -132,6 +133,9 @@ try {
   await page.evaluate(() => document.querySelector('[data-pc="ai-send"]')?.click());
   await page.waitForFunction(() => window.__crBodies.length > 0, { timeout: 10000 }).catch(() => {});
   const body = await page.evaluate(() => window.__crBodies[0] ?? null);
+  // 点发送把开始页占位页变成第一个会话:等级随它写进这个项目的清单
+  const storedAfterSend = await page.evaluate(async () => { const m = await import('/src/ai/agentTabs.ts'); const raw = localStorage.getItem(`pc.agentTabs:${m.getAgentProjectId()}`); return JSON.parse(raw || 'null')?.tabs?.[0]?.creativity ?? null; });
+  check(storedAfterSend === 'medium', 'P4 发出第一条消息后,本项目的页签清单里存下 medium', storedAfterSend);
   check(body?.creativity === 'medium' && body?.projectCreativity === 'low', 'P5 聊天请求带 creativity=medium、projectCreativity=low', body && { creativity: body.creativity, projectCreativity: body.projectCreativity, conversationId: body.conversationId });
 
   /* P6 对话覆盖优先(真的登记一次) */
@@ -151,7 +155,7 @@ try {
 
   // 收尾:项目设置改回「高」,不把低档留在这台 dev server 的项目里
   await page.evaluate(async () => { const m = await import('/src/store/project.ts'); m.actions.setProjectMeta({ creativity: undefined }); });
-  await page.evaluate(async () => { const m = await import('/src/ai/agentTabs.ts'); m.setTabCreativity('main', null); });
+  await page.evaluate(async () => { const m = await import('/src/ai/agentTabs.ts'); m.setTabCreativity(m.getActiveTabId(), null); });
   check(errors.length === 0, '页面没有未捕获的异常', errors.slice(0, 5));
 } finally {
   await browser.close();

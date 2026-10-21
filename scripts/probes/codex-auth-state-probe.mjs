@@ -53,6 +53,8 @@ try {
   async function settings(p) { await p.evaluate(()=>{const el=[...document.querySelectorAll('button')].find(e=>e.getBoundingClientRect().width>0&&(/AI 设置/.test(e.title)||e.getAttribute('aria-label')==='AI 设置'));if(!el)throw new Error('AI settings trigger missing');el.click();});await until(async()=> (await text(p)).includes('Codex')); }
   await until(async()=>await a.$('.ai-panel'));
   await a.bringToFront();
+  // 分页清单按项目分开(2026-10-22):新项目没有会话时只有开始页;先点发送建出第一个会话(这里直接调 agentTabs),「+」才会再开第二页
+  await a.evaluate(async () => { const m = await import('/src/ai/agentTabs.ts'); m.commitDraft(m.getActiveTabId()); });
   await a.click('[data-pc="agent-tab-add"][data-pc-dock-add="right"]');
   await until(async()=> (await a.$$('.ai-panel')).length===2);
   await settings(a);

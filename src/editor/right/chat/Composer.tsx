@@ -94,6 +94,8 @@ export interface ComposerProps {
   cloud?: ComposerCloud;
   /** 这一页的 id:运行选项里的创造力等级按页存 */
   tabId?: string;
+  /** 开始页上的引导(StartHero.tsx):"input" = 输入框描边脉动;"send" = 发送按钮闪;不给 = 不引导 */
+  guide?: "input" | "send" | null;
   /** 禁用输入框与发送按钮（如当前对话已无读取权限） */
   disabled?: boolean;
   disabledReason?: string;
@@ -285,6 +287,7 @@ export function Composer(props: ComposerProps) {
     menu,
     tabId,
     cloud,
+    guide = null,
     disabled = false,
     disabledReason,
   } = props;
@@ -313,7 +316,7 @@ export function Composer(props: ComposerProps) {
     : undefined;
 
   return (
-    <div ref={boxRef} className={`ai-composer${streaming ? " is-streaming" : ""}`} data-pc="ai-composer" style={sizeStyle}>
+    <div ref={boxRef} className={`ai-composer${streaming ? " is-streaming" : ""}${guide ? ` is-guide-${guide}` : ""}`} data-pc="ai-composer" data-pc-guide={guide || undefined} style={sizeStyle}>
       <ComposerGrip boxRef={boxRef} />
       {attachments.length > 0 && (
         <div className="ai-attachments">

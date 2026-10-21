@@ -40,6 +40,8 @@ test("MA-P1 diffScopes:只报 clips 数组换了引用的那几条序列,格式�
 });
 
 test("MA-P2 agent.board:页签名跟着范围改,页签上标未读;可自动投递的条数决定 hasAutoDeliverable", () => {
+  // 清单按项目分开之后,没有会话时只有开始页占位页;先让用户「点发送」建出第一个会话,再开第二页
+  tabs.commitDraft(tabs.getActiveTabId());
   const t = tabs.addTab();
   tabs.setTabConversation(t.id, "conv-p2");
   bus.applyBoard([{ id: "conv-p2", scope: "剪辑1->序列2", unread: 2, deliverable: 1, busy: false }]);

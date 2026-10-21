@@ -8,7 +8,7 @@ import { collectEnvironment } from "../../ai/envCollect";
 import { ReportDialog } from "./ReportDialog";
 import { AiSetupDialog } from "./AiSetupDialog";
 import { useChatHistory } from "../../ai/useChatHistory";
-import { MAIN_TAB } from "../../ai/liveChat";
+import { MAIN_TAB, isMainTab } from "../../ai/liveChat";
 import * as agentBus from "../../ai/agentBus";
 import { setTabBusy, setTabConversation, useAgentTabs } from "../../ai/agentTabs";
 import { getChat } from "../../ai/chatStore";
@@ -24,6 +24,7 @@ import { AgentActivityPanel, useRoundSelection } from "./chat/ActivityPanel";
 import { RemoteAgentsStrip } from "./RemoteAgentsStrip";
 import { DesktopSessionsStrip } from "./DesktopSessionsStrip";
 import { Composer } from "./chat/Composer";
+import { StartHero, useStartPage } from "./chat/StartHero";
 import { CloudAiPanel } from "./CloudAiPanel";
 import { useCloudAgent, useCloudDigest, useCloudNotices } from "../../ai/cloud/useCloud";
 import { selectCloudTab, useCloudTab } from "../../ai/cloud/tabMode";
@@ -90,12 +91,14 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   const tabTitle = tabs.find((t) => t.id === tabId)?.title ?? "AI 助手";
 
   // 页签上要知道这一页的对话 ID(给模型看的 Agent ID)和忙不忙
-  useEffect(() => { setTabConversation(tabId, history.conversationId); }, [tabId, history.conversationId]);
-  useEffect(() => { setTabBusy(tabId, streaming); }, [tabId, streaming]);
+  // 开始页占位页还不是真会话(isDraft):点发送变成真页之后这两句才记得上
+  const isDraft = tabs.find((t) => t.id === tabId)?.draft === true;
+  useEffect(() => { setTabConversation(tabId, history.conversationId); }, [tabId, history.conversationId, isDraft]);
+  useEffect(() => { setTabBusy(tabId, streaming); }, [tabId, streaming, isDraft]);
 
   // 刷新页面回来:非主页的对话不在 .proc 里,从会话归档按 id 找回
   useEffect(() => {
-    if (tabId === MAIN_TAB) return;
+    if (isMainTab(tabId)) return;
     let alive = true;
     void getChat(history.conversationId).then((chat) => {
       if (alive && chat && chat.messages.length && messages.length === 0) setMessages(chat.messages);
@@ -160,6 +163,8 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   /** 附件占位 id → 原始 File,失败重试时要用 */
   const retryFilesRef = useRef<Map<string, File>>(new Map());
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // 开始页(本项目一个会话都没有):消息区换成 StartHero;点预设往输入框放那句话,点发送才把占位页变成第一个会话
+  const start = useStartPage(tabId, inputText, setInputText, () => { requestAnimationFrame(() => textareaRef.current?.focus()); }, messages.length > 0);
 
   // 预览窗口右键卡片时会在 window 上派发 pc-quote-clip,把引用插进输入框
   useEffect(() => {
@@ -428,6 +433,8 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   const handleSend = (text: string) => {
     if (!passLoginGate()) return;
     if (!text.trim() && attachments.length === 0) return;
+    // 开始页上点发送:这时才建第一个会话,这条消息在里面发出去
+    start.commit();
     // 还在导入或导入失败的附件这次先不带上,但发送本身任何时候都不许被挡住
     const usable = attachments.filter((a) => a.status !== "importing" && a.status !== "error");
     const skipped = attachments.length - usable.length;
@@ -570,19 +577,23 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
       <RemoteAgentsStrip />
       {/* 桌面 APP 的会话(SKILL,计划 A4):每个会话单独一组,厂商 + 正在进行的操作 + 进度报告 */}
       <DesktopSessionsStrip />
-      <MessageList
-        messages={messages}
-        view={view}
-        showThinking={showThinking}
-        installJobs={installJobs}
-        expanded={expanded}
-        openRuns={openRuns}
-        rowHandlers={rowHandlers}
-        onPickExample={setInputText}
-        rewind={rewindHandlers}
-        selectedRound={round.id}
-        onSelectRound={round.select}
-      />
+      {start.draft ? (
+        <StartHero animated={start.animated} onPickPreset={start.pickPreset} />
+      ) : (
+        <MessageList
+          messages={messages}
+          view={view}
+          showThinking={showThinking}
+          installJobs={installJobs}
+          expanded={expanded}
+          openRuns={openRuns}
+          rowHandlers={rowHandlers}
+          onPickExample={setInputText}
+          rewind={rewindHandlers}
+          selectedRound={round.id}
+          onSelectRound={round.select}
+        />
+      )}
 
       {/* 「Agent 操作」:这个对话按轮显示的操作与汇报(取代按项目频道列的「Agent 操作记录」,2026-10-20 用户定);写了项目的那一步在详细预览里能撤 */}
       <AgentActivityPanel messages={messages} selectedId={round.id} onSelect={round.select} view={view}
@@ -624,6 +635,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
         onSetProvider={setProvider}
         config={config}
         tabId={tabId}
+        guide={start.guide}
         menu={{
           workflowRoles,
           onRunWorkflow: () => void runWorkflow(),

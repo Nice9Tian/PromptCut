@@ -9,7 +9,7 @@ import { getChatStore, useChatMessages, type ChatStore } from "../liveChat";
 import { getState } from "../../store/project";
 import { useSync, currentDocProjectId } from "../../editor/sync/syncManager";
 import { selectionPresenceStatus } from "../../editor/sync/selectionPresence";
-import { getTabCreativity } from "../agentTabs";
+import { getTabCreativity, getTabs } from "../agentTabs";
 import { getScript } from "../script";
 import { mediaCardUrl } from "../mediaRef";
 import { cloudAgentVersion, resolveCloudAgent, subscribeCloudAgent, type CloudAgentAvailability } from "./endpoint";
@@ -405,8 +405,11 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   useEffect(() => {
     if (!key) return;
     const w = window as unknown as { __pcCloud?: Record<string, unknown> };
-    w.__pcCloud = { ...(w.__pcCloud ?? {}), [tabId]: { messages: () => store.get(), view: () => sessionRef.current?.getView() ?? null, conversationId: () => convRef.current } };
-    return () => { if (w.__pcCloud) delete w.__pcCloud[tabId]; };
+    const hook = { messages: () => store.get(), view: () => sessionRef.current?.getView() ?? null, conversationId: () => convRef.current };
+    // 分页 id 改成「项目ID_AgentID」之后,老探针读的 window.__pcCloud.main 落了空:清单里排第一的那一页同时挂在 main 名下
+    const alias = tabId === "main" || getTabs()[0]?.id === tabId ? "main" : null;
+    w.__pcCloud = { ...(w.__pcCloud ?? {}), [tabId]: hook, ...(alias ? { [alias]: hook } : {}) };
+    return () => { if (w.__pcCloud) { delete w.__pcCloud[tabId]; if (alias) delete w.__pcCloud[alias]; } };
   }, [key, tabId, store]);
 
   // 窗口回到前台、网络恢复:马上重连,不等退避
