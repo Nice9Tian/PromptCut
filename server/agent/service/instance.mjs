@@ -1644,7 +1644,7 @@ export function createAgentInstance(env) {
             const isLook = isQueuedLook || CLOUD_SLOW_TOOLS.has(name);
             // 向渲染服务要画面的那几个(0.7.18 起在它那边排队):排多久、每次渲多久、重试几次都由渲染服务定并回明确的结果
             // (`server/hosted-render/look.mjs`:排队最多 30 分钟,渲染每次一分钟、重试三次)。这里的时限只是兜底,要比它长——
-            // 不然别的项目占着隔离工作进程时(空闲满五分钟才让位),这一步会在轮到之前被掐掉,模型以为没看成,而请求还在队列里
+            // 不然排在别的项目后面时(多项目模式各项目轮流,轮到之前要等前面的请求和换装),这一步会在轮到之前被掐掉,模型以为没看成,而请求还在队列里
             const limitMs = isQueuedLook ? (Number(o.lookQueueTimeoutMs) > 0 ? Number(o.lookQueueTimeoutMs) : LOOK_QUEUE_TOOL_MS)
               : isLook && Number(o.lookTimeoutMs) > 0 ? Number(o.lookTimeoutMs) : Number(o.toolTimeoutMs) > 0 ? Number(o.toolTimeoutMs) : 60_000;
             let timer = null;
