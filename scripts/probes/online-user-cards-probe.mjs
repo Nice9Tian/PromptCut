@@ -432,7 +432,9 @@ try {
   }
   check(st[ID.b]?.wrapper === true, '舞台:内置卡在', st[ID.b]);
   n.requests = { snapU: reqsFor(L.u, 'snap'), snapS1: reqsFor(L.s1, 'snap'), snapB: reqsFor(L.b, 'snap'), pxSmall: reqsFor(L.u, 'px') + reqsFor(L.s1, 'px') + reqsFor(L.b, 'px') };
-  n.online = await A.evaluate(() => window.__pcOnlineSnapshots?.() ?? null);
+  // 等层表取到(原先等 s2 出「本地 PC 辅助渲染」图标时层表必然已到;沙漏一开页就有,所以这里显式等层表认到 s1)
+  n.online = await until('层表认到有层的 s1', async () => { const d = await A.evaluate(() => window.__pcOnlineSnapshots?.() ?? null); return d?.layers?.some((l) => l.clipId === ID.s1) ? d : null; }, 45_000)
+    ?? await A.evaluate(() => window.__pcOnlineSnapshots?.() ?? null);
   const manifestsOf = (id) => n.online?.layers?.find((l) => l.clipId === id) ?? null;
   check(n.requests.snapS1 === 0 && n.requests.pxSmall === 0, '普通档(撤除每张卡 HTML 快照后):不请求 snap/ 与小尺寸快照 px/', n.requests);
   check(!!manifestsOf(ID.s1), '有层的 s1:层表认到这一层', { s1: manifestsOf(ID.s1) });
