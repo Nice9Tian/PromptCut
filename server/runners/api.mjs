@@ -30,6 +30,8 @@ export function lessonsStore() {
 }
 import { MessageHistory } from '../harness/history.mjs';
 import { buildTools } from '../harness/tools/index.mjs';
+import { resolveMaxOutput } from '../harness/model-limits.mjs';
+import { createCodeCacheStore } from '../tools/code-cache.mjs';
 import { createRetryingFetch } from '../harness/retry-fetch.mjs';
 import { withIdleTimeout } from '../harness/idle-timeout.mjs';
 
@@ -302,9 +304,23 @@ export function startRun(opts) {
     const maxIterations = opts.deepAuto
       ? (opts.maxRounds === 0 ? Infinity : Number(opts.maxRounds) || 300)
       : 24;
-    safeOnEvent({ type: 'diagnostic', stage: 'configuration', data: { vendor: cfg.vendor, model: cfg.model, effort: cfg.effort || '(默认)', maxTokens: cfg.maxTokens, protocol: 'native-tools', schemaCompat, maxRounds: Number.isFinite(maxIterations) ? maxIterations : null, deepAuto: !!opts.deepAuto } });
+    // 单次输出上限:配置里的 maxTokens 是上限的上限,真正发的数按模型定(harness/model-limits.mjs,A07 2026-10-22)
+    const maxOutput = resolveMaxOutput(cfg);
+    safeOnEvent({ type: 'diagnostic', stage: 'configuration', data: { vendor: cfg.vendor, model: cfg.model, effort: cfg.effort || '(默认)', maxTokens: cfg.maxTokens, maxOutput, protocol: 'native-tools', schemaCompat, maxRounds: Number.isFinite(maxIterations) ? maxIterations : null, deepAuto: !!opts.deepAuto } });
+    /*
+     * 代码块空间(server/tools/code-cache.mjs):目录由宿主给(`opts.codeCacheDir`,按项目);没给就放在这个对话的历史文件旁边,
+     * 只在这个对话里有效。建不出来(目录写不了)就不给这组工具,这一轮照常跑。
+     */
+    let codeCache = null;
+    try {
+      const dir = typeof opts.codeCacheDir === 'string' && opts.codeCacheDir ? opts.codeCacheDir
+        : path.join(path.dirname(historyFile), `${path.basename(historyFile, '.json')}.code-cache`);
+      codeCache = createCodeCacheStore({ dir, writer: String(opts.codeCacheWriter || sessionId) });
+    } catch (e) {
+      safeOnEvent({ type: 'status', text: `代码块空间用不了:${e?.message || e}` });
+    }
     // localTools: false 时不给读写本地文件的 text_editor;toolFilter 是只交给模型的工具名单(托管档的开放清单)
-    const tools = await buildTools({ callTool: opts.callTool, workspaceDir: opts.cwd, onEvent: safeOnEvent, localTools: opts.localTools !== false, only: opts.toolFilter ?? null });
+    const tools = await buildTools({ callTool: opts.callTool, workspaceDir: opts.cwd, onEvent: safeOnEvent, localTools: opts.localTools !== false, only: opts.toolFilter ?? null, codeCache });
     const agent = new Agent({ 
       provider, 
       system: opts.systemPrompt, 
@@ -316,10 +332,11 @@ export function startRun(opts) {
        * 「offers a million-token context window」)。预算 = 上下文 − 这一轮最多输出的量 − 3 万余量。
        * 网关自动缓存,实测同一前缀第二次命中约八成,长上下文的费用压得住。
        */
-      maxInputTokens: 1_000_000 - (Number(cfg.maxTokens) || 4096) - 30_000,
+      maxInputTokens: 1_000_000 - maxOutput - 30_000,
       onEvent: safeOnEvent,
       signal: abortController.signal,
       history,
+      codeCache,
       /*
        * 每次模型请求前后的回调(托管档的闸与用量记录)。`opts.checkpoint` 为真时,从第二次请求起每次请求之前把历史落一次盘:
        * 这时上一次工具往返刚做完 —— 进程被杀也只丢正在进行的那一次(契约 cloud-agent-contract.md 第 7.1 节)。
@@ -373,7 +390,7 @@ export function startRun(opts) {
         ? await runReviewLoop({
             provider, tools, system: opts.systemPrompt, userText: opts.prompt,
             maxIterations, deepAuto: !!opts.deepAuto, maxInputTokens: agent.maxInputTokens,
-            signal: abortController.signal, history, lessonsStore: lessonsStore(),
+            signal: abortController.signal, history, lessonsStore: lessonsStore(), codeCache,
             onEvent: (ev) => { for (const e of presentLoopEvent(ev)) safeOnEvent(e); },
           })
         : await agent.run(opts.prompt);

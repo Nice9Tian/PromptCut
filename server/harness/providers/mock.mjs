@@ -8,6 +8,7 @@
 //       { "say": "<文字>" }                       说这句话并结束这一轮
 //       { "sleepMs": 300 }                        等这么久再做下一项(测停止与并发;认中止信号)
 //       { "fail": "<原因>" }                      这一次模型请求报错
+//       { "truncate": { "tool", "args", "say" } } 这一回合写到输出上限被截断(见下面那一支)
 //     脚本走完还没有 say 的,补一句「完成。」结束。每个回合报一次 usage(按字符数算的确定值)。
 //     一轮对话里有多个脚本块时用最近一条用户消息里的那个。
 
@@ -67,6 +68,17 @@ export function createProvider(cfg) {
             yield { type: 'tool_use', id: `mock_${at}`, name: step.tool, input };
             yield { ...usage, output: Math.ceil(sizeOf(input) / 4) + 8 };
             yield { type: 'stop', reason: 'tool_use' };
+            return;
+          }
+          /*
+           * 写到输出上限被截断(A07):`{ "truncate": { "tool": "create_card", "args": "{\"source\":\"写了一半" }, "say"?: "…" }`
+           * 交一个没写完的工具调用(参数原文就是 args)、以 `length` 收尾;不给 tool 时只交 say 的文字、以 `length` 收尾。
+           */
+          if (step.truncate && typeof step.truncate === 'object') {
+            if (typeof step.truncate.say === 'string') yield { type: 'text_delta', text: step.truncate.say };
+            if (typeof step.truncate.tool === 'string') yield { type: 'tool_use_partial', id: `mock_${at}`, name: step.truncate.tool, args: String(step.truncate.args ?? '') };
+            yield { ...usage, output: Math.ceil(String(step.truncate.args ?? '').length / 4) + 8 };
+            yield { type: 'stop', reason: 'length' };
             return;
           }
           if (typeof step.say === 'string') {

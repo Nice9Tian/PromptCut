@@ -667,6 +667,8 @@ export function createHostedAgentService({
         pageState: body.pageState && typeof body.pageState === 'object' ? body.pageState : null,
         apiConfig: cfg,
         historyFile: dataDir ? path.join(store.dirOf(identity.projectId, ownerKeyOf(identity), conversationId), 'history.json') : null,
+        // 代码块空间按项目放(A07,2026-10-22),放在这个项目的 tenants 目录下:删项目时随它一起清(conversations.mjs 的删项目);没有数据目录时由 api 运行器放在历史文件旁边
+        ...(dataDir ? { codeCacheDir: path.join(dataDir, 'tenants', identity.projectId, 'code-cache') } : {}),
         sessionKey: `cloud-${ownerKeyOf(identity).slice(0, 16)}-${conversationId}`,
         maxProjectBytes: limits.maxProjectBytes,
         toolTimeoutMs: limits.toolMs,

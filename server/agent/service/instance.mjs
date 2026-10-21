@@ -971,6 +971,9 @@ export function createAgentInstance(env) {
           systemPrompt,
           sessionId,
           cwd,
+          // 代码块空间按项目放在工作目录下(server/tools/code-cache.mjs,A07 2026-10-22);没绑项目时是 local 那一份
+          codeCacheDir: path.join(cwd, 'code-cache', String(currentProjectKey() || 'local').replace(/[^A-Za-z0-9_.-]/g, '_').replace(/^\.+/, '_') || 'local'),
+          codeCacheWriter: agentId || sessionId,
           model,
           /*
            * 深度自主:轮次上限换成设置里的「自主轮次」(ai.json 的 deepAutoRounds,
@@ -1605,6 +1608,9 @@ export function createAgentInstance(env) {
           // 历史按宿主给的文件找;sessionId 只是事件里的一个名字,不认页面自报的
           sessionId: typeof o.sessionKey === 'string' && o.sessionKey ? o.sessionKey : `cloud-${o.runId}`,
           historyFile: o.historyFile || undefined,
+          // 代码块空间(A07):宿主按项目给的目录;没给时 api 运行器放在这个对话的历史文件旁边
+          ...(typeof o.codeCacheDir === 'string' && o.codeCacheDir ? { codeCacheDir: o.codeCacheDir } : {}),
+          codeCacheWriter: agentId,
           ...(Number(o.historyMaxBytes) > 0 ? { historyMaxBytes: Number(o.historyMaxBytes) } : {}),
           cwd: null,
           model: o.model,

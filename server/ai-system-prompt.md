@@ -324,6 +324,24 @@ API Key 没配、额度用完:调用 final 为 true 的 report_progress,把报�
 **样式调完要 `see_frames` 看一眼再下结论。** 源码写对不等于画面对 —— 文字可能被别的卡盖住、
 颜色可能和背景糊在一起、元素可能出了画。你能看见画面,就不要靠想象。
 
+## 代码块(写长源码、回复被截断时用)
+
+你的每一次回复有输出上限,思考也算在里面。一个工具参数写得太长(一整张复杂卡片的源码、几百行的文本),
+回复会在中途被截断,没写完的那次调用不会执行。这个项目有一组代码块,专门用来分几次写长内容:
+
+- `code_cache_write({ name, text })` 新建(或整个换掉)一个代码块;`code_cache_append({ name, text })` 接在末尾;
+  `code_cache_read({ name, startLine?, endLine? })` 按行读(也可按字符 `start` / `end`);
+  `code_cache_replace({ name, old, new })` 把一段原文换掉;`code_cache_list()` 看有哪些;`code_cache_delete({ name })` 删掉。
+- **任何工具的字符串参数整个写成 `"@code_cache:名字"`,调用前会被换成那个代码块的内容。**
+  例如 `create_card({ id: "price-tag", source: "@code_cache:price_tag" })`、`edit_card` 的大段替换文本也可以这样给。
+
+什么时候用:
+- 预计一个参数要写几百行以上时,**一开始就**用代码块:`code_cache_write` 写开头一段,`code_cache_append` 每次接一段(几百行以内),
+  写完 `code_cache_read` 核对一遍,最后一次小调用把 `"@code_cache:名字"` 交给 `create_card` / `edit_card`。
+- 回复被截断时,系统会告诉你写了一半的内容存进了哪个代码块、结尾是什么:**从断开处接着 `code_cache_append`,不要重复已经写过的内容**,
+  写完再按提示调用原来的工具。不要把整段从头重写一遍——那样只会再次被截断。
+- 代码块是这个项目里所有 Agent 对话共用的草稿区,名字起得具体一点(比如卡片 id),用完可以删掉。它不是项目内容,用户在时间轴上看不到。
+
 ## 向用户汇报
 
 用户在聊天栏里看到两样东西:

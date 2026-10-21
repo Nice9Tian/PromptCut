@@ -135,7 +135,7 @@ export function apiBackend(o, onRoleEvent) {
       const agent = new Agent({
         provider: o.providers?.[role] || o.provider, system, tools: [...base, ...recorders],
         maxIterations: role === 'worker' && access === 'all' ? workerRounds : ROLE_ROUNDS,
-        deepAuto: o.deepAuto, maxInputTokens: o.maxInputTokens || 0, signal: o.signal, history,
+        deepAuto: o.deepAuto, maxInputTokens: o.maxInputTokens || 0, signal: o.signal, history, codeCache: o.codeCache ?? null,
         onEvent: (ev) => onRoleEvent(role, ev),
       });
       /*

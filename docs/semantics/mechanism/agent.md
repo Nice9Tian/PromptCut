@@ -18,6 +18,21 @@
 - 只读页面独有状态（当前选中、播放头交互、面板界面）的工具在编辑界面里执行。
 - 工具的清单和参数由卡片定义等数据自动生成，加卡片不需要改工具。
 
+## 单次输出上限、截断续写与代码块空间（2026-10-22 用户定方向，见 `../product/agent.md`「工具」；下面的做法与数字都是〔裁：output-cache 2026-10-22，`docs/reports/AGENT-output-cache.md`〕）
+
+只管 API 直连（本机 API 驱动、云端托管档与账号模式，都走 `server/runners/api.mjs` → `server/harness/`）；经 MCP 接入的命令行 Agent 用它们自己的输出上限，不在这里。
+
+- **输出上限**（`server/harness/model-limits.mjs`）：按模型名查表：Claude 当前各型号 128000（Haiku 4.5、Sonnet 4.5、Opus 4.5、Sonnet 4 为 64000，Opus 4 / 4.1 为 32000）；GPT-5 及以后 128000，o 系 100000，gpt-4.1 32768，gpt-4o 16384；Gemini 2.5 及以后 65536，2.0 / 1.5 为 8192；认不出的 16384。配置（本机 `ai.json` 与云端 `<数据目录>/config/ai.json`）的 `maxTokens` 是上限的上限：发出去的是它和模型上限里小的那个；没写、写 0、或等于旧缺省 4096 时当作没写，用模型上限（4096 是几处配置工具在用户没填时自动写进去的，不是谁特意定的）。
+- **字段**：OpenAI 兼容口对 o 系、GPT-5 及以后发 `max_completion_tokens`，其余发 `max_tokens`，两个不同时带；Anthropic 发 `max_tokens`，Gemini 发 `generationConfig.maxOutputTokens`。三家本来都是流式请求，大数不会撞 HTTP 超时。
+- **400 降档**：回 400 且报错说的是输出上限太大，按报错里写的上限（没写就取下一档：128000、100000、65536、64000、32768、32000、16384、8192、4096）重发一次；OpenAI 兼容口报错说字段名不对（`max_tokens` 不支持、要用 `max_completion_tokens`，或反过来）就换字段重发一次。每种至多一次，再不行照常报错。每次重发记一行日志 `[harness.max-output-fallback]`（厂商、模型、动作、前后的数），并作为 `diagnostic` 事件（`stage: 'max-output-fallback'`）进运行日志与诊断报告。
+- **截断时保住写了一半的参数**：provider 在停止原因是写到上限（OpenAI 兼容口 `length`、Anthropic `max_tokens`）时，把参数 JSON 解不开的那次工具调用交成 `tool_use_partial`（带收到的参数原文），不执行、不进历史；写完的那几次照常执行。Gemini 的工具调用整块到达，截断时没有半截调用可保。`server/harness/partial-json.mjs` 从半截 JSON 里取出写到一半的那个字符串字段（最后一个、没收引号的；没有就取最长的字符串字段）和已经写完整的其它字段。
+- **存进代码块、让模型接着写**（`server/harness/truncation.mjs`）：取出的字段存进新代码块 `cut_<工具名>_<序号>`，在下一条给模型的消息里写明：哪个工具、哪个参数、写到第几行、存在哪个块、结尾三行、其它参数原样是什么、怎么接着写（`code_cache_append` 从断开处接着写，一次几百行以内；写完以 `@code_cache:<块名>` 交给原工具）。半截的调用本身就是 `code_cache_append` / `code_cache_write` 且块名已写完的，写出的那一截直接接进（或写进）那个块。对话里出一行状态（见下面对照表）。
+- **次数上限**（`server/harness/agent.mjs`）：每次截断都留下了内容的，一轮里最多接着写 6 次（第 7 次停）；什么也没留下的截断连续 3 次就停；到了这一轮的轮次上限也停。停下时这一轮以错误结束，话里写明已经写出的部分存在哪些代码块。中间有一次正常的工具往返，「连续」重新算；「最多 6 次」不重新算。
+- **代码块空间**（`server/tools/code-cache.mjs`）：六个工具 `code_cache_write`、`code_cache_append`、`code_cache_read`（整块、按行 `startLine`/`endLine`、按字符 `start`/`end`，一次最多交回 60000 字，没读完写明下一段从哪开始）、`code_cache_replace`（原文须唯一，或给 `all: true`）、`code_cache_list`、`code_cache_delete`。块名只用字母、数字、`_`、`.`、`-`，1～64 字，不以点开头。一块最多 2 MiB，一个项目最多 64 块、合计 16 MiB。由 `server/harness/tools/index.mjs` 加进交给模型的清单，本机与云端都有，不受托管档开放清单限制（它只读写这个项目的代码块目录）。
+- **引用**：任何工具的字符串参数**整个**写成 `@code_cache:<块名>` 时，`harness/agent.mjs` 在调用工具之前把它换成那一块的内容（嵌套的对象、数组里也换）；块不存在时这次调用报错、不执行。源码里顺带出现的这几个字不换。历史和 `tool_call` 事件里留的还是引用，不撑大上下文。云端的创造力等级、单次工具时限等照常按换过之后的参数判。
+- **存在哪**：一个目录一个项目，一块一个文件 `<块名>.txt`，`index.json` 记每块的更新时间和最后写它的对话。本机：编辑器工作目录 `exports/ai-workspace/code-cache/<项目 id>`（没绑项目时 `local`）；云端账号模式：共用数据目录 `tenants/<项目 id>/code-cache`（与这个项目的对话目录同级，各代任务进程都看得到）；云端旧托管档：`<数据目录>/tenants/<项目 id>/code-cache`（删项目时随 `tenants/<项目 id>` 一起清）；宿主没给目录时放在这个对话的历史文件旁边（`<历史文件名>.code-cache`，只在这个对话里有效）。不进项目文档、不经文档服务，不进撤销历史、不同步。同一项目的几个对话共用一份，名字撞了会互相覆盖；同时跑的几轮往同一块写不加锁，后写的为准。
+- **现状缺口**：账号模式删项目时任务进程那一侧的 `tenants/<项目 id>` 有没有整个清，本次没有核实也没有改（删对话只清那个对话的目录，`conversation-purge.mjs`）；本机的代码块不随项目删除。
+
 ## 汇报与对用户说话（2026-10-20 用户定，见 `../product/agent.md`「汇报」）
 
 - Agent 对用户说话用工具 `send_message`，`to` 填 `"user"`、`text` 写一两句话。它和多 Agent 协调的 `send_message`（发给别的 Agent 的对话 ID 或 `all`）是同一个工具。API 直连（本机与云端）由 `server/harness/tools/index.mjs` 就地答，不经公告板；经 MCP 的 CLI 驱动由公告板 `server/agent/agent-board.mjs` 直接答「已显示」。托管档的开放清单里没有 `send_message` 时，harness 补一个只能发给用户的（`server/harness/tools/userMessage.mjs`）。
@@ -187,3 +202,91 @@
 - 脱敏三道：键名叫 grant、ticket、delegation、token、key 等的字段整条抹掉；`redactDebug`（本机对话与云端对话的报告共用；Bearer、`sk-` 与 `AIza`、`xai-`、`gsk_` 开头的 Key、委托票据与对话委托的 `v1.<段>.<段>`、带 key/token/secret 的查询参数、家目录，键名 ticket、delegation、grant 等）；云端报告再补一道形状扫描；最后对整份 JSON 文本再扫一遍。
 - 本机对话的报告（`src/ai/debug.ts` 的 `conversationReport`）原来就按对话出，含这段对话的消息、每一步执行事件与环境快照，走同一个对话框与同一道 `redactDebug`。
 - 出口：复制、保存为文件、提交。在线页面「保存为文件」是浏览器下载，不请求编辑器进程；桌面版沿用本机写盘并打开所在文件夹。提交是页面直接对收集端（`tools/report-worker/`）地址的跨源 POST（`Content-Type: text/plain`，CORS 简单请求、无预检；正文是 JSON `{ token, label, at, text }`），不经编辑器进程的 `/api/*`；收集端的响应带 `Access-Control-Allow-Origin`，收集端不用改。地址与令牌是构建期变量 `VITE_DIAG_SUBMIT_URL`、`VITE_DIAG_SUBMIT_TOKEN`（令牌随页面发出，不是密钥），没配地址时「提交」置灰并说明原因；单份上限 4 MiB。
+
+## 出错时的话对照表（A04，2026-10-22 用户定，原话：「维持：建立一个对照表，方便之后DEGBUG」）
+
+只是对照，句子本身不改。行号以分支 `claude/output-cache` 写这一节时（2026-10-22）为准，改了代码要顺手改这里。
+
+通则（每一行都适用，下表不再重复）：
+
+- **气泡**：Agent 那一轮的出错话是红字一行（`src/editor/right/chat/AgentBubble.tsx:320`，`data-pc="agent-error"`）；发消息被拒的话挂在用户自己那条气泡下面（`src/editor/right/chat/UserBubble.tsx:95`，`data-pc="cloud-send-failed"`）。状态行（`status` 事件）不进气泡正文。
+- **「Agent 操作」面板**（`src/editor/right/chat/ActivityPanel.tsx`）：这一轮一个操作都没有时显示「这一轮失败了,没有执行任何操作:」接气泡里那句话（:117～:121）；有操作且以小结收尾时，最后一段的小结图标变红（:81）；状态行在「详细」视图里显示成「信息: <状态>」（:131）。下表「面板」一栏写「通则」的就是这样。
+- **云端的话怎么来的**：服务端事件 `error { code?, message? }` → `src/ai/cloud/events.ts:275` 折进消息 → `cloudErrorMessage`（:21）：带 `message` 的交 `friendlyErrorMessage`（:55）改写（中文原话放过，英文网关报错按 HTTP 码换成固定的话，**都截到 80 字**，`REASON_MAX`，:36）；只有代号的按代号取固定的话（:24～:32）。本机模式由 `src/ai/useAiChat.ts:759` 把 `error.message` 原样放进气泡，不改写、不截短。
+- **排查**：云端对话的事件记录（页面「诊断报告」里有整段事件，按 `seq` 找 `error` / `status` / `diagnostic`）；用量流水（`<数据目录>/usage/`，每次模型请求一行，失败的 `ok: false`）；账号模式任务进程的日志在任务槽单元（`promptcut-agent-task-slot-*.service`）的 journal 里，主服务在 `promptcut-agent-master.service`，槽调度在 `promptcut-agent-root.service`；旧托管档看 `agent.run.end`（带 `state` 与 `reason`，`server/agent/service/create-agent-service.mjs:598`）。
+
+### 云端：一轮里出错（气泡红字）
+
+| 出错种类 | 怎么认出来 | 气泡里的话（原文） | 「Agent 操作」面板 | 产生的代码位置 | 排查从哪看 |
+|---|---|---|---|---|---|
+| 模型服务额度不够 | 网关报错带 `quota` / `insufficient …` / `billing` / `balance`，且 HTTP 码为空或 402、403、429 | 模型服务的额度不够,这一轮没有执行(需要托管方充值)。已经落地的改动保留在项目里。 | 通则 | 报错原文：`server/harness/providers/base.mjs:149`（`<厂商> HTTP <码>: <message>`）；改写：`src/ai/cloud/events.ts:64` | 事件 `error` 的 `message` 原文；用量流水 `ok: false`；网关账单 |
+| 模型凭证被拒 | HTTP 401；或 403 且原文含 `api key` / `unauthorized` / `forbidden` / `permission` / `invalid … key` | 模型服务拒绝了云端 Agent 的凭证,这一轮没有执行(需要托管方检查模型配置)。 | 通则 | `base.mjs:149` → `events.ts:66` | 同上；节点 `config/keys/custom.key` 是否解得开 |
+| 模型服务太忙 | HTTP 429（不含额度字样） | 模型服务太忙(请求过于频繁),这一轮没有执行,请稍后再试。 | 通则 | `base.mjs:149` → `events.ts:68`（`server/harness/retry-fetch.mjs` 已先按退避重试过） | 事件 `error`；任务进程日志里 `[api] … 后重试` |
+| 模型找不到 | HTTP 404 | 托管方配置的模型找不到,这一轮没有执行(需要托管方检查模型配置)。 | 通则 | `base.mjs:149` → `events.ts:69` | `config/ai.json` 的 `model` 清单；网关 `/v1/models` |
+| 模型服务故障 | HTTP 5xx | 模型服务暂时出了故障(HTTP <码>),这一轮没有执行,请稍后再试。 | 通则 | `base.mjs:149` → `events.ts:70` | 事件 `error`；网关状态 |
+| 连不上模型服务 | 原文含 `timeout` / `ECONNRESET` / `ENOTFOUND` / `fetch failed` / `network` 等 | 连不上模型服务(网络超时或被断开),这一轮没有执行,请稍后再试。 | 通则 | 闲置超时 `server/harness/idle-timeout.mjs`；`server/runners/api.mjs:430`（超时带 `retryable`）→ `events.ts:72` | 事件 `error`；节点出网 |
+| 别的 HTTP 错误（含 400） | 有 `HTTP <码>`、不属于上面几种 | 模型调用失败(HTTP <码>):<原文压成一行、去掉密钥与请求号、截到 80 字> | 通则 | `base.mjs:149` → `events.ts:75` | 事件 `error` 的原文；输出上限引起的 400 已先降档或换字段重发过一次（日志 `[harness.max-output-fallback]`，`server/harness/providers/output-fallback.mjs:7`；事件 `diagnostic` 的 `stage: 'max-output-fallback'`） |
+| 模型流出错、没有 HTTP 码 | 英文原文、无 HTTP 码、无代号 | 模型调用失败:<原文压短> | 通则 | 例：`server/harness/providers/openai.mjs:346`（流提前结束）、`gemini.mjs:223`（没有正常收尾）→ `events.ts:76` | 事件 `error` |
+| 模型那一路的中文报错 | 原文含中文、无代号 | 原话（不以「模型」开头的前面加「模型调用失败:」），截到 80 字 | 通则 | 例：`server/harness/agent.mjs:237`（没有返回文字或工具调用）、`:159`（重复的工具调用 ID）→ `events.ts:62` | 事件 `error`；`diagnostic` 的 `request` / `response` |
+| 回复被截断、次数超限（A07） | 原文含「超过单次输出上限被截断，这一轮没能完成」 | 模型的回复[连续 N 次]超过单次输出上限被截断，这一轮没能完成。[已经写出的部分存在代码块 <块名> 里，下一条消息可以让它接着写。]可以把要求拆小一点再发，或请管理员调大单次输出上限。（云端截到 80 字，后半句看不到；本机完整） | 通则 | `server/harness/agent.mjs:226` → `events.ts:62` | 事件 `diagnostic` 的 `stage: 'truncated'`（每次截断一条：`partials`、`saved`、`salvaged`、`stalled`）；代码块目录里的 `cut_*.txt` |
+| 回复被截断、已让它接着写（A07，不是出错） | 事件 `status` | 不进气泡。状态行：模型这次回复超过单次输出上限被截断了；写了一半的 <工具>（<N> 字） 已存进代码块 <块名>，已让它接着写。／没留下内容时：模型这次回复超过单次输出上限被截断了，没有执行任何操作；已让它接着做。 | 详细视图「信息: …」 | `server/harness/truncation.mjs:67`、`:68`，由 `agent.mjs:228` 发出 | 同上 |
+| 额度用尽（一轮中途） | 事件 `error`，`code: 'quota-exceeded'`，`message` 是闸写的话 | 这个项目的云端 Agent 额度已用完(已用 <N> / 上限 <M>)。请联系托管方。 | 通则 | 闸 `server/agent/service/gate.mjs:143`；账号模式在每次模型请求前抛 `server/agent/service/account-runner.mjs:365`，`api.mjs:438` 发出 → `events.ts:62` | 用量流水；`<数据目录>/limits.json` |
+| 开关被关（一轮中途，模型请求前） | `code: 'disabled'` | 项目创建者已关闭云端 Agent。 | 通则 | `gate.mjs:149` → `account-runner.mjs:365` | 文档服务里项目的「云端 Agent」开关 |
+| 只有代号、没有话 | `code` 为 `revoked` / `interrupted` / `model` / `quota-exceeded` / `limit` / `unavailable`，或别的 | 依次：云端 Agent 的这段对话已失效(开关被关、你被移出项目或项目已删除)。已经落地的改动保留在项目里。／云端 Agent 服务中断,这一轮没有做完。已经落地的改动保留在项目里。／模型调用失败。／云端 Agent 的额度已用完。／这一轮达到了轮数或时间上限,已停下。已经落地的改动保留在项目里。／云端 Agent 暂时连不上文档服务。／（别的）云端 Agent 出错了。 | 通则 | `events.ts:25`～`:31` | 事件 `error` 的 `code` |
+| 文档服务没接上 / 连不上 | `code: 'unavailable'` | 这个项目的云端 Agent 还没接上文档服务,请稍后再试。／云端 Agent 连不上这个项目的文档服务:<原因> | 通则 | `server/agent/service/instance.mjs:1537`、`:1588` | 任务进程日志；文档服务日志 |
+| 项目太大 | `code: 'too-large'` | 项目太大,云端 Agent 暂不支持这个项目。请在电脑上的 PromptCut 里使用。 | 通则 | `instance.mjs:1584` | 项目 JSON 大小（上限 16 MiB） |
+| 一轮超时 / 到轮数上限（旧托管档） | `code: 'limit'` | 这一轮超过了 <N> 分钟的上限,已停下。已经落地的改动保留在项目里。／这一轮到了 <N> 次模型往返的上限,已停下。已经落地的改动保留在项目里,可以接着说。 | 通则 | `server/agent/service/create-agent-service.mjs:611`、`:715` | `agent.run.end`（`reason: 'limit'`） |
+| 模型调用失败（旧托管档） | `code: 'model'` | 模型调用失败:<原文去敏> | 通则 | `create-agent-service.mjs:723` | `agent.run.end`（`reason: 'model'`） |
+| 服务中断（旧托管档、进程重启） | `code: 'interrupted'` | 云端 Agent 服务中断,这一轮没有做完。已经落地的改动保留在项目里。 | 通则 | `server/agent/service/conversations.mjs:39`（话）、`:365`（重启时补发）、`create-agent-service.mjs:620` | `agent.run.end`（`state: 'interrupted'`） |
+| 重连时对话已没了（页面判） | 重连时服务端已无这个对话、本地还有没收尾的一轮 | 云端 Agent 服务中断,这一轮没有做完。已经落地的改动保留在项目里。 | 通则 | `src/ai/cloud/session.ts:351` | 浏览器控制台；服务端对话目录 |
+
+### 云端账号模式：一轮被强制结束（结算后才显示）
+
+一轮跑完先显示「执行已结束，等待云端确认关闭与结算。」（`events.ts:136`，状态行与进度行）；文档服务签了终态后按下表收尾（`events.ts:334` 的 `settledPatch`，取 `queue.state` 里这条消息的 `outcome.status` / `outcome.reason`）。这一轮已经有红字的，红字不换。
+
+| 出错种类 | 怎么认出来 | 气泡里的话（原文） | 「Agent 操作」面板 | 产生的代码位置 | 排查从哪看 |
+|---|---|---|---|---|---|
+| 被停止 | `outcome.status: 'cancelled'` | 不出红字；进度行「已停止」 | 不变红 | `events.ts:341` | 队列快照；停止的请求号 |
+| 任务进程故障 | `status: 'failed'`，`reason: 'worker-failed'` | 云端执行这一轮的进程出了故障,这一轮没有做完。已经落地的改动保留在项目里。 | 通则 | `events.ts:83` | `promptcut-agent-root.service` 的 `slot.failure-observed` / `slot.forced.*`；任务槽单元日志 |
+| 开关被关 | `reason: 'agent-disabled'` | 项目创建者已关闭云端 Agent,这一轮已停止。已经落地的改动保留在项目里。 | 通则 | `events.ts:84` | 文档服务的开关 |
+| 被移出项目 | `reason: 'member-revoked'` | 你已不在这个项目里,这一轮已停止。已经落地的改动保留在项目里。 | 通则 | `events.ts:85` | 文档服务的成员与围栏 |
+| 登录失效（改密退出） | `reason: 'credential-revoked'` | 你的登录已失效,这一轮已停止。已经落地的改动保留在项目里。 | 通则 | `events.ts:86` | 同上 |
+| 切成私有 | `reason: 'private'` | 这个对话被切成了私有,这一轮已停止。已经落地的改动保留在项目里。 | 通则 | `events.ts:87` | 对话账本 `aclRevision` |
+| 其它失败 | `status: 'failed'`，原因不在上面 | 云端 Agent 这一轮执行失败了,没有做完。已经落地的改动保留在项目里。 | 通则 | `events.ts:343` | 同「任务进程故障」；模型没配置时任务进程领任务即报 `no-model-key`（`account-runner.mjs:191`） |
+| 其它中断 | 别的终态 | 云端 Agent 服务中断,这一轮没有做完。已经落地的改动保留在项目里。 | 通则 | `events.ts:344` → `:26` | 同上 |
+
+### 云端：发消息被拒（挂在用户自己的气泡下，前缀「没有发出去：」）
+
+接口回非 2xx 时按回包的 `code`（没有就按 HTTP 码：401 → `unauthorized`、403 → `forbidden`、别的 → `unavailable`，`src/ai/cloud/cloudApi.ts:110`）取 `cloudErrorText`（`cloudApi.ts:60`），服务端带了话的（额度、文档服务连不上）用服务端的；再由 `session.ts:573` 拼成「没有发出去：<话>」。这一轮没开始，「Agent 操作」面板里没有这一轮。
+
+| 出错种类 | 怎么认出来 | 气泡里的话（原文，前面都有「没有发出去：」） | 产生的代码位置 | 排查从哪看 |
+|---|---|---|---|---|
+| 额度用完（发送时，A05） | 429，`code: 'quota-exceeded'` | 这个项目的云端 Agent 额度已用完(已用 <N> / 上限 <M>)。请联系托管方。 | `server/agent-service/account-master-assembly.mjs:451`（话来自 `gate.mjs:143`）→ `cloudApi.ts:68` | 主服务日志 `agent.master.send-quota-refused` |
+| 正忙 | `code: 'busy'` | 云端 Agent 正忙,请稍后再试。 | `gate.mjs:160` → `cloudApi.ts:66` | 并发名额（`limits.json`） |
+| 对话还有一轮在跑 | `code: 'busy-conversation'` | 这个对话还有一轮在进行,等它结束或先停止。 | `cloudApi.ts:67` | 队列快照 |
+| 开关被关 | `code: 'disabled'` | 项目创建者已关闭云端 Agent。 | `cloudApi.ts:65` | 文档服务的开关 |
+| 身份没通过 | 401 / `unauthorized` | 云端 Agent 暂时连不上:身份验证没有通过。请刷新页面或重新进入项目。 | `cloudApi.ts:62` | 票据、登录 |
+| 模型没配置 | `code: 'no-model-key'` | 云端 Agent 还没有配置模型,请联系托管方。 | `cloudApi.ts:69` | 节点 `config/ai.json`、`keys/custom.key` |
+| 消息太长 | `code: 'too-large'` | 消息太长了,云端 Agent 收不下。请缩短后再发。 | `cloudApi.ts:70` | 请求体上限 256 KiB |
+| 网络 | 请求没回来 | 连不上云端 Agent 服务,请检查网络。 | `cloudApi.ts:73`；`session.ts:572` | 浏览器网络面板 |
+| 其它代号 | 不在上面 | <服务端的话>；没有就是「云端 Agent 出错了(<代号>)。」 | `cloudApi.ts:83` | 回包的 `code` |
+| 对话数满、删除相关 | `conversation-limit`、`delete-forbidden`、`no-conversation` 等 | 见 `src/ai/cloud/chatTexts.ts`（例：「没有找到这个对话，它可能已经被删除。」，:39） | `cloudApi.ts:75`～`:82` | 对话账本 |
+
+### 云端：读不了这个对话（对话区的提示，不是某一轮的红字）
+
+| 出错种类 | 怎么认出来 | 显示的话（原文） | 产生的代码位置 | 排查从哪看 |
+|---|---|---|---|---|
+| 被设为私有、被踢、对话或项目被删（账号模式） | 事件 `access.revoked`；或读取 403 `not-listed` / `banned`；或读到过的对话再读 404 | 当前账号已无法读取这个对话，请重新选择有权限的对话。 | `src/ai/cloud/session.ts:76`（用在 :315、:404、:445、:454） | 文档服务的成员、对话账本 |
+| 开关被关（读取被拒） | `access.revoked` 且 `reason: 'agent-disabled'`；或 403 `agent-disabled` / 取票据 `disabled` | 对话里留一条红字：项目创建者已关闭云端 Agent,这个对话已停止。已经落地的改动保留在项目里;重新打开云端 Agent 后可继续。 | `session.ts:80`（:420 放进对话） | 文档服务的开关 |
+
+### 本机模式（API 直连，气泡里原样显示 `error.message`）
+
+| 出错种类 | 怎么认出来 | 气泡里的话（原文） | 「Agent 操作」面板 | 产生的代码位置 | 排查从哪看 |
+|---|---|---|---|---|---|
+| 没填 Key | 起一轮之前 | API 直连不可用:还没填 API Key | 通则 | `server/runners/api.mjs:176` | 设置里的 API 直连 |
+| 配置模块缺失 | 同上 | API 直连不可用:配置模块缺失 | 通则 | `api.mjs:164` | 安装是否完整 |
+| 厂商不认识 | 同上 | 不认识的 vendor | 通则 | `api.mjs:236` | `ai.json` 的 `api.vendor` |
+| 模型报错 | 一轮中途抛错 | <厂商> HTTP <码>: <网关的 message，截到 300 字> | 通则 | `server/harness/providers/base.mjs:149` | 诊断报告；编辑器进程的控制台（`[api] … 重试`、`[harness.max-output-fallback]`） |
+| 超时 | 原文含 timeout | 原文；自动接着说一次（`retryable`） | 通则 | `api.mjs:430`～`:437` | 同上 |
+| 回复被截断、次数超限（A07） | 同云端 | 同云端那句，完整不截 | 通则 | `server/harness/agent.mjs:226` | 诊断报告里 `diagnostic` 的 `stage: 'truncated'`；`exports/ai-workspace/code-cache/<项目>/` |
+| 用户点停止 | — | 不出红字；状态行「已中止」 | 不变红 | `api.mjs:414` | — |
+| 本机额度熔断（CLI 驱动） | 额度模块抛 `QuotaExceededError` | 额度模块给的话 | 通则 | `server/agent/service/instance.mjs:946` | `ai.json` 的 `quota` |
