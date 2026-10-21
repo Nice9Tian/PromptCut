@@ -201,19 +201,17 @@ Claude 主会话与 Antigravity 主会话接手后合进 `main` 的（每块的�
 
 ## 派出去的活
 
-**第一批（0.7.19 的前置项，2026-10-22 派出）。** 四条前置项里第 2 条（音频看门狗）核对后已在 `main`，不派；其余三条互不依赖，同时派，文件清单互不重叠、端口各占一段（避开用户常驻的 5190～5192、主会话的 5203 和 5210～5212）。涉及通讯安全的两块合入 `main` 之前另派 `opus-dev-high` 专审一遍（开工指令「分工与档位」）。
+**第二批（2026-10-22 下午）。** 第一批五块全部合入 `main` 并推送，工作区与分支已清理、AGENT 报告已归档到 `docs/archive/agent-reports/`（清理前核过五个工作区都没有 `node_modules` 目录联接）。现在在跑的三块：
 
 | 块 | 在做什么 | 谁、哪一档 | 工作区 / 分支 | 端口段 |
 |---|---|---|---|---|
-| 前置 1 | 手机版补「滤镜」入口；缩略卡、素材格子显示真画面（经素材票据）。另调研「速度」入口的代价，不实现 | `opus-dev`（Opus，medium）——复杂前端 + 素材票据 | `.worktrees/mobile-entries` / `claude/mobile-entries` | 5820～5829 |
-| 前置 3 | 登录框加「粘贴授权码」输入框，登录任务接上标准输入 | `sonnet-dev-high`（Sonnet，high）——简单前端 + 一处服务端 | `.worktrees/cli-paste-code` / `claude/cli-paste-code` | 5830～5839 |
-| 前置 4 | 云端 Agent 的发送接口不再重复核「首次使用告知」 | `opus-dev`（Opus，medium）——告知与授权，属通讯安全 | `.worktrees/consent-once` / `claude/consent-once` | 5840～5849 |
-| 前置 2 的证据 | 补音频看门狗的**正向**探针（现有 `playback-probe.mjs` 只验了它不误触发，没验它真管用）：造一次真停顿，断言不等迟到的那一拍就跳闸、声音当场停、拍子回来后恢复 | `sonnet-dev-high`（Sonnet，high）——只改 `scripts/probes/` | `.worktrees/stall-audio-probe` / `claude/stall-audio-probe` | 5850～5859 |
-| 0.7.19 | 多项目渲染节点：每个请求只加载它那几帧用到的卡和素材，不让哪个项目占着（取代 0.7.18「按轮占用」暂行办法）。语义已写好，照着实现；语义文档不许它动（`mechanism/rendering.md` 另有 Agent 在改），要改的交回主会话 | `opus-dev-high`（Opus，high）——开工指令档位表把多项目渲染节点列在 Opus 一行 | `.worktrees/multi-project-render` / `claude/multi-project-render` | 5880～5889 |
-| 0.7.19 | 在线浏览器第二～四步：撤销低内存档（全仓库 144 个文件提到它）、落实身份、舞台／素材／即时渲染三道闸门与四档气泡、定机制里标「待定」的数字 | `opus-dev-high`（Opus，high）——最大的一块，会动渲染路径 | `.worktrees/online-browser` / `claude/online-browser` | 5870～5879 |
-| 并行分支 | 〔裁〕H04「放弃这次搬迁」按钮：删掉搬到云端失败留下的半成品项目（破坏性操作，要二次确认、幂等、清本机关联记号） | `opus-dev`（Opus，medium）——破坏性 + 云端项目删除 | `.worktrees/abandon-move` / `claude/abandon-move` | 5860～5869 |
+| 0.7.19 | 在线浏览器第二～四步：撤销低内存档（全仓库 144 个文件提到它）、落实身份、舞台／素材／即时渲染三道闸门与四档气泡、定机制里标「待定」的数字 | `opus-dev-high` | `.worktrees/online-browser` / `claude/online-browser` | 5870～5879 |
+| 0.7.19 | 多项目渲染节点：每个请求只加载它那几帧用到的卡和素材（取代 0.7.18「按轮占用」）。语义已写好，照着实现，语义文档不许它动 | `opus-dev-high` | `.worktrees/multi-project-render` / `claude/multi-project-render` | 5880～5889 |
+| 0.7.19 + 0.7.20 的地基 | 共用的「冲突合并」窗口：两级可勾选（一级按被改的那样东西、二级按属性去重）、增删冲突、按「项目 × 用户」存在文档服务且独立于项目 JSON、导航栏按钮、断网时各操作的允许与置灰、手机版同桌面。要给 0.7.20 的「撤销冲突」留口子 | `opus-dev-high` | `.worktrees/conflict-merge` / `claude/conflict-merge` | 5890～5899 |
 
-「速度」入口单独说明：`TrackClip` 上没有任何 per-clip 的速度字段（`src/kernel/project.ts` 里没有 `speed`；`rate` 只出现在 `cardNodes` 的 source 输入时间映射里，即素材效果卡的机制）。所以「补速度入口」可能不是接线，而是新增一项用户看得见的能力（二级语义），还会牵动渲染取帧、导出、混音和导出像素基线。先让前置 1 调研并按解法表给候选，再由主会话定做法。
+**并行数压在 3 个**：实测这台 PC 上 5～6 个子 Agent 同时跑全量测试，假失败和拖慢比并行省下的时间更多（细节记在 `docs/local.md`「这台 PC 上并行跑 npm test 的实际上限」）。
+
+**还没开工的**：0.7.19 的云端 Agent 消息断网排队、老外壳打补丁后账号入口改提示、发版说明那一条；0.7.20 全部（退出后逐项撤回接入冲突合并窗口、申请加入与账号名单、〔裁〕H07）；并行分支「剪辑段里的卡做通产流」；以及前置项里排到后面的「速度」。
 
 ## 分支去向
 
