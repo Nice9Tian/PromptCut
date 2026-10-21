@@ -164,9 +164,10 @@ test('SPC5-10 createSharedProject({ where: hosted })：向托管地址 POST shar
 
 // ================================================================== SP6：缺省托管地址
 
-test('SPC6-1 DEFAULT_HOSTED_URL 是新云节点 http://149.88.94.84:8787', async () => {
+test('SPC6-1 DEFAULT_HOSTED_URL 是托管服务的自有域名 https://hosted.visuhive.com/hosted（2026-10-22 起，不再是 IP）', async () => {
   const { DEFAULT_HOSTED_URL } = await loadHostedDefault();
-  assert.equal(DEFAULT_HOSTED_URL, `http://${HOSTED_IP}:8787`);
+  assert.equal(DEFAULT_HOSTED_URL, 'https://hosted.visuhive.com/hosted');
+  assert.ok(!DEFAULT_HOSTED_URL.includes(HOSTED_IP));
 });
 
 test('SPC6-2 覆盖顺序：界面上改过的值 > PROMPTCUT_HOSTED_URL > 缺省值', async () => {
@@ -183,7 +184,7 @@ const EXCLUDE = [
   /^server\/test\//, /\.test\.[cm]?[jt]sx?$/, /^scripts\/probes\//, /\.md$/,
 ];
 
-test('SPC6-3 守门：源码里 8.219.80.16 只出现在 server/auth/hosted-default.mjs（测试、文档、探针除外）', () => {
+test('SPC6-3 守门：源码里托管端换下来的 IP 只出现在 server/auth/hosted-default.mjs（测试、文档、探针除外）', () => {
   const ls = (args) => spawnSync('git', ['ls-files', ...args], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   const tracked = ls(['-z']);
   assert.equal(tracked.status, 0, tracked.stderr);
@@ -198,7 +199,7 @@ test('SPC6-3 守门：源码里 8.219.80.16 只出现在 server/auth/hosted-defa
     if (text.includes(HOSTED_IP)) hits.push(f);
   }
   assert.deepEqual(hits.filter((f) => f !== 'server/auth/hosted-default.mjs'), [], `别处写死了托管地址：${hits.join(', ')}`);
-  assert.deepEqual(hits, ['server/auth/hosted-default.mjs'], '缺省托管地址在 hosted-default.mjs 里定义（恰好这一处）');
+  assert.deepEqual(hits, ['server/auth/hosted-default.mjs'], '换下来的 IP 在 hosted-default.mjs 的对照表里（恰好这一处）');
 });
 
 test('SPC5-11 route.mjs 与 hosted-default.mjs 浏览器也能用：没有静态引 node: 内置模块（局域网发现由调用方经 lan.discover 注入）', () => {

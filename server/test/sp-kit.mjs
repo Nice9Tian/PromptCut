@@ -76,7 +76,8 @@ import { isUnsafePort } from '../safe-port.mjs';
 export const ROOT = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 export const HOSTED_MAIN = path.join(ROOT, 'server', 'hosted', 'main.mjs');
 export const PROBE = path.join(ROOT, 'scripts', 'probes', 'shared-project-probe.mjs');
-// 2026-10-06 托管端换到新云节点；换下来的阿里云地址只在 hosted-default.mjs 的 RETIRED_HOSTED_HOSTS 里（旧项目文件读进来换成新的）
+// 托管端换下来的两个 IP：2026-10-06 阿里云换到新云节点，2026-10-22 缺省地址又从新云节点的 IP 换成自有域名；
+// 两个都只在 hosted-default.mjs 的对照表里（旧项目文件读进来换成现在的地址）
 export const HOSTED_IP = '149.88.94.84';
 export const RETIRED_HOSTED_IP = '8.219.80.16';
 

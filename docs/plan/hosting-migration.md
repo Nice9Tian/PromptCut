@@ -127,6 +127,14 @@ $PROMPTCUT_DATA_DIR/
 7. **验收**：0.7.16 在阿里云上建的测试房间，换机后用 0.7.17 同一台设备打开旧文件，不用认证回到原房间原身份、只连新节点、存回的是新地址；全新的 0.7.16 经阿里云 8787 的转发加入同一房间，双向改名可见，改动落在新节点（rev 2 → 4，阿里云上冻结在 2）；正在编辑的那台 0.7.16 桌面版经转发自动重连回原项目，版本号与停写前一致。
 8. **阿里云留着**：只做转发加信箱（`/coord`），托管服务停着、`pm2 save` 过；托管数据只读保留 7 天。
 
+### 2026-10-22 托管地址换成自有域名
+
+用户定用 `hosted.visuhive.com`，在 Namecheap 给 `visuhive.com` 加了一条 A 记录 `hosted`（和 `@`、`www`、`s1`、`s2` 一样指向节点）。
+
+1. **节点**：新站点 `/etc/nginx/sites-available/promptcut-hosted-domain`。443 那一块照抄 `promptcut` 站点（`149-88-94-84.sslip.io`），只换 `server_name` 与证书、去掉开发信箱；80 端口只发证书续期的验证文件（`/var/www/landing`），其余跳 https。证书 `certbot certonly --webroot -w /var/www/landing -d hosted.visuhive.com`，续期演练通过。没动已有的三个站点和任何服务。
+2. **客户端**：`server/auth/hosted-default.mjs` 的缺省托管地址从 `http://<节点 IP>:8787` 改成 `https://hosted.visuhive.com/hosted`。0.7.18 部署后节点的 8787、8788 只听本机，旧缺省地址从外面已经连不上，这一改顺带把它修好。旧项目文件、恢复凭证、本机记录里的旧地址读进来自动换成新的：「IP:8787 / 8788」换成新域名下的 `/hosted`、`/media`（协议换成 https / wss），sslip.io 名字只换主机名，`s1.`、`s2.` 舞台子域换成 `s1.visuhive.com`、`s2.visuhive.com`。桌面版随下一版补丁拿到；在那之前，0.7.18 的桌面版可以在加入项目界面把托管地址填成 `https://hosted.visuhive.com/hosted`。
+3. **以后换机器**：新机器上照现在的四个站点（`landing`、`promptcut`、`promptcut-stages`、`promptcut-hosted-domain`）配好 nginx 与证书，按上面第 2～7 步迁数据，最后在 Namecheap 把 `@`、`www`、`s1`、`s2`、`hosted` 五条 A 记录改到新地址。客户端不用改代码、不用发版，旧服务器也不用留着做转发（第 8、9 步只对还在用 IP 缺省地址的 0.7.18 及更早的客户端有意义）。
+
 ## 2a. 渲染服务的迁移与重建
 
 托管方的渲染服务（PM2 的 `promptcut-render`，契约 `docs/plan/hosted-render-contract.md`）与托管组合同在一台云节点上。**它不跟着托管数据目录走，换机时在新节点上重建**；模板与逐步命令见 `server/hosted/deploy/README.md` 的「渲染服务」一节。
