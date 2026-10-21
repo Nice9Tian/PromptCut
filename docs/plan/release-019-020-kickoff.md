@@ -67,16 +67,20 @@
 
 ## 分工与档位
 
-主会话用 Opus，不在主工作区写业务代码。主会话拆活、定接口、派活、读每一份差异、自己重跑基线、合并、发版、部署、写进度。实现派出去，互不依赖的同时派，协议照 `multi_agent.md`。
+用户 2026-10-22 原话：「本次使用多Agent并行加快速度。前端界面不交给Argon，纯代码任务交给Argon。涉及通讯安全问题需要Opus审查。简单前端界面任务交给SonnetHigh。需要在Chrome中测试，还有安卓中测试的任务由你亲自测试验收。」
+
+主会话用 Opus，不在主工作区写业务代码。主会话拆活、定接口、派活、读每一份差异、自己重跑基线、合并、发版、部署、写进度。互不依赖的活同时派，多 Agent 并行，协议照 `multi_agent.md`。
 
 | 谁 | 怎么调 | 用在 |
 |---|---|---|
-| Opus | `opus-dev`（medium）、`opus-dev-high`（high）；要更高就用 `opus-dev-high` 并把 `effort` 设成 `xhigh` 或 `max` | 同步与冲突合并、延迟撤回、三道闸门、多项目渲染节点、鉴权与票据、并发与时序、会动像素基线或对外接口的改动 |
-| Sonnet | `sonnet-dev-high`（high）；机械的批量活把 `effort` 设成 `medium` | 照契约实现、写测试、页面、探针 |
+| Opus | `opus-dev`（medium）、`opus-dev-high`（high）；要更高就用 `opus-dev-high` 并把 `effort` 设成 `xhigh` 或 `max` | 复杂的前端界面；同步与冲突合并、延迟撤回、三道闸门、多项目渲染节点、并发与时序、会动像素基线或对外接口的改动；涉及通讯安全的审查 |
+| Sonnet | `sonnet-dev-high`（high）；机械的批量活把 `effort` 设成 `medium` | 简单的前端界面；照契约实现、写测试、探针 |
+| Gemini | `/subagent-agy`（`agy-manager`），Argon | 纯代码任务（不带界面）：派活指令里给 worktree、能改的文件清单和验收命令；交叉审核。前端界面一律不派给它 |
 | GPT | `/subagent-gpt` | 查资料和攻坚：`gpt-6.1-sol`（medium～xhigh），升级攻坚用 `gpt-6-astra` |
-| Gemini | `/subagent-agy`（`agy-manager`），Argon | 界面文案和交互流程的草稿；目标明确、边界清楚的非前端代码（派活指令里给 worktree、能改的文件清单和验收命令）；交叉审核。不派前端 |
 
-- **申请加入与账号名单**（原话「交给一个OpusMax智能体做。做完让Argon交叉审核一下就行。」）：派 `opus-dev-high`，`effort` 设成 `max`；做完派 `agy-manager` 用 Argon 交叉审核，审核意见由主会话核实后再改。
+- **涉及通讯安全的改动**（账号与登录、票据与授权、撤权与退出确认、文档服务的连接与同步、断网后重发、申请加入与账号名单、跨服务的通知）：不管谁写的，合进 `main` 之前派一个 Opus（`opus-dev-high`）专门审一遍，审出的问题改完再合。
+- **申请加入与账号名单**（原话「交给一个OpusMax智能体做。做完让Argon交叉审核一下就行。」）：派 `opus-dev-high`，`effort` 设成 `max`；做完派 `agy-manager` 用 Argon 交叉审核；它涉及通讯安全，照上一条另过 Opus 审查。审核意见由主会话核实后再改。
+- **在 Chrome 里、安卓模拟器里要测的，主会话亲自测、亲自验收**，不交给子 Agent。Chrome 用 puppeteer 起的 Chrome 或内置浏览器；安卓照 `docs/local.md`「安卓模拟器」。子 Agent 交回的单测、探针结果照常由主会话重跑核对。
 - 选谁、哪一档、为什么，写在派活指令里。拿不准往高一档。同一处两轮不过就升一档或换人。
 - 卡住时照 `solution_table.md`。
 
