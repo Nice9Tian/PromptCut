@@ -949,9 +949,14 @@ async function errorsStep() {
   /* ---- E2:额度用尽 */
   {
     const before = await snap();
-    const usage = (() => { const r = admin('usage', '--project', PID, '--json'); try { return JSON.parse(String(r.stdout).trim().split('\n').at(-1)); } catch { return null; } })();
-    const used = usage?.tokens ?? 0;
-    const set = admin('quota', 'set', PID, '--tokens', String(used + 1));
+    // 额度的起点必须是「此刻真实的已用量」:前面几步(E1 那一轮的收尾记账、渲染、后台作业)的用量流水可能晚几秒才落齐,
+    // 读到的比真实的小,上限就比真实用量还低,第一条消息发出时就被发送前的额度检查拒掉,E2 要测的「一轮中途额度用完」就没了。
+    // 所以:连着读到相同的两次(隔 2 秒)才算稳定;设上限后再读一次核对,变了就按新值重设。余量仍是 1 个 token(第一次模型调用放行,记账后用完)
+    const readUsed = () => { const r = admin('usage', '--project', PID, '--json'); try { return JSON.parse(String(r.stdout).trim().split('\n').at(-1))?.tokens ?? 0; } catch { return 0; } };
+    let used = readUsed();
+    for (let i = 0; i < 10; i++) { await sleep(2000); const again = readUsed(); if (again === used) break; used = again; }
+    let set;
+    for (let i = 0; i < 5; i++) { set = admin('quota', 'set', PID, '--tokens', String(used + 1)); const now = readUsed(); if (now === used) break; used = now; }
     await sleep(400);
     const conv = await runAndWait(mockSteps([writeStep(1, 'q'), { sleepMs: 300 }, writeStep(4, 'q'), writeStep(7, 'q'), { say: '不会到' }]));
     const e = await errText(c.page);
