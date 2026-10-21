@@ -28,7 +28,7 @@
 
 ## 验证
 
-见文末「验证结果」（全量测试跑完后填）。
+见文末「验证结果」。
 
 ## 没做 / 已知限制
 
@@ -64,4 +64,21 @@
 
 ## 验证结果
 
-（待填）
+- `npx tsc -b --force`：退出码 0，零错误。
+- `npm test`（`PROMPTCUT_ACCOUNT_PROVIDER_ROOT=C:\Users\admin\Documents\VisuHive`，`PROMPTCUT_PASSWORD_ORDER_MODULE=C:\Users\admin\Documents\VisuHive\account\password-order.mjs`）：**退出码 0，tests 7310，pass 7295，fail 0，skipped 15**，「npm test 最终结果：零失败」。
+- 第一次全量跑有两项红，已处理：
+  - `C10A-API-03`（在线构建产物里不许出现 `/api/` 路径）：我用 `inClipCut(...)` 包 handler 后，对象字面量里的函数调用在摇树时算有副作用，音频与配音的 `/api/audio/measure`、`/api/voice/*` 被带进在线包。改为 `/* @__PURE__ */ inClipCut(...)`（和 `src/mcp/api.ts` 同一个做法），该项复跑通过。
+  - `W1-RUN-02`（网页接管的停止用例）：满载并发下超时失败；单独跑该文件 15 项全过，第二次全量跑也过。与本任务无关，判为负载下的偶发。
+- 新增测试（全部通过）：
+  - `server/test/tool-schema.test.mjs` +5：update_clip 说明的措辞（增量补丁、只传要改的键、没传的保持、别凭记忆整份带回、get_clip、changedParams）、静态 schema 与注入后 schema 的补丁说明和无 required、add_clip 不受影响、set_clip 说明。
+  - `src/mcp/handlers/updateClipPatch.test.mjs` 5 项：合并行为（只传 size，其余保持）、用户 undo 之后只传 size 不把撤销的颜色写回、整份旧参数带回时 `changedParams` 点出被写回的键、不改 params 不带回显、`paramsEcho` 的截断。
+  - `src/mcp/handlers/parkedCutEdit.test.mjs` 16 项：十个工具改停放剪辑里的片段、activeCutId 与激活剪辑 tracks 同一份对象、监听者从未见过视图形状、同步层 prev/next 为真实形状且一次工具调用一次提交、文档差异只在 `/cuts/@B/…` 下、一步撤销、停放剪辑总时长跟着内容走、出错后还原、嵌套 / 异步被拒、`list_cuts({cutId})`、说明措辞。
+  - `server/test/agent-parked-cut-edit.test.mjs` 3 项：真文档服务 + 真执行器（vite ssr 载入工具实现）端到端：停放剪辑里 update_clip 只提交一次、activeCutId 不变、Agent 副本与真身逐项相同；get_clip / set_rect / list_cuts；删除停放剪辑里的片段被明确拒绝且不提交。
+  - `src/ai/agentBus.test.mjs` +1：`diffScopes` 认停放剪辑。
+- 没看图、没跑探针：本任务不改画面（渲染、舞台、预渲染都未动）。没有在真浏览器里点过编辑界面；用户页面一侧的行为靠「监听者只见真实形状」的单测和同步层 prev/next 断言保证。
+
+## 请用户定的事
+
+1. 是否合并 `claude/agent-cut-edit`（我未合并、未推送、未部署）。
+2. 语义文件第 14 行要不要按上面 dry run 改（我没改）。
+3. 部署顺序：问题 1 只要 `server/` 四个文件；问题 2 的 `src/` 批与 `server/tools/cuts.mjs` 同批上线。
