@@ -9,7 +9,7 @@ import "../ai/agentTabsProject";
 import { useRef } from "react";
 import { addTab, closeTab, activateTab, useAgentTabs } from "../ai/agentTabs";
 import { useCloudAgent, useCloudNotices } from "../ai/cloud/useCloud";
-import { Icon } from "./icons";
+import { AgentTabsBar } from "./agentParts";
 import { useConfirm } from "./ui";
 import { AgentChat } from "./AgentChat";
 
@@ -28,21 +28,8 @@ export function AgentPage({ active }: { active: boolean }) {
 
   return (
     <div className="agent-page" data-pcm="agent-page">
-      <div className="chat-top" data-pcm="chat-top">
-        <div className="atabs" data-pcm="atabs">
-          {tabs.map((t) => (
-            <div key={t.id} role="tab" aria-selected={t.id === activeId} className={`atab${t.id === activeId ? " on" : ""}`} data-pcm="atab" data-draft={t.draft ? "1" : undefined}
-              onClick={() => activateTab(t.id)}>
-              {t.busy && <i className="dot run" aria-hidden="true" />}
-              <span className="nm">{t.draft ? "开始" : t.title}</span>
-              {t.draft
-                ? <span className="x-gap" />
-                : <span className="x" role="button" aria-label={`关闭 ${t.title}`} data-pcm="atab-close" onClick={(e) => { e.stopPropagation(); close(t.id, t.title); }}>✕</span>}
-            </div>
-          ))}
-        </div>
-        <button type="button" className="icon-btn" data-pcm="atab-new" title="新对话" aria-label="新对话" onClick={() => { const t = addTab(); activateTab(t.id); }}><Icon name="plus" /></button>
-      </div>
+      <AgentTabsBar tabs={tabs} activeId={activeId} onActivate={activateTab} onClose={close}
+        onNew={() => { const t = addTab(); activateTab(t.id); }} />
       {tabs.map((t) => <AgentChat key={t.id} tabId={t.id} shown={active && t.id === activeId} cloud={cloud} counts={counts} />)}
     </div>
   );

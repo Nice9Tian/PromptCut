@@ -129,3 +129,25 @@ export function StartHero(props: { animated: boolean; onPickPreset: () => void }
     </div>
   );
 }
+
+/** 对话标签行:每个会话一个标签(Agent 1、Agent 2……,都带 ✕),没有会话时只有一项「开始」;右边「+」新开 */
+export interface TabItem { id: string; title: string; draft?: boolean; busy?: boolean }
+export function AgentTabsBar(props: { tabs: readonly TabItem[]; activeId: string; onActivate: (id: string) => void; onClose: (id: string, title: string) => void; onNew: () => void }) {
+  return (
+    <div className="chat-top" data-pcm="chat-top">
+      <div className="atabs" data-pcm="atabs">
+        {props.tabs.map((t) => (
+          <div key={t.id} role="tab" aria-selected={t.id === props.activeId} className={`atab${t.id === props.activeId ? " on" : ""}`} data-pcm="atab" data-draft={t.draft ? "1" : undefined}
+            onClick={() => props.onActivate(t.id)}>
+            {t.busy && <i className="dot run" aria-hidden="true" />}
+            <span className="nm">{t.draft ? "开始" : t.title}</span>
+            {t.draft
+              ? <span className="x-gap" />
+              : <span className="x" role="button" aria-label={`关闭 ${t.title}`} data-pcm="atab-close" onClick={(e) => { e.stopPropagation(); props.onClose(t.id, t.title); }}>✕</span>}
+          </div>
+        ))}
+      </div>
+      <button type="button" className="icon-btn" data-pcm="atab-new" title="新对话" aria-label="新对话" onClick={props.onNew}><Icon name="plus" /></button>
+    </div>
+  );
+}

@@ -6,28 +6,20 @@
  * 并且「引用」不再往输入框里插文字,而是放在输入框上方的标记条里,发送时由 `agentView.withQuotes` 带上。
  * 手机版暂不放的:附件、模型与思考强度下拉、历史对话列表、删除对话、诊断报告(演示稿里没有这些入口,见任务报告)。
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
 import "katex/dist/katex.min.css";
 import { useCloudChat, type CloudAgentState } from "../ai/cloud/useCloud";
 import { CloudError, cloudConversationControlPolicy, cloudErrorText } from "../ai/cloud/cloudApi";
 import { acceptCloudConsent, cloudConsentState, refreshCloudConsent, subscribeCloudConsent } from "../ai/cloud/consent";
 import { setTabBusy, setTabConversation, setTabCreativity, useAgentTabs } from "../ai/agentTabs";
-import { CREATIVITY_HINT, CREATIVITY_LABEL, CREATIVITY_LEVELS, projectCreativity } from "../kernel/creativity.mjs";
+import { projectCreativity } from "../kernel/creativity.mjs";
 import { useStore } from "../store/project";
 import { setAccountAgentEnabled, useSync } from "../editor/sync/syncManager";
 import { CloudAgentConsentDialog } from "../editor/right/CloudAgentConsentDialog";
-import { EMPTY_EXAMPLE } from "../editor/right/chat/MessageList";
 import { useStartPage } from "../editor/right/chat/StartHero";
-import { Icon } from "./icons";
 import { useToast } from "./ui";
-import { AgentRound, QuoteBar, StartHero, UserBubble } from "./agentParts";
-import { addQuote, isUserBubble, ordinals, withQuotes, type QuoteRef } from "./agentView";
-
-/** 演示稿输入框上方那排快捷提问:点一下把这句话放进输入框(不直接发送) */
-const QUICKS = ["把开头的标题做得更大气一点", "给第二段加一个转场", "配一段轻松的背景音乐", "把整体节奏剪快一点"] as const;
-const QUICK_LABEL = ["标题更大气", "加转场", "配乐", "剪快点"] as const;
-
-const PLACEHOLDER = "告诉 Agent 你想怎么改…";
+import { AgentChatView } from "./AgentChatView";
+import { addQuote, withQuotes, type QuoteRef } from "./agentView";
 
 export function AgentChat(props: {
   tabId: string;
@@ -74,6 +66,7 @@ export function AgentChat(props: {
     const expected = cloud.accountId ? { accountId: cloud.accountId, bindingVersion: consent.bindingVersion } : null;
     if (!expected || consent.accountId !== expected.accountId || cloudConsentState().bindingVersion !== expected.bindingVersion) {
       setConsentError("请先登录当前项目的账号。");
+      toast("请先登录当前项目的账号");
       return false;
     }
     try {
@@ -173,7 +166,13 @@ export function AgentChat(props: {
     const ok = await chat.send(text, undefined, staged ?? undefined);
     return stillCurrent() && ok;
   };
-  const stick = useRef(true);
+  /** 探针与排障的只读口子(同 `window.__pcCloud`):这一页最近一次点发送时的引用和正文,以及引用条此刻的内容 */
+  const lastSend = useRef<{ text: string; quotes: QuoteRef[] } | null>(null);
+  useEffect(() => {
+    const w = window as unknown as { __pcMobileAgent?: Record<string, unknown> };
+    w.__pcMobileAgent = { ...(w.__pcMobileAgent ?? {}), [tabId]: { lastSend: () => lastSend.current, quotes: () => quotes } };
+    return () => { if (w.__pcMobileAgent) delete w.__pcMobileAgent[tabId]; };
+  }, [tabId, quotes]);
   const handleSend = async () => {
     const body = inputText.trim();
     if (!body) { taRef.current?.focus(); return; }
@@ -183,8 +182,8 @@ export function AgentChat(props: {
     start.commit();
     const text = withQuotes(body, quotes);
     const sentQuotes = quotes;
+    lastSend.current = { text, quotes: sentQuotes };
     const sentInput = inputText;
-    stick.current = true;
     if (cloud.accountMode) {
       // 账号模式:点发送当场在对话里出气泡、清空输入框(乐观显示);没发出去时气泡标「没有发出去」,原文放回输入框
       const staged = chat.stage(text);
@@ -241,50 +240,12 @@ export function AgentChat(props: {
     }
   };
 
-  /* ---------- 消息列表:贴底跟随 ---------- */
-  const listRef = useRef<HTMLDivElement>(null);
-  const onScroll = () => {
-    const el = listRef.current;
-    if (el) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
-  };
-  const rounds = useMemo(() => ordinals(chat.messages), [chat.messages]);
-  const latestAssistant = useMemo(() => {
-    for (let i = chat.messages.length - 1; i >= 0; i--) if (chat.messages[i].role === "assistant") return chat.messages[i].id;
-    return null;
-  }, [chat.messages]);
-  useLayoutEffect(() => {
-    const el = listRef.current;
-    if (el && shown && stick.current) el.scrollTop = el.scrollHeight;
-  });
-  useEffect(() => { if (shown) { stick.current = true; const el = listRef.current; if (el) el.scrollTop = el.scrollHeight; } }, [shown]);
-
   const queued = view.queue?.items.filter((i) => i.state === "queued").length ?? 0;
-  const who = tab?.title ?? "Agent";
-  const canSend = inputText.trim().length > 0;
-  const stopMode = streaming && !canSend;
-  const placeholder = quotes.length ? `@${quotes[0].label} 想怎么改?` : PLACEHOLDER;
+  const stopMode = streaming && inputText.trim().length === 0;
   const visLabel = view.revoked ? "已无读取权限" : !metadataReady ? "" : currentMeta ? `${currentMeta.visibility === "private" ? "私有对话" : "共有对话"}${creatorReadOnly ? " · 创建者只读" : ""}` : "新对话 · 默认共有";
-  const empty = !start.draft && !hasMessages;
 
-  return (
-    <div className="achat" data-pcm="agent-chat" data-tab={tabId} data-shown={shown ? "1" : "0"} style={shown ? undefined : { display: "none" }}>
-      <CloudAgentConsentDialog open={shown && consentOpen && cloud.accountMode && Boolean(consent.accountId) && consent.accountId === cloud.accountId}
-        pending={consent.pending} error={consentError} onAccept={acceptConsent} onReject={() => { setConsentError(null); setConsentOpen(false); }} />
-
-      <div className="chat-info" data-pcm="chat-info">
-        <span>创造力</span>
-        <div className="level" data-pcm="creativity">
-          {CREATIVITY_LEVELS.map((lv) => (
-            <button key={lv} type="button" className={lv === level ? "on" : undefined} data-l={CREATIVITY_LABEL[lv]} disabled={streaming}
-              title={`${CREATIVITY_LABEL[lv]}:${CREATIVITY_HINT[lv]}`} onClick={() => setTabCreativity(tabId, lv)}>{CREATIVITY_LABEL[lv]}</button>
-          ))}
-        </div>
-        <span className="spacer" />
-        {visLabel && (policy.canSwitchVisibility
-          ? <button type="button" className="chip" data-pcm="vis-chip" title="点一下切换共有 / 私有" onClick={() => void toggleVisibility()}>{visLabel}</button>
-          : <span className="chip" data-pcm="vis-chip">{visLabel}</span>)}
-      </div>
-
+  const banners = (
+    <>
       {!cloud.available && <div className="note" data-pcm="agent-note">这个项目所在的托管端没有云端 Agent 服务。</div>}
       {cloud.available && off && <div className="note" data-pcm="agent-note">{cloudErrorText("disabled")}
         {cloud.accountMode && creator && <button type="button" className="btn" disabled={enabling} data-pcm="agent-enable"
@@ -292,41 +253,37 @@ export function AgentChat(props: {
       </div>}
       {view.connection === "reconnecting" && <div className="note" data-pcm="agent-note">和云端 Agent 的连接断了,正在重新连接。云端的这一轮仍在继续,连上后会把错过的过程补齐。</div>}
       {chat.notice && <div className="note warn" data-pcm="agent-notice" role="alert" onClick={chat.clearNotice}>{chat.notice}</div>}
+    </>
+  );
 
-      <div className="msgs" ref={listRef} onScroll={onScroll} data-pcm="chat-msgs">
-        {start.draft ? (
-          <StartHero animated={start.animated} onPickPreset={start.pickPreset} />
-        ) : empty ? (
-          <div className="empty" data-pcm="agent-empty">
-            <div className="hint">这是一个新对话。想让我做点什么?</div>
-            <button type="button" className="preset" data-pcm="agent-empty-example" onClick={() => { setInputText(EMPTY_EXAMPLE); focusInput(); }}>{EMPTY_EXAMPLE}</button>
-          </div>
-        ) : chat.messages.map((m) => (isUserBubble(m)
-          ? <UserBubble key={m.id} m={m} />
-          : m.role === "assistant" ? <AgentRound key={m.id} m={m} ordinal={rounds.get(m.id) ?? 1} open={m.id === latestAssistant} who={who} /> : null))}
-        {queued > 0 && <div className="queue-note" data-pcm="queue-note">有 {queued} 条消息在排队,前面的做完就轮到</div>}
-      </div>
-
-      {creatorReadOnly ? (
-        <div className="composer" data-pcm="agent-composer"><div className="note">项目创建者可以查看这段私有对话,但不能发送消息。</div></div>
-      ) : (
-        <div className="composer" data-pcm="agent-composer" data-guide={start.guide ?? undefined}>
-          <QuoteBar quotes={quotes} onRemove={(id) => setQuotes((prev) => prev.filter((q) => q.id !== id))} />
-          {!start.draft && (
-            <div className="quicks" data-pcm="quicks">
-              {QUICKS.map((q, i) => <button key={q} type="button" onClick={() => { setInputText(q); focusInput(); }}>{QUICK_LABEL[i]}</button>)}
-            </div>
-          )}
-          <div className="in-row">
-            <textarea ref={taRef} rows={1} data-pcm="chat-input" value={inputText} placeholder={placeholder} disabled={Boolean(view.revoked)}
-              aria-label="告诉 Agent 你想怎么改"
-              onChange={(e) => setInputText(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void handleSend(); } }} />
-            <button type="button" className={`send${stopMode ? " is-stop" : ""}`} data-pcm={stopMode ? "chat-stop" : "chat-send"} aria-label={stopMode ? "停止" : "发送"}
-              onClick={() => (stopMode ? void handleStop() : void handleSend())}><Icon name={stopMode ? "stop" : "send"} /></button>
-          </div>
-        </div>
-      )}
-    </div>
+  return (
+    <AgentChatView
+      tabId={tabId}
+      shown={shown}
+      who={tab?.title ?? "Agent"}
+      messages={chat.messages}
+      start={{ draft: start.draft, animated: start.animated, guide: start.guide, onPickPreset: start.pickPreset }}
+      level={level}
+      levelDisabled={streaming}
+      onLevel={(lv) => setTabCreativity(tabId, lv)}
+      visLabel={visLabel}
+      canToggleVisibility={policy.canSwitchVisibility}
+      onToggleVisibility={() => void toggleVisibility()}
+      banners={banners}
+      queued={queued}
+      readOnly={creatorReadOnly}
+      quotes={quotes}
+      onRemoveQuote={(id) => setQuotes((prev) => prev.filter((q) => q.id !== id))}
+      inputText={inputText}
+      onInput={setInputText}
+      inputRef={taRef}
+      inputDisabled={Boolean(view.revoked)}
+      onSend={() => void handleSend()}
+      onStop={() => void handleStop()}
+      stopMode={stopMode}
+      onPickExample={(text) => { setInputText(text); focusInput(); }}
+      dialog={<CloudAgentConsentDialog open={shown && consentOpen && cloud.accountMode && Boolean(consent.accountId) && consent.accountId === cloud.accountId}
+        pending={consent.pending} error={consentError} onAccept={acceptConsent} onReject={() => { setConsentError(null); setConsentOpen(false); }} />}
+    />
   );
 }

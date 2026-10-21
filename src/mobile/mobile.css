@@ -254,7 +254,7 @@
 .pcm .ref { display: inline-flex; gap: 4px; align-items: center; background: var(--shade-weak); border-radius: var(--r-s); padding: 1px 6px; font-size: var(--fs-s); margin-bottom: 4px; color: var(--accent); max-width: 100%; }
 .pcm .msg .refs { display: flex; flex-wrap: wrap; gap: 4px; }
 .pcm .refbar { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
-.pcm .refbar .ref { font-size: var(--fs-m); padding: 3px 4px 3px 10px; gap: 6px; background: var(--accent-dim); margin-bottom: 0; }
+.pcm .refbar .ref { font-size: var(--fs-m); padding: 3px 4px 3px 10px; gap: 6px; background: var(--accent-dim); }
 .pcm .refbar .ref b { width: 18px; height: 18px; display: grid; place-items: center; border-radius: var(--r-s); font-weight: 400; cursor: pointer; }
 .pcm .ops { align-self: stretch; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-m); overflow: hidden; }
 .pcm .ops > summary { list-style: none; cursor: pointer; padding: 8px 12px; font-size: var(--fs-m); color: var(--dim); display: flex; align-items: center; gap: 6px; }
