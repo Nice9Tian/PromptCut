@@ -7,6 +7,8 @@
  *   邀请码状态、创建者操作（作废并重新生成邀请码，每次当场输入创建者密码；以及 C6.5 的改项目密码、改名单、踢人、删项目）。
  * - 取消勾选再「确定」：确认后放云端的先拉回本机再删云端项目，放本机的停本机托管；中途失败恢复为开启。
  *
+ * - 「放弃这次搬迁」（〔裁〕H04）：上一次搬到云端没做完、云端项目已经建好时出现（判据见 `accountMove.ts` 的 `pendingAttempt`）；
+ *   点了先在这一段里给一次确认（删的是哪一个云端项目、删了不能恢复、本机项目不受影响），确认后删云端那个项目并清掉本机的搬迁记录。
  * - 「搬到云端」（桌面版）：目标是这台桌面版配置的账号云端时走账号办法（`accountMoveFlow.ts`）——云端新建一个属于登录账号的项目、
  *   内容与本机一致，编辑器接着就在云端项目里；本机协作房间搬完即关闭、旧邀请码作废。两个入口：没开协作时勾上并选「云端」点「确定」；
  *   已开本机协作时点「搬到云端」。没登录先在这里登录。目标是别的节点（用户自己填的地址）时照旧办法。
@@ -22,8 +24,8 @@ import { ListEditor, LanRestartHint, readHostedUrl, writeHostedUrl } from "./Sha
 import { CreatorFlow, type Flow } from "./MembersPanel";
 import { HostedServiceRows } from "./HostedServiceRows";
 import { useSync, moveSharedToHosted, moveSharedToLan, pushToast, regenAccountProjectLink, setAccountSecondaryPassword } from "./syncManager";
-import { ACCOUNT_MOVE_TEXT, moveFailureText } from "./accountMove";
-import { accountCloud, accountCloudLogin, accountCloudSignIn, moveCurrentToAccountCloud, pendingMove, targetsAccountCloud, type AccountCloud } from "./accountMoveFlow";
+import { ACCOUNT_MOVE_TEXT, abandonFailureText, moveFailureText } from "./accountMove";
+import { abandonPendingMove, accountCloud, accountCloudLogin, accountCloudSignIn, moveCurrentToAccountCloud, pendingMove, targetsAccountCloud, type AccountCloud } from "./accountMoveFlow";
 import { projectLink, type Account } from "../../account/client";
 import {
   createInvite, defaultCreatorName, disableCollab, enableCollab, fetchInviteStatus, generatePassword, localCollab,
@@ -112,6 +114,8 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
   const [askMovePw, setAskMovePw] = useState(false);
   /** 搬完（或云端项目已建好但没做完）时给的项目链接 */
   const [moveLink, setMoveLink] = useState<string | null>(null);
+  /** 放弃这次搬迁：点了按钮、正在等确认 */
+  const [abandonAsk, setAbandonAsk] = useState(false);
 
   const local = shared ? localCollab(shared.projectId) : null;
   const iAmCreator = !!shared?.creator;
@@ -144,7 +148,7 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
     setHostedUrl(readHostedUrl());
     void defaultCreatorName().then(setCreator);
     setLoginFor(null); setLoginPw(""); setLoginBusy(false);
-    setCloudName(""); setAskCloudName(false); setMovePw(""); setAskMovePw(false); setMoveLink(null);
+    setCloudName(""); setAskCloudName(false); setMovePw(""); setAskMovePw(false); setMoveLink(null); setAbandonAsk(false);
     // 账号云端与登录状态：打开设置时查一次（没有账号桥就没有这一套，「云端」照旧办法）
     let live = true;
     setAcctUser(undefined);
@@ -286,6 +290,19 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
     if (r.localClosed) setWhere("hosted");
     setStatus({ text: moveFailureText(r, r.kind), tone: r.error === "login-required" || r.error === "creator-password" ? "info" : "err" });
   };
+  /** 放弃这次搬迁：确认过才调；状态行跟着走，失败说清云端和本机现在是什么样 */
+  const abandon = async () => {
+    if (!acct || busy) return;
+    setAbandonAsk(false); setBusy(true); setMoveLink(null);
+    const name = acctUser ? pendingMove(acctUser.id)?.name ?? "" : "";
+    setStatus({ text: ACCOUNT_MOVE_TEXT.abandoning(name), tone: "info" });
+    const r = await abandonPendingMove(acct);
+    setBusy(false);
+    if (r.ok) { setStatus({ text: r.already ? ACCOUNT_MOVE_TEXT.abandonedAlready(r.name) : ACCOUNT_MOVE_TEXT.abandoned(r.name), tone: "ok" }); return; }
+    console.warn("[collab] 放弃这次搬迁没成:", r.error, r.detail ?? "");
+    if (r.error === "login-required") { setAcctUser(null); setLoginFor(null); }
+    setStatus({ text: abandonFailureText(r), tone: r.error === "login-required" ? "info" : "err" });
+  };
   const signIn = async () => {
     if (!acct || loginBusy || !loginName.trim() || !loginPw) return;
     setLoginBusy(true); setStatus({ text: ACCOUNT_MOVE_TEXT.loginBusy, tone: "info" });
@@ -383,6 +400,8 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
   const accountTarget = where === "hosted" && targetsAccountCloud(hostedUrl, acct);
   /** 上一次没做完、云端项目已经建好的那次搬迁（再点「确定」接着做） */
   const resumable = accountTarget && acctUser && !isOn ? pendingMove(acctUser.id) : null;
+  /** 搬到云端没做完留下的云端项目（「放弃这次搬迁」只在有它时出现；正在打开云端项目时 `pendingMove` 是 null） */
+  const pending = acct && acctUser ? pendingMove(acctUser.id) : null;
   /** 登录状态一行；没登录是登录表单（字段与开始页「云端项目」的登录相同） */
   const accountRow = !acct ? null : acctUser === undefined ? (
     <div className="pc-sync-hint" data-pc="collab-account-user">{ACCOUNT_MOVE_TEXT.checkingLogin}</div>
@@ -618,6 +637,25 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
         </>
       ) : null}
 
+      {/* 正在搬或正在删的时候不显示（状态行在说进度）；搬成了记录就删了，自然也不显示 */}
+      {pending && !busy ? (
+        <div className="pc-collab-abandon" data-pc="collab-move-abandon-block">
+          {resumable ? null : <div className="pc-sync-hint" data-pc="collab-move-pending-idle">{ACCOUNT_MOVE_TEXT.pendingIdle(pending.name, !!shared)}</div>}
+          {abandonAsk ? (
+            <div data-pc="collab-abandon-confirm">
+              <div className="pc-sync-warn">{ACCOUNT_MOVE_TEXT.abandonConfirm(pending.name)}</div>
+              <div className="pc-collab-actions">
+                <button type="button" className="pc-dialog-opt pc-sync-danger-btn" data-pc="collab-abandon-yes" disabled={busy} onClick={() => void abandon()}>{ACCOUNT_MOVE_TEXT.abandonConfirmButton}</button>
+                <button type="button" className="pc-dialog-opt" data-pc="collab-abandon-no" disabled={busy} onClick={() => setAbandonAsk(false)}>{ACCOUNT_MOVE_TEXT.abandonCancel}</button>
+              </div>
+            </div>
+          ) : (
+            <div className="pc-collab-actions">
+              <button type="button" className="pc-dialog-opt" data-pc="collab-move-abandon" disabled={busy} onClick={() => { setAbandonAsk(true); setStatus(null); }}>{ACCOUNT_MOVE_TEXT.abandonButton}</button>
+            </div>
+          )}
+        </div>
+      ) : null}
       {status ? (
         <div className={`pc-sync-status-line${status.tone === "err" ? " is-err" : status.tone === "ok" ? " is-ok" : ""}`} data-pc="collab-status">{status.text}</div>
       ) : null}

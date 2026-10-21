@@ -4,10 +4,13 @@
  * 真的服务组合:账号后端、文档服务、独立的素材服务进程、TLS 入口(`server/test/fixtures/cloud-queue-user-path.mjs`,两个账号);
  * 两个桌面编辑器进程(本工作区起的开发服务器,各有自己的数据目录、卡片改动层、设备号);无头 Chrome 经界面真点。
  *
- *   node scripts/probes/account-move-probe.mjs [--only local,room] [--keep-temp]
+ *   node scripts/probes/account-move-probe.mjs [--only local,room,resume,abandon] [--keep-temp] [--out <目录>]
+ *                                             [--editor-ports 28960,28965] [--fixture-ports auto]
  *   (要设 PROMPTCUT_ACCOUNT_PROVIDER_ROOT、PROMPTCUT_PASSWORD_ORDER_MODULE,同账号那几条测试)
  *
  * 端口只用 28950～28999:夹具 28950～28956、云端 Agent 入口 28957;甲的编辑器 28960(舞台 +1、+2)、乙的编辑器 28965(+1、+2)。
+ * 分到的端口段不够 14 个时:`--editor-ports a,b` 指定两台编辑器的端口(各连占 +1、+2),`--fixture-ports auto` 让夹具与云端 Agent 入口
+ * 用测试同款的随机空闲端口(`server/test/free-ports.mjs`,20000～49151,不落在 5xxx、58xx、59xx 保留段)。
  *
  * **不是真的桌面外壳**:页面里的 `window.__TAURI__.core.invoke('account_bridge', …)` 由探针在 Node 一侧照外壳的接口代答
  * (`desktop/src-tauri/src/account_vault.rs`:configuration / login / recover / request,同样的路径白名单与 1 MiB 上限);
@@ -25,6 +28,10 @@
  *   关了以后断     另开一个小的本机协作房间:关本机协作的那一下改一处,随后云端不可用 → 补传失败。这时本机协作已关、最新内容已存在
  *                  本机草稿里(不带房间关联)、云端缺最后的修改;**刷新页面**重开那份草稿:是普通的本地项目(不停在「原房间已删除」),
  *                  设置里选云端点确定,用原来的请求号接着补上。再把搬之前那份带房间关联的旧草稿原样放回去打开:按本地项目开。
+ *   放弃这次搬迁  (〔裁〕H04,报告 `docs/reports/AGENT-claude-abandon-move.md`)小的本地项目搬到一半失败 → 设置里出现「放弃这次搬迁」;
+ *                  重开设置也在;点了先出确认(写着删哪一个、不能恢复、本机不受影响),点「不放弃」什么都不发;确认后删的回包丢了
+ *                  也算删成 → 云端项目没了(文档服务数据目录也删了)、本机记录清掉、按钮消失、本机项目与草稿一字未变照常能改能存;再搬一次还是原来的项目号,
+ *                  进了云端项目后设置里没有这个按钮。
  * 每遍截图:搬之前、进行中、失败的提示、成功后的提示(`docs/reports/assets/v18-move/`)。
  * 输出:过程写 stderr;stdout 最后一行是一行 JSON(`fails` 为空才算过)。不打印密码、令牌、票据。
  */
@@ -51,10 +58,15 @@ const argv = process.argv.slice(2);
 const arg = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : dflt; };
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const OUT = path.resolve(arg('--out', path.join(ROOT, 'docs', 'reports', 'assets', 'v18-move')));
-const ONLY = arg('--only', 'local,room,resume').split(',');
+const ONLY = arg('--only', 'local,room,resume,abandon').split(',');
 const KEEP = argv.includes('--keep-temp');
-const FIXTURE_PORTS = [28950, 28951, 28952, 28953, 28954, 28955, 28956], AGENT_PORT = 28957;
-const A_PORT = 28960, B_PORT = 28965;
+let FIXTURE_PORTS = [28950, 28951, 28952, 28953, 28954, 28955, 28956], AGENT_PORT = 28957;
+if (arg('--fixture-ports', '') === 'auto') {
+  const { freePorts } = await import('../../server/test/free-ports.mjs');
+  const got = await freePorts(8);
+  FIXTURE_PORTS = got.slice(0, 7); AGENT_PORT = got[7];
+}
+const [A_PORT, B_PORT] = arg('--editor-ports', '28960,28965').split(',').map(Number);
 fs.mkdirSync(OUT, { recursive: true });
 
 const say = (step, fields = {}) => process.stderr.write(`${JSON.stringify({ step, t: Date.now(), ...fields }).replace(/[A-Za-z0-9_-]{43,}/g, '[redacted]')}\n`);
@@ -208,7 +220,7 @@ function nativeBridge(state) {
       if (operation === 'request') {
         if ((!ROUTES.includes(args.path) && args.path !== '/api/account/cloud-agent-consent') || !args.accessToken) throw new Error('bad-path');
         if (Buffer.byteLength(JSON.stringify({ operation, args })) > 1024 * 1024) return { ok: false, status: 503, code: 'desktop-account-request-too-large' };
-        state.requests.push({ path: args.path, bytes: Buffer.byteLength(JSON.stringify(args.body ?? null)), requestId: args.body?.requestId ?? null });
+        state.requests.push({ path: args.path, bytes: Buffer.byteLength(JSON.stringify(args.body ?? null)), requestId: args.body?.requestId ?? null, projectId: args.body?.projectId ?? null });
         const fault = state.fault?.(args.path);
         if (typeof fault === 'number') return { ok: false, status: fault, code: 'authority-unavailable' };
         const r = await edge(args.path, { body: args.body, token: args.accessToken });
@@ -762,6 +774,127 @@ async function scenarioResume({ A, stateA }) {
   return { out };
 }
 
+/* ---------------- 放弃这次搬迁(〔裁〕H04) ---------------- */
+
+async function scenarioAbandon({ A, stateA }) {
+  const out = {};
+  const page = await openDesktop(A, stateA, '甲(放弃)');
+  const name = `搬到云端-放弃-${RUN}`;
+  const contentId = await P(page, async (name) => (await import('/src/editor/io/proc.ts')).newProject(name).id, name);
+  await waitFor(() => P(page, (id) => window.__pcSyncTest.docProjectId() === id && window.__pcSyncTest.view().status === 'online', contentId), 20_000, '本机项目接上');
+  await P(page, async () => { const S = await import('/src/store/project.ts'); S.actions.addCardClip('punch-pill', 0, { duration: 3 }); });
+  await P(page, async () => (await import('/src/editor/sync/syncManager.ts')).whenSaved(10_000));
+  const draftId = await P(page, async () => { const D = await import('/src/editor/io/drafts.ts'); const id = D.newDraftId(); D.setActiveDraftId(id); await D.saveDraft(id); return id; });
+  const records = () => P(page, () => JSON.parse(localStorage.getItem('pc.account.move') || '{}'));
+  /** 设置里勾多用户协作、选云端、填账号云端的地址;没登录就在设置里登录 */
+  const chooseCloud = async () => {
+    await page.click('[data-pc="collab-toggle"]');
+    await page.waitForSelector('[data-pc="collab-where-hosted"]');
+    await page.click('[data-pc="collab-where-hosted"]');
+    await page.waitForSelector('[data-pc="collab-hosted-url"]');
+    await page.$eval('[data-pc="collab-hosted-url"]', (el) => el.select());
+    await page.keyboard.press('Backspace');
+    await page.type('[data-pc="collab-hosted-url"]', `${ORIGIN}/hosted`);
+    await waitFor(() => P(page, () => !!document.querySelector('[data-pc="collab-account-user"] span, [data-pc="collab-account-login"]')), 15_000, '登录状态查完');
+    if (await P(page, () => !!document.querySelector('[data-pc="collab-account-login"]'))) {
+      await page.type('[data-pc="collab-account-name"]', fixture.accounts[0].name);
+      await page.type('[data-pc="collab-account-password"]', fixture.accounts[0].password);
+      await page.click('[data-pc="collab-account-submit"]');
+      await waitFor(() => P(page, () => !!document.querySelector('[data-pc="collab-account-user"] span')), 15_000, '在设置里登录成功');
+    }
+  };
+
+  // —— 云端中途不可用(取连接票据回 503):搬到一半失败,留下一个建好了的云端项目
+  stateA.fault = (p) => (p === '/hosted/shared/account/session' ? 503 : null);
+  await P(page, () => { window.__pcMoveTest.contentTimeoutMs = 4000; });
+  await openSettings(page);
+  await sleep(1500);
+  check(!(await P(page, () => !!document.querySelector('[data-pc="collab-move-abandon-block"]'))), '放弃-没搬过时不出现「放弃这次搬迁」');
+  await chooseCloud();
+  // 改设置会把项目名、画幅写回项目(值没变);「搬之前」的草稿从这里取
+  await clickConfirm(page);
+  await waitFor(async () => /项目内容没有传完/.test((await statusText(page)) ?? ''), 60_000, '搬迁失败');
+  stateA.fault = null;
+  await P(page, async () => (await import('/src/editor/sync/syncManager.ts')).whenSaved(10_000));
+  const contentBefore = await contentOf(page);
+  const draftBefore = await draftText(A, draftId);
+  const rec = Object.values(await records()).find((r) => r.contentId === contentId);
+  out.projectId = rec?.projectId ?? null;
+  check(!!rec?.projectId, '放弃-失败后本机记着已经建好的云端项目', rec ? { name: rec.name, hasProjectId: !!rec.projectId } : null);
+  const block = await waitFor(() => P(page, () => document.querySelector('[data-pc="collab-move-abandon-block"]')?.textContent ?? null), 10_000, '「放弃这次搬迁」出现').catch(() => null);
+  check(!!block && block.includes(M.ACCOUNT_MOVE_TEXT.abandonButton), '放弃-失败后设置里出现「放弃这次搬迁」', block);
+  await shot(page, 'abandon-1-failed');
+  await closeSettings(page);
+
+  // —— 重开设置(没勾协作、没选云端)也看得到,带一句说明
+  await openSettings(page);
+  const idle = await waitFor(() => P(page, () => document.querySelector('[data-pc="collab-move-pending-idle"]')?.textContent ?? null), 15_000, '重开设置后的提示').catch(() => null);
+  check(idle === M.ACCOUNT_MOVE_TEXT.pendingIdle(name, false), '放弃-重开设置:说明上次没做完、可以接着搬或放弃', idle);
+  await shot(page, 'abandon-2-reopened');
+
+  // —— 点了先确认;「不放弃」什么都不发
+  // 只看对这个云端项目发的(同一个账号别的页面这时可能正在别的云端项目里读成员)
+  const mark0 = stateA.requests.length;
+  await page.click('[data-pc="collab-move-abandon"]');
+  await page.waitForSelector('[data-pc="collab-abandon-confirm"]', { timeout: 5000 });
+  out.confirmText = await P(page, () => document.querySelector('[data-pc="collab-abandon-confirm"] .pc-sync-warn')?.textContent ?? null);
+  check(out.confirmText === M.ACCOUNT_MOVE_TEXT.abandonConfirm(name), '放弃-确认里写着删哪一个云端项目、不能恢复、本机不受影响', out.confirmText);
+  await shot(page, 'abandon-3-confirm');
+  await page.click('[data-pc="collab-abandon-no"]');
+  await sleep(500);
+  const sentOnCancel = stateA.requests.slice(mark0).filter((q) => q.projectId === out.projectId);
+  const buttonBack = await P(page, () => !!document.querySelector('[data-pc="collab-move-abandon"]'));
+  check(sentOnCancel.length === 0 && buttonBack, '放弃-点「不放弃」:没有向云端发任何请求,按钮还在', { sentOnCancel, buttonBack });
+
+  // —— 确认删除;删的回包丢了(请求到了云端):照样算删成
+  stateA.fault = (p) => (p === '/hosted/shared/account/admin' ? 'drop-response' : null);
+  const mark1 = cloudLog.length;
+  await page.click('[data-pc="collab-move-abandon"]');
+  await page.waitForSelector('[data-pc="collab-abandon-yes"]', { timeout: 5000 });
+  await page.click('[data-pc="collab-abandon-yes"]');
+  await waitFor(async () => { const t = await statusText(page); return t && !/^正在/.test(t); }, 30_000, '放弃的结果');
+  stateA.fault = null;
+  out.doneText = await statusText(page);
+  check(out.doneText === M.ACCOUNT_MOVE_TEXT.abandoned(name), '放弃-删的回包丢了也报删成(再问一次云端,确认不在了)', out.doneText);
+  const admin = cloudSince(mark1, /\/hosted\/shared\/account\/admin/);
+  check(admin.length === 1 && admin[0].status === 200, '放弃-云端只收到一次删除请求并删成', admin);
+  await shot(page, 'abandon-4-done');
+  check(!(await P(page, () => !!document.querySelector('[data-pc="collab-move-abandon-block"]'))), '放弃-删完按钮消失');
+  check(!Object.values(await records()).some((r) => r.contentId === contentId), '放弃-本机的搬迁记录清掉');
+  const members = await edge('/hosted/shared/account/members', { body: { projectId: out.projectId }, token: stateA.token });
+  check(members.status === 404, '放弃-云端那个项目没了(成员接口回 404)', { status: members.status, code: members.body?.code });
+  check(!cloudProjects().includes(out.projectId), '放弃-文档服务里这个项目的数据目录也删掉了');
+  const v = await viewOf(page);
+  check(v.kind === 'local' && v.shared === null && v.status === 'online', '放弃-编辑器仍在本机项目里', v);
+  check((await contentOf(page)) === contentBefore, '放弃-本机项目内容一字未变');
+  check((await draftText(A, draftId)) === draftBefore, '放弃-本机草稿一个字节都没变');
+  const edit = await editAndSave(page);
+  check(edit.ok, '放弃-本机项目照常能改、能存', edit);
+  await closeSettings(page);
+
+  // —— 再搬一次:另建一个云端项目;进了云端项目之后设置里没有这个按钮
+  await P(page, () => { delete window.__pcMoveTest.contentTimeoutMs; });
+  const createsBefore = stateA.requests.filter((q) => q.path === '/hosted/shared/account/create');
+  await openSettings(page);
+  await chooseCloud();
+  await clickConfirm(page);
+  await waitFor(async () => { const t = await statusText(page); return t && !/^正在/.test(t); }, 120_000, '再搬一次的结果');
+  out.againText = await statusText(page);
+  const v2 = await viewOf(page);
+  // 删的时候文档服务那一份数据也删了,这个号空出来:再搬还是原来的项目号(本地项目搬上去还是同一个项目),新建只发一次、用新请求号
+  const creates = stateA.requests.filter((q) => q.path === '/hosted/shared/account/create').slice(createsBefore.length);
+  check(out.againText === M.ACCOUNT_MOVE_TEXT.doneLocal && !!v2.shared?.accountId && v2.shared.projectId === out.projectId &&
+    creates.length === 1 && creates[0].requestId !== rec?.requestId,
+    '放弃-之后再搬:还是原来的项目号,新建只发一次(新请求号),搬成', { text: out.againText, creates: creates.length, sameProject: v2.shared?.projectId === out.projectId });
+  await closeSettings(page);
+  await openSettings(page);
+  await sleep(1500);
+  check(!(await P(page, () => !!document.querySelector('[data-pc="collab-move-abandon-block"]'))), '放弃-正常的云端项目里没有「放弃这次搬迁」');
+  await shot(page, 'abandon-5-cloud-no-button');
+  await closeSettings(page);
+  return { out, page };
+}
+
 /* ---------------- 主流程 ---------------- */
 
 try {
@@ -793,6 +926,7 @@ try {
   if (ONLY.includes('local')) { const r = await scenarioLocal({ A, B, stateA, stateB, video }); res.local = r.out; await r.page.close().catch(() => undefined); await r.pageB.close().catch(() => undefined); }
   if (ONLY.includes('room')) { const r = await scenarioRoom({ A, B, stateA, stateB, video }); res.room = r.out; }
   if (ONLY.includes('resume')) { const r = await scenarioResume({ A, stateA }); res.resume = r.out; }
+  if (ONLY.includes('abandon')) { const r = await scenarioAbandon({ A, stateA }); res.abandon = r.out; await r.page.close().catch(() => undefined); }
   check(!fs.existsSync(path.join(ROOT, CARD_REL)), '探针没有往仓库里写卡片文件');
 } catch (error) {
   fails.push(`探针中断:${String(error?.message ?? error).slice(0, 300)}`);
