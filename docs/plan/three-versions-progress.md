@@ -17,6 +17,15 @@
 
 **2026-10-17 核对（Claude 主会话）：main 的全量测试是红的。** `0e99dd63` 上 `npm test` 7011 条里 58 条失败（类型检查 0 错误）。最早从 10-16 凌晨的 `rr-motion-preempt`（`7ec227f6`）起就红了，之后撤快照的页面一侧、`v18-revoke-logout`、`v18-move-proc`、`v18-chat-workflow-jobs` 又各加了一批；其中部署清单漏了 `server/render-node/session.mjs`，部署到节点会起不来。逐条出处见 `docs/reports/VERIFY-main-2026-10-17.md`。**接着做 0.7.18 之前，先把 main 修回全绿。**
 
+**2026-10-22 起由 Claude 主会话接手连做 0.7.19、0.7.20**（开工指令 `release-019-020-kickoff.md`，用户用 `/goal` 指到它）。开工自检（只读）的结果：
+
+- **仓库与工作区**：`main` 干净、与 `origin/main` 同步，停在 `141e0be8`。另外三个工作区当天（2026-10-22）都没有改动，没有别的会话在动这些分支，开工指令写的前提成立：Antigravity 的 `check_frontend_backend_separation`（末次提交 2026-10-04，只有一份未跟踪的计划稿）、`.worktrees/cloud-run-assets-deploy`（2026-10-18）、`.worktrees/mobile-ui-ref`（2026-10-21）。
+- **`main` 基线全绿**：`npx tsc -b --force` 退出码 0、零错误；`npm test` 7426 条，7411 通过、**0 失败**、15 跳过，208.8 秒，退出码 0。第一遍是在安卓模拟器以 `-gpu host` 并行占着显卡和处理器时跑的，`CA-RENDER-01` 出了一条假失败（满载 11978 ms，单跑 2473 ms 通过；空载整套重跑 0 失败）。**教训：跑 `npm test` 期间不要同时开安卓模拟器**，这一套里有一批对时序敏感的用例。
+- **子 Agent 与工具都能起**：Opus（`opus-dev`）、Sonnet（`sonnet-dev-high`）各回「ok」；`agy`（Gemini）用 `gemini-3.8-flash-high` 正常回话，`gemini-4-argon-high` 在它的模型列表里。播报脚本正常（弹过一次自检信息栏）。
+- **安卓模拟环境能起、调试协议连得上**：WHPX 可用；`pc_phone` 无窗口冷启动后 `adb` 认到 `emulator-5554`、`sys.boot_completed=1`；手机版 Chrome 133.0.6943.137 起来了；`adb forward tcp:9333` 后 `http://127.0.0.1:9333/json/version` 读到 `webSocketDebuggerUrl`。验完已 `emu kill` 关掉，留到 0.7.19 测闸门时再开。
+- **GPT 这一档本次不用**：用户 2026-10-22 原话「本次不要用GPT，GPT处于不可用状态。」自检时也实测到这个 ChatGPT 账号已经不支持开工指令里写的 `gpt-6.1-sol`（服务端 400 `not supported when using Codex with a ChatGPT account`），`gpt-6-astra` 也不在模型列表里。**因此 `solution_table.md` 第 5 步的「攻坚顾问」这一级本次缺位**：卡住时改用思路顾问 Gemini（`gemini-4-argon-high`）出新假设，再用 Opus 升档（`opus-dev-high`，`effort` 提到 `xhigh` 或 `max`）攻坚；「一层扫空」的判据照旧看思路，不以失败次数或耗时为准。环境细节记在 `docs/local.md`「codex 可用模型」。
+- **前置项第 2 条（播放停顿时让声音立刻停／音频看门狗）经核对已经在 `main` 里**，不用重做：`src/editor/Preview.tsx` 的 `armStallWatch`（第 1061 行起）在「上一拍或 `play` 回包之后过了名义拍长 + 40 ms 还没有下一拍」时当场置 `mediaStalled`，不等晚到的那一拍；第 2437 行主文档的音频层 `playing={playing && !mediaStalled && (!live || firstBeatRef.current)}`，所以声音跟着当场停。出自 `e289b886`（2026-10-06，已是 `main` 的祖先），比 `TODO.md` 里记这条用户决定的提交（`1014fa19`，2026-10-21）更早——那条 TODO 照抄的是一份已经过时的清单。还要补一次浏览器侧实证才记为「已有」。
+
 接手时的摸底在 `docs/reports/AGENT-018-prep.md`：剩下五项的现状、逐项验收表的底稿（38 行）、各分支和 `main` 试合并的结论、拆成十五块的拆法、发版与部署的步骤、删节点数据清单要查什么、文档对不上的地方。
 
 应用仍是 0.7.17、外壳 0.2.7，还没有发 0.7.18。账号、文档、素材服务和网页已启用；生产的 Agent 服务和渲染服务尚未部署；生产模型尚未验。
@@ -102,8 +111,8 @@ Claude 主会话与 Antigravity 主会话接手后合进 `main` 的（每块的�
 0.7.19 之前（2026-10-22 用户定，原话「先做。之后再开始做.19」「都做。在.19之前完成。」；在线页面的部分合进 main 后先部署上线，桌面版的部分随 0.7.19 发）：
 
 - [ ] 手机版补「速度」「滤镜」两个入口；缩略卡、素材格子显示真画面（视频首帧、图片缩略图，经素材票据）。
-- [ ] 播放停顿时让声音立刻停（音频看门狗）。
-- [ ] 登录框加「粘贴授权码」输入框，登录任务接上标准输入。
+- [x] ~~播放停顿时让声音立刻停（音频看门狗）。~~ 核对后**早已在 main 里**（`e289b886`，2026-10-06，早于记该决定的 `1014fa19`）：`src/editor/Preview.tsx` 的 `armStallWatch` 不等迟到的那一拍就置 `mediaStalled`，第 2437 行主文档音频层跟着停。正在补正向探针（现有 `playback-probe.mjs` 只验了它不误触发）。
+- [x] ~~登录框加「粘贴授权码」输入框，登录任务接上标准输入。~~（2026-10-22 合入 main `ae121cef`，语义补在 `product/agent.md`「接入」与 `mechanism/agent.md`，后者标〔裁〕三级；`release` 随之前进到 `6c571a27`）
 - [ ] 云端 Agent 的发送接口不再重复核「首次使用告知」。
 
 0.7.19：
@@ -169,11 +178,19 @@ Claude 主会话与 Antigravity 主会话接手后合进 `main` 的（每块的�
 
 ## 派出去的活
 
-当前无在跑子 Agent（因周额度 `< 10%` 已全部收尾合入并清理）。
+**第一批（0.7.19 的前置项，2026-10-22 派出）。** 四条前置项里第 2 条（音频看门狗）核对后已在 `main`，不派；其余三条互不依赖，同时派，文件清单互不重叠、端口各占一段（避开用户常驻的 5190～5192、主会话的 5203 和 5210～5212）。涉及通讯安全的两块合入 `main` 之前另派 `opus-dev-high` 专审一遍（开工指令「分工与档位」）。
 
-| 块 | 在做什么 | 谁、哪一档 | 工作区 |
-|---|---|---|---|
-| —— | 当前无在途子 Agent | —— | —— |
+| 块 | 在做什么 | 谁、哪一档 | 工作区 / 分支 | 端口段 |
+|---|---|---|---|---|
+| 前置 1 | 手机版补「滤镜」入口；缩略卡、素材格子显示真画面（经素材票据）。另调研「速度」入口的代价，不实现 | `opus-dev`（Opus，medium）——复杂前端 + 素材票据 | `.worktrees/mobile-entries` / `claude/mobile-entries` | 5820～5829 |
+| 前置 3 | 登录框加「粘贴授权码」输入框，登录任务接上标准输入 | `sonnet-dev-high`（Sonnet，high）——简单前端 + 一处服务端 | `.worktrees/cli-paste-code` / `claude/cli-paste-code` | 5830～5839 |
+| 前置 4 | 云端 Agent 的发送接口不再重复核「首次使用告知」 | `opus-dev`（Opus，medium）——告知与授权，属通讯安全 | `.worktrees/consent-once` / `claude/consent-once` | 5840～5849 |
+| 前置 2 的证据 | 补音频看门狗的**正向**探针（现有 `playback-probe.mjs` 只验了它不误触发，没验它真管用）：造一次真停顿，断言不等迟到的那一拍就跳闸、声音当场停、拍子回来后恢复 | `sonnet-dev-high`（Sonnet，high）——只改 `scripts/probes/` | `.worktrees/stall-audio-probe` / `claude/stall-audio-probe` | 5850～5859 |
+| 0.7.19 | 多项目渲染节点：每个请求只加载它那几帧用到的卡和素材，不让哪个项目占着（取代 0.7.18「按轮占用」暂行办法）。语义已写好，照着实现；语义文档不许它动（`mechanism/rendering.md` 另有 Agent 在改），要改的交回主会话 | `opus-dev-high`（Opus，high）——开工指令档位表把多项目渲染节点列在 Opus 一行 | `.worktrees/multi-project-render` / `claude/multi-project-render` | 5880～5889 |
+| 0.7.19 | 在线浏览器第二～四步：撤销低内存档（全仓库 144 个文件提到它）、落实身份、舞台／素材／即时渲染三道闸门与四档气泡、定机制里标「待定」的数字 | `opus-dev-high`（Opus，high）——最大的一块，会动渲染路径 | `.worktrees/online-browser` / `claude/online-browser` | 5870～5879 |
+| 并行分支 | 〔裁〕H04「放弃这次搬迁」按钮：删掉搬到云端失败留下的半成品项目（破坏性操作，要二次确认、幂等、清本机关联记号） | `opus-dev`（Opus，medium）——破坏性 + 云端项目删除 | `.worktrees/abandon-move` / `claude/abandon-move` | 5860～5869 |
+
+「速度」入口单独说明：`TrackClip` 上没有任何 per-clip 的速度字段（`src/kernel/project.ts` 里没有 `speed`；`rate` 只出现在 `cardNodes` 的 source 输入时间映射里，即素材效果卡的机制）。所以「补速度入口」可能不是接线，而是新增一项用户看得见的能力（二级语义），还会牵动渲染取帧、导出、混音和导出像素基线。先让前置 1 调研并按解法表给候选，再由主会话定做法。
 
 ## 分支去向
 

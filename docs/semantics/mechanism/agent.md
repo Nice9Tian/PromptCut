@@ -44,6 +44,15 @@
 - 气泡里显示的话由页面从这一轮的事件里取（`src/ai/userMessages.ts`）：这一轮调过 `send_message`（发给 user、没失败）的，按先后列出它们的 `text`；一次都没调的，用文字回复（相邻的文字并成一句）。两种不混：调过的那一轮，文字回复只在「显示思考」里看得到。原先「没交收尾汇报就按文字回复代交一份汇报」（2026-10-19）撤掉，免得同一段话在气泡和汇报里各出现一次。
 - 操作区（`src/editor/right/chat/ActivityPanel.tsx`）一次显示一轮：缺省跟着最新一轮，点气泡切到那一轮，也能前后翻；内容是这一轮的操作图标、操作详细预览（写了项目的那一步能「撤销这步」）和阶段 / 本轮小结。只取这个对话的消息，不取文档服务项目频道上的工具事件（原「Agent 操作记录」`src/editor/sync/AgentEventLog.tsx` 按项目频道列，会混进别的对话和别的成员的调用，已不挂在 AI 栏）。每一轮的回复各占一个气泡，紧跟在发起它的用户消息后面，不再把没交本轮小结的回复和后面几轮并成一个气泡。
 
+## 命令行登录接标准输入与粘贴授权码（见 `../product/agent.md`「接入」；做法与数字都是〔裁：主会话 2026-10-22，三级，`docs/reports/AGENT-claude-cli-paste-code.md`〕）
+
+- 实现在 `server/runners/setup.mjs`、`server/vite-plugin-ai.ts`、`src/editor/right/AiSetupDialog.tsx`。
+- **只有 Claude 的登录任务**把子进程的标准输入接成管道（它的登录命令会问「Paste code here if prompted」），其余登录与安装任务照旧不接。任务以任何方式结束——成功、失败、超时、取消、启动出错、`dispose`——都把标准输入关掉，不留着挂住进程；子进程先退出时写管道的 EPIPE 吞掉，以任务自己的结果为准。
+- **形状校验**在写入之前（`normalizeAuthCode`）：字符集 `[A-Za-z0-9._~+/=%#-]`（base64url 字符加 `#`）、长度 16～512、每条任务最多提交 5 次。不合格当场拒绝，出错信息里不带输入的任何内容，免得把任意字符串管道给子进程。字符集是按登录网页给的码推断的，真码里出现别的字符时只改这一处常量。
+- **送码的口**是 `/api/ai/setup` 的 `POST`，请求体 `{provider, code}`：同源、`application/json`、8 KB 上限，保护照抄同一文件里既有的 `DELETE`。
+- **对话框**只在登录任务在跑、且服务端在任务上报了 `acceptsCode` 时，才在「打开登录网页」下面显示那一块（缺省收着）；任务一结束整块消失。
+- 码是凭证：不进日志、不进任务字段、不进出错信息。
+
 ## 桌面 APP 接入
 
 - 桌面工具经 stdio MCP 服务 `server/mcp-server.mjs` 接入。找实例的优先级为 `--port`、`PROMPTCUT_PORT`、`--port-file` / `PROMPTCUT_PORT_FILE`、公共 `%TEMP%\promptcut\port.json`；每次调用重新找。找不到、进程已退出或端口无人监听时返回说明。
