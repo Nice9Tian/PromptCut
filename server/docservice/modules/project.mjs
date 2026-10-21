@@ -682,7 +682,7 @@ export function projectModule({
     const undoOf = msg.undoOf == null ? null : checkToken(msg.undoOf, 'undoOf');
     const request = { opId, ops: msg.ops, expectRev: msg.expectRev ?? null, undoOf, session };
     /*
-     * 慢提交的诊断(线上 2026-10-21:Agent 的 switch_cut 约 60 秒才落地,日志里看不出卡在哪;`docs/reports/AGENT-cut-stream-fix.md`
+     * 慢提交的诊断(线上 2026-10-21:Agent 的 switch_cut 约 60 秒才落地,日志里看不出卡在哪;`docs/archive/agent-reports/AGENT-cut-stream-fix.md`
      * 缺陷 5):从收到到回包超过 `SLOW_OP_MS` 记一行 `project.op.slow`,分出排队(进有序提交之前:授权核对、项目锁)与落地(进锁之后)各多久。
      */
     const t0 = Date.now();

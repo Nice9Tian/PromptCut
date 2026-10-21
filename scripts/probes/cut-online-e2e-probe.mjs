@@ -1,6 +1,6 @@
 /**
  * 在线页面贴剪辑段里那张卡自己的流、被引用剪辑改过之后不贴旧流的端到端探针(逐卡口径:`docs/semantics/mechanism/rendering.md`
- * 「剪辑段」、`docs/reports/AGENT-cut-flatten.md`「设计」;用户 2026-10-21 定 —— 剪辑段里的卡和没有剪辑段时一样,重卡各自走轨道流)。
+ * 「剪辑段」、`docs/archive/agent-reports/AGENT-cut-flatten.md`「设计」;用户 2026-10-21 定 —— 剪辑段里的卡和没有剪辑段时一样,重卡各自走轨道流)。
  *
  *   node scripts/probes/cut-online-e2e-probe.mjs [--dist <在线构建目录>] [--base-port 5410] [--out <目录>] [--keep-temp]
  *        端口(整段 +0～+9):+0 编辑器页的源、+1 / +2 两个舞台的源、+3 文档服务、+4 素材服务、+5～+7 桌面编辑器(及它的舞台端口)。都只绑 127.0.0.1。

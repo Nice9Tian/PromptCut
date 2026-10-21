@@ -20,7 +20,7 @@
  *   口令式的旧组合停干净,再起账号组合。创建者 = 夹具账号 dualUser0、bob = dualUser1、carol 现注册并经项目链接加入;「生成轨道流」
  *   由创建者在在线页面的项目设置里打开(网站后端的 `ACCOUNT_ADMINS` 只设在本探针进程里,让创建者在权限分组内)。要先设
  *   PROMPTCUT_ACCOUNT_PROVIDER_ROOT 与 PROMPTCUT_PASSWORD_ORDER_MODULE。对话记录改读主服务的事件库与文档服务的账本。
- *   改写的断言(改前改后见 `docs/reports/AGENT-ux-probe-account.md`):X1(账号组合搭起来)、B1～B3(发起方与重开方都是在线页面)、
+ *   改写的断言(改前改后见 `docs/archive/agent-reports/AGENT-ux-probe-account.md`):X1(账号组合搭起来)、B1～B3(发起方与重开方都是在线页面)、
  *   K2(做完的任务数按工作进程逐任务收尾行数)、UC0(新建账号项目)、UC2(看轨道流)、E5(被踢的已读消息例外)。
  *
  *   node scripts/probes/cloud-agent-ux-ui-probe.mjs [--steps desktop,online,stop,spaced,usercard,errors] [--account-port 29003] [--base-port 5790] [--doc-port 8798] [--asset-port 8799]

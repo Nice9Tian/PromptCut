@@ -1,6 +1,6 @@
 /**
  * Agent 的提交(`project.op`)等回包超时之后,同一个 opId 原样重发(线上 2026-10-21 switch_cut 报「15000 ms 内没有回包」、
- * 其实约 60 秒后落地了;`docs/reports/AGENT-cut-stream-fix.md` 缺陷 5)。
+ * 其实约 60 秒后落地了;`docs/archive/agent-reports/AGENT-cut-stream-fix.md` 缺陷 5)。
  *
  *   AOR1  头两次等回包超时、第三次回 `project.op.ok`(duplicate):工具成功、写入记进 ctx.write;三次发的是同一个 opId 与同一批 ops
  *   AOR2  一直超时:重发 `opResends` 次之后照旧报 timeout(不无限等)
