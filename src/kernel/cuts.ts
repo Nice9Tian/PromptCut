@@ -8,7 +8,8 @@
 // "./project" 补扩展名)。tsconfig 开了 allowImportingTsExtensions(noEmit 下允许)。
 // id 必须复用 project.ts 的 newId —— 两个各自从 0 起的计数器同一毫秒里会撞出同一个 t-… id。
 import { newId, type Cut, type Project, type Track } from "./project.ts";
-import { cutCycleReason, cutDuration, cutReferences, stripCutReferences } from "./cutSegments.ts";
+import { activeCutIdOf, cutCycleReason, cutDuration, cutReferences, stripCutReferences } from "./cutSegments.ts";
+import { contentEndOf, effectiveDuration, manualDurationFor } from "./duration.ts";
 
 /**
  * 默认剪辑数:新项目和没有 cuts 字段的老文件只补「剪辑1」这一条,其余由用户或 Agent 新建
@@ -274,4 +275,90 @@ export function stripFilterFromCuts(p: Project, filterId: string): Project {
         ? { ...c, tracks: c.tracks.map((t) => ({ ...t, clips: t.clips.map((cl) => (cl.filter?.id === filterId ? withoutFilter(cl) : cl)) })) }
         : c),
   };
+}
+
+/* ---------- 就地改停放剪辑里的片段(不切换激活剪辑) ----------
+ *
+ * 激活剪辑住在 Project.tracks 上,停放的住在 cuts[].tracks 里,所以 findClip 只找得到激活那条里的片段;
+ * 以前 Agent 要改别的剪辑里的卡只能 switch_cut 切过去(activeCutId 是共享的项目字段,所有成员的界面一起翻),
+ * 改完再切回来,两次多余的写入(2026-10-21 线上每轮都有)。
+ *
+ * 做法:把项目换成「那条剪辑当激活」的样子(`cutEditView`),让现成的按激活剪辑写的 store 动作照常工作,
+ * 动作每次提交的新项目再折回真实形状(`foldCutEdit`):改到的只有那条剪辑条目里的 tracks / duration / transitions,
+ * activeCutId 与激活剪辑的内容原样不动。折回时全是新对象,不原地改 store 里的项目对象。
+ */
+
+/** 哪条停放的剪辑里有这个片段(激活那条里的不算);没有返回 null */
+export function parkedCutOfClip(p: Project, clipId: string): { cutId: string; cutName: string } | null {
+  const active = activeCutIdOf(p);
+  for (const c of Array.isArray(p.cuts) ? p.cuts : []) {
+    if (c.id === active || !Array.isArray(c.tracks)) continue;
+    for (const t of c.tracks) if (t.clips.some((cl) => cl.id === clipId)) return { cutId: c.id, cutName: c.name };
+  }
+  return null;
+}
+
+/**
+ * 「把 `cutId` 当激活剪辑」的编辑视图:tracks / duration / transitions 换成它的内容,真正激活的那条退回条目里带着自己的内容。
+ * 不是激活的那条、或不是带内容的停放剪辑时返回 null(调用方就地照常做)。
+ */
+export function cutEditView(real: Project, cutId: string): Project | null {
+  const activeId = activeCutIdOf(real);
+  if (!activeId || cutId === activeId) return null;
+  const target = (real.cuts ?? []).find((c) => c.id === cutId);
+  if (!target || !Array.isArray(target.tracks)) return null;
+  const cuts = real.cuts!.map((c) => {
+    if (c.id === activeId) return { ...c, tracks: real.tracks, duration: real.duration, transitions: real.transitions ?? [] };
+    if (c.id === cutId) {
+      const { tracks: _t, duration: _d, transitions: _x, ...rest } = c;
+      return rest;
+    }
+    return c;
+  });
+  return {
+    ...real,
+    tracks: target.tracks,
+    duration: typeof target.duration === "number" && target.duration > 0 ? target.duration : DEFAULT_CUT_DURATION,
+    transitions: target.transitions ?? [],
+    cuts,
+    activeCutId: cutId,
+  };
+}
+
+/** 停放剪辑的总时长跟着内容走:和 `agent-exec.mjs` 的 `settleDuration`、页面时间轴同一条规则(至少 1 秒) */
+function settleCutDuration(before: { tracks: Track[]; duration: number }, afterTracks: Track[], afterDuration: number): number {
+  if (afterTracks === before.tracks && afterDuration === before.duration) return afterDuration;
+  const end = contentEndOf(afterTracks);
+  const manual = afterDuration !== before.duration ? manualDurationFor(afterDuration, end) : manualDurationFor(before.duration, contentEndOf(before.tracks));
+  const target = effectiveDuration(end, afterDuration, manual);
+  if (Math.abs(target - afterDuration) <= 1e-6) return afterDuration;
+  const val = Math.max(1, target);
+  return Math.abs(val - afterDuration) < 1e-6 ? afterDuration : val;
+}
+
+/**
+ * `cutEditView` 里的项目被动作改成 `edited` 之后,折回真实形状:`real` 是进视图之前的真实项目。
+ * 项目级的改动(素材、效果库、卡片节点……)照 `edited`;激活剪辑的 tracks / duration / transitions / activeCutId 用 `real` 的;
+ * `cutId` 那条的条目收下 `edited` 里的 tracks / duration / transitions(总时长跟着内容走)。
+ */
+export function foldCutEdit(real: Project, edited: Project, cutId: string): Project {
+  const activeId = activeCutIdOf(real)!;
+  const realTarget = real.cuts!.find((c) => c.id === cutId)!;
+  const realActiveEntry = real.cuts!.find((c) => c.id === activeId)!;
+  const beforeDuration = typeof realTarget.duration === "number" && realTarget.duration > 0 ? realTarget.duration : DEFAULT_CUT_DURATION;
+  const duration = settleCutDuration({ tracks: realTarget.tracks!, duration: beforeDuration }, edited.tracks, edited.duration);
+  // 条目原先没有 transitions 键、改完仍是空的,就不凭空多出一个键
+  const nowT = edited.transitions ?? [];
+  const transitions = realTarget.transitions !== undefined ? nowT : nowT.length ? nowT : undefined;
+  const entry: Cut = {
+    ...realTarget,
+    tracks: edited.tracks,
+    ...(duration === beforeDuration && realTarget.duration === undefined ? {} : { duration }),
+    ...(transitions === undefined ? {} : { transitions }),
+  };
+  const cuts = (edited.cuts ?? real.cuts!).map((c) => (c.id === activeId ? realActiveEntry : c.id === cutId ? entry : c));
+  const out: Project = { ...edited, tracks: real.tracks, duration: real.duration, cuts, activeCutId: real.activeCutId };
+  if (real.transitions === undefined) delete out.transitions;
+  else out.transitions = real.transitions;
+  return out;
 }

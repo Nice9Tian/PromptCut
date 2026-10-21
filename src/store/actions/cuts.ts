@@ -5,7 +5,7 @@ import {
 import { cutCycleReason, cutDuration, cutReferences, isCutSegment } from "../../kernel/cutSegments";
 import { findClip, newId, type Track, type TrackClip } from "../../kernel/project";
 
-import { state, set, setProject, updateTrack } from "../core";
+import { state, set, setProject, updateTrack, runInCutScope } from "../core";
 
 export const cuts = {
 
@@ -42,6 +42,13 @@ export const cuts = {
     if (switchedTo) set({ t, playing: false, selection: [], playToken: state.playToken + 1, durationManual: null });
     else set({ selection: state.selection.filter((id) => !removedSegments.some((r) => r.clipIds.includes(id))) });
     return { removedSegments };
+  },
+  /**
+   * 就地改停放剪辑里的片段:fn 里的 actions 照常按「这条剪辑当激活」写,提交时只改它的条目,
+   * 激活剪辑与 activeCutId 不动(不切换、不翻任何人的界面)。fn 必须同步。见 store/core.ts `runInCutScope`。
+   */
+  editInCut<T>(cutId: string, fn: () => T): T {
+    return runInCutScope(cutId, fn);
   },
   /** 直接引用了这条剪辑的那些剪辑(删之前给人看) */
   cutReferences(cutId: string) {

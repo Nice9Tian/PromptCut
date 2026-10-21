@@ -90,3 +90,13 @@ test("MA-P5 取走又忙了:stash 放回页面这边,下次先送它们", async 
   assert.deepEqual(got.map((m) => m.text), ["t"]);
   assert.equal(bus.hasAutoDeliverable("conv-p5"), false);
 });
+
+test("MA-P1b diffScopes:不切换剪辑、就地改了停放剪辑里的序列,也记「那条剪辑->序列」", () => {
+  const act = [track("t1", "序列 1", [])];
+  const pk = [track("p1", "序列 A", []), track("p2", "序列 B", [])];
+  const mk = (parked) => ({ ...project(act), cuts: [{ id: "c1", name: "剪辑 1" }, { id: "c2", name: "剪辑 2", tracks: parked, duration: 5 }], activeCutId: "c1" });
+  const before = mk(pk);
+  assert.deepEqual(bus.diffScopes(before, mk([pk[0], { ...pk[1], clips: [{ id: "y" }] }])), ["剪辑 2->序列 B"]);
+  assert.deepEqual(bus.diffScopes(before, mk([pk[0]])), ["剪辑 2->序列 B(已删)"]);
+  assert.deepEqual(bus.diffScopes(before, mk(pk)), []);
+});

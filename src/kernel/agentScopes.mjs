@@ -2,7 +2,7 @@
  * 多 Agent 的「范围」(计划 `docs/plan/agent-workflow-plan.md` A3;语义 `user-workflow.md`「多 Agent」「保护」)。
  *
  * 范围写成「剪辑X->序列X」,多个用逗号分开。这里只放页面与服务端共用的纯逻辑:
- *   - `diffScopes(before, after)`:一次改动前后,当前剪辑里哪些「剪辑->序列」变了;
+ *   - `diffScopes(before, after)`:一次改动前后,哪些「剪辑->序列」变了(激活的剪辑,以及被就地改了的停放剪辑);
  *   - `scopeOverlaps(a, b)` / `overlappingScopes(written, declared)`:两个范围是否重叠(同名,或一方是另一方的上级);
  *   - `splitScopes(s)`:把声明的文字拆成一条条范围。
  *
@@ -40,6 +40,23 @@ export function diffScopes(before, after) {
   }
   for (const b of tracksOf(before)) {
     if (!tracksOf(after).some((t) => t.id === b.id)) out.push(`${name}->${b.name}(已删)`);
+  }
+  // 停放的剪辑里被就地改了(Agent 不切换剪辑直接改它的片段,store/core.ts 的 runInCutScope)也算范围:
+  // 内容住在 cuts[].tracks 里,逐条停放的剪辑按同一口径比序列
+  const beforeCuts = Array.isArray(before.cuts) ? before.cuts : [];
+  for (const c of Array.isArray(after.cuts) ? after.cuts : []) {
+    if (!c || c.id === after.activeCutId || !Array.isArray(c.tracks)) continue;
+    const bc = beforeCuts.find((x) => x && x.id === c.id);
+    if (!bc || !Array.isArray(bc.tracks)) continue;
+    const cname = typeof c.name === 'string' && c.name ? c.name : c.id;
+    const bprev = new Map(tracksOf({ tracks: bc.tracks }).map((t) => [t.id, t]));
+    for (const t of tracksOf(c)) {
+      const b = bprev.get(t.id);
+      if (!b || b.clips !== t.clips || b.name !== t.name || !!b.hidden !== !!t.hidden || !!b.muted !== !!t.muted || !!b.locked !== !!t.locked) out.push(`${cname}->${t.name}`);
+    }
+    for (const b of tracksOf({ tracks: bc.tracks })) {
+      if (!tracksOf(c).some((t) => t.id === b.id)) out.push(`${cname}->${b.name}(已删)`);
+    }
   }
   if (out.length === 0) {
     const order = (p) => tracksOf(p).map((t) => t.id).join('\n');
