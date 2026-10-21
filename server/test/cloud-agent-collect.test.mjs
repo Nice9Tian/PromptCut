@@ -279,5 +279,5 @@ test('CA-COL-06 / 07 作业表按实例分;重启后查得到「中断了」;作
   const fake = readCollectConfig({ PROMPTCUT_AGENT_COLLECT_PYTHON: process.execPath, PROMPTCUT_AGENT_COLLECT_TEST_ARGS: JSON.stringify([FAKE]) }, { root: ROOT });
   assert.deepEqual([fake.args, fake.testRunner], [[FAKE], true]);
   for (const n of ['collect_status', 'collect_install', 'collect_search', 'collect_probe', 'collect_download', 'collect_job', 'collect_logout']) assert.deepEqual(CLOUD_TOOL_PLAN[n], { mode: 'hosted' }, n);
-  for (const n of ['collect_login', 'collect_login_check']) assert.equal(CLOUD_TOOL_PLAN[n].mode, 'initiator', n);
+  for (const n of ['user_interface_collect_login', 'collect_login_check']) assert.equal(CLOUD_TOOL_PLAN[n].mode, 'initiator', n);
 });

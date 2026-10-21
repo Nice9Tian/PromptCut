@@ -31,11 +31,12 @@ export function bareToolName(name: string): string {
  */
 export function toolKind(rawName: string): ToolKind {
   const name = bareToolName(rawName);
-  // 收集放最前:search_web、collect_*、web_* 的目的都是往回搬素材和资料,哪怕名字像「读取」「查看」也归这里。
+  // 界面操作:播放头、切剪辑、弹窗这类动用户界面、不改项目的。2026-10-21 起这些工具名字带 user_interface_ 前缀;
+  // 老对话的历史里还是旧名(play / pause / seek / switch_cut),两种都认。放最前:user_interface_collect_login 不算收集
+  if (/^user_interface_|^(play|pause|seek)$|^switch_/.test(name)) return "ui";
+  // 收集放在界面操作之后:search_web、collect_*、web_* 的目的都是往回搬素材和资料,哪怕名字像「读取」「查看」也归这里。
   // *_install 装的是拓展包,和 collect_install 一样算往回搬东西
   if (/^(collect|web)_|^search_web$|_install$|download/i.test(name)) return "download";
-  // 界面操作:播放头、切剪辑这类只动编辑台界面、不改项目的
-  if (/^(play|pause|seek)$|^switch_/.test(name)) return "ui";
   // 多 Agent 之间报范围、互相递话。放在读取前面:list_agents / check_messages 名字像读取,其实是协作
   if (/^(declare_scope|send_message|check_messages|list_agents)$/.test(name)) return "agent";
   if (/^(remove|delete|clear)_/.test(name)) return "remove";

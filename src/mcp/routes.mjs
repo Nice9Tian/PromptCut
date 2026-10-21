@@ -18,6 +18,9 @@
  *              纯重构不赌这个,原样保留。
  *
  * 顺序照抄原分发链,方便逐条对账。
+ *
+ * 键是模型侧的工具名。会动用户界面的工具名字带 `user_interface_`(2026-10-21 用户定,server/tools/ui-names.mjs);
+ * 发给页面的内部操作名还是旧名,页面执行器进门先换成新名再查这张表(两种都认)。
  */
 export const TOOL_ROUTES = {
   sound_presets: { method: "soundPresets", passArgs: false, awaited: false },
@@ -32,7 +35,7 @@ export const TOOL_ROUTES = {
   add_clip: { method: "addClip", passArgs: true, awaited: false },
   update_clip: { method: "updateClip", passArgs: true, awaited: false },
   list_cuts: { method: "listCuts", passArgs: true, awaited: false },
-  switch_cut: { method: "switchCut", passArgs: true, awaited: false },
+  user_interface_switch_cut: { method: "switchCut", passArgs: true, awaited: false },
   add_cut: { method: "addCut", passArgs: true, awaited: false },
   rename_cut: { method: "renameCut", passArgs: true, awaited: false },
   remove_cut: { method: "removeCut", passArgs: true, awaited: false },
@@ -88,9 +91,9 @@ export const TOOL_ROUTES = {
   apply_audio_fx: { method: "applyAudioFx", passArgs: true, awaited: false },
   measure_audio: { method: "measureAudio", passArgs: true, awaited: true },
   measure_audio_js: { method: "measureAudioJs", passArgs: true, awaited: true },
-  seek: { method: "seek", passArgs: true, awaited: false },
-  play: { method: "play", passArgs: false, awaited: false },
-  pause: { method: "pause", passArgs: false, awaited: false },
+  user_interface_seek: { method: "seek", passArgs: true, awaited: false },
+  user_interface_play: { method: "play", passArgs: false, awaited: false },
+  user_interface_pause: { method: "pause", passArgs: false, awaited: false },
   set_theme: { method: "setTheme", passArgs: true, awaited: false },
   set_project_meta: { method: "setProjectMeta", passArgs: true, awaited: false },
   set_camera3d: { method: "setCamera3d", passArgs: true, awaited: false },
@@ -125,7 +128,7 @@ export const TOOL_ROUTES = {
   collect_probe: { method: "collectProbe", passArgs: true, awaited: true },
   collect_download: { method: "collectDownload", passArgs: true, awaited: true },
   collect_job: { method: "collectJob", passArgs: true, awaited: true },
-  collect_login: { method: "collectLogin", passArgs: true, awaited: true },
+  user_interface_collect_login: { method: "collectLogin", passArgs: true, awaited: true },
   collect_login_check: { method: "collectLoginCheck", passArgs: true, awaited: true },
   collect_logout: { method: "collectLogout", passArgs: true, awaited: true },
   create_card: { method: "createCard", passArgs: true, awaited: true },
@@ -159,6 +162,6 @@ export const SPECIAL_TOOLS = [
   "web_type",
   "web_scroll",
   "web_read",
-  "web_handoff",
+  "user_interface_web_handoff",
   "web_close",
 ];

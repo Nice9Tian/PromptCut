@@ -1,7 +1,7 @@
 /**
  * 账号模式下「发起人自己的页面」的反向通道(计划 `docs/plan/cloud-agent-tools-implementation.md` 的 W2 包)。
  *
- * 云端 Agent 没有界面。它要动用户的播放头(`seek`、`play`、`pause`)或把网页交给本人(`web_handoff`)时,
+ * 云端 Agent 没有界面。它要动用户的播放头(`user_interface_seek`、`user_interface_play`、`user_interface_pause`)或把网页交给本人(`user_interface_web_handoff`)时,
  * 经这里让「发这条消息的那个人、发消息时用的那张页面」替它执行,再把结果交回来。旧的一版(非账号模式)在
  * `create-agent-service.mjs` 的 `pageCall` 里,页面号是请求体自报的;这里把两头都绑到文档服务确认过的东西上:
  *
@@ -26,11 +26,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { initiatorOffline } from './cloud-tools.mjs';
+import { modelToolName, pageToolName } from '../../tools/ui-names.mjs';
 
-/** 经这条通道让发起页执行的工具。没有 `get_selection`:账号模式下它走文档服务的全员选区查询,不读单张页面 */
+/**
+ * 经这条通道让发起页执行的**内部操作名**(请求里的 `tool`)。没有 `get_selection`:账号模式下它走文档服务的全员选区查询,不读单张页面。
+ * 模型侧的工具名 2026-10-21 起带 `user_interface_` 前缀(`server/tools/ui-names.mjs`),这里保持旧名:0.7.18 的页面只认这几个
+ */
 export const PAGE_BRIDGE_TOOLS = Object.freeze(['seek', 'play', 'pause', 'web_handoff']);
-/** 页面控制三件(本文件的工具提供方处理);`web_handoff` 的提供方在 `hosted-handoff.mjs` */
-export const PAGE_CONTROL_TOOL_NAMES = Object.freeze(['seek', 'play', 'pause']);
+/** 页面控制三件(本文件的工具提供方处理;模型侧的名字);`user_interface_web_handoff` 的提供方在 `hosted-handoff.mjs` */
+export const PAGE_CONTROL_TOOL_NAMES = Object.freeze(['user_interface_seek', 'user_interface_play', 'user_interface_pause']);
 /** 事件与交回请求体的版本号(旧通道没有这个字段) */
 export const PAGE_REQUEST_VERSION = 2;
 
@@ -600,7 +604,7 @@ export function createPageBridge({ databasePath, resources, runClient, runAuthor
 }
 
 /**
- * `seek`、`play`、`pause` 三个工具的提供方(形状同别的工具包:`handles` / `call(name, args, context)` / `close(reason)`)。
+ * `user_interface_seek`、`user_interface_play`、`user_interface_pause` 三个工具的提供方(形状同别的工具包:`handles` / `call(name, args, context)` / `close(reason)`)。
  * 给模型的回答与旧通道同一份话:做成回页面的结果,发起方不在线回 `cloud-tools.mjs` 的 `initiatorOffline`。
  * `call` 的第四个参数可带 `{ requestId, signal }`:宿主重试同一次工具调用时给同一个请求号,页面不会执行两次。
  * `onPlayhead(context, t)`:`seek` 做成后通知宿主把这个对话记着的播放头改成新的(切剪辑的工具用它)。
@@ -608,20 +612,23 @@ export function createPageBridge({ databasePath, resources, runClient, runAuthor
 export function createPageControlTools({ bridge, onPlayhead = null, now = Date.now, newRequestId = () => randomBytes(16).toString('base64url') } = {}) {
   if (typeof bridge?.requestPage !== 'function' || typeof bridge?.initiator !== 'function') fail('page-bridge-configuration', 503);
   const handles = new Set(PAGE_CONTROL_TOOL_NAMES);
-  async function call(name, args, context, options = {}) {
+  async function call(nameIn, args, context, options = {}) {
+    // 模型侧的名字(新旧都认);发给页面的是旧的内部操作名
+    const name = modelToolName(nameIn);
     if (!handles.has(name)) fail('page-tool-unknown', 404);
+    const wire = pageToolName(name);
     let send;
-    try { send = checkedPageArgs(name, args, bridge.limits); } catch (error) {
+    try { send = checkedPageArgs(wire, args, bridge.limits); } catch (error) {
       if (error?.code !== 'bad-args') throw error;
-      return { ok: false, error: name === 'seek' ? 'seek 要给 t(秒,不小于 0 的数)。' : `${name} 不接受参数。` };
+      return { ok: false, error: wire === 'seek' ? `${name} 要给 t(秒,不小于 0 的数)。` : `${name} 不接受参数。` };
     }
     const who = await bridge.initiator(context);
-    const out = await bridge.requestPage({ run: context, initiatorAccountId: who.initiatorAccountId, pageId: who.pageId, tool: name, args: send,
+    const out = await bridge.requestPage({ run: context, initiatorAccountId: who.initiatorAccountId, pageId: who.pageId, tool: wire, args: send,
       requestId: options.requestId ?? newRequestId(), deadline: Number(now()) + bridge.limits.pageMs, ...(options.signal ? { signal: options.signal } : {}) });
     if (!out.delivered) return initiatorOffline(name);
     const answer = out.answer;
     if (answer.ok !== true) return { ok: false, error: String(answer.error || `${name} 在发起人的页面上没有做成`) };
-    if (name === 'seek' && typeof onPlayhead === 'function') { try { await onPlayhead(context, send.t); } catch { /* 宿主的事 */ } }
+    if (wire === 'seek' && typeof onPlayhead === 'function') { try { await onPlayhead(context, send.t); } catch { /* 宿主的事 */ } }
     return answer.result && typeof answer.result === 'object' && !Array.isArray(answer.result) ? answer.result : { ok: true };
   }
   return Object.freeze({ handles, call, async close() { return { childrenClosed: true, streamsClosed: true, workPending: 0 }; } });

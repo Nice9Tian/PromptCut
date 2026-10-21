@@ -16,6 +16,7 @@
  *   A7 改剪辑2,剪辑1 里跟着变(预览前后不同)
  *   A8 拖剪辑1 进剪辑1、在剪辑2 里拖剪辑1(A→B→A):落点预览标红并写明原因,松手不落
  *   A9 删除被引用的剪辑:确认框说明被哪些剪辑用着;确认后剪辑段一起删;撤销后都回来
+ *   A10 选中剪辑段:编辑分区里没有换引用的「引用」下拉框(引用哪条剪辑不能改,2026-10-21 用户定),「打开被引用剪辑」按钮还在
  */
 import puppeteer from 'puppeteer';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
@@ -158,6 +159,26 @@ try {
   let st = await stageText();
   check('A6', segOk && st.some((x) => x.cutScenes > 0 && x.text.includes('剪辑二的卡')), '剪辑2 拖进剪辑1:出现剪辑段,预览画出剪辑2 的卡', { dropRes, segments: s.segments, stage: st.map((x) => ({ cutScenes: x.cutScenes, has: x.text.includes('剪辑二的卡') })) });
   await shot('05-cut2-dropped-into-cut1');
+
+  /* A10 剪辑段的属性面板(2026-10-21 用户定):编辑分区里没有换引用的「引用」下拉框,「打开被引用剪辑」按钮还在 */
+  {
+    const segEl = await page.$(`[data-pc-cut-segment="${cut2}"]`);
+    if (segEl) await segEl.click();
+    await sleep(400);
+    const editShown = await page.evaluate(() => { const el = document.querySelector('[data-pc="inspector"]'); return !!el && el.getBoundingClientRect().width > 0; });
+    if (!editShown) await page.evaluate(() => document.querySelector('[data-pc-rail="edit"]')?.click());
+    await sleep(600);
+    const form = await page.evaluate(() => {
+      const f = document.querySelector('[data-pc="cut-segment-form"]');
+      return f ? { refSelect: !!f.querySelector('[data-pc="cut-segment-cut"]'), selects: f.querySelectorAll('select').length,
+        open: !!f.querySelector('[data-pc="cut-segment-open"]'), offset: !!f.querySelector('[data-pc="cut-segment-offset"]'), text: f.innerText.replace(/\s+/g, ' ').slice(0, 160) } : null;
+    });
+    check('A10', !!form && !form.refSelect && form.selects === 0 && form.open && form.offset,
+      '剪辑段面板:没有「引用」下拉框,「打开被引用剪辑」按钮和起点偏移还在', form);
+    await shot('05b-cut-segment-panel');
+    // 后面的拖放要素材库格子:切回素材库
+    await openLibraryGroup();
+  }
 
   /* A7 改剪辑2,剪辑1 里跟着变 */
   await page.evaluate((id) => {

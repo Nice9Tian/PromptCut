@@ -31,7 +31,7 @@ export const browserTools = [
   },
   {
     name: "web_type",
-    description: "往输入框里打字，打完自动返回新的截图和清单。u 是 clickable 里那个输入框的编号（清单里 input/textarea 会带 v 显示当前内容、it 显示类型）。默认**先清空再输入**；要在原有内容后面接着写就传 append。submit 为 true 时输入完按一次回车（搜索框常用）。⚠ 不要用它填密码、验证码或任何账号凭据——那些必须由用户自己在窗口里输入，用 web_handoff 把窗口交给用户。",
+    description: "往输入框里打字，打完自动返回新的截图和清单。u 是 clickable 里那个输入框的编号（清单里 input/textarea 会带 v 显示当前内容、it 显示类型）。默认**先清空再输入**；要在原有内容后面接着写就传 append。submit 为 true 时输入完按一次回车（搜索框常用）。⚠ 不要用它填密码、验证码或任何账号凭据——那些必须由用户自己在窗口里输入，用 user_interface_web_handoff 把窗口交给用户。",
     inputSchema: {
       type: "object",
       properties: {
@@ -66,8 +66,8 @@ export const browserTools = [
     side: "page"
   },
   {
-    name: "web_handoff",
-    description: "把浏览器窗口从屏幕外挪到用户面前，交给用户操作。**撞上登录、验证码、扫码、cookie 同意、付费墙时走这条**——这些事不该也不能由你代劳，验证码尤其必须是人来点。调完就**停下来**：用中文告诉用户现在要做什么、做完怎么回你，不要继续调工具。用户回话之后再 web_view 看当前状态。处理完想把窗口藏回去就传 hide:true。",
+    name: "user_interface_web_handoff",
+    description: "**会动用户的界面**:把浏览器窗口从屏幕外挪到用户面前，交给用户操作。**撞上登录、验证码、扫码、cookie 同意、付费墙时走这条**——这些事不该也不能由你代劳，验证码尤其必须是人来点。调完就**停下来**：用中文告诉用户现在要做什么、做完怎么回你，不要继续调工具。用户回话之后再 web_view 看当前状态。处理完想把窗口藏回去就传 hide:true。",
     inputSchema: {
       type: "object",
       properties: {

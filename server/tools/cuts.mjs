@@ -32,7 +32,7 @@ export const cutsTools = [
   },
   {
     name: "list_cuts",
-    description: "列出项目里的全部剪辑(时间轴)。**用户要你改的片段在别的剪辑里时,先看这个工具的返回,不要 switch_cut**:没激活的剪辑里的片段(id、cardId / 标签、起止、所在序列)就在返回的 `parkedCuts` 里,拿到 clipId 直接交给 update_clip 等就地改。一个项目可以有多条剪辑,新项目只有「剪辑1」,其余由用户或你新建(add_cut)。用户在时间轴上方的标签栏和素材库的「剪辑」组里切换、打开。**add_clip / 序列 / 导出 / see_frames / get_layout 等工具只作用于当前激活的那条剪辑**(active:true 的),get_project 的 tracks 也是它的内容。**但改别的剪辑里已有的片段不用 switch_cut**:返回里的 `parkedCuts` 已列出各停放剪辑的片段(太多时有上限,会指路);要某一条的全部就传 `cutId` 给本工具,多返回那条剪辑的 timeline 一览(片段 id、起止)。拿到 clipId 后把 clipId 直接交给 update_clip / set_clip / get_clip / set_position / set_rect / align / nudge / set_emphasis / set_clip_volume / set_clip_muted,它们会就地改那条剪辑里的片段,**不切换激活的剪辑**(激活的剪辑是共享状态,切换会让所有成员的界面一起翻,所以能不切就不切)。要在别的剪辑里新增 / 删除 / 切分 / 复制片段或看它的画面,才 switch_cut。一条剪辑可以作为**剪辑段**放进另一条剪辑(add_cut_segment),引用而不是复制。返回每条的 id、name、active、trackCount、clipCount、duration,以及 referencedBy(哪些剪辑的哪几段引用了它)和 references(它里面的剪辑段引用了哪些剪辑)。",
+    description: "列出项目里的全部剪辑(时间轴)。**用户要你改的片段在别的剪辑里时,先看这个工具的返回,不要 user_interface_switch_cut**:没激活的剪辑里的片段(id、cardId / 标签、起止、所在序列)就在返回的 `parkedCuts` 里,拿到 clipId 直接交给 update_clip 等就地改。一个项目可以有多条剪辑,新项目只有「剪辑1」,其余由用户或你新建(add_cut)。用户在时间轴上方的标签栏和素材库的「剪辑」组里切换、打开。**add_clip / 序列 / 导出 / get_layout 等工具只作用于当前激活的那条剪辑**(active:true 的;see_frames 可以传 cutId 看别的剪辑),get_project 的 tracks 也是它的内容。**但改别的剪辑里已有的片段不用 user_interface_switch_cut**:返回里的 `parkedCuts` 已列出各停放剪辑的片段(太多时有上限,会指路);要某一条的全部就传 `cutId` 给本工具,多返回那条剪辑的 timeline 一览(片段 id、起止)。拿到 clipId 后把 clipId 直接交给 update_clip / set_clip / get_clip / set_position / set_rect / align / nudge / set_emphasis / set_clip_volume / set_clip_muted,它们会就地改那条剪辑里的片段,**不切换激活的剪辑**(激活的剪辑是共享状态,切换会让所有成员的界面一起翻,所以能不切就不切)。**看它的画面也不用切**:see_frames 传 cutId。只有要在别的剪辑里新增 / 删除 / 切分 / 复制片段时才 user_interface_switch_cut(名字带 user_interface_ 的工具会动用户的界面)。一条剪辑可以作为**剪辑段**放进另一条剪辑(add_cut_segment),引用而不是复制。返回每条的 id、name、active、trackCount、clipCount、duration,以及 referencedBy(哪些剪辑的哪几段引用了它)和 references(它里面的剪辑段引用了哪些剪辑)。",
     inputSchema: {
       type: "object",
       properties: {
@@ -42,8 +42,12 @@ export const cutsTools = [
     side: "agent"
   },
   {
-    name: "switch_cut",
-    description: "切换到另一条剪辑(按 cutId 或 name 二选一)。**只有用户明说要「切到 / 打开某某剪辑」,或你要在别的剪辑里新增 / 删除 / 切分 / 复制片段、看它的画面时才用;只是改别的剪辑里已有的片段不要用它**(clipId 在 list_cuts 或 get_project 的 parkedCuts 里,直接交给 update_clip 等就地改)——激活的剪辑是所有成员共享的状态,切换会让每个人的界面一起翻,切过去再切回来是两次多余的写入。切换后 get_project / add_clip / update_clip 等看到和改到的都是这条的内容(**注意:激活的剪辑是共享状态,切换会让所有成员的界面一起翻;只是要改别的剪辑里已有的片段时不用切,见 list_cuts 的 cutId**);播放头回到这条上次离开的位置,选中清空。返回切换后的 cuts 列表和这条的 timeline 摘要。",
+    name: "user_interface_switch_cut",
+    description: "**会动用户的界面**:把所有成员共享的激活剪辑切到另一条(按 cutId 或 name 二选一),所有成员的界面一起翻过去,播放头回到这条上次离开的位置,选中清空。" +
+      "**只有用户明说要「切到 / 打开某某剪辑」,或你要在别的剪辑里新增 / 删除 / 切分 / 复制片段时才用。**" +
+      "只是改别的剪辑里已有的片段不要用它(clipId 在 list_cuts 或 get_project 的 parkedCuts 里,直接交给 update_clip 等就地改);" +
+      "只是看别的剪辑的画面也不要用它(see_frames 传 cutId)。切过去再切回来是两次多余的写入,也会打断别人正在看的时间轴。" +
+      "切换后 get_project / add_clip / update_clip 等看到和改到的都是这条的内容。返回切换后的 cuts 列表和这条的 timeline 摘要。",
     inputSchema: {
       type: "object",
       properties: {
@@ -55,12 +59,13 @@ export const cutsTools = [
   },
   {
     name: "add_cut",
-    description: "新建一条剪辑(默认名 剪辑N),带两条空序列、时长 30 秒。默认新建后立刻切过去(switch:false 则只建不切)。用户说「另起一条时间轴 / 再做一版」就是它。",
+    description: "新建一条剪辑(默认名 剪辑N),带两条空序列、时长 30 秒。**只建不切**:激活的剪辑不变,谁的界面都不动;返回新剪辑的 id。" +
+      "要往里放东西:新增片段要先 user_interface_switch_cut 切过去(会动所有成员的界面,用户明说要切或非切不可时才用);" +
+      "或者把它当剪辑段放进当前剪辑(add_cut_segment)。用户说「另起一条时间轴 / 再做一版」就是它。",
     inputSchema: {
       type: "object",
       properties: {
-        name: { type: "string" },
-        switch: { type: "boolean", description: "默认 true" }
+        name: { type: "string" }
       }
     },
     side: "agent"
@@ -111,13 +116,11 @@ export const cutsTools = [
   },
   {
     name: "set_cut_segment",
-    description: "改一个剪辑段引用哪条剪辑(cutId 或 name)、从被引用剪辑的第几秒开始(cutOffset)。会循环引用、偏移超出被引用剪辑的总时长都会被拒;改完段比被引用剪辑剩下的还长时,出点截到剩下的长度。起止、框、不透明度、淡入淡出、音量与静音不在这里改(见 add_cut_segment 的说明)。不是剪辑段的片段用 update_clip。",
+    description: "改一个剪辑段从被引用剪辑的第几秒开始(cutOffset)。偏移超出被引用剪辑的总时长会被拒;改完段比被引用剪辑剩下的还长时,出点截到剩下的长度。**剪辑段引用哪条剪辑不能改**:带了 cutId / name 会被拒;要换就 remove_clip 删掉这段,用 add_cut_segment 放一段新的。起止、框、不透明度、淡入淡出、音量与静音不在这里改(见 add_cut_segment 的说明)。不是剪辑段的片段用 update_clip。",
     inputSchema: {
       type: "object",
       properties: {
         clipId: { type: "string" },
-        cutId: { type: "string" },
-        name: { type: "string", description: "剪辑名,和 cutId 二选一" },
         cutOffset: { type: "number", description: "秒,不小于 0" }
       },
       required: ["clipId"]

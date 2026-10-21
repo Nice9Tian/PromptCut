@@ -409,7 +409,7 @@ export function collectPlugin(): Plugin {
             // 浏览器没开着就别为了查一眼把它拉起来。热重启后模块里的实例会丢,但 profile 里
             // 有活着的调试端点时 getBrowser 会接管而不是新起,所以两样都看
             if (!browser.peekBrowser() && !browser.existingEndpoint(dataDir(root))) {
-              return sendJson(res, 200, { ok: true, loggedIn: false, site, missing: SITES[site as keyof typeof SITES].required, expired: savedNow.expired, hint: savedNow.expired ? "存盘的登录态已过期,重新登录一次" : "还没有登录态:先 collect_login(扫码或浏览器)" });
+              return sendJson(res, 200, { ok: true, loggedIn: false, site, missing: SITES[site as keyof typeof SITES].required, expired: savedNow.expired, hint: savedNow.expired ? "存盘的登录态已过期,重新登录一次" : "还没有登录态:先 user_interface_collect_login(扫码或浏览器)" });
             }
             const result = await session.enqueue(async () => {
               const it = await webInst();

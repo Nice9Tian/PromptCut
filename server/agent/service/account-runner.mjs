@@ -278,7 +278,8 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       if (pathname === '/api/vision/snapshot') {
         let memberNodes = [];
         try {
-          if (typeof toolset?.pageBridge?.call === 'function' && bound?.side?.executor?.request) {
+          // 看没激活的剪辑(see_frames 的 cutId,`opts.cutLook`):成员页面按它自己的项目渲,看不了那条剪辑,只交给托管渲染服务
+          if (opts?.cutLook !== true && typeof toolset?.pageBridge?.call === 'function' && bound?.side?.executor?.request) {
             const reply = await bound.side.executor.request(
               grant.conversationId,
               { type: 'selection.query', projectId: grant.projectId, runGrantId: grant.runGrantId },

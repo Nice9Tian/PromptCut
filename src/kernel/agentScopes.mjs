@@ -112,9 +112,9 @@ export const CUTS_INDEX_LIMITS = Object.freeze({ maxClips: 60, perCutMax: 30, la
 
 /** 写给模型看的一句话。get_project / list_cuts 的索引里带一份 */
 export const PARKED_EDIT_NOTE =
-  "这些是没有激活的剪辑里的片段。改它们不用 switch_cut:把 clipId 直接交给 update_clip / set_clip / get_clip / " +
+  "这些是没有激活的剪辑里的片段。改它们不用 user_interface_switch_cut:把 clipId 直接交给 update_clip / set_clip / get_clip / " +
   "set_position / set_rect / align / nudge / set_emphasis / set_clip_volume / set_clip_muted,它们就地改那条剪辑里的片段。" +
-  "激活的剪辑是所有成员共享的,switch_cut 会让每个人的界面一起翻,只有要在别的剪辑里新增 / 删除 / 切分 / 复制片段或看画面时才切。" +
+  "看它们的画面用 see_frames 传 cutId,也不用切。激活的剪辑是所有成员共享的,user_interface_switch_cut 会让每个人的界面一起翻,只有要在别的剪辑里新增 / 删除 / 切分 / 复制片段时才切。" +
   "trackId 要用那条剪辑自己的序列 id(下面每个片段带着)。";
 
 const round2 = (n) => Math.round(n * 100) / 100;
@@ -198,6 +198,53 @@ export function otherCutsHint(project) {
   if (!rest.length) return null;
   return {
     cuts: rest,
-    hint: "上面的 timeline 只是激活剪辑的。别的剪辑里的片段不用 switch_cut:clipId 在 get_project 的 parkedCuts 或 list_cuts({ cutId }) 里,直接交给 update_clip 等就地改。",
+    hint: "上面的 timeline 只是激活剪辑的。别的剪辑里的片段不用 user_interface_switch_cut:clipId 在 get_project 的 parkedCuts 或 list_cuts({ cutId }) 里,直接交给 update_clip 等就地改;看画面用 see_frames 传 cutId。",
   };
+}
+
+/* ---------- 看别的剪辑的画面(see_frames 的 cutId;2026-10-21 用户定:看画面能指定剪辑,不用切换) ---------- */
+
+/**
+ * see_frames 带 `cutId` 时交给渲染的项目视图:把那条剪辑换成「激活」的样子(tracks / duration / transitions 换成它的内容,
+ * 真正激活的那条退回条目里带着自己的内容,剪辑段的引用照常解析)。和 `src/kernel/cuts.ts` 的 `cutEditView` 同一个形状,
+ * 这里是给服务端(Node 直接 import)和页面共用的纯 JS 版。
+ *
+ * 视图只在出这一次图时用:不进 store、不进文档同步、不改 activeCutId,谁的界面都不动。
+ * 渲染端看到的就是一份普通项目,所以旧版本的渲染进程(只认 project、不认 cutId)也出得对图。
+ *
+ * @param {object} project 真实项目
+ * @param {string | undefined | null} cutId 不给(或空串)就是当前激活的剪辑
+ * @returns {{ project: object, cut: { id: string, name: string }, active: boolean, parkedT: number | null }}
+ *   `parkedT`:那条剪辑上次离开时的播放头(停放条目里存的 `t`);激活的剪辑回 null(用页面播放头)
+ * @throws 给了 cutId 但项目里没有这条剪辑时抛,错误信息列出现有的剪辑
+ */
+export function cutLookView(project, cutId) {
+  const cuts = Array.isArray(project?.cuts) ? project.cuts.filter((c) => c && typeof c === "object") : [];
+  const activeId = activeCutIdForIndex(project) ?? "cut-1";
+  const activeName = cuts.find((c) => c.id === activeId)?.name || "剪辑1";
+  const want = typeof cutId === "string" ? cutId.trim() : "";
+  if (!want || want === activeId) return { project, cut: { id: activeId, name: activeName }, active: true, parkedT: null };
+  const target = cuts.find((c) => c.id === want);
+  if (!target) {
+    const list = cuts.length ? cuts.map((c) => `${c.name || c.id}(${c.id})`).join("、") : `${activeName}(${activeId})`;
+    throw Object.assign(new Error(`找不到剪辑 ${JSON.stringify(want)};现有的:${list}。cutId 从 list_cuts 里拿,不传就看当前激活的剪辑。`), { code: "cut-not-found" });
+  }
+  const nextCuts = cuts.map((c) => {
+    if (c.id === activeId) return { ...c, tracks: project.tracks ?? [], duration: project.duration, transitions: Array.isArray(project.transitions) ? project.transitions : [] };
+    if (c.id === want) {
+      const { tracks: _t, duration: _d, transitions: _x, t: _pt, ...rest } = c;
+      return rest;
+    }
+    return c;
+  });
+  const view = {
+    ...project,
+    tracks: Array.isArray(target.tracks) ? target.tracks : [],
+    duration: typeof target.duration === "number" && target.duration > 0 ? target.duration : 30,
+    transitions: Array.isArray(target.transitions) ? target.transitions : [],
+    cuts: nextCuts,
+    activeCutId: want,
+  };
+  const parkedT = typeof target.t === "number" && Number.isFinite(target.t) && target.t >= 0 ? target.t : 0;
+  return { project: view, cut: { id: target.id, name: target.name || target.id }, active: false, parkedT };
 }

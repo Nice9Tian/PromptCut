@@ -77,7 +77,7 @@ test('W2-BIND neither the caller nor the model can choose the page; a forged run
   await assert.rejects(f.bridge.requestPage({ ...base, initiatorAccountId: 'other', pageId: 'page-initiator', requestId: RID(12) }), { code: 'page-binding-mismatch' });
   await assert.rejects(f.bridge.requestPage({ ...base, initiatorAccountId: 'sender', pageId: null, requestId: RID(13) }), { code: 'page-binding-mismatch' });
   // 模型在参数里塞页面号、账号、项目:播放控制回一句参数不对,不发
-  assert.deepEqual(await f.control.call('seek', { t: 1, pageId: 'page-second-tab' }, f.context), { ok: false, error: 'seek 要给 t(秒,不小于 0 的数)。' });
+  assert.deepEqual(await f.control.call('seek', { t: 1, pageId: 'page-second-tab' }, f.context), { ok: false, error: 'user_interface_seek 要给 t(秒,不小于 0 的数)。' });
   assert.equal((await f.control.call('play', { pageId: 'page-second-tab', accountId: 'other' }, f.context)).ok, false);
   assert.equal((await f.control.call('seek', { t: -1 }, f.context)).ok, false);
   assert.throws(() => checkedPageArgs('seek', { t: 1, projectId }), { code: 'bad-args' });

@@ -23,3 +23,7 @@ export interface ParkedCutsIndex {
 }
 export function parkedCutsIndex(project: unknown, opts?: ParkedCutsIndexOptions): ParkedCutsIndex | null;
 export function otherCutsHint(project: unknown): { cuts: { cutId: string; name: string; clipCount: number }[]; hint: string } | null;
+/** see_frames 的 cutId:那条剪辑当激活的项目视图,只在出这一次图时用 */
+export function cutLookView<P>(project: P, cutId: string | undefined | null): {
+  project: P; cut: { id: string; name: string }; active: boolean; parkedT: number | null;
+};

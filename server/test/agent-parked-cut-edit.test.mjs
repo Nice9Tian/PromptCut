@@ -113,7 +113,7 @@ test('PK-1 update_clip 改停放剪辑里的片段:一次提交,activeCutId 与�
   assert.equal(r.ok, true);
   assert.equal(r.rev, rev0 + 1, '只提交了一次(以前是 switch_cut、update_clip、switch_cut 三次)');
   assert.deepEqual(r.cut, { id: 'cutB', name: '剪辑2', active: false });
-  assert.equal('look' in r, false);
+  assert.equal(r.look?.args?.cutId, 'cutB', 'look 带上 cutId:看它的画面用 see_frames 传 cutId,不用切换(2026-10-21)');
   assert.deepEqual(r.timeline.tracks.map((x) => x.trackId), ['tb'], 'timeline 是 B 的');
 
   const body = await probe.open('proj-pk1');
@@ -178,7 +178,7 @@ test('PK-4 模型只读 get_project 的 parkedCuts 就找到并改好停放剪�
   assert.equal(Object.keys(project)[0], 'parkedCuts', '索引排在最前面');
   assert.deepEqual(project.parkedCuts.cuts.map((c) => c.cutId), ['cutB']);
   assert.deepEqual(project.parkedCuts.cuts[0].clips, [{ id: 'cb1', trackId: 'tb', cardId: 'probe', label: '粒子背景', start: 0, end: 4 }]);
-  assert.match(project.parkedCuts.note, /不用 switch_cut/);
+  assert.match(project.parkedCuts.note, /不用 user_interface_switch_cut/);
   assert.deepEqual(project.tracks.map((x) => x.id), ['t1'], 'tracks 仍是激活剪辑的');
 
   const hit = project.parkedCuts.cuts.find((c) => c.name === '剪辑2')?.clips.find((c) => c.label === '粒子背景');

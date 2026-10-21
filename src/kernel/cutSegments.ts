@@ -48,6 +48,12 @@ export function isCutSegment(c: { cutId?: unknown } | null | undefined): boolean
   return !!c && typeof c.cutId === "string" && c.cutId.length > 0;
 }
 
+/**
+ * 剪辑段放好以后引用哪条剪辑不能改(2026-10-21 用户定,`workflow/editing.md`「剪辑段的属性」、`product/project-model.md`「片段」)。
+ * 属性面板没有换引用的入口;Agent 的 set_cut_segment 带了 cutId / name、store 动作带了 cutId 都回这句。
+ */
+export const CUT_SEGMENT_REF_FIXED = "剪辑段引用的剪辑不能改，要换就删掉这段，用 add_cut_segment 放一段新的";
+
 /** 当前激活的剪辑 id(没有 cuts 的老项目返回 undefined) */
 export function activeCutIdOf(p: Pick<Project, "cuts" | "activeCutId">): string | undefined {
   const cuts = Array.isArray(p.cuts) ? p.cuts : [];

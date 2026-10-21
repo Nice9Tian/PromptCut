@@ -58,8 +58,8 @@ test('W1-TOOL-01 七个工具真实走通,形状同桌面版', async (t) => {
   const f = await w1Fixture(t, { testAllow: ALLOW });
   const { context } = await f.newRun();
   assert.deepEqual([...f.tools.handles].sort(), [...WEB_TOOL_NAMES].sort());
-  // 工具名与桌面版的工具定义一一对上(web_handoff 归另一包)
-  assert.deepEqual(browserTools.map((tool) => tool.name).filter((n) => n !== 'web_handoff').sort(), [...WEB_TOOL_NAMES].sort());
+  // 工具名与桌面版的工具定义一一对上(网页接管 user_interface_web_handoff 归另一包)
+  assert.deepEqual(browserTools.map((tool) => tool.name).filter((n) => n !== 'user_interface_web_handoff').sort(), [...WEB_TOOL_NAMES].sort());
 
   /* 打开 */
   const opened = await f.tools.call('web_open', { url: `${ORIGIN}/` }, context);

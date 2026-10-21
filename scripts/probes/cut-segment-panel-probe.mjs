@@ -7,9 +7,9 @@
  * dev server 要先起好(三个连号端口都空着;不碰 5190～5192)。
  *
  * 断言(每条一行 PASS/FAIL,最后一行打一行 JSON,有失败退出码 1):
- *   P1 单击时间轴上的剪辑段:编辑分区显示剪辑段面板(引用的剪辑名、偏移、起止、框、不透明度、淡入淡出、音量、静音、「打开被引用剪辑」)
+ *   P1 单击时间轴上的剪辑段:编辑分区显示剪辑段面板(被引用剪辑的名字、偏移、起止、框、不透明度、淡入淡出、音量、静音、「打开被引用剪辑」)
  *   P2 改起点偏移:store 里 cutOffset 跟着变、出点截到被引用剪辑剩下的长度;撤销一次回到原值
- *   P3 换引用:下拉里自己(会循环引用)灰掉;换成剪辑3 后 cutId 变;撤销回来
+ *   P3 引用哪条剪辑不能改(2026-10-21 用户定):面板里没有「引用」下拉框(也没有别的 select),「打开被引用剪辑」按钮还在
  *   P4 框:改 X、Y、缩放 → frame;「铺满」清掉 frame;撤销回来(数字框回车才提交,X、Y、缩放各一步,共三步)
  *   P5 不透明度、淡入、淡出 → opacity / fadeIn / fadeOut;撤销回来
  *   P6 音量、静音 → audioVolume / audioMuted;撤销回来
@@ -109,7 +109,7 @@ try {
     const has = (k) => !!f.querySelector(`[data-pc="${k}"]`);
     return {
       text: f.innerText.replace(/\s+/g, ' ').slice(0, 300),
-      fields: ['cut-segment-cut', 'cut-segment-offset', 'clip-start', 'clip-end', 'cut-segment-x', 'cut-segment-y', 'cut-segment-scale', 'cut-segment-rotate',
+      fields: ['cut-segment-offset', 'clip-start', 'clip-end', 'cut-segment-x', 'cut-segment-y', 'cut-segment-scale', 'cut-segment-rotate',
         'cut-segment-opacity', 'cut-segment-fadein', 'cut-segment-fadeout', 'cut-segment-volume', 'cut-segment-muted', 'cut-segment-open', 'cut-segment-frame-reset'].filter((k) => !has(k)),
     };
   });
@@ -129,20 +129,14 @@ try {
   s = await seg();
   check('P2u', (s.cutOffset ?? 0) === 0 && s.end === 7, '撤销一次:偏移与出点回到原值', { cutOffset: s.cutOffset, end: s.end });
 
-  /* P3 换引用 */
-  const opts = await page.evaluate(() => [...document.querySelectorAll('[data-pc="cut-segment-cut"] option')].map((o) => ({ v: o.value, t: o.textContent, disabled: o.disabled })));
-  r0 = await projectRef();
-  await page.select('[data-pc="cut-segment-cut"]', ids.c3);
-  await sleep(300);
-  s = await seg();
-  const p8b = !(await sameRef(r0));
-  check('P3', opts.find((o) => o.v === ids.root)?.disabled === true && s.cutId === ids.c3 && s.end === 5, '自己灰掉(会循环引用);换成剪辑3 后 cutId 变,出点截到剪辑3 的 4 秒', { opts, cutId: s.cutId, end: s.end });
-  await panelShot('03-switch-cut');
-  await undo();
-  s = await seg();
-  check('P3u', s.cutId === ids.c2, '撤销:引用回到剪辑2', { cutId: s.cutId });
-  s = await seg();
-  if (s.end !== 7) { await undo(); s = await seg(); }
+  /* P3 引用哪条剪辑不能改(2026-10-21 用户定):编辑分区里没有「引用」下拉框,「打开被引用剪辑」按钮还在 */
+  const refUi = await page.evaluate(() => {
+    const f = document.querySelector('[data-pc="cut-segment-form"]');
+    return { select: !!f?.querySelector('[data-pc="cut-segment-cut"]'), anySelect: f ? f.querySelectorAll('select').length : -1,
+      open: !!f?.querySelector('[data-pc="cut-segment-open"]'), label: /引用\s/.test(f?.innerText ?? '') };
+  });
+  check('P3', !refUi.select && refUi.anySelect === 0 && refUi.open, '编辑分区里没有换引用的下拉框;「打开被引用剪辑」按钮还在', refUi);
+  await panelShot('03-no-ref-select');
 
   /* P4 框 */
   r0 = await projectRef();
@@ -202,7 +196,7 @@ try {
   await sleep(200);
   await panelShot('07-offset-error');
 
-  check('P8', p8a && p8b && p8c && p8d && p8e, '每次改动都换了新的项目对象', { p8a, p8b, p8c, p8d, p8e });
+  check('P8', p8a && p8c && p8d && p8e, '每次改动都换了新的项目对象', { p8a, p8c, p8d, p8e });
 
   /* P9 打开被引用剪辑 */
   await page.click('[data-pc="cut-segment-open"]');

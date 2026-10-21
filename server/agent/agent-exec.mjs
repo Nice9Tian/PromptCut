@@ -20,7 +20,8 @@
  */
 import { randomUUID } from 'node:crypto';
 import { annotateResult, clipIdsOfOps, overwroteView } from './user-editing.mjs';
-import { parkedCutsIndex } from './ssr-host.mjs';
+import { parkedCutsIndex, cutLookView } from './ssr-host.mjs';
+import { modelToolName } from '../tools/ui-names.mjs';
 
 export const AGENT_EXEC_DEFAULTS = Object.freeze({
   /** 被拒(stale)后等副本追上文档服务的当前版本,Agent 马上重读就能读到最新的 */
@@ -70,15 +71,15 @@ const CLIP_CREATE_TOOLS = new Set(['add_clip', 'duplicate_clip', 'add_composite'
 /**
  * 既读页面独有状态、又写项目的工具(c65-integ2 裁定:违反 D1 判据,改为写入在 Agent 服务端以 agent 身份执行,
  * 所需的页面状态向页面要一次,经现有 SSE 页面通道取只读值)。值是要向页面要的键:
- *   - `t`:页面播放头。切剪辑(`switch_cut`、缺省会切过去的 `add_cut`、删当前剪辑的 `remove_cut`)要把它存回被停放的那条剪辑;
+ *   - `t`:页面播放头。切剪辑(`user_interface_switch_cut`、删当前剪辑的 `remove_cut`)要把它存回被停放的那条剪辑
+ *     (`add_cut` 2026-10-21 起只建不切,不再要播放头);
  *   - `track`:页面内存里 `track_points` 跑出来的轨迹(`attach_clip_motion` 读它算逐帧坐标)。
  * `set_project_meta` 不读页面状态(`duration` 的手动截断值由页面收到远端改动时按项目自己推出来,见
  * `src/store/remotePageState.ts`),所以不在这张表里,直接在服务端执行。
  * 页面状态的「写」(切剪辑后页面的播放头、选区、停播)同样由页面收到远端改动时自己做,不经这条通道。
  */
 export const PAGE_STATE_TOOLS = Object.freeze({
-  switch_cut: Object.freeze(['t']),
-  add_cut: Object.freeze(['t']),
+  user_interface_switch_cut: Object.freeze(['t']),
   remove_cut: Object.freeze(['t']),
   attach_clip_motion: Object.freeze(['track']),
 });
@@ -177,6 +178,15 @@ export function projectView(project) {
       },
     } : m)),
   };
+}
+
+/**
+ * see_frames 的 `cutId` → 交给渲染的项目视图(`src/kernel/agentScopes.mjs` 的 `cutLookView`)。cutId 不存在时抛给模型看的错。
+ * 回 `{ project, cut: { id, name }, active, parkedT }`。
+ */
+export function seeFramesView(project, cutId) {
+  if (cutId !== undefined && cutId !== null && typeof cutId !== 'string') throw new Error('cutId 要是字符串(list_cuts 里的剪辑 id);不传就看当前激活的剪辑。');
+  return cutLookView(project, cutId);
 }
 
 function targetOf(args) {
@@ -501,14 +511,19 @@ export function createAgentExecutor({
 
   async function seeFrames(args, conv, toolDef) {
     const snap = await readSnapshot(conv);
-    const { source, ...rest } = args || {};
+    const { source, cutId, ...rest } = args || {};
+    // cutId(2026-10-21 用户定):看没激活的剪辑不用切换。渲染拿到的是「那条剪辑当激活」的项目视图,
+    // 视图只在这一次出图时用,不写副本、不提交、不改 activeCutId;渲染端看到的是普通项目,旧版本的渲染进程也出得对
+    const look = seeFramesView(snap.project, cutId);
     const times = Array.isArray(rest.times) ? rest.times.filter((x) => typeof x === 'number').slice(0, 10) : [];
     const body = times.length
-      ? { project: snap.project, times, clipId: rest.clipId }
-      : { project: snap.project, t: typeof rest.t === 'number' ? rest.t : (rest.clipId ? undefined : playhead()), clipId: rest.clipId };
-    const data = await prerenderPost('/api/vision/snapshot', body, { timeoutMs: toolDef?.timeoutMs || 180_000 });
+      ? { project: look.project, times, clipId: rest.clipId }
+      : { project: look.project, t: typeof rest.t === 'number' ? rest.t : (rest.clipId ? undefined : (look.active ? playhead() : look.parkedT)), clipId: rest.clipId };
+    // cutLook:出图要按这份视图渲(账号模式据此不交给成员设备:成员页面按自己的项目渲,看不了别的剪辑)
+    const data = await prerenderPost('/api/vision/snapshot', body, { timeoutMs: toolDef?.timeoutMs || 180_000, ...(look.active ? {} : { cutLook: true }) });
     if (!data?.ok) throw new Error(data?.error || '渲染画面失败');
     let result = times.length ? { ok: true, frames: data.frames, note: data.note, __images: data.__images } : data;
+    result = { ...result, cut: look.cut };
     const images = [];
     if (data.__image?.base64) images.push({ mime: data.__image.mime, base64: data.__image.base64, label: typeof data.t === 'number' ? `t=${data.t}s` : '' });
     for (const im of Array.isArray(data.__images) ? data.__images : []) if (im?.base64) images.push({ mime: im.mime, base64: im.base64, label: im.label ?? '' });
@@ -611,7 +626,9 @@ export function createAgentExecutor({
      * 执行一个 `side: "agent"` 的工具。回 `undefined` 表示服务端不接(交给页面):目前只有 `see_frames` 的素材拼图。
      * `ctx` 由 `track` 传进来,执行器把这次写入(`write`)记在上面。
      */
-    async execute(tool, args, agentKey, toolDef, ctx = {}) {
+    async execute(toolIn, args, agentKey, toolDef, ctx = {}) {
+      // 旧名(switch_cut 等)照常认:路由表与 PAGE_STATE_TOOLS 用的是新名(server/tools/ui-names.mjs)
+      const tool = modelToolName(toolIn);
       const conv = conversationOf(agentKey);
       stats.executed += 1;
       const required = toolDef?.inputSchema?.required ?? [];

@@ -18,7 +18,7 @@
  *   - **用量**:每次调用记一行(`service: 'collect'`,按次数与下载的字节)。
  *
  * **`collect_install` 在云端不装东西**:节点上有没有采集工具由部署决定(`PROMPTCUT_AGENT_COLLECT_PYTHON`),模型不能触发往节点上装。
- * 登录态(`collect_login`)要用户自己扫码,是「要操作发起人界面」的工具;云端不存任何站点的 cookies,下载按未登录的画质。
+ * 登录态(`user_interface_collect_login`)要用户自己扫码,是「要操作发起人界面」的工具;云端不存任何站点的 cookies,下载按未登录的画质。
  *
  * **需要登录的站点(0.7.18,工具包 C1;`collect-bridge.mjs`)**:宿主给了 `delegate`(绑在当前这一轮上的委托口子)时,
  * `collect_download` 先问它——链接属于有登录支持的站点、发起人本人在线且用的是桌面版、他的电脑上有登录态,就由他的电脑下载并
@@ -465,7 +465,7 @@ export function createCollect({ config = null, egress, limits: limitsIn = {}, lo
       collect_job: jobOf,
       collect_logout: async () => ({ ok: true, loggedOut: false, note: '云端不存任何站点的登录态,没有可退出的。' }),
       /** 登录只在本人电脑上操作:有委托口子就经反向通道让发起页打开本机的登录窗口(本人不在线回不在线),没有就如实说 */
-      collect_login: async (args) => { const d = currentLogin(); return d ? d.login(args ?? {}) : LOGIN_LOCAL_ONLY('collect_login'); },
+      collect_login: async (args) => { const d = currentLogin(); return d ? d.login(args ?? {}) : LOGIN_LOCAL_ONLY('user_interface_collect_login'); },
       collect_login_check: async (args) => { const d = currentLogin(); return d ? d.loginCheck(args ?? {}) : LOGIN_LOCAL_ONLY('collect_login_check'); },
       /** 这个对话结束或被删时调:停掉它还在跑的下载 */
       stopAll() { for (const j of state.jobs.values()) if (j.conversationId === conversationId && j.status === 'running') j.abort.abort(); },

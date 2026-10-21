@@ -4,7 +4,7 @@
  * 用断言，不靠推断。
  *
  *   node scripts/probes/cloud-agent-look-probe.mjs [--doc-port 8798] [--asset-port 8799] [--agent-port 5745] [--render-port 5820]
- *        [--steps builtin,tools,usercard,readonly,off,desktop] [--desktop-port 5790] [--keep] [--verbose]
+ *        [--steps builtin,tools,usercard,cutlook,readonly,off,desktop] [--desktop-port 5790] [--keep] [--verbose]
  *
  * 全部是真进程、真握手，只绑 127.0.0.1，数据在一个临时目录里，结束时删掉；不连任何远端。模型是仓库里的模拟模型提供方（照脚本走），不花钱。
  *   托管组合（文档 + 素材）`server/hosted/main.mjs`，本机信任关着
@@ -29,6 +29,10 @@
  * K4 含用户卡的项目（步骤 usercard）：云端 Agent 用 `create_card` 建一张纯色卡（`fixtures/cloud-look/look-solid.tsx`）并放上时间轴，
  *    `see_frames` 看到的画面中心是参数给的红色；`update_clip` 把参数改成蓝色后再看是蓝色；`edit_card` 把源码改成恒为绿色后再看是绿色
  *    （渲染服务等隔离工作进程把改过的卡同步到位才出图）。三张都由隔离工作进程出；常驻工作进程对这个项目一帧也没出、一个任务也没认领。
+ * K4b 看没激活的剪辑（步骤 cutlook；2026-10-21 用户定：看画面能指定剪辑，不用切换）：Agent 用 `create_card` 建一张纯色卡 `cut-look-solid`，
+ *    项目换成两条剪辑——剪辑1（激活）整屏红、剪辑2（停放）整屏蓝；模拟模型 `see_frames { cutId: 'cut-2' }` 拿到的画面中心是蓝，
+ *    `see_frames {}` 是红；回包写明看的是哪条剪辑；这一轮前后项目的版本号不变、activeCutId 仍是剪辑1（不切换、不写入）。图由托管渲染服务出。
+ *    出的两张图存到 `--out` 目录（不给就不存）：K4b-cut2.png、K4b-cut1.png。
  * K5 只读成员也能看（步骤 readonly）：只读成员发起的对话里 `see_frames` 照常拿到画面（看不改项目），同一轮里的写入照旧被拒。
  * K6 开关（步骤 off，放最后）：项目创建者关掉「渲染节点」后，`see_frames` 回「这次没看成」（原因是渲染节点关着），这一轮照常结束、不挂住；
  *    重新打开后又看得到。
@@ -52,7 +56,8 @@ import {
 const { PNG } = createRequire(import.meta.url)('pngjs');
 const args = process.argv.slice(2);
 const argOf = (name, fallback) => { const i = args.indexOf(name); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : fallback; };
-const ALL_STEPS = ['builtin', 'tools', 'usercard', 'readonly', 'off', 'desktop'];
+const ALL_STEPS = ['builtin', 'tools', 'usercard', 'cutlook', 'readonly', 'off', 'desktop'];
+const OUT_DIR = argOf('--out', null);
 const STEPS = String(argOf('--steps', ALL_STEPS.join(','))).split(',').map((s) => s.trim()).filter(Boolean);
 const DOC_PORT = Number(argOf('--doc-port', 8798));
 const ASSET_PORT = Number(argOf('--asset-port', 8799));
@@ -314,6 +319,40 @@ async function main() {
       centerPixels: c, expect: ['红 255,0,0', '蓝 0,0,255', '绿 0,255,0'], byWorker: st.look?.byWorker ?? null, isolatedRunsForThisProject: isoRuns,
       residentWorker: resident ? { claimed: resident.claimed, hold: resident.hold ?? null, cards: resident.cards?.state ?? null } : null,
       ...(c.length === 3 ? {} : { lookLog: render.logs.filter((l) => /^look\.|isolation\./.test(String(l.event))).slice(-14).map((l) => JSON.stringify(l).slice(0, 240)) }),
+    });
+  }
+
+  if (STEPS.includes('cutlook')) {
+    const CARD = 'cut-look-solid';
+    const source = fs.readFileSync(path.join(ROOT, 'scripts', 'probes', 'fixtures', 'cloud-look', 'look-solid.tsx'), 'utf8').replace(/\r\n/g, '\n')
+      .replace('id: "look-solid"', `id: "${CARD}"`).replace('export const lookSolid', 'export const cutLookSolid');
+    const r0 = await run(ula, Y, 'look-cut-card', [{ tool: 'create_card', input: { id: CARD, source } }, { say: '卡建好了' }], { creativity: 'high' });
+    const solid = (id, color) => ({ id, kind: 'card', cardId: CARD, start: 0, end: 2, params: { color } });
+    const two = {
+      ...base(Y, '看画面探针·两条剪辑', [{ id: 'tr-0', name: 'tr-0', hidden: false, clips: [solid('cl-red', '#ff0000')] }]), duration: 2,
+      cuts: [{ id: 'cut-1', name: '剪辑1' }, { id: 'cut-2', name: '剪辑2', t: 1, duration: 2, transitions: [], tracks: [{ id: 'tr-b', name: 'tr-b', hidden: false, clips: [solid('cl-blue', '#0000ff')] }] }],
+      activeCutId: 'cut-1',
+    };
+    await putProject(ula, Y, two);
+    const before = await projectOf(ula, Y);
+    const r = await run(ula, Y, 'look-cut', [
+      { tool: 'see_frames', input: { source: 'timeline', cutId: 'cut-2', t: 1 } },
+      { tool: 'see_frames', input: { source: 'timeline', t: 1 } },
+      { say: '两条剪辑都看过了' },
+    ]);
+    const after = await projectOf(ula, Y);
+    const c = r.images.map((p) => pixel(p, 0.5, 0.5));
+    if (OUT_DIR) {
+      fs.mkdirSync(OUT_DIR, { recursive: true });
+      r.images.forEach((png, i) => fs.writeFileSync(path.join(OUT_DIR, i === 0 ? 'K4b-cut2.png' : 'K4b-cut1.png'), PNG.sync.write(png)));
+    }
+    const sees = r.tools.filter((t) => t.name === 'see_frames');
+    check('K4b 看没激活的剪辑：see_frames 带剪辑2 的 cutId 出蓝、不带出红；回包写明剪辑；项目版本号与激活剪辑不变（托管渲染服务出图）', r0.meta?.state === 'idle' && r.meta?.state === 'idle'
+      && c.length === 2 && near(c[0], [0, 0, 255]) && near(c[1], [255, 0, 0])
+      && /"cut":\{"id":"cut-2","name":"剪辑2"\}/.test(sees[0]?.summary ?? '') && /"cut":\{"id":"cut-1","name":"剪辑1"\}/.test(sees[1]?.summary ?? '')
+      && after.rev === before.rev && after.project?.activeCutId === 'cut-1', {
+      end: [r0.meta?.state ?? null, r.meta?.state ?? null], tools: [...toolsLine(r0.tools), ...toolsLine(r.tools)], centerPixels: c, expect: ['蓝 0,0,255', '红 255,0,0'],
+      rev: [before.rev, after.rev], activeCutId: after.project?.activeCutId ?? null, saved: OUT_DIR ? path.join(OUT_DIR, 'K4b-cut2.png') : null,
     });
   }
 

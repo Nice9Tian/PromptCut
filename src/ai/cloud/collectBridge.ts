@@ -29,6 +29,8 @@
  *      还没交给上传队列的不再交,已经交了的请上传一侧撤回(上传一侧给了 `cancel` 才撤得回)。之后云端再来问,得到的是「没做成」。
  */
 import type { CloudEvent } from "./types.ts";
+// 请求里的 tool 是旧的内部操作名;模型侧的新名(user_interface_collect_login,2026-10-21)也认,进门换回旧名
+import { pageToolName } from "../../../server/tools/ui-names.mjs";
 
 /** 页面肯执行的采集请求。与服务端 `collect-bridge.mjs` 的 `COLLECT_PAGE_TOOLS` 对账(单测 C1-PAGE-05) */
 export const COLLECT_PAGE_REQUEST_TOOLS = Object.freeze([
@@ -395,7 +397,7 @@ export function createCollectBridgePage(deps: CollectBridgePageDeps): {
 
   const handles = (ev: CloudEvent): boolean =>
     !!ev && ev.type === "page.request" && ev.v === COLLECT_PAGE_REQUEST_VERSION && typeof ev.tool === "string" &&
-    (COLLECT_PAGE_REQUEST_TOOLS as readonly string[]).includes(ev.tool);
+    (COLLECT_PAGE_REQUEST_TOOLS as readonly string[]).includes(pageToolName(ev.tool));
 
   const collector = {
     handles,
@@ -409,7 +411,7 @@ export function createCollectBridgePage(deps: CollectBridgePageDeps): {
       if (!mine || !PRESENCE_PAGE_ID_RE.test(mine) || ev.pageId !== mine) return null;
       const seen = done.get(id);
       if (seen) return seen.nonce === nonce ? seen.answer : null;
-      const tool = ev.tool as CollectPageRequestTool;
+      const tool = pageToolName(String(ev.tool)) as CollectPageRequestTool;
       const raw = ev.args && typeof ev.args === "object" && !Array.isArray(ev.args) ? (ev.args as Record<string, unknown>) : {};
       const base = { v: COLLECT_PAGE_REQUEST_VERSION as 2, id, nonce, pageId: mine, ...(typeof ev.runId === "string" ? { runId: ev.runId } : {}) };
       const answer = (async (): Promise<CollectPageAnswer> => {

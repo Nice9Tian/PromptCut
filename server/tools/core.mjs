@@ -66,8 +66,8 @@ export const coreTools = [
     side: "page"
   },
   {
-    name: "seek",
-    description: "跳转到时间轴的指定秒数。",
+    name: "user_interface_seek",
+    description: "**会动用户的界面**:把用户编辑台上的播放头跳到时间轴的指定秒数。看某一刻的画面不用它(see_frames 传 t);只有用户要你把播放头放到某处时才用。",
     inputSchema: {
       type: "object",
       properties: { t: { type: "number" } },
@@ -76,14 +76,14 @@ export const coreTools = [
     side: "page"
   },
   {
-    name: "play",
-    description: "开始播放。",
+    name: "user_interface_play",
+    description: "**会动用户的界面**:在用户的编辑台上开始播放。只有用户要你播放时才用。",
     inputSchema: { type: "object", properties: {} },
     side: "page"
   },
   {
-    name: "pause",
-    description: "暂停播放。",
+    name: "user_interface_pause",
+    description: "**会动用户的界面**:暂停用户编辑台上的播放。只有用户要你暂停时才用。",
     inputSchema: { type: "object", properties: {} },
     side: "page"
   }

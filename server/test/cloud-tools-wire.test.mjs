@@ -41,7 +41,7 @@ import { tools as ALL_TOOLS } from '../mcp-tools.mjs';
 
 const SCOPE = ['detect_shots', 'list_shots', 'stt_status', 'stt_install', 'transcribe_media', 'track_status', 'track_install', 'track_points', 'get_track',
   'attach_clip_motion', 'subject_status', 'subject_install', 'detect_subjects', 'list_subjects', 'background_job_status', 'auto_workflow', 'auto_workflow_status',
-  'web_open', 'web_view', 'web_click', 'web_type', 'web_scroll', 'web_read', 'web_close', 'web_handoff', 'seek', 'play', 'pause', 'collect_login', 'collect_login_check',
+  'web_open', 'web_view', 'web_click', 'web_type', 'web_scroll', 'web_read', 'web_close', 'user_interface_web_handoff', 'user_interface_seek', 'user_interface_play', 'user_interface_pause', 'user_interface_collect_login', 'collect_login_check',
   'measure_audio_js'];
 
 test('WIRE-TABLE 可以由提供者接的正是点名的三十一个;不在表里的照旧', () => {
@@ -107,7 +107,7 @@ test('WIRE-TABLE 给模型看的那一段跟着接上的族变:接上的不再�
   assert.ok(plain.includes('不带任何站点的登录态(按未登录的画质)'));
   assert.ok(plain.includes('云端的下载这一版用不到他电脑上的登录态'));
   assert.doesNotMatch(plain, /由他的电脑用本机的登录态代下/);
-  assert.ok(plain.includes('站点登录(`collect_login`、`collect_login_check`)'), '登录那两个工具照常说可以请他本人处理');
+  assert.ok(plain.includes('站点登录(`user_interface_collect_login`、`collect_login_check`)'), '登录那两个工具照常说可以请他本人处理');
   // 登录那一族没接上时,「代下开着」这个说法不起作用
   assert.doesNotMatch(cloudSystemNote({ look: false, provided: CLOUD_PROVIDER_FAMILIES.web, collectDelegate: true }), /代下|用不到他电脑上的登录态/);
   // 只接上网页操作、没有反向通道(没有内部通道的进程):不说可以交给他本人

@@ -10,11 +10,12 @@ import { NumberField } from "../fields/NumberField";
 import { RangeField } from "../fields/RangeField";
 
 /**
- * 编辑分区里剪辑段的属性(`product/project-model.md`「片段」的剪辑段一条):引用哪条剪辑、从被引用剪辑的第几秒开始,
- * 以及和素材段相同的起止、框、不透明度、淡入淡出、音量与静音。
+ * 编辑分区里剪辑段的属性(`product/project-model.md`「片段」的剪辑段一条):从被引用剪辑的第几秒开始,
+ * 以及和素材段相同的起止、框、不透明度、淡入淡出、音量与静音。引用哪条剪辑不能改(2026-10-21 用户定,
+ * `workflow/editing.md`「剪辑段的属性」),所以这里没有换引用的下拉框;要换就删掉这段,从素材库重新拖一条。
  *
  * 每一项都走现有的 store 动作(`setCutSegment`、`moveClip`、`setClipFrame`、`updateClip`、`setClipVolume`、`setClipMuted`),
- * 它们换新对象写回项目、进撤销栈;循环引用、偏移超出被引用剪辑总长这类拒绝原样显示在表单底下。
+ * 它们换新对象写回项目、进撤销栈;偏移超出被引用剪辑总长这类拒绝原样显示在表单底下。
  * 「打开被引用剪辑」和双击时间轴上的剪辑段同效(`openCutInTimeline`)。
  *
  * 数字框与滑块是 `../fields/` 里共用的 NumberField / RangeField:数字框敲字只改草稿,回车或失焦才提交一步;
@@ -84,26 +85,6 @@ export function CutSegmentForm({ clip }: { clip: TrackClip }) {
       </div>
 
       {locked && <div className="pc-left-faint">所在序列锁着,先解锁才能改</div>}
-
-      {row("引用", (
-        <select
-          data-pc="cut-segment-cut"
-          value={cutId}
-          disabled={locked}
-          onChange={(e) => run(() => actions.setCutSegment(clip.id, { cutId: e.target.value }))}
-          className="flex-1 min-w-0 pc-left-select is-sm"
-        >
-          {!target && <option value={cutId}>(已删除)</option>}
-          {cuts.map((c) => {
-            const reason = c.id === cutId ? null : actions.cutCycleReason(c.id);
-            return (
-              <option key={c.id} value={c.id} disabled={!!reason} title={reason ?? undefined}>
-                {c.name}{reason ? "(会循环引用)" : ""}
-              </option>
-            );
-          })}
-        </select>
-      ), "换成引用另一条剪辑;会循环引用的灰掉")}
 
       {row("起点偏移", (
         <>

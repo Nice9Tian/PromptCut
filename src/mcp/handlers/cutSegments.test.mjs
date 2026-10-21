@@ -14,6 +14,7 @@ const { TOOL_ROUTES } = await import(srcUrl("mcp/routes.mjs"));
 const { clipsHandlers } = await import(srcUrl("mcp/handlers/clips.ts"));
 const { effectsHandlers } = await import(srcUrl("mcp/handlers/effects.ts"));
 const { cutSegmentHandlers } = await import(srcUrl("mcp/handlers/cutSegments.ts"));
+const { tools } = await import("../../../server/mcp-tools.mjs");
 const api = { ...clipsHandlers, ...effectsHandlers, ...cutSegmentHandlers };
 const call = (tool, args) => api[TOOL_ROUTES[tool].method](args);
 
@@ -73,5 +74,18 @@ test("两个工具直连 EditorApi 自己的方法,不再借 addClip / updateCli
   assert.throws(() => call("add_clip", { start: 0, cutId: "B" }));
   call("update_clip", { clipId: seg.clipId, cutOffset: 2 });
   assert.equal(call("get_clip", { clipId: seg.clipId }).cutSegment.cutOffset, 0, "update_clip 不认 cutOffset");
-  assert.equal(call("set_cut_segment", { clipId: seg.clipId, name: "剪辑B", cutOffset: 1 }).segment.cutOffset, 1);
+  assert.equal(call("set_cut_segment", { clipId: seg.clipId, cutOffset: 1 }).segment.cutOffset, 1);
+});
+
+test("剪辑段引用哪条剪辑不能改(2026-10-21 用户定):set_cut_segment 带 cutId / name 被拒,store 动作也换不了", () => {
+  load();
+  const seg = call("add_cut_segment", { cutId: "B", start: 0 }).segment;
+  const before = getState().project;
+  assert.throws(() => call("set_cut_segment", { clipId: seg.clipId, cutId: "B" }), /剪辑段引用的剪辑不能改，要换就删掉这段，用 add_cut_segment 放一段新的/);
+  assert.throws(() => call("set_cut_segment", { clipId: seg.clipId, name: "剪辑B", cutOffset: 1 }), /不能改/);
+  assert.equal(getState().project, before, "被拒时项目一个字都没写");
+  assert.throws(() => actions.setCutSegment(seg.clipId, { cutId: "B" }), /不能改/);
+  assert.equal(call("get_clip", { clipId: seg.clipId }).cutSegment.cutId, "B");
+  const schema = tools.find((t) => t.name === "set_cut_segment").inputSchema.properties;
+  assert.deepEqual(Object.keys(schema).sort(), ["clipId", "cutOffset"], "工具说明里不再有 cutId / name");
 });

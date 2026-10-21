@@ -51,7 +51,7 @@ function findTrack(p: Project, trackId: unknown): Track {
   const t = p.tracks.find((x) => x.id === id);
   if (!t) {
     const known = p.tracks.map((x) => `${x.id}「${x.name}」`).join("、");
-    throw new Error(`当前剪辑里没有序列 ${id}。现有:${known}。序列只属于当前激活的剪辑,要动别的剪辑先 switch_cut`);
+    throw new Error(`当前剪辑里没有序列 ${id}。现有:${known}。序列只属于当前激活的剪辑,要动别的剪辑的序列先 user_interface_switch_cut(会动所有成员的界面)`);
   }
   return t;
 }

@@ -184,5 +184,5 @@ export function explainPick(res) {
 export function explainSecret(kind) {
   const what = { password: '密码', code: '验证码', card: '银行卡信息' }[kind] ?? '账号凭据';
   return `这是填${what}的输入框。云端 Agent 不代填密码、验证码和任何账号凭据,没有输入。`
-    + '能交给用户时用 web_handoff(发起方不在线时它会明确告诉你);否则把情况告诉用户,换一个不需要登录的来源继续。';
+    + '能交给用户时用 user_interface_web_handoff(发起方不在线时它会明确告诉你);否则把情况告诉用户,换一个不需要登录的来源继续。';
 }

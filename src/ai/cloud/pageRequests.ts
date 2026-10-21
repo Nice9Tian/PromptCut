@@ -12,6 +12,8 @@
  * 这四个都不改项目:只读成员的页面上也照常执行。
  */
 import type { CloudEvent } from "./types.ts";
+// 请求里的 tool 是旧的内部操作名;模型侧的新名(user_interface_*,2026-10-21)也认,进门换回旧名
+import { pageToolName } from "../../../server/tools/ui-names.mjs";
 
 /** 页面肯执行的请求。与服务端 `server/agent/service/cloud-tools.mjs` 的 `CLOUD_PAGE_TOOLS` 对账(单测 CAU-REV-05) */
 export const CLOUD_PAGE_REQUEST_TOOLS = Object.freeze(["seek", "play", "pause", "get_selection"] as const);
@@ -60,7 +62,7 @@ export async function runPageRequest(ev: CloudEvent, exec: PageRequestExec): Pro
   if (!ev || ev.type !== "page.request") return null;
   const id = typeof ev.id === "string" && REQUEST_ID_RE.test(ev.id) ? ev.id : null;
   if (!id) return null;
-  const tool = typeof ev.tool === "string" ? ev.tool : "";
+  const tool = pageToolName(typeof ev.tool === "string" ? ev.tool : "");
   if (!(CLOUD_PAGE_REQUEST_TOOLS as readonly string[]).includes(tool)) {
     return { id, ok: false, error: `这个页面不执行 ${tool.slice(0, 40) || "(空)"}:反向通道只做 ${CLOUD_PAGE_REQUEST_TOOLS.join("、")}。` };
   }
@@ -220,7 +222,7 @@ export function createAccountPageRequests(deps: { pageId: () => string | null; e
       if (!mine || !PRESENCE_PAGE_ID_RE.test(mine) || ev.pageId !== mine) return null;
       const seen = done.get(id);
       if (seen) return seen.nonce === nonce ? seen.answer : null;
-      const tool = typeof ev.tool === "string" ? ev.tool : "";
+      const tool = pageToolName(typeof ev.tool === "string" ? ev.tool : "");
       const raw = ev.args && typeof ev.args === "object" && !Array.isArray(ev.args) ? (ev.args as Record<string, unknown>) : {};
       const base = { v: ACCOUNT_PAGE_REQUEST_VERSION as 2, id, nonce, pageId: mine, ...(typeof ev.runId === "string" ? { runId: ev.runId } : {}) };
       const answer = execute(base, tool, raw);

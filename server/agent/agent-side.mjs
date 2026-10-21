@@ -15,6 +15,7 @@
  */
 import { createAgentLink } from './doc-link.mjs';
 import { createAgentExecutor } from './agent-exec.mjs';
+import { modelToolName, pageToolName } from '../tools/ui-names.mjs';
 import { annotateError, annotateResult, userEditingFor } from './user-editing.mjs';
 
 /** 向页面要只读页面状态用的内部工具名(不在工具表里,Agent 看不到;页面 `src/ai/mcpExecutor.ts` 认它) */
@@ -69,7 +70,8 @@ export function createAgentSide({
 
   /** 经页面执行,统一成 { result, opIds } */
   async function viaPage(tool, args, agent, extra = null) {
-    const out = await callPage(tool, args, extra ? { agent, ...extra } : { agent });
+    // 发给页面的是旧的内部操作名(会动界面的那几个,server/tools/ui-names.mjs):0.7.18 的页面也认得
+    const out = await callPage(pageToolName(tool), args, extra ? { agent, ...extra } : { agent });
     if (pageResult === 'wrapped') return { result: out?.result, opIds: Array.isArray(out?.opIds) ? out.opIds : [] };
     return { result: out, opIds: [] };
   }
@@ -122,7 +124,9 @@ export function createAgentSide({
      * 执行一个工具(带事件)。`agent` 是 Agent 对话 id(字符串,没有就 ''),`callId` 是模型那一侧的这次调用 id。
      * 未知工具抛 `code: 'UNKNOWN_TOOL'`。
      */
-    async callTool(tool, args = {}, { agent = '', callId } = {}) {
+    async callTool(toolIn, args = {}, { agent = '', callId } = {}) {
+      // 会动用户界面的工具改了名(user_interface_ 前缀):旧名照常认,往下一律用新名
+      const tool = modelToolName(toolIn);
       const toolDef = byName.get(tool);
       if (!toolDef) throw Object.assign(new Error(`Unknown tool: ${tool}`), { code: 'UNKNOWN_TOOL' });
       const key = typeof agent === 'string' ? agent : '';

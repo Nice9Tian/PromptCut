@@ -5,7 +5,9 @@
 ## 剪辑的存法
 
 - 激活那条剪辑的序列、转场、总时长住在项目本身上，停放的各自带着（`src/kernel/cuts.ts`）。没有 `cuts` 字段的项目加载时只补「剪辑1」一条（`DEFAULT_CUT_COUNT = 1`）；已经带着 `cuts` 的原样不动。
-- 就地改停放剪辑里的片段（Agent 按片段 id 改属性的工具，`src/mcp/clipCut.ts`）：把那条剪辑当激活的视图交给现成动作，提交时折回，只改它条目里的 tracks / duration / transitions（`kernel/cuts.ts` 的 `cutEditView` / `foldCutEdit`，`store/core.ts` 的 `runInCutScope`）；激活剪辑与它的序列保持原对象，一次工具调用是一次提交、一步撤销。删、复制、切分片段与 `get_layout` 仍只认激活剪辑，片段在别的剪辑里时报出它在哪条剪辑、要先 `switch_cut`。
+- 就地改停放剪辑里的片段（Agent 按片段 id 改属性的工具，`src/mcp/clipCut.ts`）：把那条剪辑当激活的视图交给现成动作，提交时折回，只改它条目里的 tracks / duration / transitions（`kernel/cuts.ts` 的 `cutEditView` / `foldCutEdit`，`store/core.ts` 的 `runInCutScope`）；激活剪辑与它的序列保持原对象，一次工具调用是一次提交、一步撤销。删、复制、切分片段与 `get_layout` 仍只认激活剪辑，片段在别的剪辑里时报出它在哪条剪辑、要先 `user_interface_switch_cut`（2026-10-21 改名）。就地改的回包里「看一眼画面」的调用带上那条剪辑的 `cutId`。〔裁：cut-look-ui 2026-10-22〕
+- 看别的剪辑的画面（`see_frames` 的 `cutId`，`../product/project-model.md`「剪辑」2026-10-21 用户定）：出图前把项目换成「那条剪辑当激活」的视图（`src/kernel/agentScopes.mjs` 的 `cutLookView`，与 `cutEditView` 同一个形状，纯 JS 版供服务端直接用），只交给这一次出图，不进 store、不进文档同步、不改 `activeCutId`。请求体里只有这份视图、不带 `cutId`，所以只认 `project` 的旧版渲染进程也出得对。不给时刻时取那条剪辑停放时存的播放头 `t`（没有就 0），给了 `clipId` 时照旧取片段中点。〔裁：cut-look-ui 2026-10-22〕
+- 剪辑段的引用不能改（`../product/project-model.md`「片段」2026-10-21 用户定）：store 动作 `setCutSegment` 只收 `cutOffset`，带 `cutId` 就抛；Agent 的 `set_cut_segment` 不再声明 `cutId` / `name`，带了回「剪辑段引用的剪辑不能改，要换就删掉这段，用 add_cut_segment 放一段新的」（`src/kernel/cutSegments.ts` 的 `CUT_SEGMENT_REF_FIXED`）。
 
 ## 剪辑段的存法
 

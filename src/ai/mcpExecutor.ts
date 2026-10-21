@@ -2,6 +2,7 @@
 // 所以在这里就地声明用到的那点形状。
 // @ts-expect-error 无类型声明的 .mjs
 import { tools as RAW_TOOL_SPECS } from "../../server/mcp-tools.mjs";
+import { modelToolName, pageToolName } from "../../server/tools/ui-names.mjs";
 import { webOpen, webView, webClick, webType, webScroll, webRead, webHandoff, webClose } from "./web";
 import { requestAgentBrowser, closeAgentBrowser } from "./agentBrowserStore";
 import * as agentBus from "./agentBus";
@@ -112,13 +113,13 @@ export interface EditorApi {
   // 多条剪辑(时间轴)。其余 clip / 序列工具都只作用于当前激活的那条
   listCuts(args?: { cutId?: string }): any;
   switchCut(args: { cutId?: string; name?: string }): any;
-  addCut(args?: { name?: string; switch?: boolean }): any;
+  addCut(args?: { name?: string }): any;
   renameCut(args: { cutId: string; name: string }): any;
   removeCut(args: { cutId: string; force?: boolean; reason?: string }): any;
   /** 在激活剪辑里放一个引用别的剪辑的剪辑段(cutId 或 name 二选一);放进自己、循环引用时抛并说明原因 */
   addCutSegment(args: { cutId?: string; name?: string; start: number; duration?: number; cutOffset?: number; trackId?: string }): any;
   /** 改剪辑段引用哪条剪辑(cutId 或 name)、从被引用剪辑的第几秒开始(cutOffset) */
-  setCutSegment(args: { clipId: string; cutId?: string; name?: string; cutOffset?: number }): any;
+  setCutSegment(args: { clipId: string; cutOffset?: number }): any;
   seek(args: { t: number }): any;
   play(): any;
   pause(): any;
@@ -170,7 +171,7 @@ export interface EditorApi {
   editCard(args: { cardId: string; file?: string; find: string; replace: string; replaceAll?: boolean }): Promise<any>;
   /** 只读 DOM 树(inspect_card_dom):每个节点标出源码位置,改动一律走 editCard */
   inspectCardDom(args: { clipId: string; t?: number; ref?: number | string; depth?: number }): Promise<any>;
-  seePreview(args: { t?: number; clipId?: string; times?: number[] }): Promise<any>;
+  seePreview(args: { t?: number; clipId?: string; times?: number[]; cutId?: string }): Promise<any>;
   seeSequences(args: { mediaId: string; page?: number; perPage?: number; grid?: number; scene?: number; from?: number; to?: number }): Promise<any>;
   cardAuthoringGuide(): Promise<any>;
 }
@@ -184,7 +185,7 @@ const TIMELINE_TOOLS = new Set([
   "create_filter", "update_filter", "remove_filter", "apply_filter",
   "create_pixel_map", "update_pixel_map", "remove_pixel_map", "apply_pixel_map",
   "create_audio_fx", "update_audio_fx", "remove_audio_fx", "apply_audio_fx",
-  "switch_cut", "add_cut", "set_theme", "voice_generate", "sound_generate",
+  "user_interface_switch_cut", "add_cut", "set_theme", "voice_generate", "sound_generate",
 ]);
 
 /**
@@ -426,7 +427,11 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
         }).catch(() => {});
       } else if (ev.type === "call") {
         const id = ev.id;
-        const tool = ev.tool;
+        /*
+         * 会动用户界面的工具改了名(`user_interface_` 前缀,server/tools/ui-names.mjs):服务端发来的内部操作名保持旧名
+         * (0.7.18 桌面版当发起人页面时照常认),这里两种都认,进门统一换成新名再查路由表
+         */
+        const tool = modelToolName(ev.tool);
         const args = ev.args as any;
         // 多 Agent:服务端把发起这次调用的 Agent 对话 ID 带过来(走 agy 或外部命令行的没有)
         const agent: string | null = typeof ev.agent === "string" && ev.agent ? ev.agent : null;
@@ -475,7 +480,7 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "get_gif") result = await getGif(args);
           // 网页操作不经过 EditorApi:浏览器整个在服务端,这些工具不碰编辑台的任何状态。
           // 挂进 EditorApi 只会逼编辑台那边实现 8 个纯转发的方法。
-          else if (tool.startsWith("web_")) result = await runWebTool(tool, args);
+          else if (tool.startsWith("web_") || tool === "user_interface_web_handoff") result = await runWebTool(pageToolName(tool), args);
           else throw new Error(`未知工具: ${tool}`);
         } catch (err: unknown) {
           ok = false;

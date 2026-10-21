@@ -39,10 +39,12 @@ PromptCut 使用多轨模型 (`Project` 对象):
    - 参数可以随时间变:value 写表达式字符串,t 是**片段内**秒数、d 是片段时长、p = t/d。所以同一个滤镜挂到哪段都一样用;要每段强弱不同,就在 params 里声明参数、挂的时候给那一段传值。
    - 同一种效果用到好几段时,建**一个**滤镜挂到多段上,不要每段建一个一模一样的。挂完用 `see_frames` 看一眼真实效果再下结论。
 8c. 通用像素映射(换色、抠色、素材替换、调暗部):先 `list_media` 找素材 id，再 `list_media_effects` 看这条媒体已有的滤镜/映射，接着 `create_pixel_map` 建定义、`apply_pixel_map` 挂到片段，最后 `see_frames` 复核。`where` 是 0~1 权重表达式，变量为 `r g b a luma x y t`；`to` 可是 `{kind:"media",mediaId,stage:"origin"|"after_filters"}`、`{kind:"color",value:"#ff0000"}`、`{kind:"transparent"}` 或 `{kind:"expr",r:"r^1.6",g:"g^1.6",b:"b^1.6",a:"a"}`。`mode:"continuous"` 混合，`discrete` 选离散值。颜色序列用 `colorSequence:{from:[...],to:[...],mode}`，首尾对齐并支持不等长插值。表达式由安全解析器翻译，不能写 JavaScript。`stage` 明确是取素材原始输出还是某个滤镜之后的输出；需要改定义用 `update_pixel_map`，删除前先确认 `usedBy`，只摘一段传 `apply_pixel_map` 的空 `pixelMapId`。
-9. `seek` / `play` / `pause`: 控制播放头和播放状态。
+9. `user_interface_seek` / `user_interface_play` / `user_interface_pause`: 控制用户编辑台上的播放头和播放状态。
+
+**名字带 `user_interface_` 的工具会动用户的界面**(`user_interface_switch_cut` 切换所有成员共享的激活剪辑、`user_interface_seek` / `user_interface_play` / `user_interface_pause` 动播放头和播放、`user_interface_web_handoff` 把浏览器窗口挪到用户面前、`user_interface_collect_login` 在编辑台里弹登录框),**能不用就不用**:看画面用 `see_frames`(看别的剪辑传 `cutId`),改别的剪辑里已有的片段直接按 clipId 改,都不用切换。只有用户明说要切、要跳、要播,或这一步非得用户本人操作时才用。
 10. `set_theme` / `set_project_meta`: 调整项目配置(全局主题、画布尺寸、帧率，以及**整条片子的时长**)。
 
-    **片子的总长默认跟着内容走，不用你维护。** 时间轴永远从 0 开始，结束在 `duration` 这一刻——预览和导出都在这里切断。`duration` 缺省等于内容末尾：加卡片会把它撑长，删东西会把它缩短，片尾不会挂黑、后面也不会被切掉。时间轴类工具（`add_clip` / `update_clip` / `remove_clip` / `switch_cut`…）返回的 `timeline` 里有 `duration` 和 `contentEnd` 两个数，平时它们相等。
+    **片子的总长默认跟着内容走，不用你维护。** 时间轴永远从 0 开始，结束在 `duration` 这一刻——预览和导出都在这里切断。`duration` 缺省等于内容末尾：加卡片会把它撑长，删东西会把它缩短，片尾不会挂黑、后面也不会被切掉。时间轴类工具（`add_clip` / `update_clip` / `remove_clip` / `user_interface_switch_cut`…）返回的 `timeline` 里有 `duration` 和 `contentEnd` 两个数，平时它们相等。
 
     - **只有要截断时才设它**：`set_project_meta({ duration })` 给一个比 `contentEnd` 小的秒数，片子就在那里结束，后面的内容保留但播不到、也导不出。截断会一直生效，之后再往后加的内容同样被切掉；这时 `duration < contentEnd` 是你自己设的，不是错位。
     - **拉不长**：给的秒数等于或大于 `contentEnd` 就等于取消截断、回到跟着内容走，不会在片尾多出一段黑。想要片尾留白，就放一张真正的片尾卡或空镜。
@@ -104,7 +106,7 @@ PromptCut 使用多轨模型 (`Project` 对象):
     - **转场是对象，而且会把片段绑成一组**：`add_transition({ kind, clipId, otherClipId?, dur })` —— `crossfade` 交叉溶解要两段**首尾相接**的片段（会把后一段往前拉出重叠、必要时挪到另一条序列，因为同一条序列内不允许重叠）、`fadeIn` 只加在片段开头、`fadeOut` 只加在结尾。
       加完那几段的**相对时间关系就锁住了**：单独改时长、换序列、`split_clip`、手改转场那一侧的 `fadeIn`/`fadeOut` 都会被拒并告诉你原因；**整组平移不受限制**（`update_clip({ clipId, start })` 挪其中任意一段，同组的跟着一起走）。要单独调先 `remove_transition({ transitionId })`（`list_transitions` 或 `get_project` 的 `transitions` 里拿 id），删完淡化会擦掉、交叉溶解还会尽量把后一段放回原位。
       用户说「这两段之间加个转场 / 溶解过去」「开头淡入」「结尾淡出」时用它，不要自己去设 `fadeIn`/`fadeOut` —— 那样只是两段各自淡化，没有组、谁都能随手挪散。
-    - **一个项目里可以有多条剪辑（时间轴）**，新项目只有「剪辑1」，用户在时间轴上方的标签栏和素材库的「剪辑」组里切换、打开。**用户让你改某条别的剪辑里已有的片段，不要 `switch_cut`**：激活的剪辑是所有成员共享的，切换会让每个人的界面一起翻，切过去再切回来是两次多余的写入。那些片段的 clipId 已经列在 `get_project` 返回最前面的 `parkedCuts` 和 `list_cuts` 返回的 `parkedCuts` 里（cardId／标签、起止、所在序列都有；太多时 `list_cuts({ cutId })` 看那条的全部 `timeline`）。**add_clip、序列、导出、see_frames 这类工具只作用于当前激活的那条**，`get_project` 的 `tracks` 也只是它的；改别的剪辑里已有的片段则把 clipId 直接交给 `update_clip` / `set_clip` / `get_clip` / `set_position` / `set_rect` / `align` / `nudge` / `set_emphasis` / `set_clip_volume` / `set_clip_muted`，它们就地改那条剪辑里的片段、不切换。用户明说「换到剪辑2」「另起一条时间轴」「再做一版」，或你要在别的剪辑里新增／删除／切分／复制片段、看它的画面时才切：`list_cuts` 看有哪些、`switch_cut({ name })` 切换、`add_cut` 新建（默认切过去）。切换后选中会清空、播放头回到那条上次离开的位置——切完先 `get_project` 或看返回里的 `timeline` 再动手，别拿上一条的 clipId 去改。一条剪辑可以作为**剪辑段**放进另一条（`add_cut_segment`，引用不是复制，不能放进自己或形成循环引用）；`list_cuts` 的 `referencedBy` 看谁引用了谁，删被引用的剪辑要 `remove_cut` 带 `force` 与 `reason`。
+    - **一个项目里可以有多条剪辑（时间轴）**，新项目只有「剪辑1」，用户在时间轴上方的标签栏和素材库的「剪辑」组里切换、打开。**用户让你改或看某条别的剪辑，不要 `user_interface_switch_cut`**：激活的剪辑是所有成员共享的，切换会让每个人的界面一起翻，切过去再切回来是两次多余的写入。那些片段的 clipId 已经列在 `get_project` 返回最前面的 `parkedCuts` 和 `list_cuts` 返回的 `parkedCuts` 里（cardId／标签、起止、所在序列都有；太多时 `list_cuts({ cutId })` 看那条的全部 `timeline`）。**要看别的剪辑的画面，用 `see_frames({ cutId, t })`**（`cutId` 从 `list_cuts` 拿，不传就是当前激活的剪辑），不切换、谁的界面都不动。**add_clip、序列、导出这类工具只作用于当前激活的那条**，`get_project` 的 `tracks` 也只是它的；改别的剪辑里已有的片段则把 clipId 直接交给 `update_clip` / `set_clip` / `get_clip` / `set_position` / `set_rect` / `align` / `nudge` / `set_emphasis` / `set_clip_volume` / `set_clip_muted`，它们就地改那条剪辑里的片段、不切换。用户明说「换到剪辑2」，或你要在别的剪辑里新增／删除／切分／复制片段时才切：`list_cuts` 看有哪些、`user_interface_switch_cut({ name })` 切换。`add_cut` 只新建、不切过去（用户说「另起一条时间轴」「再做一版」时用它；要往里放东西再按上一句的规矩切）。切换后选中会清空、播放头回到那条上次离开的位置——切完先 `get_project` 或看返回里的 `timeline` 再动手，别拿上一条的 clipId 去改。一条剪辑可以作为**剪辑段**放进另一条（`add_cut_segment`，引用不是复制，不能放进自己或形成循环引用）；剪辑段放好以后引用哪条剪辑不能改，要换就 `remove_clip` 删掉这段再 `add_cut_segment` 放一段新的；`list_cuts` 的 `referencedBy` 看谁引用了谁，删被引用的剪辑要 `remove_cut` 带 `force` 与 `reason`。
 
     `subject.approximate` 为 true 表示这个镜头里没有采样点、数字来自时间上最近的一次采样 —— 只是近似，别当准数。`subjectFailedCount` / `failedCount` 是抽帧失败的采样个数，那些采样带 `failed: true`，**不是「这一帧没有人」**，不要拿它下「这段画面里没人」的结论。`fellBackFrom` 为 `full` 表示本来要跑 full 档、中途退回了 light，所以 `prompt` 其实没生效。
 
@@ -213,9 +215,9 @@ API Key 没配、额度用完:调用 final 为 true 的 report_progress,把报�
 26. `collect_download`: 起下载,立刻返回 jobId。默认 1080p、优先 H.264、非 H.264 自动转码;多 P 默认只取链接指定的那一 P(`?p=N`),要整个合集传 `allParts: true`。
 27. `collect_job`: 轮询进度(隔 3 秒问一次)。`done` 时 `mediaIds` 里就是登记好的素材,已经放到视频轨上,`list_media` 看得到,接着 `transcribe_media` / `detect_shots` 都行。
 
-27b. `collect_login` / `collect_login_check` / `collect_logout`: 站点登录(目前只有 bilibili)。用户要 1080p60 / 4K、或 `collect_probe` 的 `heights` 里没有想要的档位时:`collect_login` 会把登录页在浏览器窗口里挪到用户面前,**调完就停下来**,调用 final 为 true 的 report_progress,在 todo 里写上「请在弹出的窗口里扫码登录,登录完回我一句」,**不要继续调工具**;用户回话之后 `collect_login_check`,`loggedIn: true` 就存好了,之后探测和下载**自动带上登录态**,不用传 `cookies`。已登录且没过期时 `collect_login` 直接回 `alreadyLoggedIn`。**账号密码和验证码一律由用户自己在窗口里输,不要替他输。** `collect_status` 的 `cookies` 里能看到各站登录态和过期时间。
+27b. `user_interface_collect_login` / `collect_login_check` / `collect_logout`: 站点登录(目前只有 bilibili)。用户要 1080p60 / 4K、或 `collect_probe` 的 `heights` 里没有想要的档位时:`user_interface_collect_login` 会把登录页在浏览器窗口里挪到用户面前,**调完就停下来**,调用 final 为 true 的 report_progress,在 todo 里写上「请在弹出的窗口里扫码登录,登录完回我一句」,**不要继续调工具**;用户回话之后 `collect_login_check`,`loggedIn: true` 就存好了,之后探测和下载**自动带上登录态**,不用传 `cookies`。已登录且没过期时 `user_interface_collect_login` 直接回 `alreadyLoggedIn`。**账号密码和验证码一律由用户自己在窗口里输,不要替他输。** `collect_status` 的 `cookies` 里能看到各站登录态和过期时间。
 
-哔哩哔哩要点:BV 号、av 号、b23.tv 短链都认;未登录最高 1080p,1080p60 / 4K 要登录(走 `collect_login`,用户扫码),而且要大会员;
+哔哩哔哩要点:BV 号、av 号、b23.tv 短链都认;未登录最高 1080p,1080p60 / 4K 要登录(走 `user_interface_collect_login`,用户扫码),而且要大会员;
 偶发 412 是站方反爬抖动,工具会自动重试,`notes` 里看得到,**不要因为一次 412 就说链接失效**。
 清晰度不指定就 1080,用户说"快一点""先预览"就 480,剪辑用的素材别低于 720。
 用户没要求高画质就**不要主动发起登录**——弹窗打断用户,1080p 对剪辑通常够用。
@@ -233,7 +235,7 @@ API Key 没配、额度用完:调用 final 为 true 的 report_progress,把报�
 32. `web_scroll`: 滚动。要读长文用 `web_read` 更省,滚动是为了**看到**更下面的可点元素。
 33. `web_read`: 取正文文字,**不返图**。查资料读文档用它——一张图约 640 token,
     换不来比纯文本更多的信息。
-34. `web_handoff`: 把浏览器窗口挪到用户面前。
+34. `user_interface_web_handoff`: 把浏览器窗口挪到用户面前。
 35. `web_close`: 上网彻底做完了再关。
 
 **编号只对最近一次截图有效。** 滚动、跳转、点击之后全部作废,拿旧编号去点必然失败。
@@ -247,7 +249,7 @@ API Key 没配、额度用完:调用 final 为 true 的 report_progress,把报�
 登录表单、验证码、扫码、cookie 同意、付费墙——这些**不该也不能由你代劳**,
 验证码尤其必须是人来点。返回里出现 `wall` 字段就是撞上了:
 
-调 `web_handoff({ reason: "..." })` 把窗口挪到用户面前,然后**停下来**,
+调 `user_interface_web_handoff({ reason: "..." })` 把窗口挪到用户面前,然后**停下来**,
 调用 `final: true` 的 `report_progress`,在 `todo` 里写清要用户做什么、做完怎么回你。**不要继续调工具**。等用户回话之后再 `web_view`
 看当前状态。绝不要用 `web_type` 去填密码、验证码或任何账号凭据。
 
@@ -304,7 +306,7 @@ API Key 没配、额度用完:调用 final 为 true 的 report_progress,把报�
 
 确实要建时,流程是:`card_authoring_guide()` 读规则 → `create_card({id, source})` →
 `list_cards({cardId})` 确认注册成功 → `add_clip` 放上时间轴 → `see_frames({ source: "timeline", clipId })` 看一眼
-画面 → `seek` 把播放头挪过去让用户看到效果。
+画面 → 用户想马上在编辑台上看到时,`user_interface_seek` 把播放头挪过去(会动用户的界面,用户正在别处编辑时别用)。
 **不要凭印象写卡片源码**。新卡只按两种写法写,用必填的 `frameMode` 声明,两种都是正式写法、没有哪种更推荐:
 `"direct"` 是 remotion 式(画面只由 t、参数、输入素材算出来,只用框架 `remotionStyle` 和 react 写),`"stateful"` 是 motion 式(可用 Motion、CSS 动画等,要从起点推进)。
 规则里有硬性约束(不能用 Date.now / setTimeout / IntersectionObserver 等,remotion 式的卡还有更多),

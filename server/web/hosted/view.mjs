@@ -34,7 +34,7 @@ function hostedWallNote(walls) {
   const names = { login: '登录表单', captcha: '验证码', qrcode: '扫码登录', consent: 'cookie 同意条' };
   return `这一页有${walls.map((w) => names[w] || w).join('、')}。`
     + '登录、验证码、扫码这类事不要自己动手,也不要想办法绕过:云端 Agent 不代填密码、验证码和任何账号凭据。'
-    + '能交给用户时用 web_handoff(发起方不在线时它会明确告诉你);否则把情况告诉用户,换一个不需要登录的来源继续。'
+    + '能交给用户时用 user_interface_web_handoff(发起方不在线时它会明确告诉你);否则把情况告诉用户,换一个不需要登录的来源继续。'
     + (walls.includes('captcha') ? '验证码必须由用户来点。' : '');
 }
 

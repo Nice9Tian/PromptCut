@@ -17,7 +17,7 @@
  * ## 撞墙就交给人
  *
  * 登录、验证码、cookie 同意 —— 这些**不该也不能由 agent 代劳**(验证码尤其)。
- * detectWall 在每次动作后扫一眼,发现了就在返回里明说,并给出 web_handoff 这条路。
+ * detectWall 在每次动作后扫一眼,发现了就在返回里明说,并给出 user_interface_web_handoff 这条路。
  * 不自动弹窗:什么时候打断用户是模型该判断的事,而且自动弹会把离屏浏览器的存在暴露成
  * 一个乱跳的窗口。
  */
@@ -75,7 +75,7 @@ async function finish(page, extra = {}) {
     const names = { login: '登录表单', captcha: '验证码', qrcode: '扫码登录', consent: 'cookie 同意条' };
     out.wall = walls;
     out.wallNote = `这一页有${walls.map((w) => names[w] || w).join('、')}。`
-      + '这类事不要自己动手 —— 调 web_handoff 把浏览器窗口挪到用户面前,让用户处理完再继续。'
+      + '这类事不要自己动手 —— 调 user_interface_web_handoff 把浏览器窗口挪到用户面前,让用户处理完再继续。'
       + (walls.includes('captcha') ? '验证码必须由用户来点。' : '');
   }
   return out;
