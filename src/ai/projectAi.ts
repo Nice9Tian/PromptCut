@@ -2,6 +2,7 @@ import type { ChatMessage } from "./types";
 import { getScript, setScript } from "./script";
 import { getMessages, messagesForSave, replaceMessages } from "./liveChat";
 import { resetAiSessionIds } from "./aiSessionKeys";
+import { noteProjectChatApplied } from "./agentTabs";
 
 /**
  * 随项目一起存取的 AI 状态:剧本 + 这段对话。
@@ -31,6 +32,8 @@ export function applyProjectAi(ai: unknown): void {
   const src = (ai && typeof ai === "object" ? ai : {}) as Partial<ProjectAi>;
   setScript(typeof src.script === "string" ? src.script : "");
   replaceMessages(src.messages);
+  // 分页清单按项目分开:项目自带对话的话,紧接着换项目时给它补一个页接住这段对话(agentTabs.setAgentProject)
+  noteProjectChatApplied(getMessages().length > 0);
   resetAiSessionIds();
 }
 

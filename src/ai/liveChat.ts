@@ -22,6 +22,15 @@ import type { ChatMessage } from "./types.ts";
 
 export const MAIN_TAB = "main";
 
+/**
+ * 是不是「主页」:随 .proc 存取的那一页。老版本里它的 id 就是 "main";分页清单按项目分开之后,
+ * 项目自带的主对话页叫「项目ID_main」(`agentTabs.setAgentProject` 在项目的 .proc 带着对话时补出来)。
+ * 两种叫法都认,对话 store 共用同一份。新开的会话(「项目ID_<随机>」)都不是主页。
+ */
+export function isMainTab(tabId: string): boolean {
+  return tabId === MAIN_TAB || tabId.endsWith(`_${MAIN_TAB}`);
+}
+
 export interface ChatStore {
   get(): ChatMessage[];
   set(next: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])): void;
@@ -56,16 +65,17 @@ const stores = new Map<string, ChatStore>();
 
 /** 某一页的对话 store。没有就建一份空的;关掉的页用 dropChatStore 收掉 */
 export function getChatStore(tabId: string = MAIN_TAB): ChatStore {
-  let s = stores.get(tabId);
+  const key = isMainTab(tabId) ? MAIN_TAB : tabId;
+  let s = stores.get(key);
   if (!s) {
     s = createStore();
-    stores.set(tabId, s);
+    stores.set(key, s);
   }
   return s;
 }
 
 export function dropChatStore(tabId: string): void {
-  if (tabId === MAIN_TAB) return;
+  if (isMainTab(tabId)) return;
   stores.delete(tabId);
 }
 

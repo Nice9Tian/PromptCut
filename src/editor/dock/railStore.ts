@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from "react";
-import { activateTab, addTab, getActiveTabId, getTabs, subscribeTabs } from "../../ai/agentTabs";
+// 先接上「分页清单跟着当前项目走」,下面第一次读 getTabs() 时才是当前项目的清单
+import "../../ai/agentTabsProject";
+import { activateTab, addTab, getActiveTabId, getAgentProjectId, getTabs, subscribeTabs } from "../../ai/agentTabs";
 import { setRailCollapsed, toggleRailCollapsed } from "../sideRails";
 import { writeStored } from "../left/stored";
 import {
@@ -165,11 +167,18 @@ export function addAgentOnSide(side: Side): void {
 }
 
 // agentTabs 每次变化(含忙碌 / 未读这类只改字段的)都来一遍;没有增删时 syncAgents 原样返回,不会写盘
+let lastProjectId = getAgentProjectId();
 subscribeTabs(() => {
   const hint = pendingAddSide;
   const res = syncAgents(layout, getTabs().map((t) => t.id), hint);
-  if (res.layout === layout) return;
-  commit(res.layout);
+  // 换了项目、或把会话全关光回到开始页:这一份清单的当前页(项目的当前 Agent / 开始页)新补进 rail 时顺手选中它(不展开)。
+  // 否则它的位置原先是别的项目的 Agent,关掉后 active 会退到剧本或分区
+  const projectChanged = getAgentProjectId() !== lastProjectId;
+  lastProjectId = getAgentProjectId();
+  const activeItem = agentItem(getActiveTabId());
+  const next = (projectChanged || res.added.includes(activeItem)) && sideOf(res.layout, activeItem) ? withActive(res.layout, activeItem) : res.layout;
+  if (next === layout) return;
+  commit(next);
   for (const side of res.emptied) setRailCollapsed(side, true);
   if (hint && res.added.length) setRailCollapsed(hint, false);
 });

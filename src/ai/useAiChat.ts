@@ -6,7 +6,7 @@ import type { AiProvider, ChatMessage, ChatAttachment, MessagePart, MessageRunti
 import { parseSseChunks } from "./sse";
 import { readChoice, compatToSend, normalizeModel, modelsFor, pairModelEffort, sanitizeEffort } from "./modelOptions";
 import { getScript } from "./script";
-import { useChatMessages, getChatStore, MAIN_TAB } from "./liveChat";
+import { useChatMessages, getChatStore, isMainTab, MAIN_TAB } from "./liveChat";
 import { WORKFLOW_ROLES } from "./roles";
 import { getState } from "../store/project";
 import { getTabCreativity, getTabProvider } from "./agentTabs";
@@ -65,6 +65,17 @@ function completeToolPart(
   return next;
 }
 
+/**
+ * 首启设置对话框这一次页面加载只弹一次:以前认「主页」这一页去弹;分页清单按项目分开、
+ * 第一个会话不再是固定的「main」之后,谁先走到这里谁弹。
+ */
+let setupGateClaimed = false;
+function claimSetupGate(): boolean {
+  if (setupGateClaimed) return false;
+  setupGateClaimed = true;
+  return true;
+}
+
 export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversationId?: () => string | undefined }) {
   // 对话归项目所有(要随 .proc 存取、随项目切换),所以放在组件外的 store 里。
   // 多 Agent 分页:每页一份 store,主页(MAIN_TAB)那份才随 .proc 存取
@@ -73,7 +84,7 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
   const setMessages = store.set;
   const messages = useChatMessages(store);
   // CLI 驱动的会话 id 也按页分开:两页共用一个 sessionId 等于两个 Agent 接着同一段对话说
-  const sessKey = (p: string) => (tabId === MAIN_TAB ? `aiSession:${p}` : `aiSession:${p}:${tabId}`);
+  const sessKey = (p: string) => (isMainTab(tabId) ? `aiSession:${p}` : `aiSession:${p}:${tabId}`);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [sttInfo, setSttInfo] = useState<SttInfo | null>(null);
   const [provider, setProvider] = useState<AiProvider | null>(null);
@@ -135,7 +146,7 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
       setConfig({ version: 1, defaultProvider: null, toolProtocol: true, api: { vendor: "anthropic", baseUrl: "", model: "gpt-4o|gpt-4o-mini", maxTokens: 4096, apiKey: { set: false, last4: "" }, source: "" }, keys: { custom: { set: false, last4: "" }, router: { set: false, last4: "" } }, cliModels: { claude: "opus|sonnet|haiku", codex: "gpt-5.6-terra|gpt-5.6-sol", agy: "gemini-3.8-flash-high|gemini-3.8-flash-medium|gemini-3.8-flash-low|gemini-3.1-pro-high|gemini-3.1-pro-low|claude-sonnet-4-6" } });
       setProvider("claude");
       // ?nosetup=1 给自动化脚本用:不弹首启设置对话框
-      if (tabId === MAIN_TAB && localStorage.getItem("aiSetupDone") === null && !new URLSearchParams(location.search).has("nosetup")) {
+      if (localStorage.getItem("aiSetupDone") === null && !new URLSearchParams(location.search).has("nosetup") && claimSetupGate()) {
         setSetupOpen(true);
       }
       return;
@@ -193,7 +204,7 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
     if (providers.length > 0 && !setupGateRef.current && !opts?.mock) {
       setupGateRef.current = true;
       // ?nosetup=1 给自动化脚本用:不弹首启设置对话框
-      if (tabId === MAIN_TAB && localStorage.getItem("aiSetupDone") === null && !new URLSearchParams(location.search).has("nosetup")) {
+      if (localStorage.getItem("aiSetupDone") === null && !new URLSearchParams(location.search).has("nosetup") && claimSetupGate()) {
         setSetupOpen(true);
       }
     }
