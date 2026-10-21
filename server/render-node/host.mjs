@@ -56,8 +56,9 @@
  *   - `setPaused(true)`:全部节点不再认领新任务,手里的照做(背压);
  *   - **产物到了容量上限**:某个任务以 `service-quota` 失败(素材服务回 507,`artifact-transfer.mjs`)时,全部节点暂停认领
  *     `QUOTA_PAUSE_MS`(10 分钟),发一条 `quota-paused` 事件;`quotaPausedUntil` 可查。那个任务是不可重试的失败;
- *   - **有成员在线的项目优先**:每一拍先推进 `entry.members === true` 的项目,全局闸的空位先给它们;
- *     `setMembers(projectId, bool)` 随目录的变化更新。
+ *   - **各项目轮流**(0.7.19 多项目模式,语义 `product/rendering.md`「渲染服务的两种模式」;`./multi-queue.mjs`):每一拍按
+ *     「最久没轮到的项目先」推进,全局闸的空位先给它;一个项目发出一个认领就排到最后。原来的「有成员在线的项目优先」与多项目模式的
+ *     「同一类里各项目轮流」冲突,取消;`members` / `setMembers` 照旧记着(诊断里看得到),不再影响先后。
  * 不带 `dynamic` 时这些方法照样在,行为与原来一致(成员表就是构造时那几项)。
  *
  * # 按项目「搁着不认领」(托管方渲染服务的用户卡隔离,`docs/plan/hosted-render-contract.md` 第 7.5 节)
@@ -88,6 +89,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { createLocalNode, idleLockTakeover } from './local-node.mjs';
+import { createRotation, orderByPolicy } from './multi-queue.mjs';
 import { checkClaimable } from './filter.mjs';
 import { isExportFramesTask } from './export-plan.mjs';
 import { normalizeEntry, SHARED_CONFIG_ENV } from '../auth/shared-config.mjs';
@@ -239,6 +241,8 @@ export function createRenderHost({
   let nextIndex = 0;
   /** 运行中的并发上限(`setLimit`),不超过 `cap` */
   let limit = cap;
+  /** 各项目轮流的记账(多项目模式;产流那一类):按接线时发的号记,摘掉的项目一并忘掉 */
+  const rotation = createRotation();
 
   const emit = (event) => { try { onEvent(event); } catch { /* 诊断回调出错不影响节点 */ } };
 
@@ -381,6 +385,7 @@ export function createRenderHost({
     m.started = false;
     const i = members.indexOf(m);
     if (i >= 0) members.splice(i, 1);
+    rotation.forget(String(m.index));
     try { m.close?.(); } catch { /* 已关 */ }
     emit({ type: 'project-removed', projectId: m.projectId, index: m.index, reason });
   }
@@ -440,13 +445,18 @@ export function createRenderHost({
         if (m.endpoint.connected === true || (typeof m.endpoint.onOpen !== 'function' && m.endpoint.closed !== true)) open(m);
       }
     },
-    /** 一拍:逐个节点续约、认领。有成员在线的项目先推进(全局闸的空位先给它们);排空中的项目做完就摘掉 */
+    /**
+     * 一拍:逐个节点续约、认领。各项目轮流:最久没轮到的项目先推进(全局闸的空位先给它),这一拍发出认领的项目排到最后;
+     * 排空中的项目做完就摘掉
+     */
     tick() {
       if (stopped) return;
-      const order = [...members].sort((a, b) => (a.prefer === b.prefer ? a.index - b.index : a.prefer ? -1 : 1));
+      const order = orderByPolicy(members.map((m) => ({ m, projectId: String(m.index), kind: 'stream', seq: m.index })), rotation).map((x) => x.m);
       for (const m of order) {
         if (m.removed) continue;
+        const before = m.inflight;
         if (m.started && m.local) m.local.tick();
+        if (m.inflight !== null && m.inflight !== before) rotation.served('stream', String(m.index));
         if (m.draining && m.inflight === null && (m.local ? m.local.session.held().length : 0) === 0 && (m.local?.running?.().length ?? 0) === 0) detach(m, 'drained');
       }
     },

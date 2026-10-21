@@ -2,7 +2,7 @@
  * 托管方渲染服务（契约 `docs/plan/hosted-render-contract.md` 第 2、4、5a、7 节；用例 HR16～HR20、HR25）。
  * 跑：npm test -- server/test/hosted-render-service.test.mjs（不起浏览器、不起真的工作进程；端口一律 0）
  *
- *   HR16  主机运行中增删项目：加、摘（让掉认领）、排空（做完再摘）、暂停认领、有成员在线的项目优先；按代理口的清单对账
+ *   HR16  主机运行中增删项目：加、摘（让掉认领）、排空（做完再摘）、暂停认领、各项目轮流（0.7.19 多项目模式）；按代理口的清单对账
  *   HR17  管理进程的项目维护：从目录清单与手里的认领定出该连的项目（上限、排队、排空）；控制连接客户端对真文档服务——
  *         连上取清单、变化跟着推、要票据、断线重连后对账；本机代理口的口令与清单外的项目
  *   HR18  背压与内存看护：读数 → 暂停与恢复；超过硬上限 → 结束工作进程、退避重起、三次后并发降为 1；起工作进程的命令（有无 cgroup）
@@ -229,29 +229,32 @@ test('HR16 暂停认领（背压）：手里的照做，新的不认领；放开
   await drive(env, () => host.tick(), () => env.spaces.get('proj-a').task(t.id)?.state === 'done');
 });
 
-test('HR16 有成员在线的项目优先：并发只有 1 时，空位先给 members 为真的项目，与加入的先后无关', async () => {
-  for (const order of [['proj-a', 'proj-b'], ['proj-b', 'proj-a']]) {
-    const env = createSpaces(['proj-a', 'proj-b']);
-    const executors = new Map([['proj-a', fakeExecutor({ hang: true })], ['proj-b', fakeExecutor({ hang: true })]]);
-    const { host } = dynamicHost(env, { cap: 1, executors });
-    host.start();
-    // proj-b 有成员在线，proj-a 没有（靠别的托管方服务才有活）
-    for (const p of order) host.add({ projectId: p, members: p === 'proj-b' });
-    const tasks = { 'proj-a': fineTask('proj-a', 'prio'), 'proj-b': fineTask('proj-b', 'prio') };
-    for (const p of order) env.spaces.get(p).publish([tasks[p]]);
-    await drive(env, () => host.tick(), () => host.busy() === 1);
-    assert.equal(env.spaces.get('proj-b').task(tasks['proj-b'].id).state, 'claimed', `加入顺序 ${order}：有成员在线的先认领`);
-    assert.equal(env.spaces.get('proj-a').task(tasks['proj-a'].id).state, 'open');
-    // 成员走了、另一个项目来了成员：下一个空位换给它
-    host.shutdown('test');
-  }
-  const env = createSpaces(['proj-a', 'proj-b']);
-  const { host } = dynamicHost(env, { cap: 1 });
+test('HR16 各项目轮流（多项目模式，取代「有成员在线的项目优先」）：并发只有 1 时，空位按「最久没轮到的项目先」给，一个项目认领一个就排到最后；项目内先来先做', async () => {
+  const env = createSpaces(['proj-a', 'proj-b', 'proj-c']);
+  const { host, events } = dynamicHost(env, { cap: 1 });
   host.start();
+  // proj-b 有成员在线：多项目模式里不再因此排前
   host.add({ projectId: 'proj-a', members: false });
-  host.add({ projectId: 'proj-b', members: false });
-  host.setMembers('proj-b', true);
-  assert.deepEqual(host.nodes().map((n) => [n.projectId, n.prefer]), [['proj-a', false], ['proj-b', true]]);
+  host.add({ projectId: 'proj-b', members: true });
+  host.add({ projectId: 'proj-c', members: false });
+  const byId = new Map();
+  // 按来的先后一个个发布（队列按收到的时刻记 publishedAt）：a1、b1、a2、c1、b2、a3
+  for (const label of ['a1', 'b1', 'a2', 'c1', 'b2', 'a3']) {
+    const p = `proj-${label[0]}`;
+    const t = fineTask(p, label);
+    byId.set(t.id, label);
+    env.spaces.get(p).publish([t]);
+    await env.settle();
+    env.clock.advance(10);
+  }
+  const total = 6;
+  await drive(env, () => host.tick(), () => events.filter((e) => e.type === 'completed').length >= total, 400);
+  const order = events.filter((e) => e.type === 'completed').map((e) => byId.get(e.id));
+  console.log('[HR16-RR] 独立渲染主机认领、做完的次序', order.join(' → '));
+  assert.deepEqual(order, ['a1', 'b1', 'c1', 'a2', 'b2', 'a3'], '各项目轮流；同一项目内先来先做（按发布先后）');
+  host.setMembers('proj-b', false);
+  assert.deepEqual(host.nodes().map((n) => [n.projectId, n.prefer]), [['proj-a', false], ['proj-b', false], ['proj-c', false]], '成员在线照旧记着（诊断）');
+  host.shutdown('test');
 });
 
 test('HR16 按代理口的清单对账：该加的加、不在清单里的摘、标了排空的排空、暂停与成员在线跟着改；代理模式的参数与环境变量', async () => {
