@@ -95,17 +95,20 @@ test('RQ1 两个都带用户卡的项目先后有活：第二个排队而不是�
   assert.deepEqual(k.state.sent.map((s) => s.projectId), [P1], '乙的内容没有交给装着甲的隔离工作进程');
   assert.equal(k.look.status().queue.queued, 1);
 
-  // 甲再来一个：它的项目正装着，不被排在前面的乙挡住
+  // 甲再来一个（0.7.19 多项目模式）：甲刚出过一个、乙排在前面——甲的项目虽然装着，也不越过乙（各项目轮流，不让甲占着）
   const a3 = await k.submit(k.msg(P1, { requestId: rid(3) }));
   assert.equal(a3.status, 202);
-  assert.equal((await k.poll({ requestId: rid(3), waitMs: 2000 })).status, 200);
-  assert.equal((await k.poll({ requestId: rid(2), waitMs: 50 })).body.state, 'queued', '乙还排着');
+  const a3w = await k.poll({ requestId: rid(3), waitMs: 150 });
+  assert.deepEqual([a3w.status, a3w.body.state, a3w.body.blockedReason, a3w.body.queuePosition], [202, 'queued', 'iso-other-project', 1], '甲的第二个排在乙后面');
+  assert.deepEqual(k.look.isoOrder(), [P2, P1], '隔离工作进程下一个该装的是乙');
 
-  // 轮到乙（甲让位之后隔离工作进程装上乙）：照常出图
+  // 轮到乙（隔离工作进程换装乙）：照常出图；之后再装回甲，出甲的第二个
   k.isoRuns(P2);
   const b3 = await k.poll({ requestId: rid(2), waitMs: 2000 });
   assert.deepEqual([b3.status, b3.body.ok], [200, true]);
-  assert.deepEqual(k.state.sent.map((s) => s.projectId), [P1, P1, P2]);
+  k.isoRuns(P1);
+  assert.equal((await k.poll({ requestId: rid(3), waitMs: 2000 })).status, 200);
+  assert.deepEqual(k.state.sent.map((s) => s.projectId), [P1, P2, P1]);
   const s = k.look.status();
   assert.deepEqual([s.served, s.failed, s.refused, s.queue.queued], [3, 0, 0, 0]);
   // 出了结果的再问一次还是那一份（调用方没收到回执就重问）
@@ -213,6 +216,7 @@ test('RQ4 重启后排着的请求还在：队列落盘，新起的管理进程�
   assert.equal((await k1.poll({ requestId: rid(0), waitMs: 2000 })).status, 200);
   k1.state.reply = () => new Promise((resolve) => { release = () => resolve({ status: 200, json: { ok: true } }); });
   await k1.submit(k1.msg(P1, { requestId: rid(1) }));
+  await sleep(60);
   await k1.submit(k1.msg(P2, { requestId: rid(2) }));
   await sleep(60);
   k1.state.paused = true;

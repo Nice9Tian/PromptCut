@@ -474,12 +474,22 @@ export function createLook({
         settle(oldest, 'failed', fail(503, 'queue-stalled'));
       }
     }
+    /*
+     * 要隔离工作进程出的请求严格按多项目模式的次序：排在最前的那个（它的项目）没轮上之前，别的项目的请求不越过它——
+     * 不然装着的项目会因为「它的下一个此刻做得了」一直被接着转、一直不空，排在前面的项目永远装不上（等于让它占着）。
+     * 常驻工作进程出的请求（不带用户卡）不受这一条管。
+     */
+    let isoHead = null;
     for (const e of ordered()) {
       // 「登记了再来问」的：调用方很久没来问（它自己没了），撤掉，不占着队列
       if (e.persist && at - e.lastPollAt >= limits.orphanMs) { log('look.orphaned', { id: e.id.slice(0, 8), projectId: e.projectId }); settle(e, 'cancelled', fail(499, 'cancelled')); continue; }
       if (e.deadline ? at >= e.deadline : (limits.maxQueueMs && at - e.queuedAt >= limits.maxQueueMs)) { settle(e, 'failed', waitedOut(e)); continue; }
       const r = routeOnce(e);
       if (r.fail) { settle(e, 'failed', r.fail); continue; }
+      if (e.needIso === true) {
+        isoHead ??= e.projectId;
+        if (e.projectId !== isoHead) { e.blockedReason = 'iso-other-project'; continue; }
+      }
       if (r.wait) { e.blockedReason = r.wait; continue; }
       if (current) { e.blockedReason = 'behind-another'; continue; }
       void attempt(e, r).catch((err) => {
