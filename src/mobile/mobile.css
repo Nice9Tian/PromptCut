@@ -205,9 +205,119 @@
 .pcm .tl-tools button:active { color: var(--accent); }
 .pcm .tl-tools button:disabled { opacity: .35; pointer-events: none; }
 
-/* Agent 分页:挂云端 Agent 的对话页,按手机宽度收窄 */
+/* ===== Agent 分页(演示稿「3. Agent 对话」;语义 workflow/editing.md「手机版界面」) ===== */
 .pcm .pane-agent { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-.pcm .pane-agent > * { flex: 1; min-height: 0; }
+.pcm .agent-page { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.pcm .achat { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.pcm .chat-top { flex: none; display: flex; align-items: center; gap: 6px; padding: 0 10px; }
+.pcm .atabs { display: flex; gap: 4px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.pcm .atabs::-webkit-scrollbar { display: none; }
+.pcm .atab { flex: none; display: flex; align-items: center; gap: 4px; height: 30px; padding: 0 4px 0 10px; border-radius: var(--r-m); background: var(--panel2); color: var(--dim); font-size: var(--fs-m); cursor: pointer; }
+.pcm .atab .nm { max-width: 120px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pcm .atab .x { width: 16px; height: 16px; border-radius: var(--r-s); display: grid; place-items: center; font-size: var(--fs-s); }
+.pcm .atab .x:active { background: var(--line); }
+.pcm .atab .x-gap { width: 6px; }
+.pcm .atab .dot.run { width: 6px; height: 6px; background: var(--accent); animation: pcm-pulse 1s infinite; }
+.pcm .atab.on { background: var(--accent-dim); color: var(--accent); }
+.pcm .chat-info { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 14px 4px; font-size: var(--fs-m); color: var(--dim); }
+.pcm .level { display: inline-flex; background: var(--panel2); border-radius: var(--r-m); padding: 2px; }
+.pcm .level button { height: 24px; padding: 0 10px; border-radius: var(--r-s); font-size: var(--fs-m); color: var(--dim); }
+.pcm .level button:disabled { opacity: .5; }
+.pcm button.chip { cursor: pointer; }
+.pcm button.chip:active { background: var(--line); }
+.pcm .achat .note { flex: none; margin: 4px 14px 0; padding: 6px 10px; border-radius: var(--r-s); background: var(--panel2); color: var(--dim); font-size: var(--fs-m); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pcm .achat .note.warn { background: var(--warn-bg); color: var(--warn-text); }
+.pcm .achat .note .btn { height: 26px; padding: 0 10px; font-size: var(--fs-m); }
+.pcm .msgs { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 8px 14px; display: flex; flex-direction: column; gap: 10px; }
+.pcm .msgs > * { flex: none; }
+.pcm .msg { max-width: 88%; padding: 9px 12px; border-radius: var(--r-m); font-size: var(--fs-l); word-break: break-word; }
+.pcm .msg.me { align-self: flex-end; background: var(--accent-dim); color: var(--accent-soft); border-bottom-right-radius: var(--r-s); }
+.pcm .msg.me .plain { white-space: pre-wrap; }
+.pcm .msg.me.is-sending { opacity: .75; }
+.pcm .msg.me .send-state { margin-top: 4px; font-size: var(--fs-s); color: var(--dim); }
+.pcm .msg.me .send-err, .pcm .msg.ag.err { color: var(--danger); font-size: var(--fs-m); }
+.pcm .msg.me .send-err { margin-top: 4px; }
+.pcm .msg.ag { align-self: flex-start; background: var(--panel2); border-bottom-left-radius: var(--r-s); }
+.pcm .msg.ag.note-out { font-size: var(--fs-m); color: var(--dim); }
+.pcm .msg.ag .act { margin-left: 6px; font-size: var(--fs-m); color: var(--dim); }
+.pcm .msg .who { font-size: var(--fs-s); color: var(--dim); margin-bottom: 2px; }
+.pcm .msg .md > :first-child { margin-top: 0; }
+.pcm .msg .md > :last-child { margin-bottom: 0; }
+.pcm .msg .md p { margin: .4em 0; }
+.pcm .msg .md a { color: var(--accent); }
+.pcm .msg .md pre { overflow-x: auto; background: var(--shade-weak); padding: 8px; border-radius: var(--r-s); font-size: var(--fs-m); }
+.pcm .msg .md code { font-size: .92em; }
+.pcm .msg .md ul, .pcm .msg .md ol { margin: .4em 0; padding-left: 1.3em; }
+.pcm .msg .md .md-table-wrap { overflow-x: auto; }
+.pcm .msg .md table { border-collapse: collapse; font-size: var(--fs-m); }
+.pcm .msg .md th, .pcm .msg .md td { border: 1px solid var(--line); padding: 3px 6px; }
+.pcm .ref { display: inline-flex; gap: 4px; align-items: center; background: var(--shade-weak); border-radius: var(--r-s); padding: 1px 6px; font-size: var(--fs-s); margin-bottom: 4px; color: var(--accent); max-width: 100%; }
+.pcm .msg .refs { display: flex; flex-wrap: wrap; gap: 4px; }
+.pcm .refbar { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.pcm .refbar .ref { font-size: var(--fs-m); padding: 3px 4px 3px 10px; gap: 6px; background: var(--accent-dim); }
+.pcm .refbar .ref b { width: 18px; height: 18px; display: grid; place-items: center; border-radius: var(--r-s); font-weight: 400; cursor: pointer; }
+.pcm .ops { align-self: stretch; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-m); overflow: hidden; }
+.pcm .ops > summary { list-style: none; cursor: pointer; padding: 8px 12px; font-size: var(--fs-m); color: var(--dim); display: flex; align-items: center; gap: 6px; }
+.pcm .ops > summary::-webkit-details-marker { display: none; }
+.pcm .ops > summary::after { content: "›"; margin-left: auto; transition: transform .15s; }
+.pcm .ops[open] > summary::after { transform: rotate(90deg); }
+.pcm .ops .items { padding: 0 12px 10px; display: flex; flex-direction: column; gap: 6px; }
+.pcm .it { display: flex; gap: 8px; align-items: flex-start; font-size: var(--fs-m); }
+.pcm .it b { font-weight: 600; color: var(--text); }
+.pcm .it .mk { flex: none; width: 16px; height: 16px; border-radius: var(--r-pill); margin-top: 1px; display: grid; place-items: center; font-size: var(--fs-xs); }
+.pcm .it.done .mk { background: var(--ok); color: var(--on-ok); }
+.pcm .it.todo .mk { background: var(--line); color: var(--dim); }
+.pcm .it.run .mk { background: var(--accent); color: var(--on-accent); animation: pcm-pulse 1s infinite; }
+.pcm .it.ask .mk { background: var(--warn); color: var(--on-warn); }
+.pcm .it.err .mk { background: var(--danger); color: var(--white); }
+.pcm .ops .rep { margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
+.pcm .ops .rep-title { font-size: var(--fs-s); color: var(--dim); }
+.pcm .param-diff { font-size: var(--fs-s); color: var(--dim); }
+.pcm .queue-note, .pcm .empty .hint { font-size: var(--fs-m); color: var(--dim); text-align: center; }
+.pcm .empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 24px 8px; }
+.pcm .typing { display: inline-block; }
+.pcm .typing i { display: inline-block; width: 5px; height: 5px; margin-right: 3px; border-radius: var(--r-pill); background: var(--dim); animation: pcm-bl 1s infinite; }
+.pcm .typing i:nth-child(2) { animation-delay: .15s; }
+.pcm .typing i:nth-child(3) { animation-delay: .3s; }
+@keyframes pcm-bl { 50% { transform: translateY(-3px); opacity: .4; } }
+.pcm .composer { flex: none; padding: 8px 10px 12px; border-top: 1px solid var(--line); background: var(--bg); }
+.pcm .quicks { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 8px; scrollbar-width: none; }
+.pcm .quicks::-webkit-scrollbar { display: none; }
+.pcm .quicks button { flex: none; height: 28px; padding: 0 10px; border-radius: var(--r-pill); background: var(--panel2); font-size: var(--fs-m); color: var(--dim); }
+.pcm .quicks button:active { color: var(--accent); }
+.pcm .in-row { display: flex; gap: 8px; align-items: flex-end; }
+.pcm .in-row textarea { flex: 1; min-width: 0; min-height: 40px; max-height: 120px; resize: none; border-radius: 20px; border: 1px solid var(--line); background: var(--panel); padding: 9px 14px; line-height: 20px; outline: none; display: block; }
+.pcm .in-row textarea:focus { border-color: var(--accent); }
+.pcm .send { width: 40px; height: 40px; flex: none; border-radius: var(--r-pill); background: var(--accent); color: var(--on-accent); font-weight: 700; display: grid; place-items: center; }
+.pcm .send svg { width: 20px; height: 20px; }
+.pcm .send.is-stop { background: var(--panel2); color: var(--text); }
+
+/* 开始页(没有会话时):预设 + 输入框;刚进项目时带引导动画(光点、指向输入框的箭头、输入框 / 发送按钮的描边脉动) */
+.pcm .start { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; text-align: center; gap: 10px; padding: 24px 20px; min-height: 100%; }
+.pcm .start > :first-child { margin-top: auto; }
+.pcm .start > :last-child { margin-bottom: auto; }
+.pcm .start-title { font-size: var(--fs-xl); font-weight: 600; }
+.pcm .start-hint { max-width: 300px; font-size: var(--fs-m); line-height: 1.6; color: var(--dim); }
+.pcm .preset { width: 100%; max-width: 300px; padding: 10px 12px; font-size: var(--fs-l); color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-m); }
+.pcm .preset:active { border-color: var(--accent); }
+.pcm .orb { position: relative; width: 64px; height: 64px; display: grid; place-items: center; margin-bottom: 4px; }
+.pcm .orb .core { position: relative; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; color: var(--white); background: linear-gradient(135deg, var(--accent), var(--plum)); animation: pcm-breathe 2.8s ease-in-out infinite; }
+.pcm .orb .core svg { width: 18px; height: 18px; stroke-width: 2.2; }
+.pcm .orb .ring { position: absolute; inset: 8px; border-radius: 50%; border: 1px solid var(--accent); opacity: 0; animation: pcm-ripple 2.8s ease-out infinite; }
+.pcm .orb .ring2 { animation-delay: 1.4s; }
+@keyframes pcm-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.08); } }
+@keyframes pcm-ripple { 0% { transform: scale(.8); opacity: .55; } 100% { transform: scale(1.6); opacity: 0; } }
+.pcm .cue { margin-top: 6px; font-size: 20px; line-height: 1; color: var(--accent); animation: pcm-nudge 1.6s ease-in-out infinite; }
+@keyframes pcm-nudge { 0%, 100% { transform: translateY(0); opacity: .55; } 50% { transform: translateY(6px); opacity: 1; } }
+.pcm .composer[data-guide="input"] .in-row textarea { border-color: var(--accent); animation: pcm-glow 2.2s ease-in-out infinite; }
+@keyframes pcm-glow { 0%, 100% { box-shadow: 0 0 0 0 transparent; } 50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); } }
+.pcm .composer[data-guide="send"] .send { animation: pcm-flash 1.1s ease-in-out infinite; }
+@keyframes pcm-flash { 0%, 100% { box-shadow: 0 0 0 0 transparent; filter: none; } 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 45%, transparent); filter: brightness(1.15); } }
+@media (prefers-reduced-motion: reduce) {
+  .pcm .orb .core, .pcm .orb .ring, .pcm .cue, .pcm .composer[data-guide="input"] .in-row textarea, .pcm .composer[data-guide="send"] .send { animation: none; }
+  .pcm .orb .ring { opacity: 0; }
+  .pcm .composer[data-guide="send"] .send { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent); }
+}
 
 /* ===== 底部面板 ===== */
 .pcm .scrim { position: absolute; inset: 0; background: var(--scrim); z-index: 40; }

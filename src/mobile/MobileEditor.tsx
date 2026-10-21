@@ -21,8 +21,7 @@ import { SyncOverlays } from "../editor/sync/SyncOverlays";
 import { DependencyPrompt } from "../editor/DependencyPrompt";
 import { resumeShared, startSync, useSync } from "../editor/sync/syncManager";
 import { useCloudRunning } from "../editor/sync/presence";
-import { OnlineCloudPanel } from "../editor/right/OnlineAgentPage";
-import { MAIN_TAB } from "../ai/liveChat";
+import { AgentPage } from "./AgentPage";
 import { clipKind, clipName, mainClipsOf, mainTrackOf, planReorder } from "./mainContent";
 import { ThumbStrip } from "./ThumbStrip";
 import { FullTimeline, type FullTimelineHandle } from "./FullTimeline";
@@ -374,7 +373,7 @@ export function MobileEditor() {
       )}
 
       <div className="pane-agent" data-pcm="pane-agent" style={page === "agent" ? undefined : { display: "none" }}>
-        <OnlineCloudPanel tabId={MAIN_TAB} active={page === "agent"} />
+        <AgentPage active={page === "agent"} />
       </div>
 
       <div className="pager" data-pcm="pager">
