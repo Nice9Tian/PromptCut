@@ -14,7 +14,7 @@ import { getScript } from "../script";
 import { mediaCardUrl } from "../mediaRef";
 import { cloudAgentVersion, resolveCloudAgent, subscribeCloudAgent, type CloudAgentAvailability } from "./endpoint";
 import { cloudIdentityVersion, subscribeCloudIdentity } from "./identity";
-import { cloudConsentState, requireCloudConsent, subscribeCloudConsent } from "./consent";
+import { CloudConsentRequiredError, cloudConsentState, reportCloudConsentRequired, requireCloudConsent, subscribeCloudConsent, type CloudConsentPermit } from "./consent";
 import { CloudError, cloudErrorText, createCloudApi, createCloudControlScopeGuard, requireAccountAbortControl, withCloudControlConsent, type CloudApi } from "./cloudApi";
 import { createCloudSession, type CloudSession, type CloudSessionView } from "./session";
 import { titleOf } from "./events";
@@ -256,7 +256,8 @@ export interface CloudChat {
   conversationId: string;
   /** `files`:已经传好的附件(`attach` 回来的那些);其 `url` 随消息带给服务端,名字显示在本页的气泡里。
    *  `staged`:先用 `stage` 放进对话的那条本地气泡;发不出去时它标成「没发出去」 */
-  send: (text: string, files?: ChatAttachment[], staged?: string) => Promise<boolean>;
+  /** `consentPermit`：同一次发送开头 `grantCloudConsent` 发的一次性许可；有效就不再向账号服务读第二次告知。 */
+  send: (text: string, files?: ChatAttachment[], staged?: string, consentPermit?: CloudConsentPermit | null) => Promise<boolean>;
   /** 账号模式:点发送的那一刻先在对话里放一条本地气泡(乐观显示),回它的号;没有会话时回 null */
   stage: (text: string, files?: ChatAttachment[]) => string | null;
   /** 本地气泡在发出之前就被挡下了(没确认告知、对话已切走等):标成没发出去 */
@@ -447,13 +448,17 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     if (sessionKeyRef.current === key) rememberTitle(projectId, convRef.current, titleOf(messages), persistScope);
   }, [projectId, messages, key, persistScope]);
 
-  const send = useCallback(async (text: string, files?: ChatAttachment[], staged?: string): Promise<boolean> => {
+  const send = useCallback(async (text: string, files?: ChatAttachment[], staged?: string, consentPermit?: CloudConsentPermit | null): Promise<boolean> => {
     const fail = (reason: string) => { if (staged) sessionRef.current?.failStaged(staged, reason); return false; };
     if (!text.trim() || view.revoked) return fail(cloudErrorText("forbidden"));
     if (cloud.accountMode) {
       if (!cloud.accountId || !key) return fail(cloudErrorText("unauthorized"));
-      try { await requireCloudConsent({ accountId: cloud.accountId, bindingVersion: consent.bindingVersion }); }
-      catch (err) { const reason = err instanceof Error ? err.message : cloudErrorText("network"); setNotice(reason); return fail(reason); }
+      // 一次发送只核一次告知：开头新读过、许可当场核对仍有效就不再读；许可作废时这里照旧新读一次
+      try { await requireCloudConsent({ accountId: cloud.accountId, bindingVersion: consent.bindingVersion }, consentPermit); }
+      catch (err) {
+        if (err instanceof CloudConsentRequiredError) reportCloudConsentRequired({ accountId: cloud.accountId, bindingVersion: consent.bindingVersion }, tabId);
+        const reason = err instanceof Error ? err.message : cloudErrorText("network"); setNotice(reason); return fail(reason);
+      }
     }
     const s = sessionRef.current;
     if (!s || !key || keyRef.current !== key || sessionKeyRef.current !== key) return fail("账号、项目或对话已切换。");
@@ -489,6 +494,9 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
       return true;
     } catch (err) {
       setNotice(err instanceof CloudError ? err.message : cloudErrorText("network"));
+      // 服务端收消息时核告知没通过：弹告知框（文字见 cloudErrorText 的 consent-required）
+      if (err instanceof CloudError && err.code === "consent-required" && cloud.accountId)
+        reportCloudConsentRequired({ accountId: cloud.accountId, bindingVersion: consent.bindingVersion }, tabId);
       // 满额被拒：列表可能是旧的，重读一次让「已满」的提示和实际对上
       if (err instanceof CloudError && err.code === "conversation-limit") void refreshHistoryRef.current();
       return false;

@@ -27,7 +27,7 @@ import { RemoteAgentsStrip } from "./RemoteAgentsStrip";
 import { ReportDialog } from "./ReportDialog";
 import { cloudConversationReport } from "../../ai/cloud/report";
 import { CODE_VERSION } from "../../online/buildInfo";
-import { acceptCloudConsent, cloudConsentState, refreshCloudConsent, subscribeCloudConsent } from "../../ai/cloud/consent";
+import { acceptCloudConsent, cloudConsentState, grantCloudConsent, onCloudConsentRequired, refreshCloudConsent, subscribeCloudConsent, type CloudConsentPermit } from "../../ai/cloud/consent";
 import { CloudAgentConsentDialog } from "./CloudAgentConsentDialog";
 import { CloudDeleteChatDialog, type CloudDeleteAsk } from "./CloudDeleteChatDialog";
 import { LIBRARY_KINDS, putInLibrary, type LibraryOutcome } from "./cloudAttachLibrary";
@@ -85,24 +85,29 @@ export function CloudAiPanel(props: {
     return () => { dead = true; };
     // A new account/project binding gets a fresh server result; rejecting does not trigger a loop.
   }, [cloud.accountMode, cloud.available, cloud.projectId, cloud.accountId, consent.accountId, consent.bindingVersion]);
-  const consentForUse = async () => {
-    if (!cloud.accountMode) return true;
-    if (!stillCurrent()) return false;
+  /**
+   * 用之前向账号服务新读一次告知。放行时回 `{ permit }`：账号模式下是这次新读取发的一次性许可，
+   * 交给同一次发送的 `chat.send`，那边当场核对仍有效就不再读第二次（一次发送只核一次告知）；不放行回 null。
+   */
+  const consentForUse = async (): Promise<{ permit: CloudConsentPermit | null } | null> => {
+    if (!cloud.accountMode) return { permit: null };
+    if (!stillCurrent()) return null;
     const expected = cloud.accountId ? { accountId: cloud.accountId, bindingVersion: consent.bindingVersion } : null;
     if (!expected || consent.accountId !== expected.accountId || cloudConsentState().bindingVersion !== expected.bindingVersion) {
       setConsentError("请先登录当前项目的账号。");
-      return false;
+      return null;
     }
     try {
-      const accepted = await refreshCloudConsent(expected);
-      if (cloudConsentState().accountId !== expected.accountId || cloudConsentState().bindingVersion !== expected.bindingVersion) return false;
-      if (!accepted) { setConsentError(null); setConsentOpen(true); }
-      return accepted;
+      const { accepted, permit } = await grantCloudConsent(expected);
+      if (cloudConsentState().accountId !== expected.accountId || cloudConsentState().bindingVersion !== expected.bindingVersion) return null;
+      // 只有确实没同意才弹告知框；同意了但没拿到许可（permit 为 null）照常发，chat.send 发出前自己再读一次
+      if (!accepted) { setConsentError(null); setConsentOpen(true); return null; }
+      return { permit };
     } catch (error) {
-      if (!stillCurrent()) return false;
+      if (!stillCurrent()) return null;
       setConsentError(error instanceof Error ? error.message : "云端账号暂时不可用。");
       setConsentOpen(true);
-      return false;
+      return null;
     }
   };
   const acceptConsent = () => { void acceptCloudConsent().then(() => { if (stillCurrent()) { setConsentError(null); setConsentOpen(false); } },
@@ -120,6 +125,15 @@ export function CloudAiPanel(props: {
   const stillCurrent = () => activeKeyRef.current === qKey && (!cloud.accountMode ||
     (cloudConsentState().accountId === cloud.accountId && cloudConsentState().bindingVersion === consent.bindingVersion));
   useEffect(() => { if (cloud.accountMode) { setConsentOpen(false); setConsentError(null); } }, [cloud.accountMode, qKey]);
+  // 这一页发的消息被拒在「没同意告知」上（发出前那次读取，或服务端收消息时回 consent-required）：弹告知框
+  useEffect(() => {
+    if (!cloud.accountMode) return;
+    return onCloudConsentRequired((binding, origin) => {
+      if (origin !== tabId || binding.accountId !== cloud.accountId || binding.bindingVersion !== consent.bindingVersion) return;
+      setConsentError(null);
+      setConsentOpen(true);
+    });
+  }, [cloud.accountMode, cloud.accountId, consent.bindingVersion, tabId]);
   const { tabs } = useAgentTabs();
   const tabTitle = desktop ? (tabs.find((t) => t.id === tabId)?.title ?? "AI 助手") : "云端 Agent";
   // 页签上的「对话 ID」是给本机 Agent 的多 Agent 通信用的;桌面版里这一页选回本机驱动后还要用它,云端的对话 id 不往里写
@@ -265,13 +279,13 @@ export function CloudAiPanel(props: {
   };
   useEffect(() => () => { if (echoTimer.current !== null) window.clearTimeout(echoTimer.current); }, []);
 
-  const sendNow = async (text: string, files?: ChatAttachment[], staged?: string | null): Promise<boolean> => {
+  const sendNow = async (text: string, files?: ChatAttachment[], staged?: string | null, consentPermit?: CloudConsentPermit | null): Promise<boolean> => {
     if (off || !stillCurrent() || !controlPolicy.canSend || view.revoked) { if (staged) chat.failStaged(staged, "现在不能在这个对话里发消息。"); return false; }
     if (!cloud.accountMode) markSent();
     // 账号模式:图片、视频、音频附件先放进素材库,告诉 Agent 是哪一条(2026-10-18 用户定)
     const prepared = cloud.accountMode && files?.length ? await withLibrary(files) : files;
     if (!stillCurrent()) return false;
-    const ok = await chat.send(text, prepared, staged ?? undefined);
+    const ok = await chat.send(text, prepared, staged ?? undefined, consentPermit);
     if (!stillCurrent()) return false;
     if (!ok) { echoWait.current = false; bump((n) => n + 1); }
     return ok;
@@ -295,16 +309,18 @@ export function CloudAiPanel(props: {
         setInputText(previous => previous ? previous : text);
         setAttachments(previous => previous.length ? previous : sentAttachments);
       };
-      if (!await consentForUse() || !stillCurrent()) {
+      const admission = await consentForUse();
+      if (!admission || !stillCurrent()) {
         if (staged) chat.failStaged(staged, "使用云端 Agent 前，请先阅读并确认告知。");
         restore();
         return;
       }
       if (skipped > 0) chat.notify(`${skipped} 个附件还在上传或上传失败,这次没带上。`);
-      if (!await sendNow(text.trim(), usable, staged)) restore();
+      if (!await sendNow(text.trim(), usable, staged, admission.permit)) restore();
       return;
     }
-    if (!await consentForUse() || !stillCurrent()) return;
+    const admission = await consentForUse();
+    if (!admission || !stillCurrent()) return;
     // 还在上传或上传失败的附件这次先不带上,但发送本身不被挡住
     const { usable, skipped } = pickSendable(attachments, chat.conversationId);
     if (!text.trim()) {
@@ -316,7 +332,7 @@ export function CloudAiPanel(props: {
     if (!cloud.accountMode && busy()) {
       enqueue(qKey, { text: text.trim(), ...(usable.length ? { attachments: usable } : {}) });
     } else {
-      if (!await sendNow(text.trim(), usable)) return;
+      if (!await sendNow(text.trim(), usable, null, admission.permit)) return;
     }
     if (stillCurrent()) {
       setInputText(previous => previous === text ? "" : previous);
@@ -335,8 +351,9 @@ export function CloudAiPanel(props: {
     flushingRef.current = true;
     void (async () => {
       try {
-        if (!await consentForUse() || !stillCurrent()) { setQueuePaused(qKey, true); return; }
-        if (await sendNow(head.text, head.attachments)) removeQueued(qKey, head.id);
+        const admission = await consentForUse();
+        if (!admission || !stillCurrent()) { setQueuePaused(qKey, true); return; }
+        if (await sendNow(head.text, head.attachments, null, admission.permit)) removeQueued(qKey, head.id);
         else setQueuePaused(qKey, true);
       } finally { flushingRef.current = false; }
     })();
@@ -413,14 +430,16 @@ export function CloudAiPanel(props: {
   };
 
   const insertQueued = async (item: QueuedItem) => {
-    if (!await consentForUse() || !stillCurrent()) return;
+    const admission = await consentForUse();
+    if (!admission || !stillCurrent()) return;
     if (view.streaming) {
       await chat.abort();
       // 停止要等服务端收尾的事件回来
       for (let i = 0; i < 40 && stillCurrent() && chat.store.get().some((m) => m.pending); i++) await new Promise((r) => setTimeout(r, 100));
     }
     if (!stillCurrent()) return;
-    if (await sendNow(item.text, item.attachments)) removeQueued(qKey, item.id);
+    // 中间可能等过停止收尾，许可多半已过期；过期时 chat.send 会照旧再读一次
+    if (await sendNow(item.text, item.attachments, null, admission.permit)) removeQueued(qKey, item.id);
     else setQueuePaused(qKey, true);
   };
   const editQueued = (item: QueuedItem) => {

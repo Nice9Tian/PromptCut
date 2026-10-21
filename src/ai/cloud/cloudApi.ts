@@ -80,6 +80,8 @@ export function cloudErrorText(code: string, serverMessage?: string): string {
     case "agent-fence-pending": return CLOUD_CHAT_TEXT.deletePending;
     case "purge-failed": return CLOUD_CHAT_TEXT.purgeFailed;
     case "creator-required": return CLOUD_CHAT_TEXT.creatorRequired;
+    // 服务端收消息时核告知没通过（页面那次读取之后、发出之前告知状态变了）：页面同时弹出告知框
+    case "consent-required": return "使用云端 Agent 前，请先阅读并确认告知。";
     default: return serverMessage || `云端 Agent 出错了(${code})。`;
   }
 }
