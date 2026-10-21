@@ -1692,6 +1692,18 @@ export function createAgentInstance(env) {
     hasProjectCards: () => (hostedShared?.cards.items.size ?? 0) > 0,
     /** 托管档:这个项目内容库里卡片源码的「键 → 版本」(看画面时交给渲染服务:有卡就走隔离工作进程,并等它装到这个版本) */
     cardRevs: () => Object.fromEntries([...(hostedShared?.cards.items ?? [])].map(([key, v]) => [key, Number.isFinite(v?.rev) ? v.rev : null])),
+    /**
+     * 托管档:本项目的共享成本记录(文档服务的 `cost.list`,页面测完卡写进去的那一份),发布预渲染之前判轻重用
+     * (`render-clips.mjs` 的「只发重卡」)。经这个对话的连接问;没绑、连不上、超时、被拒(旧文档服务不许 Agent 读)都回 null。
+     */
+    async costRecords(agent) {
+      const binding = agentBinding;
+      if (!HOSTED || !binding?.side?.executor || typeof agent !== 'string' || !agent) return null;
+      try {
+        const reply = await binding.side.executor.request(agent, { type: 'cost.list' }, (m) => m?.type === 'cost.listing' || m?.type === 'error');
+        return reply?.type === 'cost.listing' && Array.isArray(reply.records) ? reply.records : null;
+      } catch { return null; }
+    },
     /** 此刻的项目副本与它的版本(托管档的宿主挑要预渲染重试的片段用);没绑或还没内容回 null */
     replica: () => {
       const r = agentBinding?.side?.link?.replica;

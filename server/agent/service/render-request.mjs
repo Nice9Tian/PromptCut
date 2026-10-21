@@ -3,7 +3,8 @@
  * 由 Agent 服务以**服务身份**发布清单计划,让渲染节点把被改到的片段渲出来;保持到结果入库。
  *
  * - 发什么:与在线页面同一种清单计划(`server/render-queue/messages.mjs` 的 `clipsPlanTaskOf`,与页面那份单测对拍)。
- *   清单里只放这一轮被写到的、要预渲染的片段(素材片段不放;Agent 服务没有成本记录,其余全部按重卡处理);
+ *   清单里只放这一轮被写到的、判重的片段(素材片段不放;轻重由写入一侧按文档服务的共享成本记录判,判轻的不进来,
+ *   见 `render-clips.mjs`「只发重卡」;这里收到的已经是判过的);
  *   每个计划最多 200 个片段,多了分批。
  * - 什么时候发:每次写入落地后攒 3 秒(一连串写入合成一个计划);一轮结束时再补发一次。新计划发出后撤回这个对话
  *   上一批还没渲完的旧计划(旧版本的画面没人要了),旧计划里还没渲完的片段并进新计划。
@@ -340,6 +341,8 @@ export function createRenderRequests({ publisher = null, store, now = () => Date
 
   return {
     enabled: !!publisher,
+    /** 写入落地后攒多久再发(写入一侧「攒一会儿再判轻重」用同一个数,`render-clips.mjs` 的 `createHeavyRenderGate`) */
+    debounceMs: limits.debounceMs,
 
     /**
      * 一次写入落地了。`project` 是写入之后的项目内容(挑要渲的片段用),`rev` 是它的版本。

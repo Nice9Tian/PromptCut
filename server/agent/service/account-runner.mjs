@@ -3,7 +3,8 @@ import { coalesceRunEvents } from './coalesce-run-events.mjs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { createAgentInstance } from './instance.mjs';
-import { createRenderClipPicker, FLAT_KERNEL_MODULE } from './render-clips.mjs';
+import { createHeavyRenderGate, createRenderClipPicker, FLAT_KERNEL_MODULE, loadHeavyJudge } from './render-clips.mjs';
+import { RENDER_REQUEST_DEFAULTS } from './render-request.mjs';
 import { createAccountConversationService } from './conversation-policy.mjs';
 import { createWorkspaces } from './workspace.mjs';
 import { createEgressGate } from './egress.mjs';
@@ -81,6 +82,7 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
   assetBase = null, look = null, voiceConfig = async () => null, collect = null,
   egress: egressOptions = {}, workspaceLimits = {}, toolLimits = {}, toolFetch,
   resources = null, runAssets = null, runClient = null, accountTools: toolOptions = null,
+  renderJudgeDelayMs = RENDER_REQUEST_DEFAULTS.debounceMs,
   now = Date.now, log = () => {} } = {}) {
   if (typeof root !== 'string' || typeof loadModule !== 'function' ||
     typeof dataClient?.wsUrl !== 'string' || !/^wss:\/\//.test(dataClient.wsUrl) ||
@@ -110,6 +112,10 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
   // 剪辑段的摊平视图(发布预渲染时收剪辑段里的卡,`render-clips.mjs`):经载入缝取内核函数,载不了就只按片段 id 挑
   let flatKernel = null;
   const flatKernelReady = Promise.resolve().then(() => loadModule(FLAT_KERNEL_MODULE)).then((m) => { flatKernel = m; }, () => {});
+  // 发布预渲染之前判轻重(只发重卡,`render-clips.mjs`「只发重卡」):判定函数经同一条载入缝取;载不了就照原来全发
+  let heavyJudge = null;
+  void Promise.resolve().then(() => loadHeavyJudge(loadModule)).then((fn) => { heavyJudge = fn; },
+    (error) => log('agent.render.judge-unavailable', { message: String(error?.message ?? error).slice(0, 120) }));
   const hostedTools = createHostedTools({ root, loadModule, workspaces, egress, assetBase, voiceConfig, collect: toolOptions?.config?.collect ?? collect,
     ...(toolFetch ? { fetchImpl: toolFetch } : {}), limits: toolLimits, log,
     recordService: row => gate.record(row) });
@@ -124,6 +130,17 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
     const assignmentDigest = grant.assignmentDigest ?? grant.scopeBinding?.assignmentDigest ?? null;
     let inst, DataWebSocket, projectAssets = null, toolset = null, bound = null, heartbeatTimer = null;
     const renderPicker = createRenderClipPicker(() => flatKernel);
+    // 写入攒一会儿再判轻重,只把判重的报给主服务(`render_request` 事件);一轮收尾(settle)时攒着的马上判、马上报
+    const renderGate = createHeavyRenderGate({
+      picker: renderPicker, delayMs: renderJudgeDelayMs, log,
+      replica: () => inst?.replica?.() ?? null,
+      judge: () => heavyJudge,
+      records: () => inst?.costRecords?.(grant.conversationId) ?? Promise.resolve(null),
+      emit: (clips, { rev }) => {
+        if (!Number.isSafeInteger(rev)) return;
+        onEvent({ type: 'render_request', clips, rev, userCards: inst?.hasProjectCards?.() === true });
+      },
+    });
     let removeAbort = () => {};
     if (look && typeof look.heartbeat === 'function') {
       heartbeatTimer = setInterval(() => {
@@ -303,12 +320,9 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       // (`server/agent-service/account-render-requests.mjs`),这一代进程收尾了也照样渲;这里不拿任何发布凭证
       onWrite: (_agent, write) => {
         try {
-          const replica = inst?.replica?.();
-          // 剪辑段里的卡按摊平视图里的虚拟片段 id 发(`render-clips.mjs`):改被引用剪辑、切激活剪辑也收得到
-          const clips = renderPicker.pick(replica?.project, write?.clipIds ?? []);
-          const rev = Number.isSafeInteger(write?.rev) ? write.rev : replica?.rev;
-          if (!clips.length || !Number.isSafeInteger(rev)) return;
-          onEvent({ type: 'render_request', clips, rev, userCards: inst.hasProjectCards?.() === true });
+          // 剪辑段里的卡按摊平视图里的虚拟片段 id 发(`render-clips.mjs`):改被引用剪辑、切激活剪辑也收得到。
+          // 挑出来的是候选,攒一会儿按共享成本记录判轻重,只报判重的(语义 `product/agent.md`:托管方只为被改动的重卡产流)
+          renderGate.note(write?.clipIds ?? []);
         } catch (error) { log('agent.render.note-failed', { message: String(error?.message ?? error).slice(0, 120) }); }
       },
       onFinalClose: () => { /* The next model/tool gate fails closed via doc. */ }, log });
@@ -349,9 +363,10 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
           }, beforeToolCall, onEvent });
         return handle;
       },
-      settle(sig) {
-        if (!toolset) return Promise.resolve({ waited: true, pending: 0 });
-        return toolset.settle(sig ?? signal ?? null, {
+      async settle(sig) {
+        // 这一轮的终态事件在 settle 之后才发:攒着要预渲染的片段在这之前判完、报完(之后的事件不再收)
+        if (!toolset) { await renderGate.flush(); return { waited: true, pending: 0 }; }
+        const settled = await toolset.settle(sig ?? signal ?? null, {
           onWaiting: ({ pending, text }) => {
             try {
               onEvent({
@@ -373,6 +388,9 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
             } catch { /* 宿主的事 */ }
           },
         });
+        // 后台作业(一键流程等)在等的这段时间里也会写项目:等完再判一次
+        await renderGate.flush();
+        return settled;
       },
       async drain() {
         let toolsOpen = null;
@@ -402,6 +420,7 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
                 });
               } catch {}
               removeAbort();
+              renderGate.close();
               inst.close('run-drained');
               await DataWebSocket.closeOwned();
             }
@@ -435,6 +454,7 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
           });
         } catch {}
         removeAbort();
+        renderGate.close();
         inst.close('run-finished');
       },
     };

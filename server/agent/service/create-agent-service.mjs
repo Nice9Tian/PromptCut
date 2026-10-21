@@ -22,7 +22,7 @@
  *   - 对话存储(`conversations.mjs`)与预渲染重试发布(`render-request.mjs`)。
  * 本文件不引用 `src/`。
  */
-import { createRenderClipPicker, FLAT_KERNEL_MODULE } from './render-clips.mjs';
+import { createHeavyRenderGate, createRenderClipPicker, FLAT_KERNEL_MODULE, loadHeavyJudge } from './render-clips.mjs';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { createAgentInstance } from './instance.mjs';
@@ -223,6 +223,12 @@ export function createHostedAgentService({
   // 剪辑段的摊平视图(发布预渲染时收剪辑段里的卡,`render-clips.mjs`):经载入缝取内核函数,载好之前只按片段 id 挑
   let flatKernel = null;
   Promise.resolve().then(() => loadModule(FLAT_KERNEL_MODULE)).then((m) => { flatKernel = m; }, () => {});
+  // 发布预渲染之前判轻重(只发重卡,`render-clips.mjs`「只发重卡」):判定函数经同一条载入缝取;载不了就照原来全发
+  let heavyJudge = null;
+  if (render.enabled) {
+    Promise.resolve().then(() => loadHeavyJudge(loadModule)).then((fn) => { heavyJudge = fn; },
+      (err) => say('agent.render.judge-unavailable', { message: String(err?.message ?? err).slice(0, 120) }));
+  }
   const hostedTools = createHostedTools({
     root,
     loadModule,
@@ -278,6 +284,7 @@ export function createHostedAgentService({
     instances.delete(entry.key);
     // 还在跑的一轮由调用方先按各自的原因停掉;走到这里还有的(不该有)按中断收尾,不让它悬着
     for (const conv of [...entry.runs.values()]) conv.run?.stop('interrupted');
+    for (const rg of entry.renderGates?.values() ?? []) rg.close();
     try { entry.inst.close(reason); } catch { /* 已经关了 */ }
     say('agent.instance.close', { projectId: entry.identity.projectId, user: sha(entry.identity.userId).slice(0, 8), reason });
   }
@@ -381,11 +388,35 @@ export function createHostedAgentService({
     if (!render.enabled) return;
     const conv = entry.runs.get(conversationId);
     if (!conv?.run) return;
-    const replica = entry.inst.replica();
     // 剪辑段里的卡按摊平视图里的虚拟片段 id 发(`render-clips.mjs`;一个实例一份上一次的签名表)
     entry.renderPicker ??= createRenderClipPicker(() => flatKernel);
-    const clips = entry.renderPicker.pick(replica?.project ?? null, write?.clipIds ?? []);
-    render.noteWrite(conv, { clips, rev: write?.rev ?? replica?.rev, project: replica?.project ?? null, runId: conv.run.runId, userCards: entry.inst.hasProjectCards?.() === true });
+    renderGateOf(entry, conversationId, conv).note(write?.clipIds ?? []);
+  }
+
+  /**
+   * 这个对话的「攒一会儿、判轻重、只发重卡」(`render-clips.mjs` 的 `createHeavyRenderGate`)。攒的时长与预渲染重试的防抖同一个数;
+   * 判重的交给预渲染重试(`render.noteWrite`),记在写入它们的那一轮名下。
+   */
+  function renderGateOf(entry, conversationId, conv) {
+    entry.renderGates ??= new Map();
+    let rg = entry.renderGates.get(conversationId);
+    if (!rg) {
+      let runId = conv.run?.runId ?? null;
+      rg = createHeavyRenderGate({
+        picker: entry.renderPicker, delayMs: render.debounceMs, log: say,
+        replica: () => entry.inst.replica?.() ?? null,
+        judge: () => heavyJudge,
+        records: () => entry.inst.costRecords?.(conversationId) ?? Promise.resolve(null),
+        emit: (clips, { rev }) => {
+          const replica = entry.inst.replica?.();
+          render.noteWrite(conv, { clips, rev: rev ?? replica?.rev, project: replica?.project ?? null, runId: rg.runId, userCards: entry.inst.hasProjectCards?.() === true });
+        },
+      });
+      rg.runId = runId;
+      entry.renderGates.set(conversationId, rg);
+    }
+    if (conv.run?.runId) rg.runId = conv.run.runId;
+    return rg;
   }
 
   /**
@@ -565,8 +596,8 @@ export function createHostedAgentService({
         store.setState(conv, { state, reason, message, endedAt: now() });
         store.compact(conv);
         say('agent.run.end', { projectId: identity.projectId, runId, state, ...(reason ? { reason } : {}) });
-        // 一轮结束:攒着的预渲染重试马上发,保证最后的版本有计划
-        void render.flush(conv);
+        // 一轮结束:攒着的先判完轻重,再把预渲染重试马上发,保证最后的版本有计划
+        void Promise.resolve(entry.renderGates?.get(conversationId)?.flush()).then(() => render.flush(conv));
       };
 
       const stop = (kind, detail = {}) => {
@@ -778,6 +809,9 @@ export function createHostedAgentService({
       const conv = conversationOf(identity, conversationId, false);
       if (!conv) return false;
       conv.run?.stop('stopped');
+      const owner = instances.get(keyOf(identity));
+      owner?.renderGates?.get(conversationId)?.close();
+      owner?.renderGates?.delete(conversationId);
       render.forget(conv);
       store.remove(conv);
       try { workspaces.open({ projectId: identity.projectId, ownerKey: ownerKeyOf(identity), conversationId }).destroy(); } catch { /* 没有工作区 */ }
