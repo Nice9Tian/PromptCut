@@ -181,7 +181,7 @@ ChatGPT 复用了旧工作区的目录，目录名和里面的分支名不一样
 
 | 分支或工作区 | 是什么 |
 |---|---|
-| `claude/peaceful-meitner-ef78de`（领先 2，5 个文件） | 会话之间的信箱第二版，没合入，去留用户没定 |
+| `claude/peaceful-meitner-ef78de`（领先 2，5 个文件） | 会话之间的信箱第二版，没合入，去留用户没定。〔2026-10-21 用户定：过期，归档。设计稿存进 `docs/archive/coord-mailbox/`，见 `user-decisions-2026-10-21.md`〕 |
 | `claude/c10-accept`、`claude/c10-integ`、`claude/m7-probe-exp`，工作区 `m7-integ`（没有分支，停在一个提交上） | 9 月底在线浏览器和浏览器节点那几轮留下的，用户原有的 |
 | `codex/c10-a5-timing`（只在本机，领先 5），工作区在 `C:\Users\admin\Documents\Codex\2026-10-08\task-2\promptcut-a5` | 另一个 Codex 会话的 |
 | `check_frontend_backend_separation`，工作区在 `C:\Users\admin\.gemini\antigravity\worktrees\` 下 | Antigravity 的 |
@@ -256,8 +256,8 @@ git for-each-ref --format="%(refname:short) %(committerdate:short)" refs/heads r
 - 第 4 条：保全 2026-10-12 已做。`.worktrees/018-member-native-route` 里那 6 个文件原样提交在 `codex/018-missing-material-user-path` 上（`01ff6ba5`）；这条分支和 `codex/018-agent-worker-doc`、`codex/018-agent-worker-runtime` 都推到了远端，本机和远端一致。第 5.1、5.2 节里写的「6 个文件没提交」「远端没有这条分支」「远端那两条是旧的」是 10-10 的情况，现在都不成立了。同一天逐条核对过：`codex/` 开头的 18 条分支本文都写到了，没有漏的。
 - 第 5 条：已写。变量名和用途在 `guide_files/verification.md`「基线」，这台电脑上指到哪在 `docs/local.md`。
 - 第 6 条：用户定，内容已经合入或用完的分支和工作区直接清，不用问，尽量保持干净；规矩写在 `render-018-kickoff.md`「可以直接做的」。
-- 第 10 条：阿里云那台执行方不碰，旧数据由用户自己处理（`three-versions-brief.md` 第 5 节原来就是这样写的）。和旧信箱谁先谁后仍未定。
-- 第 8、9 条仍未定，不在这次任务里。
+- 第 10 条：阿里云那台执行方不碰，旧数据由用户自己处理（`three-versions-brief.md` 第 5 节原来就是这样写的）。和旧信箱谁先谁后仍未定。〔2026-10-21：阿里云已到期注销，旧信箱随之停用，本条办结〕
+- 第 8、9 条仍未定，不在这次任务里。〔第 8 条 2026-10-18 已定：和断网重连共用「冲突合并」窗口，见 `three-versions-progress.md` 的 0.7.19；第 9 条 2026-10-21 办结：信箱第二版过期，已归档到 `docs/archive/coord-mailbox/`〕
 
 下面是 2026-10-10 写的原文：
 

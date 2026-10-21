@@ -14,7 +14,7 @@
 ```text
 目标：按 docs/plan/Master-Execution-Plan.md 推进到 M8 全案验收总报告完成，顺序照 docs/reports/PAUSE-2026-09-26.md 第 3 节〔接手时加：从 docs/reports/HANDOFF-〔日期〕.md 记的那一步接着做〕；每项验收都有对话内可见的证据；每次合入 main 后 release 分支按 git_and_release.md 判过并推进。
 
-会话：主会话是本会话「PromptCut 主会话（PC）」（本机 ID 〔ID〕，跨机以标题为准）；笔记本辅助节点「PromptCut 笔记本辅助测试节点」（〔ID〕）经跨会话消息；云端「PromptCut M5～M8 云端工作节点」经阿里云信箱（to-cloud / to-local），可能已归档；「PromptCut M5～M8 开发交接」「PromptCut M5～M8 PC 辅助测试节点」待命，不派活。用户已把对辅助节点的完全指挥权让渡给本会话（主计划 6.4b 节）。派活顺序按 6.4 节：本机优先，其次笔记本辅助，云端最后；对端不在线按 6.8 节用本机替身，不等。
+会话：主会话是本会话「PromptCut 主会话（PC）」（本机 ID 〔ID〕，跨机以标题为准）；笔记本辅助节点「PromptCut 笔记本辅助测试节点」（〔ID〕）经跨会话消息；「PromptCut M5～M8 开发交接」「PromptCut M5～M8 PC 辅助测试节点」待命，不派活。用户已把对辅助节点的完全指挥权让渡给本会话（主计划 6.4b 节）。派活顺序按 6.4 节：本机优先，其次笔记本辅助；对端不在线按 6.8 节用本机替身，不等。
 
 规矩：全程遵守 docs/semantics/guide_files/ 与主计划第 0.4、6、10 节。具体到停点：
 - 只在一种情况停下问用户：某一项按 guide_files/solution_table.md 扫空仍未达成、且它挡住后面的选型或开工（先把不依赖它的项做完再停）。「必须真跨机而对端不在线」不再是停下的理由：验证分本地验证与真实网络验证两级，「跨机」不再单独成项，真实网络验证只在往节点部署时或改到网络这一层时做；耗时只记录、不当通过条件，没有哪一项要等某台机器复核（guide_files/verification.md，2026-10-07 用户定）。
