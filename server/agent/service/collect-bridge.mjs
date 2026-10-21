@@ -13,7 +13,7 @@
  *     哈希与大小对得上」(F0 的 `ProjectAssets.verifyRef`);再核一次写权限后交给宿主登记进项目(宿主带期望版本提交);
  *   - 委托不成(本人不在线、页面不是桌面版、本机没有登录态、超时、本机下载或上传失败、回执核不过)时回「没委托成」与原因,
  *     由 `hosted-collect.mjs` 接着在云端匿名下载,并在作业的说明里写明原因与画质差别;
- *   - `collect_login`、`collect_login_check` 只在本人电脑上操作:经同一条通道让发起页打开本机的登录窗口、查本机的登录态,
+ *   - `user_interface_collect_login`(发给页面的内部操作名仍是 `collect_login`)、`collect_login_check` 只在本人电脑上操作:经同一条通道让发起页打开本机的登录窗口、查本机的登录态,
  *     云端只拿回「开没开」「登没登」。
  *
  * 云端拿不到、也不存的:cookie、请求头、浏览器用户数据目录、本机路径、站点的用户标识。页面交回的答案先按白名单收一遍
@@ -206,7 +206,7 @@ export const COLLECT_BRIDGE_TEXT = Object.freeze({
   fallback: Object.freeze({
     'initiator-offline': '这个站点登录后才有更高的画质,但发起人现在不在线,用不了他电脑上的登录态',
     'page-without-local-collect': '这个站点登录后才有更高的画质,但发起人现在用的是网页版(没有本机的采集与登录态)',
-    'not-logged-in': '发起人的电脑上还没有这个站点的登录态(需要的话先 collect_login,让他在自己的电脑上登录)',
+    'not-logged-in': '发起人的电脑上还没有这个站点的登录态(需要的话先 user_interface_collect_login,让他在自己的电脑上登录)',
     'local-not-ready': '发起人电脑上的采集工具没有就绪(没有装 yt-dlp 或缺 ffmpeg)',
     'local-busy': '发起人的电脑正在替这个对话下载另一条链接',
     'local-download-failed': '发起人的电脑用登录态下载这条链接没有成功',
@@ -224,7 +224,7 @@ export const COLLECT_BRIDGE_TEXT = Object.freeze({
   loginAlready: '发起人的电脑上已经有这个站点没过期的登录态,不用再登录。之后 collect_download 这个站点的链接时,会由他的电脑带着登录态下载(他在线的时候)。',
   loginChecked: '发起人的电脑上已经登录。登录态只留在他的电脑上;之后 collect_download 这个站点的链接时,会由他的电脑带着登录态下载(他在线的时候)。',
   loginMissing: '发起人的电脑上还没有登录态。请他在自己电脑上弹出的登录框里完成登录后再查一次;不要连着轮询,等用户回话。',
-  loginExpired: '发起人电脑上的登录态已经过期。请重新 collect_login,让他在自己的电脑上再登录一次。',
+  loginExpired: '发起人电脑上的登录态已经过期。请重新 user_interface_collect_login,让他在自己的电脑上再登录一次。',
   webPage: (tool) => `${tool} 只能在发起人自己的电脑上操作,而他现在用的是网页版(没有本机的登录窗口)。请告诉用户到电脑上的 PromptCut 里登录;云端照常按未登录的画质采集。`,
   loginFailed: (tool) => `${tool} 在发起人的电脑上没有做成。请告诉用户在电脑上的 PromptCut 里自己登录一次;云端照常按未登录的画质采集。`,
 });
@@ -517,13 +517,13 @@ export function createCollectBridge({ bridge, databasePath, assets, authorize, r
     let out;
     try { out = await ask(context, 'collect_login', { site, method: args?.method === 'browser' ? 'browser' : 'qr', ...(args?.force === true ? { force: true } : {}) }, requestId, signal); } catch (error) {
       if (!revoked(error) && error?.code === 'bad-args') throw error;
-      return initiatorOffline('collect_login');
+      return initiatorOffline('user_interface_collect_login');
     }
-    if (!out.delivered) return initiatorOffline('collect_login');
+    if (!out.delivered) return initiatorOffline('user_interface_collect_login');
     if (out.answer.ok !== true) {
       return out.answer.code === 'unsupported'
-        ? { ok: false, initiatorOnly: true, error: COLLECT_BRIDGE_TEXT.webPage('collect_login') }
-        : { ok: false, initiatorOnly: true, error: COLLECT_BRIDGE_TEXT.loginFailed('collect_login') };
+        ? { ok: false, initiatorOnly: true, error: COLLECT_BRIDGE_TEXT.webPage('user_interface_collect_login') }
+        : { ok: false, initiatorOnly: true, error: COLLECT_BRIDGE_TEXT.loginFailed('user_interface_collect_login') };
     }
     if (out.answer.result.alreadyLoggedIn) return { ok: true, site, alreadyLoggedIn: true, onInitiatorComputer: true, hint: COLLECT_BRIDGE_TEXT.loginAlready };
     return { ok: true, site, visible: true, onInitiatorComputer: true, hint: COLLECT_BRIDGE_TEXT.loginOpened };

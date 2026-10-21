@@ -23,6 +23,7 @@ import { loadRole } from '../agent-roles.mjs';
 import { annotateError, annotateResult, createUserEditingBoard, userEditingFor } from '../user-editing.mjs';
 import { effectiveIsFile } from '../../card-overrides.mjs';
 import { parkedCutsIndex, cutLookView } from '../ssr-host.mjs';
+import { modelToolName, pageToolName } from '../../tools/ui-names.mjs';
 import {
   checkCloudTool, initiatorOffline, initiatorUnreachable,
   CLOUD_AGENT_SIDE, CLOUD_HOSTED_TOOLS, CLOUD_INITIATOR_TOOLS, CLOUD_LOOK_TOOLS, CLOUD_PAGE_STATE_READS, CLOUD_PAGE_TOOLS, CLOUD_PLAYHEAD_TOOLS, CLOUD_SLOW_TOOLS,
@@ -154,7 +155,7 @@ export function createAgentInstance(env) {
 
     if (tool === 'get_project') {
       // 和编辑器页面的 getProject 同一个形状:文字稿只给摘要,全文走 get_transcript
-      // 停放剪辑的片段索引放最前,模型不必 switch_cut 就拿得到别的剪辑里的 clipId
+      // 停放剪辑的片段索引放最前,模型不必 user_interface_switch_cut 就拿得到别的剪辑里的 clipId
       const parkedCuts = parkedCutsIndex(project);
       return {
         ...(parkedCuts ? { parkedCuts } : null),
@@ -548,7 +549,10 @@ export function createAgentInstance(env) {
     projectCreativity: () => currentProjectCreativity(),
   });
 
-  function callToolInternal(tool, args, agent, callId) {
+  function callToolInternal(toolIn, args, agent, callId) {
+    // 会动用户界面的工具改了名(`user_interface_` 前缀,server/tools/ui-names.mjs):老对话的历史里还是旧名,模型照着调旧名时照常执行。
+    // 从这里往下(工具表、开放清单、闸门、事件)一律用新名;发给页面时再换回旧的内部操作名
+    const tool = modelToolName(toolIn);
     return toolCallScope.run({ callId: typeof callId === 'string' ? callId : undefined }, () => callToolScoped(tool, args, agent, callId));
   }
 
@@ -784,7 +788,7 @@ export function createAgentInstance(env) {
       }, limit);
     });
 
-    editorRes.write(`data: ${JSON.stringify({ type: 'call', id, tool, args, agent: agent || undefined })}\n\n`);
+    editorRes.write(`data: ${JSON.stringify({ type: 'call', id, tool: pageToolName(tool), args, agent: agent || undefined })}\n\n`);
 
     // 留在页面的工具写了项目时,页面回包带它这次提交的 opIds(c65-integ2 接线);agent-side 据此推进对话读到的版本
     return await p;
@@ -1467,18 +1471,20 @@ export function createAgentInstance(env) {
 
   async function hostedPageTool(tool, args, agent) {
     const a = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
-    if (tool === 'seek' && !(typeof a.t === 'number' && Number.isFinite(a.t) && a.t >= 0)) {
+    // 发给页面的是旧的内部操作名(seek / play / pause):旧页面照常认
+    const wire = pageToolName(tool);
+    if (wire === 'seek' && !(typeof a.t === 'number' && Number.isFinite(a.t) && a.t >= 0)) {
       // 没有人连着看时先说不在线(Agent 该知道的是「这一步用不上页面」,而不是去补参数重试)
       if (!hostedInitiatorOnline(agent)) return initiatorOffline(tool);
-      return { ok: false, error: 'seek 要给 t(秒,不小于 0 的数)。' };
+      return { ok: false, error: `${tool} 要给 t(秒,不小于 0 的数)。` };
     }
-    const send = tool === 'seek' ? { t: a.t } : {};
+    const send = wire === 'seek' ? { t: a.t } : {};
     let out = null;
-    try { out = env.pageCall ? await env.pageCall(agent, tool, send) : null; } catch { out = null; }
+    try { out = env.pageCall ? await env.pageCall(agent, wire, send) : null; } catch { out = null; }
     if (out?.ok === true && out.result && typeof out.result === 'object') {
       const r = out.result;
       if (r.ok !== true) return { ok: false, error: String(r.error || `${tool} 在发起人的页面上没有做成`) };
-      if (tool === 'seek') {
+      if (wire === 'seek') {
         const ps = hostedPageStates.get(agent);
         hostedPageStates.set(agent, { ...(ps && typeof ps === 'object' ? ps : {}), t: a.t });
       }

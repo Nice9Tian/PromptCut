@@ -22,7 +22,8 @@
   - `cards.mjs`: Card ecosystem manipulation (baking, inspecting)
   - `clips.mjs`: Core timeline clip mutations
   - `collect.mjs`: Web media scraping and downloading
-  - `core.mjs`: System lifecycle and playback (`wait`, `report_progress`, `play`, `seek`)
+  - `core.mjs`: System lifecycle and playback (`wait`, `report_progress`, `user_interface_play`, `user_interface_seek`)
+  - `ui-names.mjs`: 会动用户界面的工具改名对照(旧名 → `user_interface_` 新名,2026-10-21 用户定)。模型看到的是新名;工具入口新旧都认;发给页面的内部操作名保持旧名
   - `cuts.mjs`: Sub-clip stripping and transitions
   - `effects.mjs`: Visual filters and pixel maps
   - `layout.mjs`: Stage positioning, nudging, aligning, and 3D camera

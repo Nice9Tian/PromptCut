@@ -53,7 +53,7 @@ export const collectTools = [
         audioOnly: { type: "boolean", description: "只要音频(m4a)" },
         allParts: { type: "boolean", description: "多 P 稿件全部下载" },
         keepCodec: { type: "boolean", description: "true 表示不把 HEVC / AV1 转成 H.264(默认会转,浏览器预览才稳)" },
-        cookies: { type: "string", description: "一般不用传:collect_login 存下的登录态会自动带上。要传只认应用数据目录 cookies/ 下的文件,别处的路径会被忽略" }
+        cookies: { type: "string", description: "一般不用传:user_interface_collect_login 存下的登录态会自动带上。要传只认应用数据目录 cookies/ 下的文件,别处的路径会被忽略" }
       },
       required: ["url"]
     },
@@ -70,8 +70,8 @@ export const collectTools = [
     side: "page"
   },
   {
-    name: "collect_login",
-    description: "登录视频站点(目前只有 bilibili),拿到登录才有的清晰度(B 站 1080p60 / 4K 要大会员登录)。它在编辑台里弹出登录框:默认 method 为 qr,二维码直接显示在编辑台里,用户用手机扫;method 为 browser 则打开站点自己的登录页(账号密码 / 短信 / 验证码都在那里),用户自己输。**调完就停下来**:用中文告诉用户「登录框已经弹出来了,扫码或切到账号密码登录,登录完回我一句」,**不要继续调工具**;用户回话之后再调 collect_login_check。已经登录且没过期时不弹框,直接返回 alreadyLoggedIn: true。登录态存成 cookies.txt,之后 collect_probe / collect_download 自动带上,不用再传 cookies 参数。**不要替用户输账号密码或验证码**。",
+    name: "user_interface_collect_login",
+    description: "**会动用户的界面**(在编辑台里弹出登录框):登录视频站点(目前只有 bilibili),拿到登录才有的清晰度(B 站 1080p60 / 4K 要大会员登录)。它在编辑台里弹出登录框:默认 method 为 qr,二维码直接显示在编辑台里,用户用手机扫;method 为 browser 则打开站点自己的登录页(账号密码 / 短信 / 验证码都在那里),用户自己输。**调完就停下来**:用中文告诉用户「登录框已经弹出来了,扫码或切到账号密码登录,登录完回我一句」,**不要继续调工具**;用户回话之后再调 collect_login_check。已经登录且没过期时不弹框,直接返回 alreadyLoggedIn: true。登录态存成 cookies.txt,之后 collect_probe / collect_download 自动带上,不用再传 cookies 参数。**不要替用户输账号密码或验证码**。",
     inputSchema: {
       type: "object",
       properties: {
@@ -84,7 +84,7 @@ export const collectTools = [
   },
   {
     name: "collect_login_check",
-    description: "用户说扫完码之后调:从浏览器取出登录态,登录了就存盘、把窗口藏回去,返回 loggedIn: true、userId、expiresAt(过期后要重新 collect_login)。loggedIn: false 时看 missing / hint,让用户在窗口里完成登录后再查一次;不要连着轮询,等用户回话。",
+    description: "用户说扫完码之后调:从浏览器取出登录态,登录了就存盘、把窗口藏回去,返回 loggedIn: true、userId、expiresAt(过期后要重新 user_interface_collect_login)。loggedIn: false 时看 missing / hint,让用户在窗口里完成登录后再查一次;不要连着轮询,等用户回话。",
     inputSchema: {
       type: "object",
       properties: {

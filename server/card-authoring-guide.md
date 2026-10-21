@@ -786,7 +786,7 @@ create_card({ id, source })                ← 落盘 + 热更新 + 自动注册
 list_cards({ cardId: "price-tag" })        ← 确认注册成功、schema 是你想要的
 add_clip({ cardId: "price-tag", start, duration, params })   ← 放上时间轴
 see_frames({ source: "timeline", clipId })                    ← 看一眼画面，确认它真的长成你想要的样子
-seek({ t: start + 0.5 })                   ← 把播放头挪过去，让用户直接看到效果
+user_interface_seek({ t: start + 0.5 })    ← 可选:把用户的播放头挪过去，让他直接看到效果(会动用户的界面，能不用就不用)
 ```
 
 源码写到 `src/cards/user/<id>.tsx`，**不需要**改任何注册表文件——该目录是自动扫描的。

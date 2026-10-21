@@ -1,5 +1,5 @@
 /**
- * 云端 Agent 的 `web_handoff`(计划 `docs/plan/cloud-agent-tools-implementation.md` 的 W2 包)。
+ * 云端 Agent 的 `user_interface_web_handoff`(原名 `web_handoff`;计划 `docs/plan/cloud-agent-tools-implementation.md` 的 W2 包)。
  *
  * 本机的 `web_handoff` 是把 Agent 用的浏览器窗口挪到用户面前,让用户自己处理登录、验证码、扫码。云节点上的浏览器
  * (W1 包的 `hosted-browser.mjs`)没有窗口可挪,用户的登录信息也不许上节点。语义(`docs/semantics/product/agent.md`
@@ -20,8 +20,10 @@
 import { randomBytes } from 'node:crypto';
 import { initiatorOffline } from './cloud-tools.mjs';
 import { PageBridgeError, checkedPageArgs } from './page-bridge.mjs';
+import { modelToolName } from '../../tools/ui-names.mjs';
 
-export const HANDOFF_TOOL_NAMES = Object.freeze(['web_handoff']);
+/** 模型侧的名字(2026-10-21 起带 `user_interface_` 前缀);发给页面的内部操作名仍是 `web_handoff`(`page-bridge.mjs` 的 `PAGE_BRIDGE_TOOLS`) */
+export const HANDOFF_TOOL_NAMES = Object.freeze(['user_interface_web_handoff']);
 
 /** 给模型看的工具结果(草稿,见报告「要用户定的事」)。宿主可以用 `texts` 整体或逐条替换 */
 export const HANDOFF_TEXT = Object.freeze({
@@ -29,9 +31,9 @@ export const HANDOFF_TEXT = Object.freeze({
     + '现在停下来,用中文告诉用户要做什么、做完了怎么说。**不要继续调工具**,等用户回话之后再 web_view 看当前状态。',
   hidden: '发起人电脑上的浏览器已经收回。',
   noPage: '云端的浏览器还没有打开网页,没有可以交给用户的页面。先用 web_open 打开要处理的网页。',
-  unmounted: '云端的网页操作还没接上,web_handoff 现在用不了。请按项目内容继续,需要的话告诉用户自己在电脑上的 PromptCut 里做这一步。',
+  unmounted: '云端的网页操作还没接上,user_interface_web_handoff 现在用不了。请按项目内容继续,需要的话告诉用户自己在电脑上的 PromptCut 里做这一步。',
   unsupported: '发起人现在用的是网页版,没有可以交给他的本机浏览器。请告诉用户到电脑上的 PromptCut 里处理这一步,或者换一个不需要登录的做法。',
-  failed: 'web_handoff 在发起人的电脑上没有做成。',
+  failed: 'user_interface_web_handoff 在发起人的电脑上没有做成。',
 });
 
 const plain = (value) => !!value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
@@ -48,15 +50,16 @@ export function createHandoffTools({ bridge, browser = null, texts = {}, now = D
   const text = { ...HANDOFF_TEXT, ...texts };
   const handles = new Set(HANDOFF_TOOL_NAMES);
 
-  async function call(name, args, context, options = {}) {
+  async function call(nameIn, args, context, options = {}) {
+    const name = modelToolName(nameIn);
     if (!handles.has(name)) throw new PageBridgeError('page-tool-unknown', 404);
     // 模型能给的只有 reason 与 hide;地址由云端浏览器给,模型不能指定把用户带到哪
     const a = args === undefined || args === null ? {} : args;
-    if (!plain(a) || Object.keys(a).some((key) => key !== 'reason' && key !== 'hide')) return { ok: false, error: 'web_handoff 只接受 reason(文字)与 hide(是否收回)。' };
+    if (!plain(a) || Object.keys(a).some((key) => key !== 'reason' && key !== 'hide')) return { ok: false, error: 'user_interface_web_handoff 只接受 reason(文字)与 hide(是否收回)。' };
     let send;
     try { send = checkedPageArgs('web_handoff', a, bridge.limits); } catch (error) {
       if (error?.code !== 'bad-args') throw error;
-      return { ok: false, error: 'web_handoff 的 reason 要是一句不太长的话,hide 要是 true 或 false。' };
+      return { ok: false, error: 'user_interface_web_handoff 的 reason 要是一句不太长的话,hide 要是 true 或 false。' };
     }
     if (!browser) return { ok: false, cloudUnavailable: true, code: 'handoff-browser-unmounted', error: text.unmounted };
     // 先确认这一轮此刻有效、取到发起人与发起页(授权已经不在会在这里抛出去)
@@ -72,7 +75,7 @@ export function createHandoffTools({ bridge, browser = null, texts = {}, now = D
     }
     const out = await bridge.requestPage({ run: context, initiatorAccountId: who.initiatorAccountId, pageId: who.pageId, tool: 'web_handoff', args: send,
       requestId: options.requestId ?? newRequestId(), deadline: Number(now()) + bridge.limits.pageMs, ...(options.signal ? { signal: options.signal } : {}) });
-    if (!out.delivered) return initiatorOffline('web_handoff');
+    if (!out.delivered) return initiatorOffline('user_interface_web_handoff');
     const answer = out.answer;
     if (answer.ok !== true) {
       if (answer.code === 'unsupported') return { ok: false, initiatorOnly: true, error: text.unsupported };

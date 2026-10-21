@@ -170,7 +170,7 @@ export function pickCookies(dataDir, url, explicitPath) {
   const site = siteOfUrl(url);
   if (!site) return { path: null, site: null, reason: null };
   const st = savedCookieStatus(dataDir, site);
-  if (!st.exists) return { path: null, site, reason: `${SITES[site].name}未登录,按未登录画质下载;要登录才有的画质先 collect_login` };
-  if (st.expired) return { path: null, site, reason: `${SITES[site].name}的登录态已过期,按未登录画质下载;重新 collect_login 可续上` };
+  if (!st.exists) return { path: null, site, reason: `${SITES[site].name}未登录,按未登录画质下载;要登录才有的画质先 user_interface_collect_login` };
+  if (st.expired) return { path: null, site, reason: `${SITES[site].name}的登录态已过期,按未登录画质下载;重新 user_interface_collect_login 可续上` };
   return { path: st.path, site, reason: `带上${SITES[site].name}的登录态(用户 ${st.userId ?? '?'})` };
 }

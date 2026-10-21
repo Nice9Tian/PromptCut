@@ -54,7 +54,7 @@ export const effectsHandlers = {
   },
   /* ---------- 剪辑(多条时间轴) ---------- */
   // 每条剪辑带上引用关系(referencedBy:哪些剪辑的哪几段引用了它;references:它里面的剪辑段引用了谁)
-  // 给了 cutId 就多返回那条剪辑的 timeline 一览(各序列和片段的 id、起止):不用 switch_cut 就能拿到要改的片段 id,
+  // 给了 cutId 就多返回那条剪辑的 timeline 一览(各序列和片段的 id、起止):不用 user_interface_switch_cut 就能拿到要改的片段 id,
   // 拿到以后 update_clip / set_clip / get_clip / set_rect… 直接按 clipId 改(见 mcp/clipCut.ts)
   listCuts: (args) => {
     const p = getState().project;
@@ -67,7 +67,7 @@ export const effectsHandlers = {
       const { otherCuts: _drop, ...digest } = timelineDigest({ ...p, tracks: content.tracks, duration: content.duration });
       out.timeline = { cutId: cut.id, name: cut.name, active: cut.id === activeCutIdOf(p), ...digest };
     } else {
-      // 不指定剪辑时,把所有停放剪辑里的片段(有上限)直接列出来:模型拿到 clipId 就不必为了「看进去」而 switch_cut
+      // 不指定剪辑时,把所有停放剪辑里的片段(有上限)直接列出来:模型拿到 clipId 就不必为了「看进去」而 user_interface_switch_cut
       const parkedCuts = parkedCutsIndex(p, { cardName: (id) => getCard(id)?.name });
       if (parkedCuts) out.parkedCuts = parkedCuts;
     }
@@ -81,15 +81,19 @@ export const effectsHandlers = {
     return {
       ok: true, activeCutId: p.activeCutId, cuts: listCuts(p), timeline: timelineDigest(p),
       note: `已切换到「${cut.name}」。切换会改共享的激活剪辑,让所有成员的界面一起翻;只是要改别的剪辑里已有的片段时不需要它——` +
-        "把 clipId(list_cuts 的 cutId 参数 / get_project 的 parkedCuts 里有)直接交给 update_clip 等就地改。" +
+        "把 clipId(list_cuts 的 cutId 参数 / get_project 的 parkedCuts 里有)直接交给 update_clip 等就地改;看别的剪辑的画面用 see_frames 的 cutId。" +
         "上面的 timeline 现在是这条的;之前激活的那条已停放,它里面的片段同样可以直接改。",
     };
   },
+  // 只建不切(2026-10-21 用户定):切换激活剪辑会动所有成员的界面,要切另调 user_interface_switch_cut
   addCut: (args) => {
-    const cut = actions.addCut(args?.name, { switchTo: args?.switch !== false });
+    const cut = actions.addCut(args?.name, { switchTo: false });
     clipGuard.noteMutation();
     const p = getState().project;
-    return { ok: true, cut: { id: cut.id, name: cut.name }, activeCutId: p.activeCutId, cuts: listCuts(p) };
+    return {
+      ok: true, cut: { id: cut.id, name: cut.name }, activeCutId: p.activeCutId, cuts: listCuts(p),
+      note: `已新建「${cut.name}」(${cut.id}),没有切过去,激活的剪辑不变。要往里新增片段先 user_interface_switch_cut(会动所有成员的界面);也可以用 add_cut_segment 把它当剪辑段放进当前剪辑。`,
+    };
   },
   renameCut: (args) => {
     const cut = resolveCut(getState().project, { cutId: args.cutId });

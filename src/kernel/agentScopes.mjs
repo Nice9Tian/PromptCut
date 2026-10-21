@@ -112,9 +112,9 @@ export const CUTS_INDEX_LIMITS = Object.freeze({ maxClips: 60, perCutMax: 30, la
 
 /** 写给模型看的一句话。get_project / list_cuts 的索引里带一份 */
 export const PARKED_EDIT_NOTE =
-  "这些是没有激活的剪辑里的片段。改它们不用 switch_cut:把 clipId 直接交给 update_clip / set_clip / get_clip / " +
+  "这些是没有激活的剪辑里的片段。改它们不用 user_interface_switch_cut:把 clipId 直接交给 update_clip / set_clip / get_clip / " +
   "set_position / set_rect / align / nudge / set_emphasis / set_clip_volume / set_clip_muted,它们就地改那条剪辑里的片段。" +
-  "激活的剪辑是所有成员共享的,switch_cut 会让每个人的界面一起翻,只有要在别的剪辑里新增 / 删除 / 切分 / 复制片段或看画面时才切。" +
+  "看它们的画面用 see_frames 传 cutId,也不用切。激活的剪辑是所有成员共享的,user_interface_switch_cut 会让每个人的界面一起翻,只有要在别的剪辑里新增 / 删除 / 切分 / 复制片段时才切。" +
   "trackId 要用那条剪辑自己的序列 id(下面每个片段带着)。";
 
 const round2 = (n) => Math.round(n * 100) / 100;
@@ -198,7 +198,7 @@ export function otherCutsHint(project) {
   if (!rest.length) return null;
   return {
     cuts: rest,
-    hint: "上面的 timeline 只是激活剪辑的。别的剪辑里的片段不用 switch_cut:clipId 在 get_project 的 parkedCuts 或 list_cuts({ cutId }) 里,直接交给 update_clip 等就地改。",
+    hint: "上面的 timeline 只是激活剪辑的。别的剪辑里的片段不用 user_interface_switch_cut:clipId 在 get_project 的 parkedCuts 或 list_cuts({ cutId }) 里,直接交给 update_clip 等就地改;看画面用 see_frames 传 cutId。",
   };
 }
 

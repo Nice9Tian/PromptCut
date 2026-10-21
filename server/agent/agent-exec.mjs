@@ -70,15 +70,15 @@ const CLIP_CREATE_TOOLS = new Set(['add_clip', 'duplicate_clip', 'add_composite'
 /**
  * 既读页面独有状态、又写项目的工具(c65-integ2 裁定:违反 D1 判据,改为写入在 Agent 服务端以 agent 身份执行,
  * 所需的页面状态向页面要一次,经现有 SSE 页面通道取只读值)。值是要向页面要的键:
- *   - `t`:页面播放头。切剪辑(`switch_cut`、缺省会切过去的 `add_cut`、删当前剪辑的 `remove_cut`)要把它存回被停放的那条剪辑;
+ *   - `t`:页面播放头。切剪辑(`user_interface_switch_cut`、删当前剪辑的 `remove_cut`)要把它存回被停放的那条剪辑
+ *     (`add_cut` 2026-10-21 起只建不切,不再要播放头);
  *   - `track`:页面内存里 `track_points` 跑出来的轨迹(`attach_clip_motion` 读它算逐帧坐标)。
  * `set_project_meta` 不读页面状态(`duration` 的手动截断值由页面收到远端改动时按项目自己推出来,见
  * `src/store/remotePageState.ts`),所以不在这张表里,直接在服务端执行。
  * 页面状态的「写」(切剪辑后页面的播放头、选区、停播)同样由页面收到远端改动时自己做,不经这条通道。
  */
 export const PAGE_STATE_TOOLS = Object.freeze({
-  switch_cut: Object.freeze(['t']),
-  add_cut: Object.freeze(['t']),
+  user_interface_switch_cut: Object.freeze(['t']),
   remove_cut: Object.freeze(['t']),
   attach_clip_motion: Object.freeze(['track']),
 });

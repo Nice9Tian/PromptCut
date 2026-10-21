@@ -20,6 +20,10 @@
     create_filter: '建滤镜', update_filter: '改滤镜', remove_filter: '删滤镜', apply_filter: '挂滤镜',
     create_audio_fx: '建音频效果', update_audio_fx: '改音频效果', remove_audio_fx: '删音频效果', apply_audio_fx: '挂音频效果',
     measure_audio: '测响度', switch_cut: '切换剪辑', add_cut: '新建剪辑', set_theme: '换主题',
+    // 会动用户界面的工具 2026-10-21 起名字带 user_interface_ 前缀;旧名(上面的 switch_cut 等)留着,老会话报上来的还是旧名
+    user_interface_switch_cut: '切换剪辑', user_interface_seek: '跳播放头', user_interface_play: '播放', user_interface_pause: '暂停',
+    seek: '跳播放头', play: '播放', pause: '暂停', user_interface_web_handoff: '交出网页', web_handoff: '交出网页',
+    user_interface_collect_login: '弹登录框', collect_login: '弹登录框',
     get_project: '读项目', report_progress: '交进度', get_skill_guide: '读说明',
   };
 
