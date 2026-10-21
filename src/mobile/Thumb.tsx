@@ -4,7 +4,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { MediaAsset } from "../kernel/project";
 import { usePreviewMediaUrl } from "../editor/media/previewUrl";
-import { createThumbLoader, grabFrame, thumbKey, type ThumbKind } from "./thumbs";
+import { useTierHashes } from "../editor/media/assetTiers";
+import { originalHashOf } from "../render/mediaTier";
+import { createThumbLoader, fetchableNow, grabFrame, thumbKey, type ThumbKind } from "./thumbs";
 
 const loader = createThumbLoader({ grab: grabFrame });
 
@@ -27,12 +29,15 @@ export function useThumb(media: MediaAsset | null | undefined, t = 0): { ref: Re
   const key = kind && url ? thumbKey(url, kind, t) : "";
   const [attempt, setAttempt] = useState(0);
   const pending = !!media?.pending;
+  // 素材服务还没收全这份就先不取(否则刚导入时控制台一串 404);收全了轮询结果一变就开始取
+  const tiers = useTierHashes();
+  const canFetch = !!url && fetchableNow(url, tiers, pending, media ? originalHashOf(media) : null);
   useEffect(() => setAttempt(0), [key, pending]);
   useEffect(() => (key ? loader.watch(key, (v) => setGot({ key, src: v })) : undefined), [key]);
   const [got, setGot] = useState<{ key: string; src: string } | null>(() => (key ? (() => { const s = loader.peek(key); return s ? { key, src: s } : null; })() : null));
 
   useEffect(() => {
-    if (!key || !kind) return;
+    if (!key || !kind || !canFetch) return;
     const hit = loader.peek(key);
     if (hit) { setGot({ key, src: hit }); return; }
     const el = ref.current;
@@ -55,7 +60,7 @@ export function useThumb(media: MediaAsset | null | undefined, t = 0): { ref: Re
     return () => { io.disconnect(); stop(); };
     // url 里的票据会轮换,key 不变就不重取
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, attempt, pending]);
+  }, [key, attempt, pending, canFetch]);
 
   return { ref, src: got && got.key === key ? got.src : null };
 }

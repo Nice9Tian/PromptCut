@@ -3,7 +3,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createThumbLoader, thumbKey, seekTarget, fitSize } from './thumbs.ts';
+import { createThumbLoader, thumbKey, seekTarget, fitSize, urlHash, fetchableNow } from './thumbs.ts';
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
@@ -131,4 +131,18 @@ test('TH10 别处取到了同一张,等着它的也收到(先失败的那处不�
   g.calls[1].resolve('data:w');
   await tick(); await tick();
   assert.deepEqual(seen, ['data:v'], '退订后不再回调');
+});
+
+test('TH11 没收全的素材先不取:判据只问素材服务的已收全集合', () => {
+  const h = 'a'.repeat(64), g = 'b'.repeat(64);
+  const url = `/media-s/s1/media/${h}?t=tk`;
+  assert.equal(urlHash(url), h);
+  assert.equal(urlHash(`/@media/${g}.mp4`), g);
+  assert.equal(urlHash('/assets/x.png'), null);
+  assert.equal(fetchableNow(url, ['@known:remote', g], false), false, '问过了而它不在集合里:不取');
+  assert.equal(fetchableNow(url, ['@known:remote', h], true), true, '在集合里就取(pending 不管)');
+  assert.equal(fetchableNow(url, [], true), false, '还没问过、还在入库:等');
+  assert.equal(fetchableNow(url, [], false), true, '还没问过、不在入库:先取');
+  assert.equal(fetchableNow('/assets/x.png', ['@known:remote'], true), true, '不是按哈希寻址的老素材照取');
+  assert.equal(fetchableNow(url, ['@known:remote', g], false, g.toUpperCase()), true, '取的是小尺寸、原尺寸已收全:取');
 });

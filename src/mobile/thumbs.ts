@@ -45,6 +45,27 @@ export function fitSize(w: number, h: number, maxW = THUMB_W): { w: number; h: n
   return { w: Math.max(1, Math.round(w * s)), h: Math.max(1, Math.round(h * s)) };
 }
 
+/** 地址里按哈希寻址的那一段(`/@media/<哈希>` 或远程素材服务的 `.../media/<哈希>`) */
+export function urlHash(url: string): string | null {
+  const m = /\/(?:@media|media)\/([0-9a-f]{64})(?:[.?#/]|$)/i.exec(String(url || ""));
+  return m ? m[1].toLowerCase() : null;
+}
+
+/**
+ * 现在去取会不会白跑一趟(素材服务还没收全,会答 404):判据只问素材服务(`mechanism/asset-service.md`「同步状态只问素材服务」),
+ * 即编辑器每 2 秒轮询得到的「已收全哈希」集合 `tierHashes`(带标记,问过才非空)。
+ * - 问过了:地址里的哈希(或这份素材的原尺寸哈希)在集合里才取;
+ * - 还没问过:素材还在入库(`pending`)就等,否则先取(取不到按退避重试);
+ * - 不是按哈希寻址的地址(老素材):照取。
+ */
+export function fetchableNow(url: string, tierHashes: readonly string[], pending: boolean, originalHash?: string | null): boolean {
+  const h = urlHash(url);
+  if (!h) return true;
+  // 原尺寸收全之后轮询就不再问小尺寸(`assetTiers.ts` 的 hashesToAsk),小尺寸先于原尺寸上传,原尺寸在集合里也算
+  if (tierHashes.length) return tierHashes.includes(h) || (!!originalHash && tierHashes.includes(originalHash.toLowerCase()));
+  return !pending;
+}
+
 export type Grab = (url: string, kind: ThumbKind, t: number) => Promise<string>;
 
 interface Job { key: string; url: string; kind: ThumbKind; t: number; wanted: number; promise: Promise<string | null>; resolve: (v: string | null) => void }
