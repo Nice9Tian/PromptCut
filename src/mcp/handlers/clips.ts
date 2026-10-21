@@ -34,7 +34,7 @@ export const clipsHandlers = {
     // 之后模型引用 clipId 以它为准,不再凭几步前的记忆。理由见 toolEcho.ts。
     return { ...clip, look: lookHint(clip.id), timeline: timelineDigest(getState().project) };
   },
-  updateClip: inClipCut((args: Args<"updateClip">) => {
+  updateClip: /* @__PURE__ */ inClipCut((args: Args<"updateClip">) => {
     rejectAudioVolumeKeys(args, "update_clip");
     if (args.params || args.cardId !== undefined) {
       const hit = findClip(getState().project, args.clipId);
@@ -109,14 +109,14 @@ export const clipsHandlers = {
     return { ok: true, removed: a.clipId, ...(reason ? { reason } : null), timeline: timelineDigest(getState().project) };
   },
   // 约定封装:Agent 看到和改的都是它(kernel/envelope.ts),不是原始 clip 也不是组件源码
-  getClip: inClipCut((args: Args<"getClip">) => {
+  getClip: /* @__PURE__ */ inClipCut((args: Args<"getClip">) => {
     const hit = findClip(getState().project, args.clipId);
     if (!hit) throw clipMissingError(args.clipId);
     const envelope = envelopeOf(getState().project, hit.clip, getCard(hit.clip.cardId), stageSize());
     // 剪辑段:另带引用哪条剪辑、偏移、被引用剪辑的总时长、音量与静音(kernel/cutSegments.ts)
     return hit.clip.cutId ? { ...envelope, cutSegment: segmentInfo(hit.clip.id) } : envelope;
   }),
-  setClip: inClipCut((args: Args<"setClip">) => {
+  setClip: /* @__PURE__ */ inClipCut((args: Args<"setClip">) => {
     const hit = findClip(getState().project, args.clipId);
     if (!hit) throw clipMissingError(args.clipId);
     const report = applyEnvelope(
@@ -149,7 +149,7 @@ export const clipsHandlers = {
     return c;
   },
   duplicateClip: (args) => { assertClipNotParked(args.clipId); const c = actions.duplicateClip(args.clipId); if (!c) throw new Error("复制失败"); clipGuard.noteCreated(c.id); return c; },
-  setEmphasis: inClipCut((args: Args<"setEmphasis">) => {
+  setEmphasis: /* @__PURE__ */ inClipCut((args: Args<"setEmphasis">) => {
     const clipId = String(args.clipId ?? "");
     const kind = String(args.kind ?? "");
     if (!clipId) throw new Error("要 clipId");

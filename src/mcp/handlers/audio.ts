@@ -33,13 +33,13 @@ export const audioHandlers = {
   applyAudioFx: (args) => { const r = audioFxTools.applyAudioFx(args); clipGuard.noteMutation(); return r; },
   measureAudio: (args) => measureAudio(args),
   measureAudioJs: (args) => measureAudioJs(args),
-  setClipVolume: inClipCut((args: Args<"setClipVolume">) => {
+  setClipVolume: /* @__PURE__ */ inClipCut((args: Args<"setClipVolume">) => {
     const result = actions.setClipVolume(String(args.clipId), args.volume);
     if (!result.ok) throw new Error(result.error);
     clipGuard.noteMutation();
     return { ...result, timeline: timelineDigest(getState().project) };
   }),
-  setClipMuted: inClipCut((args: Args<"setClipMuted">) => {
+  setClipMuted: /* @__PURE__ */ inClipCut((args: Args<"setClipMuted">) => {
     const result = actions.setClipMuted(String(args.clipId), args.muted);
     if (!result.ok) return result;
     clipGuard.noteMutation();
