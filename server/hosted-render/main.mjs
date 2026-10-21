@@ -467,8 +467,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       eligible: (projectId) => dir.some((p) => p.projectId === projectId && p.enabled && p.active),
       report: isoReport ? { at: isoReportAt, queue: isoReport.queue } : null,
       looks: { wanted: lookWanted, busy: look.busyOn() === 'isolated' ? look.busyProject() : null },
-      // 内存吃紧：装着的项目空着就结束，不留缓存（机制「缓存……内存不够时随时清掉」）
-      memoryLow: backpressure.paused,
+      // 内存吃紧（背压的原因里有内存；负载高、文档服务慢不算）：装着的项目空着就结束，不留缓存（机制「缓存……内存不够时随时清掉」）
+      memoryLow: backpressure.paused && backpressure.reasons.includes('memory'),
     });
   }
 

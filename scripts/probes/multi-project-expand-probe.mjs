@@ -13,6 +13,9 @@ import '../lib/no-user-dirs.mjs'; // 第一个 import：不继承外部的 PROMP
  * 两遍出的每一帧逐像素比（RGBA 四个通道逐字节），记相同的帧数与不同的像素数。另外记展开前后的片段数、卡、素材，
  * 说明多项目模式确实只装了用到的那几张。
  *
+ * 第二趟（`--no-pipeline` 跳过）走看画面那一路：工作进程收到看画面请求时用的 `FramePipeline#see_frames`（`server/vision/render.ts` 的
+ * `renderFrames` 就是它），同样整份项目一遍、展开后的一遍，逐像素比。
+ *
  * 测试项目覆盖：推帧卡（从挂载帧回放）、依赖下层的卡（毛玻璃一类，下层是视频与图片）、画布卡、remotion 式卡、
  * 视频素材（带滤镜）与交叉溶解、图片素材、剪辑段（引用一条停放的剪辑，段从被引用剪辑的第 1 秒起）、隐藏序列、
  * 请求帧落在卡的挂载边界上。
@@ -26,6 +29,8 @@ import { PNG } from 'pngjs';
 import { exportUnified } from '../../server/bakery/export-unified.mjs';
 import { findFfmpeg } from '../../server/bakery/index.mjs';
 import { expandProject } from '../../server/render-node/expand.mjs';
+import { FramePipeline } from '../../server/frame-pipeline.mjs';
+import { renderProject } from '../../server/render-project.mjs';
 import { devOrigin } from './probe-connect.mjs';
 
 const argv = process.argv.slice(2);
@@ -123,31 +128,49 @@ async function main() {
   const allClips = project.tracks.reduce((n, t) => n + t.clips.length, 0) + project.cuts.reduce((n, c) => n + (c.tracks ?? []).reduce((m, t) => m + t.clips.length, 0), 0);
   const results = [];
   let identical = 0, frames = 0, diffPixels = 0;
+  const tally = (perFrame, a, b, f, extra = {}) => {
+    const c = comparePng(a, b);
+    frames += 1;
+    if (c.size && c.pixels === 0) identical += 1;
+    diffPixels += c.pixels;
+    perFrame.push({ frame: f, diffPixels: c.pixels, totalPixels: c.total, opaquePixels: c.opaque ?? null, ...extra });
+  };
+  const line = (perFrame) => perFrame.map((p) => `帧 ${p.frame} 不同像素 ${p.diffPixels}/${p.totalPixels}（不透明 ${p.opaquePixels}）`).join('；');
   try {
+    // 第一趟：导出取帧（exportUnified）
     for (const [i, req] of REQUESTS.entries()) {
       const exp = expandProject(project, { frames: req.frames });
       const dir = path.join(root, `r${i + 1}`);
       const full = await renderFrames(project, req.frames, path.join(dir, 'single'));
       const multi = await renderFrames(exp.project, req.frames, path.join(dir, 'multi'));
       const perFrame = [];
-      for (const f of req.frames) {
-        const c = comparePng(full.get(f), multi.get(f));
-        frames += 1;
-        if (c.size && c.pixels === 0) identical += 1;
-        diffPixels += c.pixels;
-        perFrame.push({ frame: f, diffPixels: c.pixels, totalPixels: c.total, opaquePixels: c.opaque ?? null });
-      }
-      const row = { request: req.name, frames: req.frames, clipsFull: allClips, clipsExpanded: exp.clipIds.length, keptClips: exp.clipIds, cards: exp.cardIds, media: exp.mediaIds, cuts: exp.cutIds, perFrame };
-      results.push(row);
-      console.log(`[MPE-PROBE] ${i + 1}. ${req.name}：帧 ${req.frames.join(',')}；片段 ${allClips} → ${exp.clipIds.length}（${exp.clipIds.join(',')}）；素材 ${exp.mediaIds.join(',') || '无'}；`
-        + perFrame.map((p) => `帧 ${p.frame} 不同像素 ${p.diffPixels}/${p.totalPixels}（不透明 ${p.opaquePixels}）`).join('；'));
+      for (const f of req.frames) tally(perFrame, full.get(f), multi.get(f), f);
+      results.push({ path: 'export', request: req.name, frames: req.frames, clipsFull: allClips, clipsExpanded: exp.clipIds.length, cards: exp.cardIds, media: exp.mediaIds, cuts: exp.cutIds, perFrame });
+      console.log(`[MPE-PROBE] ${i + 1}. ${req.name}：帧 ${req.frames.join(',')}；片段 ${allClips} → ${exp.clipIds.length}（${exp.clipIds.join(',')}）；素材 ${exp.mediaIds.join(',') || '无'}；${line(perFrame)}`);
+    }
+    // 第二趟：看画面那一路（工作进程的 renderFrames 用的 FramePipeline#see_frames）
+    if (!argv.includes('--no-pipeline')) {
+      const service = new FramePipeline({ root: path.join(root, 'pipeline'), origin: () => origin });
+      try {
+        for (const [i, req] of REQUESTS.entries()) {
+          const times = req.frames.map((f) => f / FPS);
+          const exp = expandProject(project, { frames: req.frames });
+          const full = await service.see_frames(renderProject(project), times);
+          const multi = await service.see_frames(renderProject(exp.project), times);
+          const perFrame = [];
+          for (const f of req.frames) tally(perFrame, full.get(f).buf, multi.get(f).buf, f, { source: [full.get(f).source ?? null, multi.get(f).source ?? null] });
+          results.push({ path: 'see_frames', request: req.name, frames: req.frames, clipsFull: allClips, clipsExpanded: exp.clipIds.length, perFrame });
+          console.log(`[MPE-PROBE see_frames] ${i + 1}. ${req.name}：${line(perFrame)}`);
+        }
+      } finally { await service.close(); }
     }
   } finally {
     if (!argv.includes('--keep')) for (const name of Object.values(media)) await fs.rm(path.join(mediaDir, name), { force: true });
   }
   const ok = identical === frames && diffPixels === 0;
-  console.log(JSON.stringify({ ok, requests: REQUESTS.length, frames, identical, diffPixels, out: root, origin, results: results.map(({ keptClips, ...r }) => r) }));
+  console.log(JSON.stringify({ ok, requests: REQUESTS.length, frames, identical, diffPixels, out: root, origin, results }));
   process.exit(ok ? 0 : 1);
 }
+
 
 main().catch((err) => { console.error(err?.stack || err); process.exit(2); });
