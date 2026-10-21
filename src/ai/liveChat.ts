@@ -106,8 +106,8 @@ export function useChatMessages(store: ChatStore = main): ChatMessage[] {
  * 没跑完的消息(pending)存下来也复原不了,一并去掉。
  * 条数封顶,免得一个长项目把 .proc 撑到几十兆。
  */
-export function messagesForSave(limit = 100): ChatMessage[] {
-  return main.get()
+export function messagesForSave(limit = 100, from: ChatStore = main): ChatMessage[] {
+  return from.get()
     .filter((m) => !m.pending)
     .slice(-limit)
     .map(({ trace, traceBytes, traceTruncated, ...rest }) => rest);
