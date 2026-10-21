@@ -37,6 +37,8 @@ const PATHS = {
   alignEnd: <path d="M19 5v14M15 12H5M12 9l3 3-3 3" />,
   pgPreview: <><rect x="3" y="5" width="18" height="14" rx="2.5" /><path d="M10.2 9.4v5.2l4.4-2.6z" /></>,
   pgTimeline: <><path d="M4 7h9M8 12h12M4 17h7" /><path d="M16 4v16" /></>,
+  send: <path d="M12 19V6M6.5 11.5L12 6l5.5 5.5" />,
+  stop: <rect x="7" y="7" width="10" height="10" rx="2" />,
   sparkle: <><path d="M11 3.5l1.9 5.4 5.4 1.9-5.4 1.9L11 18.1l-1.9-5.4L3.7 10.8l5.4-1.9z" /><path d="M18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" /></>,
 } as const;
 
