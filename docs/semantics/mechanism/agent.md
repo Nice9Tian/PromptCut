@@ -211,7 +211,7 @@
 
 - **气泡**：Agent 那一轮的出错话是红字一行（`src/editor/right/chat/AgentBubble.tsx:320`，`data-pc="agent-error"`）；发消息被拒的话挂在用户自己那条气泡下面（`src/editor/right/chat/UserBubble.tsx:95`，`data-pc="cloud-send-failed"`）。状态行（`status` 事件）不进气泡正文。
 - **「Agent 操作」面板**（`src/editor/right/chat/ActivityPanel.tsx`）：这一轮一个操作都没有时显示「这一轮失败了,没有执行任何操作:」接气泡里那句话（:117～:121）；有操作且以小结收尾时，最后一段的小结图标变红（:81）；状态行在「详细」视图里显示成「信息: <状态>」（:131）。下表「面板」一栏写「通则」的就是这样。
-- **云端的话怎么来的**：服务端事件 `error { code?, message? }` → `src/ai/cloud/events.ts:275` 折进消息 → `cloudErrorMessage`（:21）：带 `message` 的交 `friendlyErrorMessage`（:55）改写（中文原话放过，英文网关报错按 HTTP 码换成固定的话，**都截到 80 字**，`REASON_MAX`，:36）；只有代号的按代号取固定的话（:24～:32）。本机模式由 `src/ai/useAiChat.ts:759` 把 `error.message` 原样放进气泡，不改写、不截短。
+- **云端的话怎么来的**：服务端事件 `error { code?, message? }` → `src/ai/cloud/events.ts:275` 折进消息 → `cloudErrorMessage`（:21）：带 `message` 的交 `friendlyErrorMessage`（:55）改写（中文原话整句放过，只在超过 600 字的极端情况才截，`CJK_REASON_MAX`，2026-10-22 用户定「服务端写好的中文话不再截到 80 字」；英文网关报错按 HTTP 码换成固定的话，其余英文原文截到 80 字，`REASON_MAX`）；只有代号的按代号取固定的话（:24～:32）。本机模式由 `src/ai/useAiChat.ts:759` 把 `error.message` 原样放进气泡，不改写、不截短。
 - **排查**：云端对话的事件记录（页面「诊断报告」里有整段事件，按 `seq` 找 `error` / `status` / `diagnostic`）；用量流水（`<数据目录>/usage/`，每次模型请求一行，失败的 `ok: false`）；账号模式任务进程的日志在任务槽单元（`promptcut-agent-task-slot-*.service`）的 journal 里，主服务在 `promptcut-agent-master.service`，槽调度在 `promptcut-agent-root.service`；旧托管档看 `agent.run.end`（带 `state` 与 `reason`，`server/agent/service/create-agent-service.mjs:598`）。
 
 ### 云端：一轮里出错（气泡红字）
@@ -226,8 +226,8 @@
 | 连不上模型服务 | 原文含 `timeout` / `ECONNRESET` / `ENOTFOUND` / `fetch failed` / `network` 等 | 连不上模型服务(网络超时或被断开),这一轮没有执行,请稍后再试。 | 通则 | 闲置超时 `server/harness/idle-timeout.mjs`；`server/runners/api.mjs:430`（超时带 `retryable`）→ `events.ts:72` | 事件 `error`；节点出网 |
 | 别的 HTTP 错误（含 400） | 有 `HTTP <码>`、不属于上面几种 | 模型调用失败(HTTP <码>):<原文压成一行、去掉密钥与请求号、截到 80 字> | 通则 | `base.mjs:149` → `events.ts:75` | 事件 `error` 的原文；输出上限引起的 400 已先降档或换字段重发过一次（日志 `[harness.max-output-fallback]`，`server/harness/providers/output-fallback.mjs:7`；事件 `diagnostic` 的 `stage: 'max-output-fallback'`） |
 | 模型流出错、没有 HTTP 码 | 英文原文、无 HTTP 码、无代号 | 模型调用失败:<原文压短> | 通则 | 例：`server/harness/providers/openai.mjs:346`（流提前结束）、`gemini.mjs:223`（没有正常收尾）→ `events.ts:76` | 事件 `error` |
-| 模型那一路的中文报错 | 原文含中文、无代号 | 原话（不以「模型」开头的前面加「模型调用失败:」），截到 80 字 | 通则 | 例：`server/harness/agent.mjs:237`（没有返回文字或工具调用）、`:159`（重复的工具调用 ID）→ `events.ts:62` | 事件 `error`；`diagnostic` 的 `request` / `response` |
-| 回复被截断、次数超限（A07） | 原文含「超过单次输出上限被截断，这一轮没能完成」 | 模型的回复[连续 N 次]超过单次输出上限被截断，这一轮没能完成。[已经写出的部分存在代码块 <块名> 里，下一条消息可以让它接着写。]可以把要求拆小一点再发，或请管理员调大单次输出上限。（云端截到 80 字，后半句看不到；本机完整） | 通则 | `server/harness/agent.mjs:226` → `events.ts:62` | 事件 `diagnostic` 的 `stage: 'truncated'`（每次截断一条：`partials`、`saved`、`salvaged`、`stalled`）；代码块目录里的 `cut_*.txt` |
+| 模型那一路的中文报错 | 原文含中文、无代号 | 原话（不以「模型」开头的前面加「模型调用失败:」），整句显示 | 通则 | 例：`server/harness/agent.mjs:237`（没有返回文字或工具调用）、`:159`（重复的工具调用 ID）→ `events.ts:62` | 事件 `error`；`diagnostic` 的 `request` / `response` |
+| 回复被截断、次数超限（A07） | 原文含「超过单次输出上限被截断，这一轮没能完成」 | 模型的回复[连续 N 次]超过单次输出上限被截断，这一轮没能完成。[已经写出的部分存在代码块 <块名> 里，下一条消息可以让它接着写。]可以把要求拆小一点再发，或请管理员调大单次输出上限。（云端与本机都整句显示） | 通则 | `server/harness/agent.mjs:226` → `events.ts:62` | 事件 `diagnostic` 的 `stage: 'truncated'`（每次截断一条：`partials`、`saved`、`salvaged`、`stalled`）；代码块目录里的 `cut_*.txt` |
 | 回复被截断、已让它接着写（A07，不是出错） | 事件 `status` | 不进气泡。状态行：模型这次回复超过单次输出上限被截断了；写了一半的 <工具>（<N> 字） 已存进代码块 <块名>，已让它接着写。／没留下内容时：模型这次回复超过单次输出上限被截断了，没有执行任何操作；已让它接着做。 | 详细视图「信息: …」 | `server/harness/truncation.mjs:67`、`:68`，由 `agent.mjs:228` 发出 | 同上 |
 | 额度用尽（一轮中途） | 事件 `error`，`code: 'quota-exceeded'`，`message` 是闸写的话 | 这个项目的云端 Agent 额度已用完(已用 <N> / 上限 <M>)。请联系托管方。 | 通则 | 闸 `server/agent/service/gate.mjs:143`；账号模式在每次模型请求前抛 `server/agent/service/account-runner.mjs:365`，`api.mjs:438` 发出 → `events.ts:62` | 用量流水；`<数据目录>/limits.json` |
 | 开关被关（一轮中途，模型请求前） | `code: 'disabled'` | 项目创建者已关闭云端 Agent。 | 通则 | `gate.mjs:149` → `account-runner.mjs:365` | 文档服务里项目的「云端 Agent」开关 |

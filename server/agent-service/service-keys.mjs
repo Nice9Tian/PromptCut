@@ -57,8 +57,10 @@ const SERVICES = {
       if (!models.length) throw new ImportKeyError('bad-content', '密文里没有写模型清单。请让对方在「模型」一栏填上(多个用 | 分隔,第一个是缺省)。');
       if (cfg.baseUrl && !httpUrl(cfg.baseUrl)) throw new ImportKeyError('bad-content', '密文里的接口地址要以 http:// 或 https:// 开头。');
       const old = readModelConfig(dataDir);
-      const maxTokens = cfg.maxTokens ?? (old.vendor && old.vendor !== 'mock' ? old.maxTokens : 4096) ?? 4096;
-      if (!Number.isSafeInteger(maxTokens) || maxTokens < 256) throw new ImportKeyError('bad-content', 'token 上限要是不小于 256 的整数。');
+      // 密文没写上限时按模型的最大上限(0;2026-10-22 用户定「默认到最大」);旧配置里自动写的 4096 当作没填
+      const oldMax = old.vendor && old.vendor !== 'mock' && old.maxTokens && old.maxTokens !== 4096 ? old.maxTokens : 0;
+      const maxTokens = cfg.maxTokens ?? oldMax;
+      if (!Number.isSafeInteger(maxTokens) || (maxTokens !== 0 && maxTokens < 256)) throw new ImportKeyError('bad-content', 'token 上限要是 0(按模型最大)或不小于 256 的整数。');
       const replaced = fs.existsSync(modelConfigPaths(dataDir).keyFile);
       writeModelConfig(dataDir, { vendor: cfg.vendor, baseUrl: cfg.baseUrl, model: models.join('|'), maxTokens }, cfg.apiKey);
       return { vendor: cfg.vendor, models, defaultModel: models[0], maxTokens, replaced };
