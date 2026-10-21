@@ -304,6 +304,8 @@
 .ais-code-paste[open] { display: grid; gap: 8px; }
 .ais-code-row { display: flex; align-items: center; gap: 8px; }
 .ais-code-row input { flex: 1 1 auto; min-width: 0; }
+.ais-code-row button { flex: 0 0 auto; white-space: nowrap; }
+.ais-code-paste .ais-detail { font-size: 12px; line-height: 1.5; }
 
 /* ── API 配置的加密分发 ───────────────────────────────── */
 .ais-share-toggle {
