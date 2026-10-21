@@ -376,7 +376,7 @@ test('AG-10 工具表:每个工具都标了 side(agent / page / server),事件�
   assert.deepEqual([...sides].sort(), ['agent', 'page', 'server']);
   assert.equal(Object.keys(toolGroups).length, tools.length);
   // 只读页面独有状态的留在页面;写项目的纯项目工具在 Agent 服务端
-  for (const n of ['get_selection', 'seek', 'play', 'pause', 'web_handoff', 'list_cards']) assert.equal(toolDef(n).side, 'page', n);
+  for (const n of ['get_selection', 'user_interface_seek', 'user_interface_play', 'user_interface_pause', 'user_interface_web_handoff', 'list_cards']) assert.equal(toolDef(n).side, 'page', n);
   for (const n of ['add_clip', 'update_clip', 'set_position', 'get_layout', 'get_project', 'see_frames', 'apply_card', 'fill_captions']) assert.equal(toolDef(n).side, 'agent', n);
 });
 

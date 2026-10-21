@@ -21,6 +21,7 @@
 import { randomUUID } from 'node:crypto';
 import { annotateResult, clipIdsOfOps, overwroteView } from './user-editing.mjs';
 import { parkedCutsIndex, cutLookView } from './ssr-host.mjs';
+import { modelToolName } from '../tools/ui-names.mjs';
 
 export const AGENT_EXEC_DEFAULTS = Object.freeze({
   /** 被拒(stale)后等副本追上文档服务的当前版本,Agent 马上重读就能读到最新的 */
@@ -625,7 +626,9 @@ export function createAgentExecutor({
      * 执行一个 `side: "agent"` 的工具。回 `undefined` 表示服务端不接(交给页面):目前只有 `see_frames` 的素材拼图。
      * `ctx` 由 `track` 传进来,执行器把这次写入(`write`)记在上面。
      */
-    async execute(tool, args, agentKey, toolDef, ctx = {}) {
+    async execute(toolIn, args, agentKey, toolDef, ctx = {}) {
+      // 旧名(switch_cut 等)照常认:路由表与 PAGE_STATE_TOOLS 用的是新名(server/tools/ui-names.mjs)
+      const tool = modelToolName(toolIn);
       const conv = conversationOf(agentKey);
       stats.executed += 1;
       const required = toolDef?.inputSchema?.required ?? [];

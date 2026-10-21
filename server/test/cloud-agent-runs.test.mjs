@@ -621,13 +621,14 @@ test('CA-PAGE-01 / CA-TOOL-03 页面状态按对话找、发起方在线才用;�
 
   await t.test('CA-PAGE-01 两个对话各用各的播放头;发起方不在线时照常执行、播放头按 0 记并注明', async () => {
     // 同一位成员同时开两个对话,带不同的播放头;都连着看
-    await svc.send(A1, 'c-p1', { pageState: { t: 2.5, selection: ['c1'] }, prompt: script([{ sleepMs: 400 }, { tool: 'add_cut', input: { name: '甲剪辑' } }, { sleepMs: 20_000 }]) });
+    await svc.send(A1, 'c-p1', { pageState: { t: 2.5, selection: ['c1'] }, prompt: script([{ sleepMs: 400 }, { tool: 'add_cut', input: { name: '甲剪辑' } }, { tool: 'user_interface_switch_cut', input: { name: '甲剪辑' } }, { sleepMs: 20_000 }]) });
     await svc.send(A1, 'c-p2', { pageState: { t: 7.25, selection: [] }, prompt: script([{ sleepMs: 20_000 }]) });
     const s1 = collect();
     svc.subscribe(A1, 'c-p1', 0, s1.cb);
     const off2 = svc.subscribe(A1, 'c-p2', 0, () => {});
-    await waitFor(() => s1.seen.some((e) => e.type === 'tool_result'), 60_000, 'c-p1 切完剪辑');
-    const r1 = s1.seen.find((e) => e.type === 'tool_result');
+    // add_cut 2026-10-21 起只建不切,切剪辑(要播放头的)是第二步
+    await waitFor(() => s1.seen.filter((e) => e.type === 'tool_result').length >= 2, 60_000, 'c-p1 切完剪辑');
+    const r1 = s1.seen.filter((e) => e.type === 'tool_result')[1];
     assert.equal(r1.ok, true, r1.summary);
     assert.equal(/发起方不在线/.test(r1.summary), false);
     const after1 = JSON.stringify((await kit.doc.stateOf('p-a')).project);
@@ -636,13 +637,15 @@ test('CA-PAGE-01 / CA-TOOL-03 页面状态按对话找、发起方在线才用;�
     // c-p2 在线:用 7.25
     const inst = svc._instance(A1);
     await inst.callTool('get_project', {}, 'c-p2');
-    const r2 = await inst.callTool('add_cut', { name: '乙剪辑' }, 'c-p2');
+    await inst.callTool('add_cut', { name: '乙剪辑' }, 'c-p2');
+    const r2 = await inst.callTool('user_interface_switch_cut', { name: '乙剪辑' }, 'c-p2');
     assert.equal(r2.initiatorOffline, undefined);
     assert.ok(JSON.stringify((await kit.doc.stateOf('p-a')).project).includes(':7.25'));
     // c-p2 的发起方走了:照常执行,播放头按 0 记,结果里注明;立刻回,不等
     off2();
     const t0 = Date.now();
-    const r3 = await inst.callTool('add_cut', { name: '丙剪辑' }, 'c-p2');
+    await inst.callTool('add_cut', { name: '丙剪辑' }, 'c-p2');
+    const r3 = await inst.callTool('user_interface_switch_cut', { name: '丙剪辑' }, 'c-p2');
     assert.ok(Date.now() - t0 < 1000);
     assert.equal(r3.ok !== false, true, JSON.stringify(r3).slice(0, 300));
     assert.equal(r3.initiatorOffline, true);

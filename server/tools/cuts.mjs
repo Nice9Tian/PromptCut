@@ -43,7 +43,7 @@ export const cutsTools = [
   },
   {
     name: "user_interface_switch_cut",
-    description: "**会动用户的界面**:把所有成员共享的激活剪辑切到另一条(按 cutId 或 name 二选一),每个人的时间轴一起翻过去,播放头回到这条上次离开的位置,选中清空。" +
+    description: "**会动用户的界面**:把所有成员共享的激活剪辑切到另一条(按 cutId 或 name 二选一),所有成员的界面一起翻过去,播放头回到这条上次离开的位置,选中清空。" +
       "**只有用户明说要「切到 / 打开某某剪辑」,或你要在别的剪辑里新增 / 删除 / 切分 / 复制片段时才用。**" +
       "只是改别的剪辑里已有的片段不要用它(clipId 在 list_cuts 或 get_project 的 parkedCuts 里,直接交给 update_clip 等就地改);" +
       "只是看别的剪辑的画面也不要用它(see_frames 传 cutId)。切过去再切回来是两次多余的写入,也会打断别人正在看的时间轴。" +

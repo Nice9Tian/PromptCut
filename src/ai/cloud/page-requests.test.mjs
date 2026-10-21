@@ -31,6 +31,7 @@ import { createCloudSession } from "./session.ts";
 import { createCloudApi } from "./cloudApi.ts";
 import { CLOUD_PAGE_TOOLS } from "../../../server/agent/service/cloud-tools.mjs";
 import { PAGE_BRIDGE_TOOLS, PAGE_REQUEST_VERSION } from "../../../server/agent/service/page-bridge.mjs";
+import { pageToolName } from "../../../server/tools/ui-names.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.resolve(HERE, "..", "..");
@@ -207,8 +208,18 @@ test("CAU-REV-04 只看不动的页面不报页面号、不执行;关掉或换�
   s2.close();
 });
 
-test("CAU-REV-05 对账:页面的白名单与服务端经反向通道的工具表是同一组", () => {
-  assert.deepEqual([...CLOUD_PAGE_REQUEST_TOOLS].sort(), [...CLOUD_PAGE_TOOLS].sort());
+test("CAU-REV-05 对账:页面的白名单与服务端经反向通道的工具表是同一组(服务端是模型侧的新名,发给页面换回旧的内部操作名)", () => {
+  assert.deepEqual([...CLOUD_PAGE_REQUEST_TOOLS].sort(), [...CLOUD_PAGE_TOOLS].map(pageToolName).sort());
+});
+
+test("CAU-REV-05b 页面一侧新旧名字都认(请求里的 tool 是旧的内部操作名,新名 user_interface_* 也执行)", async () => {
+  const calls = [];
+  const exec = { seek: (a) => { calls.push(["seek", a.t]); return { ok: true }; }, play: () => { calls.push(["play"]); return { ok: true }; }, pause: () => ({ ok: true }), getSelection: () => [] };
+  const a = await runPageRequest({ type: "page.request", id: "req-00000001", tool: "seek", args: { t: 2 } }, exec);
+  const b = await runPageRequest({ type: "page.request", id: "req-00000002", tool: "user_interface_seek", args: { t: 3 } }, exec);
+  const c = await runPageRequest({ type: "page.request", id: "req-00000003", tool: "user_interface_play", args: {} }, exec);
+  assert.deepEqual([a.ok, b.ok, c.ok], [true, true, true]);
+  assert.deepEqual(calls, [["seek", 2], ["seek", 3], ["play"]]);
 });
 
 test("CAU-REV-06 守门:触发执行的入口只有事件流;接口层带委托票据交回", async () => {

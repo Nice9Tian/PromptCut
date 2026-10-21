@@ -24,6 +24,8 @@
  * 两道:`pending` 的工具不交给模型(`cloudOpenTools()` 传给驱动当过滤);工具调用的总入口(`instance.mjs`)再判一次。
  */
 
+import { modelToolName } from '../../tools/ui-names.mjs';
+
 const R = 'route';
 const H = 'hosted';
 const S = 'server';
@@ -202,7 +204,9 @@ export const CLOUD_PAGE_STATE_READS = Object.freeze(new Set(['get_selection']));
 export const CLOUD_PLAYHEAD_TOOLS = Object.freeze(new Set(['user_interface_switch_cut', 'remove_cut']));
 
 /** 「发起方不在线」的回答(模型据此继续,不等) */
-export function initiatorOffline(tool) {
+export function initiatorOffline(toolIn) {
+  // 旧名(seek 等,发给页面的内部操作名)也认:话里写模型侧的新名(server/tools/ui-names.mjs)
+  const tool = modelToolName(toolIn);
   // 读选区的那一句是用户审过的原话(契约第 22.2 节),不改
   if (tool === 'get_selection') return { ok: false, initiatorOffline: true, error: '发起方不在线,读不到页面的选区。请按项目内容继续,不要等待。' };
   const what = CLOUD_TOOL_PLAN[tool]?.what ?? '页面';
@@ -210,7 +214,8 @@ export function initiatorOffline(tool) {
 }
 
 /** 发起方在线、但这个工具在云端经不了他的页面(网页接管、扫码登录、开子 Agent 页签):写明差什么 */
-export function initiatorUnreachable(tool) {
+export function initiatorUnreachable(toolIn) {
+  const tool = modelToolName(toolIn);
   const plan = CLOUD_TOOL_PLAN[tool];
   const what = plan?.what ?? '页面';
   const why = plan?.online ?? '云端还不能经他的页面做这一步';
@@ -225,7 +230,8 @@ export function initiatorUnreachable(tool) {
  * @param {string} tool
  * @param {{ has(name: string): boolean } | null} [provided] 这个进程里真的建出了提供者的工具(见文件头 provider 一条);不给就只按静态表判
  */
-export function checkCloudTool(tool, provided = null) {
+export function checkCloudTool(toolIn, provided = null) {
+  const tool = modelToolName(toolIn);
   const plan = Object.hasOwn(CLOUD_TOOL_PLAN, tool) ? CLOUD_TOOL_PLAN[tool] : null;
   if (plan?.disabled === true) return { ok: false, cloudUnavailable: true, error: '云端暂不支持开子 Agent' };
   // 这个进程里真的建出了它的提供者:可用(提供者自己再如实回「这台节点没配 / 用不了」)

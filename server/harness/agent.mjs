@@ -1,4 +1,5 @@
 import { MessageHistory } from './history.mjs';
+import { modelToolName } from '../tools/ui-names.mjs';
 
 const canonical = value => JSON.stringify(value, (_key, v) => v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
 /** 各家「写到单次输出上限被截断」的停止原因：OpenAI 兼容口 `length`、Anthropic `max_tokens`、Gemini `MAX_TOKENS` */
@@ -212,7 +213,8 @@ export class Agent {
       // Multiple calls still share one model round trip.
       for (const call of calls) {
         checkAbort(this.signal);
-        const tool = this.tools.find(t => t.name === call.name);
+        // 会动用户界面的工具改了名(user_interface_ 前缀,2026-10-21):老对话的历史里还是旧名,模型照着调旧名时照常认
+        const tool = this.tools.find(t => t.name === call.name) ?? this.tools.find(t => t.name === modelToolName(call.name));
         const begin = Date.now();
         this.onEvent({ type: 'tool_call', callId: call.id, round, name: call.name, input: call.input });
         const toolHeartbeat = setInterval(() => progress(round, 'executing', `正在执行 ${call.name}，已等待 ${Math.floor((Date.now() - begin) / 1000)} 秒…`), 5000);

@@ -9,6 +9,7 @@ import { test } from 'node:test';
 import { toolToVendor, sanitizeSchema } from '../harness/schema.mjs';
 import { tools as mcpTools } from '../mcp-tools.mjs';
 import { TOOL_ROUTES } from '../../src/mcp/routes.mjs';
+import { modelToolName } from '../tools/ui-names.mjs';
 import { buildParamsSchema, injectCardParams, injectPartParams, buildPartParamsSchema } from '../card-params-schema.mjs';
 
 /** 两张形状不同的卡,够覆盖 text / number / select / required */
@@ -136,7 +137,8 @@ test('执行器分发的每个工具名，mcp-tools 里都真的有声明', () =
     ...[...src.matchAll(/tool === "([a-z_]+)"/g)].map((m) => m[1]),
     ...[...src.matchAll(/case "(web_[a-z_]+)":/g)].map((m) => m[1]),
   ];
-  const orphans = dispatched.filter((n) => !declared.has(n));
+  // 页面执行器里网页接管按旧的内部操作名分支(case "web_handoff"),进门先换成新名(server/tools/ui-names.mjs):认它对应的新名
+  const orphans = dispatched.filter((n) => !declared.has(n) && !declared.has(modelToolName(n)));
   assert.deepEqual(orphans, [], `执行器分发了但没声明的工具：${orphans.join('、')}`);
 });
 

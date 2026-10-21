@@ -148,7 +148,7 @@ test('云端 Agent 的反向通道(服务层)', async (t) => {
     const t0 = Date.now();
     const out = await inst.callTool('seek', { t: 1 }, 'c-r5');
     assert.equal(out.initiatorOffline, true);
-    assert.match(out.error, /发起方不在线,seek 要用到他的播放头/);
+    assert.match(out.error, /发起方不在线,user_interface_seek 要用到他的播放头/);
     assert.ok(Date.now() - t0 < 150, '不等待');
     // 没有任何窗口连着:选区也回不在线(那句用户审过的原话)
     assert.deepEqual(await inst.callTool('get_selection', {}, 'c-r5'), { ok: false, initiatorOffline: true, error: '发起方不在线,读不到页面的选区。请按项目内容继续,不要等待。' });
@@ -275,10 +275,10 @@ test('云端 Agent 的反向通道(服务层)', async (t) => {
   });
 
   await t.test('CA-REV-11 工具表:经反向通道恰好四个;其余页面工具按各自关闭/不支持规则答复', async () => {
-    assert.deepEqual([...CLOUD_PAGE_TOOLS].sort(), ['get_selection', 'pause', 'play', 'seek']);
+    assert.deepEqual([...CLOUD_PAGE_TOOLS].sort(), ['get_selection', 'user_interface_pause', 'user_interface_play', 'user_interface_seek']);
     assert.equal(CLOUD_INITIATOR_TOOLS.size, 8);
     const rest = [...CLOUD_INITIATOR_TOOLS].filter((n) => !CLOUD_PAGE_TOOLS.has(n)).sort();
-    assert.deepEqual(rest, ['collect_login', 'collect_login_check', 'spawn_agent', 'web_handoff']);
+    assert.deepEqual(rest, ['collect_login_check', 'spawn_agent', 'user_interface_collect_login', 'user_interface_web_handoff']);
     await kit.service.send(alice, 'c-r11', { prompt: hold(), pageId: PAGE });
     const inst = kit.service._instance(alice);
     const me = page(kit, alice, 'c-r11', PAGE);
@@ -314,7 +314,7 @@ test('CA-REV-10 HTTP:pageId、?page=、POST page-results;别人的对话 404,不
   const B = { Authorization: 'Bearer test:p-a:bob@dev-b' };
   const post = (p, headers, body) => fetch(`${svc.url}${p}`, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
-  const steps = [{ sleepMs: 300 }, { tool: 'seek', input: { t: 6 } }, { tool: 'pause', input: {} }, { sleepMs: 300 }, { say: '好了' }];
+  const steps = [{ sleepMs: 300 }, { tool: 'user_interface_seek', input: { t: 6 } }, { tool: 'user_interface_pause', input: {} }, { sleepMs: 300 }, { say: '好了' }];
   const sent = await post('/v1/conversations/c-h/messages', A, { prompt: script(steps), pageId: PAGE });
   assert.equal(sent.status, 202);
   await sent.arrayBuffer();
@@ -358,7 +358,7 @@ test('CA-REV-10 HTTP:pageId、?page=、POST page-results;别人的对话 404,不
   assert.deepEqual(reqs.map((r) => [r.tool, r.args]), [['seek', { t: 6 }], ['pause', {}]]);
   assert.ok(reqs.every((r) => r.seq === undefined));
   const results = mine.events.filter((e) => e.type === 'tool_result');
-  assert.deepEqual(results.map((e) => [e.name, e.ok]), [['seek', true], ['pause', true]]);
+  assert.deepEqual(results.map((e) => [e.name, e.ok]), [['user_interface_seek', true], ['user_interface_pause', true]]);
   // 按请求聚合回答,保留原来 3 秒的防卡死上限;任何回答失败都向测试传播。
   let answerTimer;
   try {

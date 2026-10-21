@@ -159,11 +159,12 @@ const pageStateCalls = (a) => a.pageCalls.filter((c) => c.tool === PAGE_STATE_TO
 
 // ------------------------------------------------------------------ 工具表
 
-test('AP-1 工具表:五个工具都在 Agent 服务端(side agent);要页面状态的只有切剪辑三个(播放头)与 attach_clip_motion(轨迹)', () => {
+test('AP-1 工具表:五个工具都在 Agent 服务端(side agent);要页面状态的只有切剪辑两个(播放头)与 attach_clip_motion(轨迹)', () => {
   const side = (n) => tools.find((t) => t.name === n)?.side;
-  for (const n of ['set_project_meta', 'switch_cut', 'add_cut', 'remove_cut', 'attach_clip_motion']) assert.equal(side(n), 'agent', n);
+  for (const n of ['set_project_meta', 'user_interface_switch_cut', 'add_cut', 'remove_cut', 'attach_clip_motion']) assert.equal(side(n), 'agent', n);
+  // add_cut 2026-10-21 起只建不切,不再要播放头;切剪辑改名 user_interface_switch_cut
   assert.deepEqual(Object.fromEntries(Object.entries(PAGE_STATE_TOOLS).map(([k, v]) => [k, [...v]])), {
-    switch_cut: ['t'], add_cut: ['t'], remove_cut: ['t'], attach_clip_motion: ['track'],
+    user_interface_switch_cut: ['t'], remove_cut: ['t'], attach_clip_motion: ['track'],
   });
 });
 
@@ -173,11 +174,17 @@ test('AP-2 switch_cut:向页面要一次播放头;写入以 agent 身份进文�
   const env = await startEnv(t);
   const watcher = await seeded(env, 'p-ps-2', cutsProject());
   const a = env.agent('p-ps-2', { pageState: { t: 4.5 } });
-  const r = await a.call('switch_cut', { cutId: 'k2' });
+  const r = await a.call('user_interface_switch_cut', { cutId: 'k2' });
   assert.ok(r.ok, String(r.error?.message ?? ''));
   assert.equal(r.value.activeCutId, 'k2');
-  assert.deepEqual(pageStateCalls(a), [{ tool: PAGE_STATE_TOOL, args: { tool: 'switch_cut', args: { cutId: 'k2' }, keys: ['t'] } }], '页面状态只要一次,只要播放头');
-  assert.ok(!a.pageCalls.some((c) => c.tool === 'switch_cut'), '写入不经页面');
+  assert.deepEqual(pageStateCalls(a), [{ tool: PAGE_STATE_TOOL, args: { tool: 'user_interface_switch_cut', args: { cutId: 'k2' }, keys: ['t'] } }], '页面状态只要一次,只要播放头');
+  assert.ok(!a.pageCalls.some((c) => c.tool === 'switch_cut' || c.tool === 'user_interface_switch_cut'), '写入不经页面');
+  // 旧名照常认(老对话的历史里还是旧名)
+  const back = await a.call('switch_cut', { cutId: 'k1' });
+  assert.ok(back.ok, String(back.error?.message ?? ''));
+  assert.equal(back.value.activeCutId, 'k1');
+  const again = await a.call('user_interface_switch_cut', { cutId: 'k2' });
+  assert.ok(again.ok, String(again.error?.message ?? ''));
   const st = await env.stateOf('p-ps-2');
   assert.equal(st.project.activeCutId, 'k2');
   assert.equal(st.project.cuts.find((c) => c.id === 'k1').t, 4.5, '离开的剪辑停放着页面给的播放头');
@@ -188,7 +195,7 @@ test('AP-2 switch_cut:向页面要一次播放头;写入以 agent 身份进文�
   assert.equal(op.actor.conversation, 1);
 });
 
-test('AP-3 add_cut(缺省切过去)与 remove_cut(删当前剪辑):各向页面要一次播放头;页面通道不通时退回服务端记着的播放头,照样写成', async (t) => {
+test('AP-3 add_cut 只建不切(不要页面状态);切过去、remove_cut(删当前剪辑)各向页面要一次播放头;页面通道不通时退回服务端记着的播放头,照样写成', async (t) => {
   const env = await startEnv(t);
   await seeded(env, 'p-ps-3', cutsProject());
   const a = env.agent('p-ps-3', { pageState: { t: 2.25 } });
@@ -196,7 +203,12 @@ test('AP-3 add_cut(缺省切过去)与 remove_cut(删当前剪辑):各向页面�
   assert.ok(added.ok, String(added.error?.message ?? ''));
   let st = await env.stateOf('p-ps-3');
   assert.equal(st.project.cuts.length, 4);
-  assert.equal(st.project.activeCutId, added.value.cut.id, '新建后切了过去');
+  assert.equal(st.project.activeCutId, 'k1', 'add_cut 只建不切(2026-10-21 用户定)');
+  assert.equal(pageStateCalls(a).length, 0, 'add_cut 不要页面状态');
+  const sw0 = await a.call('user_interface_switch_cut', { cutId: added.value.cut.id });
+  assert.ok(sw0.ok, String(sw0.error?.message ?? ''));
+  st = await env.stateOf('p-ps-3');
+  assert.equal(st.project.activeCutId, added.value.cut.id);
   assert.equal(st.project.cuts.find((c) => c.id === 'k1').t, 2.25, '原来的剪辑停放着页面给的播放头');
 
   const removed = await a.call('remove_cut', { cutId: added.value.cut.id });
@@ -207,7 +219,7 @@ test('AP-3 add_cut(缺省切过去)与 remove_cut(删当前剪辑):各向页面�
   assert.equal(pageStateCalls(a).length, 2, '每次调用各要一次');
 
   const down = env.agent('p-ps-3', { pageDown: true });
-  const sw = await down.call('switch_cut', { cutId: 'k3' });
+  const sw = await down.call('user_interface_switch_cut', { cutId: 'k3' });
   assert.ok(sw.ok, `页面不在也能切:${sw.error?.message ?? ''}`);
   assert.equal(pageStateCalls(down).length, 1, '试过一次页面通道');
 });

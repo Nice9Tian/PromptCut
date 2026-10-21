@@ -140,7 +140,7 @@ test('C65B-D1-06 工具逐条标 side：写工具与 get_project / get_layout �
   const unlabeled = tools.filter((x) => sideOf(x) === undefined).map((x) => `${x.name}=${x.side}`);
   assert.deepEqual(unlabeled, [], '每个工具都标了执行位置');
   const agentSide = ['add_clip', 'update_clip', 'remove_clip', 'set_project_meta', 'set_rect', 'add_track', 'create_filter', 'get_project', 'get_layout'];
-  const pageSide = ['get_selection', 'seek', 'play', 'pause', 'web_handoff'];
+  const pageSide = ['get_selection', 'user_interface_seek', 'user_interface_play', 'user_interface_pause', 'user_interface_web_handoff'];
   for (const n of [...agentSide, ...pageSide]) assert.ok(byName.has(n), `工具表里有 ${n}`);
   assert.deepEqual(agentSide.filter((n) => sideOf(byName.get(n)) !== 'agent').map((n) => `${n}=${byName.get(n).side}`), [], '写工具与 D4 的读工具在 Agent 服务端');
   assert.deepEqual(pageSide.filter((n) => sideOf(byName.get(n)) !== 'page').map((n) => `${n}=${byName.get(n).side}`), [], '只读页面独有状态的工具留在页面');
@@ -150,8 +150,10 @@ test('C65B-D1-07 留在页面的工具仍经页面执行：get_selection、seek 
   const { env, agent } = await setup(t);
   const rev0 = (await stateOf(env)).rev;
   await agent.call('get_selection');
-  await agent.call('seek', { t: 1 });
-  assert.deepEqual(agent.pageCalls.map((c) => c.tool), ['get_selection', 'seek'], `页面侧工具经页面：${JSON.stringify(agent.pageCalls)}`);
+  await agent.call('user_interface_seek', { t: 1 });
+  await agent.call('seek', { t: 2 });
+  // 发给页面的是旧的内部操作名(新旧名调用都一样),0.7.18 的页面也认得
+  assert.deepEqual(agent.pageCalls.map((c) => c.tool), ['get_selection', 'seek', 'seek'], `页面侧工具经页面：${JSON.stringify(agent.pageCalls)}`);
   assert.equal((await stateOf(env)).rev, rev0, '页面侧工具不产生提交');
 });
 

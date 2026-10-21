@@ -120,7 +120,7 @@ test('CA-TOOL-02 工具表里的每个工具都归了类;在副本上执行的�
   }
   assert.ok(pendingByReason().size >= 5);
   assert.deepEqual([...CLOUD_HOSTED_TOOLS].sort(), ['cancel_card_audio', 'card_authoring_guide', 'collect_download', 'collect_install', 'collect_job', 'collect_logout', 'collect_probe', 'collect_search', 'collect_status', 'create_card', 'edit_card', 'get_card_source', 'import_media', 'measure_audio', 'render_card_audio', 'sound_cancel', 'sound_generate', 'sound_status', 'voice_generate', 'voice_list']);
-  assert.deepEqual([...CLOUD_INITIATOR_TOOLS].sort(), ['collect_login', 'collect_login_check', 'get_selection', 'pause', 'play', 'seek', 'spawn_agent', 'web_handoff']);
+  assert.deepEqual([...CLOUD_INITIATOR_TOOLS].sort(), ['collect_login_check', 'get_selection', 'spawn_agent', 'user_interface_collect_login', 'user_interface_pause', 'user_interface_play', 'user_interface_seek', 'user_interface_web_handoff']);
   assert.deepEqual(checkCloudTool('update_clip'), { ok: true, mode: 'route' });
   assert.deepEqual(checkCloudTool('create_card'), { ok: true, mode: 'hosted' });
   const no = checkCloudTool('web_open');

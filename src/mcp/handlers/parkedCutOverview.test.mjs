@@ -62,7 +62,7 @@ test("get_project:parkedCuts 排在最前面,列出停放剪辑的片段(不带 
     { id: "b1", trackId: "tb1", cardId: "particles-pk", cardName: "粒子背景", label: "粒子背景", start: 0, end: 6 },
     { id: "b2", trackId: "tb1", cardId: "particles-pk", cardName: "粒子背景", start: 1, end: 2 },
   ]);
-  assert.match(r.parkedCuts.note, /不用 switch_cut/);
+  assert.match(r.parkedCuts.note, /不用 user_interface_switch_cut/);
   assert.deepEqual(r.tracks.map((t) => t.id), ["ta1"], "tracks 仍是激活剪辑的");
   assert.equal(getState().project.activeCutId, "A", "只读");
 });
@@ -87,7 +87,7 @@ test("工具回包的 timeline:别的剪辑有内容时带 otherCuts;就地改�
   fresh();
   const a = call("update_clip", { clipId: "a1", opacity: 0.8 });
   assert.deepEqual(a.timeline.otherCuts.cuts, [{ cutId: "B", name: "剪辑2", clipCount: 2 }]);
-  assert.match(a.timeline.otherCuts.hint, /不用 switch_cut/);
+  assert.match(a.timeline.otherCuts.hint, /不用 user_interface_switch_cut/);
   const b = call("update_clip", { clipId: "b1", opacity: 0.8 });
   assert.equal(b.cut.id, "B");
   assert.equal("otherCuts" in b.timeline, false);
@@ -98,7 +98,7 @@ test("工具回包的 timeline:别的剪辑有内容时带 otherCuts;就地改�
 
 test("switch_cut 的回包带 note:切换会让所有成员的界面一起翻,改已有片段不需要它", () => {
   fresh();
-  const r = call("switch_cut", { cutId: "B" });
+  const r = call("user_interface_switch_cut", { cutId: "B" });
   assert.equal(r.activeCutId, "B");
   assert.match(r.note, /已切换到「剪辑2」/);
   assert.match(r.note, /所有成员的界面一起翻/);
@@ -110,11 +110,11 @@ test("工具说明:get_project / list_cuts / switch_cut 指路 parkedCuts,switch
   const { tools } = await import("../../../server/mcp-tools.mjs");
   const d = (n) => tools.find((t) => t.name === n).description;
   assert.match(d("get_project"), /parkedCuts/);
-  assert.match(d("get_project"), /不用 switch_cut/);
+  assert.match(d("get_project"), /不用 user_interface_switch_cut/);
   assert.match(d("list_cuts"), /parkedCuts/);
-  assert.match(d("list_cuts"), /不要 switch_cut/);
-  assert.match(d("switch_cut"), /不要用它/);
-  assert.match(d("switch_cut"), /所有成员的界面/);
+  assert.match(d("list_cuts"), /不要 user_interface_switch_cut/);
+  assert.match(d("user_interface_switch_cut"), /不要用它/);
+  assert.match(d("user_interface_switch_cut"), /所有成员的界面/);
 });
 
 test("系统提示词:多条剪辑一节开头就说不要 switch_cut,并指路 parkedCuts", async () => {
@@ -122,7 +122,8 @@ test("系统提示词:多条剪辑一节开头就说不要 switch_cut,并指路 
   const text = fs.readFileSync(new URL("../../../server/ai-system-prompt.md", import.meta.url), "utf8");
   const line = text.split(/\r?\n/).find((l) => l.includes("一个项目里可以有多条剪辑"));
   assert.ok(line);
-  assert.ok(line.indexOf("不要 `switch_cut`") < line.indexOf("add_clip、序列"), "不要切换的话在最前");
+  assert.ok(line.indexOf("不要 `user_interface_switch_cut`") >= 0 && line.indexOf("不要 `user_interface_switch_cut`") < line.indexOf("add_clip、序列"), "不要切换的话在最前");
+  assert.match(line, /see_frames\(\{ cutId/, "看别的剪辑的画面用 see_frames 的 cutId");
   assert.match(line, /parkedCuts/);
 });
 
@@ -145,7 +146,7 @@ function mockModel(userText) {
   }
   if (!hit) {
     // 没找到才会想到去切 —— 这条路径就是线上观察到的行为,测试要求不要走到
-    run("switch_cut", { name: wantCut });
+    run("user_interface_switch_cut", { name: wantCut });
     throw new Error("模型在 get_project 里没找到停放剪辑的片段");
   }
   const r = run("update_clip", { clipId: hit.id, params: { count: wantValue } });

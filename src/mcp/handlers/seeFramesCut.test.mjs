@@ -95,13 +95,3 @@ test("页面执行器进门两种名字都认,网页接管新名也落到 runWeb
   assert.match(src, /tool === "user_interface_web_handoff"\) result = await runWebTool\(pageToolName\(tool\), args\)/);
 });
 
-test("云端反向通道的页面一侧:新旧名字都认(请求里的 tool 是旧的内部操作名,新名也执行)", async () => {
-  const { runPageRequest } = await import(srcUrl("ai/cloud/pageRequests.ts"));
-  const calls = [];
-  const exec = { seek: (a) => { calls.push(["seek", a.t]); return { ok: true }; }, play: () => { calls.push(["play"]); return { ok: true }; }, pause: () => ({ ok: true }), getSelection: () => [] };
-  const a = await runPageRequest({ type: "page.request", id: "req-00000001", tool: "seek", args: { t: 2 } }, exec);
-  const b = await runPageRequest({ type: "page.request", id: "req-00000002", tool: "user_interface_seek", args: { t: 3 } }, exec);
-  const c = await runPageRequest({ type: "page.request", id: "req-00000003", tool: "user_interface_play", args: {} }, exec);
-  assert.deepEqual([a.ok, b.ok, c.ok], [true, true, true]);
-  assert.deepEqual(calls, [["seek", 2], ["seek", 3], ["play"]]);
-});

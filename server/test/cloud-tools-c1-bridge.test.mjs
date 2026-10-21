@@ -367,7 +367,7 @@ test('C1-LOGIN collect_login / collect_login_check only operate on the initiator
   // 发起页是网页版:如实说只能在电脑上做
   const g = await c1Fixture(t, {});
   g.desktop(g.initiatorPage, { web: true }).attach();
-  assert.deepEqual(await g.cloud.tools.collect_login({}), { ok: false, initiatorOnly: true, error: COLLECT_BRIDGE_TEXT.webPage('collect_login') });
+  assert.deepEqual(await g.cloud.tools.collect_login({}), { ok: false, initiatorOnly: true, error: COLLECT_BRIDGE_TEXT.webPage('user_interface_collect_login') });
   assert.deepEqual(await g.cloud.tools.collect_login_check({}), { ok: false, initiatorOnly: true, error: COLLECT_BRIDGE_TEXT.webPage('collect_login_check') });
   // 没有委托口子(没接线):如实说只能在本人电脑上操作
   g.cloud.delegate = () => null;
