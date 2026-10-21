@@ -7,6 +7,7 @@
  * 纯函数,不读 store:项目与「我是谁」都由调用方传进来。
  */
 import { entityValuePath, getAt, parsePath } from "../../kernel/diffProject";
+import { relocatePath } from "../../kernel/cutPaths";
 import type { Project } from "../../kernel/project";
 import { getCard } from "../../kernel/registry";
 import type { Writer } from "../../store/docsync";
@@ -70,7 +71,9 @@ export function entityLabel(entity: string, project: Project | null): string {
   const coll = segs[segs.length - 2];
   const id = segs[segs.length - 1].replace(/^@/, "");
   const kind = KIND[coll] ?? "条目";
-  const value = project ? (getAt(project, entityValuePath(entity)) as Record<string, unknown> | undefined) : undefined;
+  // 序列在停放剪辑里时实体(不分住在哪)的路径要按序列 id 换到它现在住的地方才取得到值
+  const valuePath = entityValuePath(entity);
+  const value = project ? ((getAt(project, valuePath) ?? getAt(project, relocatePath(project, valuePath))) as Record<string, unknown> | undefined) : undefined;
   if (coll === "clips") return `片段${quoted(clipName(value, id))}`;
   const name = value && typeof value.name === "string" && value.name.trim() ? value.name.trim() : id;
   return `${kind}${quoted(name)}`;
