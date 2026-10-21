@@ -262,9 +262,9 @@ export function createCloudSession(deps: CloudSessionDeps) {
   const listeners = new Set<() => void>();
 
   function publish() {
-    // 账号模式:队列里当前这一轮已被领走(preparing / running)就算在跑,即使它的第一个事件还没到、对话里还没有这一轮的助手消息——
-    // 输入框此刻已是「排队 / 停止」而不是「发送」(`cloudConversationControlPolicy` 按队列算),streaming 要与它一致
-    const queueActive = Boolean(queue?.currentRunId && queue.items.some((item) => item.runId === queue?.currentRunId && (item.state === "running" || item.state === "preparing")));
+    // 账号模式:队列里有已被领走或在跑的消息就算这个对话在跑,即使它的第一个事件还没到、对话里还没有这一轮的助手消息——
+    // 输入框此刻已是「排队 / 停止」而不是「发送」(`cloudConversationControlPolicy` 按队列算),streaming 要与它一致。空闲时刚收下、还没轮到的排第一那条不算(它显示「已发出，等待云端开始处理…」)
+    const queueActive = Boolean(queue?.items.some((item) => item.state === "preparing" || item.state === "running"));
     const next: CloudSessionView = { conversationId, streaming: hasOpenRun(store.get()) || queueActive, connection, problem, lastSeq, queue, senders, revoked };
     if (next.conversationId === view.conversationId && next.streaming === view.streaming && next.connection === view.connection && next.problem === view.problem && next.lastSeq === view.lastSeq && next.queue === view.queue && next.senders === view.senders && next.revoked === view.revoked) return;
     view = next;
@@ -378,10 +378,11 @@ export function createCloudSession(deps: CloudSessionDeps) {
             if (myGen !== gen || streamReadEpoch !== readEpoch) return;
             attempt = 0;
             known = true; seenLive = true;
+            // 又读得到了(创建者把开关打开):撤掉「已关闭」那条说明,真正的记录随事件流补回来
+            if (store.get().some((m) => m.id === AGENT_OFF_NOTE_ID)) store.set((prev) => prev.filter((m) => m.id !== AGENT_OFF_NOTE_ID));
             if (revoked || isConversationRevoked(deps, id)) {
               revoked = false;
               unmarkConversationRevoked(deps, id);
-              if (store.get().some((m) => m.id === AGENT_OFF_NOTE_ID)) store.set((prev) => prev.filter((m) => m.id !== AGENT_OFF_NOTE_ID));
             }
             if (connection !== "live") { problem = null; setConnection("live"); }
             if (ev.type === "end" && ev.state === "none") { sawNone = true; continue; }
@@ -415,7 +416,8 @@ export function createCloudSession(deps: CloudSessionDeps) {
           const accountAuthFailure = Boolean(deps.accountMode &&
             ((status === 401 || status === 403) || (err instanceof CloudError && FATAL.has(err.code))));
           if (accountAuthFailure) clearAccountReadState();
-          if (accountAuthFailure && err instanceof CloudError && err.code === "agent-disabled") store.set(agentOffNote());
+          // 重连取票据时文档服务拒签 `service-disabled`(cloudApi 的 identityError 记成 `disabled`)或读取 403 `agent-disabled`:都是创建者关了开关
+          if (accountAuthFailure && err instanceof CloudError && (err.code === "agent-disabled" || err.code === "disabled")) store.set(agentOffNote());
           if (accountAuthFailure || (err instanceof CloudError && FATAL.has(err.code))) {
             const code = err instanceof CloudError ? err.code : "";
             if (deps.accountMode && (code === "not-listed" || code === "banned")) {

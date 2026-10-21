@@ -232,7 +232,7 @@ test("PRIV-10 同一条 access.revoked 不带 reason(被踢、设私有):仍是�
   s.close();
 });
 
-test("STREAM-1 队列里当前这一轮已被领走(preparing)但还没有任何事件:streaming 为真,与输入框一致;这一轮结清后为假", async () => {
+test("STREAM-1 队列里有已收下的消息(preparing)但还没有任何事件:streaming 为真,与输入框一致;结清后为假", async () => {
   const prep = { type: "queue.state", conversationId: "c-1", queueRevision: 1, aclRevision: 0, currentRunId: "run_x",
     items: [{ messageId: "m1", arrivalSeq: 1, state: "preparing", position: null, runId: "run_x" }] };
   const done = { type: "queue.state", conversationId: "c-1", queueRevision: 2, aclRevision: 0, currentRunId: null,
@@ -245,4 +245,18 @@ test("STREAM-1 队列里当前这一轮已被领走(preparing)但还没有任何
   await waitFor(() => after.s.getView().queue?.currentRunId === null && after.s.getView().queue?.queueRevision === 2);
   assert.equal(after.s.getView().streaming, false);
   after.s.close();
+});
+
+test("PRIV-11 创建者关了云端 Agent,重连时取票据被拒(disabled)或读取 403(agent-disabled):对话里留写明原因的出错消息;重新能读时撤掉", async () => {
+  for (const code of ["disabled", "agent-disabled"]) {
+    const { s, store } = open([{ events: content, then: "close" }, { fail: new CloudError(code, cloudErrorText("disabled"), 403) },
+      { events: content, then: "hang" }]);
+    await waitFor(() => s.getView().problem === cloudErrorText("disabled"));
+    assert.equal(store.get().length, 1, code);
+    assert.equal(store.get()[0].outcome, "error");
+    assert.match(store.get()[0].error, /项目创建者已关闭云端 Agent/);
+    s.kick();
+    await waitFor(() => !store.get().some((m) => m.id === "cr-agent-off"), 3000);
+    s.close();
+  }
 });
