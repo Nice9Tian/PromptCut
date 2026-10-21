@@ -110,9 +110,9 @@ async function mediaBlock(hash: string, position: number, count: number, sampleR
   }
   /*
    * 在线浏览器模式:`/@media/<hash>/pcm` 是编辑器进程(ffmpeg 裁采样)的接口,远程素材服务没有这一路;
-   * 素材效果卡在这台设备上本来就渲染不了(常驻「需要本地 PC 渲染辅助」,C10 契约第 9 节),这里不发请求,当场失败。
+   * 素材效果卡在这台设备上本来就渲染不了(由渲染节点出,C10 契约第 9 节),这里不发请求,当场失败。
    */
-  if (onlinePage()) fail("在线浏览器模式不取素材的采样块(素材效果卡需要本地 PC 渲染辅助)");
+  if (onlinePage()) fail("在线浏览器模式不取素材的采样块(素材效果卡的声音由渲染节点提供)");
   const pending = (async () => {
     const url = `/@media/${hash}/pcm?start=${position}&count=${count}&sampleRate=${sampleRate}&ch=${MEDIA_PCM_CHANNELS}`;
     const response = await fetch(url);

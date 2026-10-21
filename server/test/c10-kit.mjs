@@ -436,12 +436,12 @@ export const TABLE_A = [
   '当前离线，有未提交的修改。关闭页面将丢失这些操作。',
   '在线浏览器模式暂不支持',
   '，请在电脑上的 PromptCut 里使用。',
-  // 时间轴徽标:2026-09-29 用户定与舞台图标同一句(原「该模式暂不支持自定义卡」)
-  '需要本地 PC 渲染辅助',
 ];
 export const C10_UI_MARKERS = ['，请在电脑上的 PromptCut 里使用。', '当前离线，有未提交的修改。关闭页面将丢失这些操作。'];
 /** 第 9 节：并入图标，不另报错 */
-export const DROPPED_TEXTS = ['该模式暂不支持素材输入的音频素材效果卡', '该模式暂不支持自定义卡'];
+export const DROPPED_TEXTS = ['该模式暂不支持素材输入的音频素材效果卡', '该模式暂不支持自定义卡',
+  // 2026-10-21 用户定:「无论哪种都不存在『本地PC辅助渲染』这个情况」—— 舞台图标与时间轴徽标一并撤掉
+  '需要本地 PC 渲染辅助'];
 export function uiGate() {
   const hits = C10_UI_MARKERS.flatMap(srcFilesContaining);
   return hits.length ? { ok: true, files: hits } : { ok: false, reason: skipReason(`src/ 的非测试源文件里没有表 A 的「${C10_UI_MARKERS.join('」或「')}」`) };

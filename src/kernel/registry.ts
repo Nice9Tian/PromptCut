@@ -296,7 +296,7 @@ export function unknownCardClipIds(clips: Iterable<{ id: string; cardId?: string
 
 /**
  * 一张同步来的卡在本页的运行状态(契约第 8 节的十种)。只有 `ready` 是「本页能运行」;其余都退回原做法
- * (按重卡、贴预渲染结果、缺了出「需要本地 PC 渲染辅助」),参数面板按状态说明原因。
+ * (按重卡、贴预渲染结果、缺了是沙漏、等渲染节点),参数面板按状态说明原因。
  */
 export type CardRunStateName =
   | "ready" | "loading" | "unsupported-syntax" | "missing-module" | "load-error"
