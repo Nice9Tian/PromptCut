@@ -38,23 +38,21 @@ export const PLACEHOLDER_ANIMATION_PREFIX = "pc-ph-";
  *   - `no-data`      T1:兜底链尽头,这一层还没有任何预渲染结果;
  *   - `over-budget`  T1:流超出解码器预算、换帧预算也装不下快照;
  *   - `awaiting`     T2:这一帧的快照还没到;
- *   - `catching-up`  T3 / T4:不可见地追帧,或等后台舞台补跑后互换;
- *   - `unsupported`  这台设备渲染不了这张卡(在线浏览器模式下的用户卡、素材效果卡),兜底顺序又什么都贴不上
- *                    (这一帧没有可贴的预渲染结果):不是「正在加载」,所以**不显示沙漏**,显示「电脑 + 离线」图标和
- *                    `UNSUPPORTED_TEXT`;和别的原因一样进显隐调度,快照或流到了就撤(2026-09-29 用户改语义)。
+ *   - `catching-up`  T3 / T4:不可见地追帧,或等后台舞台补跑后互换。
+ *
+ * 这台设备渲染不了的卡(在线浏览器模式下跑不了的用户卡、素材效果卡)什么都贴不上时同样是 `awaiting`(沙漏):
+ * 结果由渲染节点出,到了自动换上。原先的 `unsupported`(「电脑 + 离线」图标与「本地 PC 辅助渲染」的提示)2026-10-21 用户定撤掉:
+ * 「无论哪种都不存在『本地 PC 辅助渲染』这个情况」。
  */
-export type PlaceholderReason = "no-data" | "over-budget" | "awaiting" | "catching-up" | "unsupported";
-
-/** `unsupported` 占位符上的文字(已定,不可改) */
-export const UNSUPPORTED_TEXT = "需要本地 PC 渲染辅助";
+export type PlaceholderReason = "no-data" | "over-budget" | "awaiting" | "catching-up";
 
 /**
  * 槽位(P3 补进接口):舞台在每张卡的包裹层里挂一个 `position:absolute; inset:0` 的槽位,占位组件渲在里面。
  * 显隐切的是**槽位**的 `hidden`(组件无状态,React 每次提交都不会冲掉手动切过的值);
  * 组件根元素自己不带 `hidden`。
  *
- * `PLACEHOLDER_FIXED_ATTR`:原来标「常驻槽位」(`unsupported` 不走兜底顺序时用)。2026-09-29 起 `unsupported` 也进显隐调度,
- * 舞台不再挂常驻槽位;常量留着,只为旧的截图 / 探针脚本认得这个名字。
+ * `PLACEHOLDER_FIXED_ATTR`:原来标「常驻槽位」(已撤掉的 `unsupported` 图标用过)。舞台不再挂常驻槽位;
+ * 常量留着,只为旧的截图 / 探针脚本认得这个名字。
  */
 export const PLACEHOLDER_SLOT_ATTR = "data-pc-placeholder-slot";
 export const PLACEHOLDER_FIXED_ATTR = "data-pc-placeholder-fixed";
@@ -83,11 +81,10 @@ export interface PlaceholderPlaneProps {
   geometry: PlaceholderGeometry;
   reason: PlaceholderReason;
   /**
-   * 在屏幕上多大(舞台一侧按预览缩放、这一层的缩放与框算好;`placeholderFit.ts`):`scale` 是组件在包裹层坐标里的放大倍数,
-   * `layout` 是「需要本地 PC 渲染辅助」图标的排法(横排 / 竖排 / 只留图标)。不给 = 倍数 1、横排(按舞台像素原样画)。
-   * 沙漏只放大沙漏本身(徽标的圆、铺满形态中间那个),噪点照旧铺满实体框。
+   * 在屏幕上多大(舞台一侧按预览缩放、这一层的缩放与框算好;`placeholderFit.ts`):`scale` 是组件在包裹层坐标里的放大倍数。
+   * 不给 = 倍数 1(按舞台像素原样画)。沙漏只放大沙漏本身(徽标的圆、铺满形态中间那个),噪点照旧铺满实体框。
    */
-  fit?: { scale: number; layout?: "row" | "column" | "icon" };
+  fit?: { scale: number };
 }
 
 /**

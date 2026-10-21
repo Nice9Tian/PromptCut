@@ -66,7 +66,7 @@ export function runStateMessage(s: CardRunState | undefined): string | null {
     case "media": return "这台设备解不了这段素材,素材效果卡的画面由渲染节点提供。";
     case "runtime-error": return "这张卡在在线浏览器里运行出错,本次改由渲染节点提供画面。";
     case "not-isolated": return d ? `${d},用户卡与素材效果卡的画面由渲染节点提供。` : "这个页面没有隔离的运行环境,用户卡与素材效果卡的画面由渲染节点提供。";
-    case "low-memory": return "这台设备在低内存档,不运行用户卡与素材效果卡的代码。";
+    case "low-memory": return "这台设备在低内存档,不运行同步来的用户卡与素材效果卡的代码,画面由渲染节点提供。";
     default: return null;
   }
 }

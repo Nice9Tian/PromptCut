@@ -3,8 +3,8 @@
  *   node --experimental-test-module-mocks --test src/editor/onlineCardsL.test.mjs
  *
  *   OCE-L-01 「本页运行不了」的判法(`placeholderHost.needsLocalPc`):素材效果卡照旧算;用户卡只有运行不了的才算 ——
- *            构建时就在包里的不算,同步来的看运行状态(只有 `ready` 不算),低内存档一律算;桌面恒不算
- *   OCE-L-02 时间轴徽标「需要本地 PC 渲染辅助」:只对本页运行不了的卡、且确认没覆盖整段时出;能运行的同步卡不出
+ *            构建时就在包里的不算(低内存档也不算,2026-10-21 起),同步来的看运行状态(只有 `ready` 不算);桌面恒不算
+ *   OCE-L-02 时间轴不再挂「需要本地 PC 渲染辅助」徽标(2026-10-21 用户定撤掉):判定函数没了,片段里也不引它
  *   OCE-L-03 测量门:卡片源码同步完之后,再等同步来的卡第一次载入有结果(没有 `loading` 的了)才开;成功失败都算;
  *            仍受同一个上限封顶;没有在载入的卡时与原来相同
  *   OCE-L-04 导出:同步来的用户卡与素材效果卡不管判轻判重都必须用预渲染原尺寸(导出页不执行它们的代码);层表里没有它们的层、
@@ -43,7 +43,7 @@ function setup() {
 const cleanup = () => { H.setOnlineBrowserMode(false); H.setLocalOnlyLowMemory(false); R.setCardRunStates([]); R.setRuntimeCards([]); R.setSyncedUserCards([]); };
 const local = (id) => H.unsupportedHere(id, R.getCard(id));
 
-test("OCE-L-01 本页运行不了的判法:素材效果卡照旧;用户卡看能不能运行;低内存档一律算;桌面恒不算", () => {
+test("OCE-L-01 本页运行不了的判法:素材效果卡照旧;用户卡看能不能运行;低内存档不另挡;桌面恒不算", () => {
   setup();
   try {
     assert.equal(local("builtin"), false);
@@ -64,14 +64,18 @@ test("OCE-L-01 本页运行不了的判法:素材效果卡照旧;用户卡看能
     R.setRuntimeCards([dom("synced", { Component: undefined, card: () => ({}) })]);
     assert.equal(local("synced"), true, "舞台里载入的同步素材效果卡:素材效果卡照旧算");
     R.setRuntimeCards([]);
-    // 低内存档:不执行用户卡的代码
+    // 低内存档(2026-10-21 起):不另挡用户卡 —— 本页能运行的照常运行、停下追精确帧;同步来的卡在低内存档的运行状态是
+    // `low-memory`(编辑页面这一侧合出来的,单舞台没有隔离环境),照旧算运行不了
     R.setCardRunStates([["synced", { state: "ready" }]]);
     H.setLocalOnlyLowMemory(true);
     assert.equal(H.localOnlyLowMemory(), true);
-    assert.equal(local("repo-user"), true, "低内存档:构建时的用户卡也算");
-    assert.equal(local("synced"), true, "低内存档:哪怕运行状态写着 ready 也算");
+    assert.equal(local("repo-user"), false, "低内存档:构建时的用户卡本页能运行,不算");
+    assert.equal(local("synced"), false, "低内存档:运行状态是 ready 的不算");
+    R.setCardRunStates([["synced", { state: "low-memory" }]]);
+    assert.equal(local("synced"), true, "低内存档:运行状态 low-memory 的算");
     assert.equal(local("builtin"), false);
-    assert.deepEqual([...H.localOnlyClipIds([{ id: "a", cardId: "builtin" }, { id: "b", cardId: "repo-user" }, { id: "c", cardId: "synced" }, { id: "d", cardId: "gpu" }])], ["b", "c", "d"]);
+    assert.deepEqual([...H.localOnlyClipIds([{ id: "a", cardId: "builtin" }, { id: "b", cardId: "repo-user" }, { id: "c", cardId: "synced" }, { id: "d", cardId: "gpu" }])], ["c", "d"]);
+    R.setCardRunStates([["synced", { state: "ready" }]]);
     H.setLocalOnlyLowMemory(false);
     assert.deepEqual([...H.localOnlyClipIds([{ id: "a", cardId: "builtin" }, { id: "b", cardId: "repo-user" }, { id: "c", cardId: "synced" }, { id: "d", cardId: "gpu" }])], ["d"]);
     // 桌面(模式关着)
@@ -81,23 +85,11 @@ test("OCE-L-01 本页运行不了的判法:素材效果卡照旧;用户卡看能
   } finally { cleanup(); }
 });
 
-test("OCE-L-02 时间轴徽标:只对本页运行不了的卡、确认没覆盖整段时出;能运行的同步卡不出", () => {
-  setup();
-  try {
-    const badge = (id, coverage) => B.showLocalPcBadge({ online: H.onlineBrowserMode(), localOnly: local(id), coverage });
-    assert.equal(badge("synced", "none"), true, "还没载入成功、没有结果:出");
-    assert.equal(badge("synced", "unknown"), false, "还不知道:不出");
-    R.setCardRunStates([["synced", { state: "loading" }]]);
-    assert.equal(badge("synced", "full"), false);
-    R.setCardRunStates([["synced", { state: "ready" }]]);
-    for (const c of ["none", "partial", "full", "unknown", null]) assert.equal(badge("synced", c), false, `能运行:覆盖 ${c} 都不出`);
-    R.setCardRunStates([["synced", { state: "missing-module", detail: "lodash" }]]);
-    assert.equal(badge("synced", "partial"), true, "引用了页面里没有的模块:出");
-    assert.equal(badge("repo-user", "none"), false, "构建时的用户卡:不出");
-    assert.equal(badge("gpu", "none"), true, "素材效果卡:照旧出");
-    H.setLocalOnlyLowMemory(true);
-    assert.equal(badge("repo-user", "none"), true, "低内存档:构建时的用户卡照旧出");
-  } finally { cleanup(); }
+test("OCE-L-02 时间轴不再挂「需要本地 PC 渲染辅助」徽标", () => {
+  assert.equal(B.showLocalPcBadge, undefined, "判定函数撤掉了");
+  assert.equal(B.clipCardLabel("x"), "x", "卡名照旧");
+  const clipView = fs.readFileSync(fileURLToPath(srcUrl("editor/timeline/ClipView.tsx")), "utf8");
+  assert.doesNotMatch(clipView, /clip-custom-card|ONLINE_CUSTOM_CARD_TEXT|showLocalPcBadge/);
 });
 
 function fakeClock() {
@@ -232,7 +224,7 @@ test("OCE-L-06 接线:运行状态变了,分派表、测量、时间轴片段、
   // 契约第 6 节的各处都经 `localOnlyClipIds` / `unsupportedHere` / `needsLocalPc`,不自己再判「是不是用户卡」
   for (const [rel, re] of [
     ["editor/costIdentity.ts", /localOnlyClipIds\(/], ["editor/snapshotFeed.ts", /localOnlyClipIds\(/],
-    ["StageView.tsx", /localOnlyClipIds\(/], ["render/Stage.tsx", /unsupportedHere\(clip\.cardId, def\)/], ["editor/timeline/ClipView.tsx", /unsupportedHere\(/],
+    ["StageView.tsx", /localOnlyClipIds\(/], ["render/Stage.tsx", /unsupportedHere\(clip\.cardId, def\)/],
   ]) {
     const text = read(rel);
     assert.match(text, re, `${rel} 走同一个判法`);

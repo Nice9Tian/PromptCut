@@ -48,8 +48,7 @@ import type { BundleResult, CardBundle } from "../online/cardRuntime/protocol";
 import { setNodeGraphCapable } from "../online/nodeCardInfo";
 import { createIsolatedSoundLink, type IsolatedSoundLink } from "./io/isolatedSound";
 import { holdMeasureForCardSources, measureGateDiag, measureGateOpen, releaseMeasureGate, setMeasureGateLink } from "./measureGate";
-import { setCoverageSource, subscribeCoverage } from "./onlineCoverage";
-import { localOnlyMissingAt } from "./localOnlyMissing";
+import { setCoverageSource } from "./onlineCoverage";
 import { currentCosts, currentPlan, judgedPlan, lightCostAt, lowMemoryJudged, onPlanUpdated, planLowMemoryLight, sendPlanTo, setPlanDeadMs, setPlanLowMemory, setPlanLowMemoryLight } from "./planDispatch";
 import { lowMemoryMeasuring, lowMemorySearchState, reclassify, runLowMemorySearch, type LowMemorySearchOutcome } from "./lowMemorySearch";
 import { LowMemoryGate } from "./LowMemoryGate";
@@ -139,8 +138,8 @@ function l2LowMemoryCostStore(): CostStore {
 /*
  * 父页的在线浏览器模式开关(C10 契约第 9 节):与舞台 `StageView` 同一个判据(在线构建,或编辑页地址上的
  * `platform=browser`,后者经 `stageSrc` 转给舞台)。开着时这台设备跑不了的卡(用户卡、素材效果卡)一律按重卡贴预渲染结果
- * (`snapshotFeed` 的 `localOnlyOf`、`costIdentity.ts` 不给它们身份),时间轴在它们的结果没覆盖整段时挂
- * 「需要本地 PC 渲染辅助」徽标。
+ * (`snapshotFeed` 的 `localOnlyOf`、`costIdentity.ts` 不给它们身份),贴不上时是沙漏、等渲染节点的结果
+ * (2026-10-21 起没有「本地 PC 辅助渲染」的图标与徽标)。
  */
 try { setOnlineBrowserMode(ONLINE || new URLSearchParams(location.search).get("platform") === "browser"); } catch { /* 没有 location */ }
 
@@ -235,10 +234,6 @@ export function Preview(props: { variant?: "mobile" } = {}) {
   const scale = cam.scale;
   const scaleRef = useRef(scale);
   scaleRef.current = scale;
-  /** 每台舞台上一次收到的「已确认没有结果」的片段(`setLocalOnlyMissing`,按 id 排好、用 `|` 连起来);变了才发 */
-  const missingSentRef = useRef<Partial<Record<StageId, string>>>({});
-  /** 按当前时刻重算并发出(真身在在线来源那段 effect 下面定义;握手时也叫) */
-  const pushMissingRef = useRef<() => void>(() => {});
   const camRef = useRef(cam);
   camRef.current = cam;
   /**
@@ -851,10 +846,8 @@ export function Preview(props: { variant?: "mobile" } = {}) {
         if (ONLINE) void client.setSyncedUserCards([...syncedUserCards().values()]).catch(() => { /* iframe 又换了,下一次握手会重发 */ });
         // 在线执行:转译好的包交给这一台(排在同步表之后:舞台按同步表把入口摊到卡片 id 上);闸门没开的舞台先记着
         if (ONLINE) pushCardBundlesRef.current(id);
-        // 预览缩放倍数交给舞台:占位符(沙漏、「需要本地 PC 渲染辅助」图标)据此补偿,屏幕上看得清;桌面与在线都发
+        // 预览缩放倍数交给舞台:占位符(沙漏)据此补偿,屏幕上看得清;桌面与在线都发
         void client.setViewScale(scaleRef.current).catch(() => { /* 同上 */ });
-        // 在线浏览器模式:已确认此刻没有可贴结果的「本机跑不了」的片段(其余显示沙漏;刚打开页面时不闪图标)
-        if (onlineBrowserMode()) { missingSentRef.current[id] = undefined; pushMissingRef.current(); }
         // 每来一次就 +1:同一个值再赋一遍不会触发重渲染,而新挂的 iframe 需要重新收一遍 project 和时间
         if (role === "front") setStageReady((n) => n + 1);
       }
@@ -1314,7 +1307,7 @@ export function Preview(props: { variant?: "mobile" } = {}) {
     };
   }, [online]);
   /*
-   * 预览缩放倍数变了,发给两个舞台(占位符据此补偿:沙漏在屏幕上保持原大小,「需要本地 PC 渲染辅助」图标看得清)。
+   * 预览缩放倍数变了,发给两个舞台(占位符据此补偿:沙漏在屏幕上保持原大小)。
    * 握手时另发一次(见 `pc-stage-ready` 那段)。桌面与在线都发。
    */
   useEffect(() => {
@@ -1323,42 +1316,16 @@ export function Preview(props: { variant?: "mobile" } = {}) {
       if (c) void c.setViewScale(scale).catch(() => { /* iframe 正在换:下一次握手会重发 */ });
     }
   }, [scale]);
-  /*
-   * C10 契约第 9 节(刚打开页面不闪图标):这台设备跑不了的片段贴不上快照 / 流时,只有父页已确认这一帧没有可贴的结果
-   * (层表已取到、没有可用的层;或这一帧所在那一段的清单已取到、这一帧不在里面)才显示「需要本地 PC 渲染辅助」图标,
-   * 其余显示沙漏。这里按当前时刻算出「已确认」的那几张(`localOnlyMissing.ts`),变了才发给两个舞台。
-   * 时刻、项目、层表与清单(覆盖订阅)、同步表变了都重算;桌面(模式关着)什么都不发。
-   */
-  pushMissingRef.current = () => {
-    if (!onlineBrowserMode()) return;
-    const p = getState().project;
-    const src = onlineSourceRef.current;
-    const ids = localOnlyMissingAt({
-      clips: p.tracks.filter((tr) => !tr.hidden).flatMap((tr) => tr.clips),
-      t: tRef.current, fps: p.fps || 30, localOnly: localOnlyOf(p),
-      confirm: src ? (clipId, localFrame) => src.frameConfirmedMissing(clipId, localFrame) : null,
-    });
-    const key = ids.join("|");
-    for (const id of STAGE_IDS) {
-      const c = rpcRef.current[id];
-      if (!c || missingSentRef.current[id] === key) continue;
-      missingSentRef.current[id] = key;
-      void c.setLocalOnlyMissing(ids).catch(() => { missingSentRef.current[id] = undefined; });
-    }
-  };
-  useEffect(() => { pushMissingRef.current(); }, [t, project, online, lowMem]);
   useEffect(() => {
     if (!onlineBrowserMode()) return;
     const refresh = () => {
-      pushMissingRef.current();
       // planDispatch 在同一批通知里用 queueMicrotask 重算 currentPlan;排在它后面重投一次流平面与抑制集合,
       // 让刚变成 ready 的同步用户卡当场解除抑制(不必等用户点播放或拖时间轴)
       queueMicrotask(() => { void pumpRef.current(); });
     };
-    const offCoverage = subscribeCoverage(() => pushMissingRef.current());
     const offSynced = onSyncedUserCardsChanged(refresh);
     const offRun = onCardRunStatesChanged(refresh);
-    return () => { offCoverage(); offSynced(); offRun(); };
+    return () => { offSynced(); offRun(); };
   }, [online]);
   /*
    * C10 契约第 7 节:队列报 task.done(本页发布的清单计划或它切出的细任务做完了):马上重取层表与清单,新快照下一拍换上。

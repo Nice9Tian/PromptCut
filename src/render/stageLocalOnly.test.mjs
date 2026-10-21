@@ -2,9 +2,10 @@
  * 舞台(`Stage.tsx`)上这台设备跑不了的卡(C10 契约第 9 节,2026-09-29 用户改语义)。服务端渲染出 HTML 来核,跑:
  *   node --test src/render/stageLocalOnly.test.mjs
  *
- *   SL-01 在线浏览器模式:构建时的用户卡、素材效果卡、同步来的用户卡(没有定义)不挂组件;包裹层照内置重卡的路子挂流平面与
- *         抑制占位(撤快照后无快照平面);占位槽位不再是常驻的(没有 `data-pc-placeholder-fixed`),默认 `hidden`(进显隐调度);父页没确认这一帧没有结果时
- *         是沙漏(`awaiting`),确认了才是「需要本地 PC 渲染辅助」图标;图标与沙漏按预览缩放补偿(`fit`);两边都没有的 id 不画
+ *   SL-01 在线浏览器模式:构建时就在包里的用户卡照常挂组件,低内存档也一样(2026-10-21 用户定「暂停时渲染出精确的帧」,
+ *         低内存档不再挡本页能运行的卡);同步来的用户卡没有定义时不挂组件,包裹层照内置重卡的路子挂流平面与抑制占位
+ *         (撤快照后无快照平面);占位槽位默认 `hidden`(进显隐调度),一律是沙漏(`awaiting`),预览缩到多小都没有
+ *         「需要本地 PC 渲染辅助」(2026-10-21 用户定撤掉);沙漏按预览缩放补偿(`fit`);两边都没有的 id 不画
  *   SL-02 模式关着(桌面、导出、预渲染):用户卡、素材效果卡照常挂组件,同步表不起作用,没有 `unsupported`
  */
 import test from "node:test";
@@ -46,66 +47,54 @@ async function withStage(fn) {
 /** 某个片段的包裹层(到下一个包裹层为止) */
 const wrapOf = (html, id) => html.match(new RegExp(`<div data-pc-clip="${id}"[\\s\\S]*?(?=<div data-pc-clip=|$)`))?.[0] ?? null;
 
-test("SL-01 在线:本页运行不了的卡不挂组件,照挂流平面与抑制占位,占位槽位进显隐调度;能运行的用户卡照常挂;未知 id 不画", () => withStage(async ({ R, H, render, marker }) => {
+test("SL-01 在线:本页运行不了的卡不挂组件,照挂流平面与抑制占位,占位一律是沙漏;能运行的用户卡(低内存档也是)照常挂;未知 id 不画", () => withStage(async ({ R, H, render, marker }) => {
   H.setOnlineBrowserMode(true);
   H.setPlaceholdersEnabled(true);
   try {
-    const html = render({ snapshots: new Map([["s", "<p>snap-s</p>"]]), suppressed: new Set(["u", "s"]), streamPlanes: [{ clipIds: ["u"] }], awaiting: new Set(), settling: new Map() });
-    const b = wrapOf(html, "b"), s = wrapOf(html, "s");
+    const props = { snapshots: new Map([["s", "<p>snap-s</p>"]]), suppressed: new Set(["u", "s", "v"]), streamPlanes: [{ clipIds: ["v"] }], awaiting: new Set(), settling: new Map() };
+    const html = render(props);
+    const b = wrapOf(html, "b"), s = wrapOf(html, "s"), v = wrapOf(html, "v");
     assert.match(b, /data-test-component="builtin"/, "内置卡照常挂组件");
     // 2026-10-06(online-card-exec-contract.md 第 6 节):构建时就在包里的用户卡是页面自己的代码,照内置卡挂组件
     assert.match(wrapOf(html, "u"), /data-test-component="mine"/, "构建时的用户卡照常挂组件");
-    assert.doesNotMatch(wrapOf(html, "u"), /unsupported|需要本地 PC 渲染辅助/);
-    // 低内存档不执行用户卡的代码:构建时的用户卡在低内存档照旧不挂组件(下面用它核「运行不了的卡」的那一套)
+    // 2026-10-21:低内存档不再挡本页能运行的用户卡(停下时要画出精确的帧)
     H.setLocalOnlyLowMemory(true);
-    const lowHtml = render({ snapshots: new Map([["s", "<p>snap-s</p>"]]), suppressed: new Set(["u", "s"]), streamPlanes: [{ clipIds: ["u"] }], awaiting: new Set(), settling: new Map() });
-    const u = wrapOf(lowHtml, "u");
-    assert.doesNotMatch(u, /data-test-component/, "低内存档:构建时的用户卡不挂组件");
-    assert.match(u, /data-pc-stream-plane=""/, "用户卡照挂流平面");
-    // 同步来的卡在舞台里载入成功(运行时注册表里有定义):照常挂组件;没载入的(v)照旧不挂
+    const lowHtml = render(props);
+    assert.match(wrapOf(lowHtml, "u"), /data-test-component="mine"/, "低内存档:构建时的用户卡照常挂组件");
     H.setLocalOnlyLowMemory(false);
+    // 同步来的卡在舞台里载入成功(运行时注册表里有定义):照常挂组件;没载入的(v)照旧不挂
     R.setRuntimeCards([{ id: "synced-card", name: "同步卡", defaults: {}, controls: [], frameMode: "direct", Component: marker("synced") }]);
     const live = render({ snapshots: new Map(), suppressed: new Set(), awaiting: new Set(), settling: new Map() });
     assert.match(wrapOf(live, "s"), /data-test-component="synced"/, "载入成功的同步卡挂组件");
     assert.doesNotMatch(wrapOf(live, "v"), /data-test-component/, "没载入的同步卡不挂组件");
     R.setRuntimeCards([]);
-    H.setLocalOnlyLowMemory(true);
+    assert.doesNotMatch(v, /data-test-component/, "没有定义的同步卡不挂组件");
+    assert.match(v, /data-pc-stream-plane=""/, "跑不了的卡照挂流平面");
     // 撤快照后:没有流的同步卡(没有定义)由 suppressed 占位接管,不再挂快照平面
     assert.doesNotMatch(s, /data-pc-snapshot-plane/, "同步卡撤除快照平面");
     assert.match(s, /class="pc-suppressed"/, "同步卡(没有定义)由 suppressed 占位接管");
-    for (const w of [u, s]) {
+    for (const w of [s, v]) {
       assert.match(w, /data-pc-placeholder-slot="" hidden=""/, "槽位默认藏着,由显隐调度切");
-      assert.doesNotMatch(w, /data-pc-placeholder-fixed/, "不再是常驻槽位");
-      // 父页还没确认这一帧没有结果:普通加载占位(沙漏),不是图标(刚打开页面不闪图标)
-      assert.match(w, /data-pc-placeholder-reason="awaiting"/);
-      assert.doesNotMatch(w, /需要本地 PC 渲染辅助/);
+      assert.doesNotMatch(w, /data-pc-placeholder-fixed/, "不是常驻槽位");
+      assert.match(w, /data-pc-placeholder-reason="awaiting"/, "跑不了的卡是沙漏(结果由渲染节点出)");
     }
-    // 父页确认 u、s 这一帧没有可贴的结果:换成「需要本地 PC 渲染辅助」图标
-    H.setLocalOnlyConfirmed(["u", "s"]);
-    // 预览缩放 25%:片段框 640×360、不缩放 → 目标倍数 4,横排 792 放不进 → 竖排 640 也放不进(留边距)→ 只留图标
+    // 预览缩放 25%:沙漏屏幕上保持原大小(28 × 4 舞台像素);任何情况下都没有「需要本地 PC 渲染辅助」
     H.setPlaceholderViewScale(0.25);
-    const html2 = render({ snapshots: new Map([["s", "<p>snap-s</p>"]]), suppressed: new Set(["u", "s"]), streamPlanes: [{ clipIds: ["u"] }], awaiting: new Set(), settling: new Map() });
-    for (const id of ["u", "s"]) {
+    const html2 = render(props);
+    for (const id of ["s", "v", "b"]) {
       const w = wrapOf(html2, id);
-      assert.match(w, /data-pc-placeholder-reason="unsupported"/);
-      assert.match(w, /需要本地 PC 渲染辅助/);
-      // 量不到实体框:小徽标,中心在位置框中心,按 fit 放大
-      assert.match(w, /data-pc-placeholder-kind="unsupported-badge"[^>]*data-pc-placeholder-layout="icon"[^>]*style="position:absolute;left:320px;top:180px;transform:translate\(-50%, -50%\) scale\(4\)"/);
-      assert.match(w, /aria-label="需要本地 PC 渲染辅助"/, "只留图标时 aria-label 照旧是全文");
+      assert.match(w, /data-pc-placeholder-kind="badge"[^>]*width:28px;height:28px;transform:scale\(4\)/, `${id} 的沙漏按预览缩放补偿`);
     }
-    // 内置卡的沙漏:屏幕上保持原大小,只抵消预览缩放(28 × 4 舞台像素)
-    const b2 = wrapOf(html2, "b");
-    assert.match(b2, /data-pc-placeholder-kind="badge"[^>]*style="position:absolute;left:306px;top:166px;width:28px;height:28px;transform:scale\(4\)"/);
-    H.setLocalOnlyConfirmed([]);
+    for (const doc of [html, lowHtml, html2]) assert.doesNotMatch(doc, /unsupported|需要本地 PC 渲染辅助/);
     H.setPlaceholderViewScale(1);
-    assert.doesNotMatch(b, /data-pc-placeholder-reason="unsupported"/, "内置卡的占位照旧是沙漏");
     assert.equal(wrapOf(html, "x"), null, "两边都没有的 id 不画");
     // 后台舞台(占位关着):照样不挂组件,也没有槽位
     H.setPlaceholdersEnabled(false);
     const back = render({ snapshots: new Map(), suppressed: new Set() });
-    assert.doesNotMatch(wrapOf(back, "u"), /data-test-component|data-pc-placeholder-slot/);
+    assert.doesNotMatch(wrapOf(back, "v"), /data-test-component|data-pc-placeholder-slot/);
   } finally {
     H.setLocalOnlyLowMemory(false);
+    H.setPlaceholderViewScale(1);
     R.setRuntimeCards([]);
     H.setOnlineBrowserMode(false);
     H.setPlaceholdersEnabled(false);

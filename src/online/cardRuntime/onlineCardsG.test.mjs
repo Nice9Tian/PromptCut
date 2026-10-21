@@ -79,9 +79,10 @@ test("OCE-G-02 素材效果卡在哪份文档里能跑:缺省不能;舞台写了
     assert.ok(R.cardsRegistryGen() > gen, "变了要让按代数记忆的地方重算");
     assert.equal(R.setLocalCardExec({ graph: true }), false, "没变不通知");
     assert.equal(local("g-synced"), false, "能跑素材效果卡的舞台:素材效果卡能运行");
+    // 2026-10-21 起低内存档不另挡:舞台里载入成功、能跑素材效果卡的照常运行(停下追精确帧)
     H.setLocalOnlyLowMemory(true);
-    assert.equal(local("g-synced"), true, "低内存档一律不能");
-    assert.equal(local("u-synced"), true);
+    assert.equal(local("g-synced"), false, "低内存档:能运行的照常运行");
+    assert.equal(local("u-synced"), false);
     H.setLocalOnlyLowMemory(false);
     // 出过事的卡:撤下
     R.setLocalCardExec({ graph: true, blocked: ["g-synced", "u-synced"] });

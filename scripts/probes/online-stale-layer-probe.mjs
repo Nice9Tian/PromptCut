@@ -18,8 +18,9 @@
  *   2. 甲改 u 的参数:甲、乙两页的舞台在一拍之内不再贴 u 的旧层、显示沙漏(`awaiting`,不是图标);
  *      用舞台里的 MutationObserver 记时刻:甲从改的那一刻算,乙从它的 store 收到这次修改算。父页 `__pcOnlineSnapshots().stale` 列着 u。
  *   3. 甲把参数改回原来的:原来那一层还在,两页又贴「SNAP u v1」。
- *   4. 甲再改 u、改 b:u 两页沙漏;播放中 b 不再贴「SNAP b v1」(占位或活渲);等满 STALE_AWAIT_MS(15 s)还没新层,u 转成图标、时间轴出徽标。
- *   5. 渲染节点(探针)按新项目写第二版层表与清单:两页 u 贴「SNAP u v2」、图标与徽标撤掉;播放中 b 贴「SNAP b v2」。
+ *   4. 甲再改 u、改 b:u 两页沙漏;播放中 b 不再贴「SNAP b v1」(占位或活渲);等满 STALE_AWAIT_MS(15 s)还没新层,u 仍是沙漏、
+ *      时间轴没有徽标(2026-10-21 用户定:没有「本地 PC 辅助渲染」的图标与徽标,结果由渲染节点出)。
+ *   5. 渲染节点(探针)按新项目写第二版层表与清单:两页 u 贴「SNAP u v2」、沙漏撤掉;播放中 b 贴「SNAP b v2」。
  * 不打印口令;结果最后一行是一行 JSON(`ok`、`fails`、各段时延),截图在 --out。
  */
 import puppeteer from 'puppeteer';
@@ -566,7 +567,7 @@ try {
     check(s4.bPlay.editToStaleB - (s4.bPlay.editToSyncB ?? 0) <= BEAT_BUDGET_MS, `乙:收到修改后 ${BEAT_BUDGET_MS} ms 内不再贴 b 的旧层`, s4.bPlay);
   }
 
-  /* ============================================================ 4b. 再改 u:沙漏 → 等满转图标;b 播放中不贴旧层 */
+  /* ============================================================ 4b. 再改 u:沙漏,等满也还是沙漏;b 播放中不贴旧层 */
   const bGot2 = watchParam(B, U, 'text', 'three');
   const tEdit2 = await store(A, `const t = Date.now(); S.actions.setClipParams('osl-u', { text: 'three' }); return t;`);
   await bGot2;
@@ -598,19 +599,19 @@ try {
   check(!s4.bA.bad && !s4.bB.bad, '内置重卡改了参数:播放中两页都不再贴 SNAP b v1(占位或活渲)', { a: s4.bA, b: s4.bB });
   s4.diagA = (await onlineDiag(A))?.stale ?? null;
   check(s4.diagA?.some((x) => x.clipId === B_), '甲在线来源认出 b 的层过期', s4.diagA);
-  // 等满 STALE_AWAIT_MS:u 转成图标,时间轴出徽标
+  // 等满 STALE_AWAIT_MS:u 仍是沙漏,时间轴没有徽标
   const wait = Math.max(0, tEdit2 + STALE_AWAIT_MS + 3_000 - Date.now());
   await sleep(wait);
   for (const [label, pg] of [['A', A], ['B', B]]) {
-    s4[`icon${label}`] = await until(`${label}:等满之后 u 是图标、有徽标`, async () => {
+    s4[`icon${label}`] = await until(`${label}:等满之后 u 仍是沙漏、没有徽标`, async () => {
       const x = await clipOnStage(pg, U);
       const badge = await badgeOf(pg, U);
-      return x?.placeholder && x.reason === 'unsupported' && badge ? { stage: x, badge } : null;
+      return x?.placeholder && x.reason === 'awaiting' && badge === false ? { stage: x, badge } : null;
     }, 10_000);
   }
   out.edit2 = s4;
-  check(s4.iconA && s4.iconB, `等满 ${STALE_AWAIT_MS} ms 还没新层:两页 u 转成「需要本地 PC 渲染辅助」图标、时间轴出徽标`, { a: s4.iconA, b: s4.iconB });
-  await stageShot(A, 'stale-3-A-icon');
+  check(s4.iconA && s4.iconB, `等满 ${STALE_AWAIT_MS} ms 还没新层:两页 u 仍是沙漏、时间轴没有徽标(没有「本地 PC 辅助渲染」)`, { a: s4.iconA, b: s4.iconB });
+  await stageShot(A, 'stale-3-A-hourglass');
 
   /* ============================================================ 5. 渲染节点写第二版:新结果换上 */
   const L2 = { u: makeLayer(U, 'u v2', '#b45309', count), b: makeLayer(B_, 'b v2', '#7e22ce', count) };
@@ -621,13 +622,13 @@ try {
   check(map2.layers.every((l, i) => l.inputSig && l.inputSig !== map1.layers[i].inputSig), '第二版层表的 inputSig 与第一版不同', { map1: out.map1, map2: out.map2 });
   const s5 = {};
   for (const [label, pg] of [['A', A], ['B', B]]) {
-    s5[label] = await until(`${label}:新结果换上(u 贴 SNAP u v2,图标、徽标撤掉)`, async () => {
+    s5[label] = await until(`${label}:新结果换上(u 贴 SNAP u v2,沙漏撤掉)`, async () => {
       const x = await clipOnStage(pg, U);
       const badge = await badgeOf(pg, U);
       return x?.snapText?.includes('u v2') && !x.placeholder && badge === false ? { stage: x, ms: Date.now() - tWrite } : null;
     }, 30_000);
   }
-  check(s5.A && s5.B, '渲染节点渲完:两页 u 自动换上新结果,图标与徽标撤掉', s5);
+  check(s5.A && s5.B, '渲染节点渲完:两页 u 自动换上新结果,沙漏撤掉', s5);
   await stageShot(A, 'stale-4-A-v2');
   await stageShot(B, 'stale-4-B-v2');
   s5.bA = await playbackSnapOf(A, B_, 'b v2');
