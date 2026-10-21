@@ -103,7 +103,12 @@ async function waitFor(fn, ms, what, every = 250) {
     await delay(every);
   }
 }
-const status = async () => (await fetch(`${STATUS}/status`, { signal: AbortSignal.timeout(5000) })).json();
+/** 状态口；机器满载时管理进程一时答得慢，按退避再问两次（暂时性故障不算结果） */
+const status = async () => {
+  for (let i = 0; ; i += 1) {
+    try { return await (await fetch(`${STATUS}/status`, { signal: AbortSignal.timeout(T(5000)) })).json(); } catch (err) { if (i >= 2) throw err; await delay(1000 * (i + 1)); }
+  }
+};
 
 /* ------------------------------------------------------------------ 成员一侧的连接 */
 let reqSeq = 0;

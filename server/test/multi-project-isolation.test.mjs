@@ -155,3 +155,46 @@ test('MPI3 展开后的项目只带本项目用到的素材；参数里引用了
   assert.deepEqual(r.mediaIds, ['own'], '只有本项目素材表里、被用到的条目');
   assert.ok(r.project.media.every((m) => m.hash !== H_OTHER));
 });
+
+test('MPI4 换装时的两种退出：排空中工作进程自己退了算轮换；同一项目的一轮出过图之后没了，不算后面排着的请求「起不来」', async () => {
+  // 排空中自己退了
+  let exited = false;
+  const calls = [];
+  const iso = createIsolation({
+    nodeIdOf: (p) => p, cacheMs: 60_000,
+    runner: { async prepare() {}, start() { exited = false; }, async stop(reason) { calls.push(reason); }, async cleanup() {}, exited: () => exited },
+  });
+  const report = (p, extra = {}) => ({ at: Date.now() + 1000, queue: { nodes: [{ projectId: p, held: [], running: [], claimable: 0, claimed: 0, ...extra }] } });
+  const cand = (p, extra = {}) => ({ projectId: p, members: false, pending: 1, pendingKey: p, ...extra });
+  iso.tick({ candidates: [cand(PA)] });
+  await iso.settled();
+  iso.tick({ candidates: [cand(PA)], report: report(PA, { held: ['t'] }) });
+  iso.tick({ candidates: [cand(PB, { look: true }), cand(PA)], report: report(PA, { held: ['t'] }) });
+  assert.equal(iso.current.phase, 'draining');
+  exited = true;
+  iso.tick({ candidates: [cand(PB, { look: true })], report: report(PA) });
+  await iso.settled();
+  assert.deepEqual(calls, ['rotated']);
+  assert.equal(iso.status().lastRun.reason, 'rotated');
+
+  // 甲的一轮出过图（worked）之后没了：甲后面排着的请求接着排，不按「起不来」结掉
+  const lastRun = { projectId: PA, reason: 'exit', worked: true, at: Date.now() + 60_000 };
+  const look = createLook({
+    verify: () => ({ ok: true, service: 'agent', kid: 'k', instanceId: 'agent-1' }),
+    project: () => ({ enabled: true, active: true, hosted: { agent: { enabled: true } } }),
+    resident: () => ({ port: 1, key: 'r', running: true, node: () => null }),
+    iso: () => ({ enabled: true, port: 2, key: null, current: null, report: null, lastRun }),
+    fetch: async () => { throw new Error('不该转出'); },
+    limits: { pollMs: 5, retries: 0 },
+  });
+  try {
+    await look.handle({ auth: 'agent', bodyText: JSON.stringify({ projectId: PA, path: '/api/vision/snapshot', body: { project: { id: PA, tracks: [] }, t: 0 }, cards: CARDS, requestId: rid(90) }) });
+    await sleep(60);
+    const p = await look.poll({ auth: 'agent', bodyText: JSON.stringify({ requestId: rid(90), waitMs: 0 }) });
+    assert.deepEqual([p.status, p.body.state, p.body.attempts], [202, 'queued', 0], '还排着，没算一次失败');
+    lastRun.worked = false;
+    await sleep(60);
+    const q = await look.poll({ auth: 'agent', bodyText: JSON.stringify({ requestId: rid(90), waitMs: 0 }) });
+    assert.equal(q.body.look, 'iso-failed', '真是为它起的一轮没起成（没出过图就没了）：照旧算');
+  } finally { look.close(); }
+});

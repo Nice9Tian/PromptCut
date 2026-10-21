@@ -220,7 +220,8 @@ export function createIsolation({
         else if (now() - cur.startedAt >= startTimeoutMs) { void end('start-timeout'); return; }
         else return;
       }
-      if (runner.exited()) { void end('exit'); return; }
+      // 排空中自己退了（清单上标了排空、手里的做完，工作进程自己收尾退出）：这就是换装，不算意外退出
+      if (runner.exited()) { void end(cur.phase === 'draining' ? 'rotated' : 'exit'); return; }
       const held = (node?.held?.length ?? 0) + (node?.running?.length ?? 0);
       // 认领数涨了：这一类里它出了一个请求（每涨一个记一次，轮流按「一个请求」算）
       const claimed = Number(node?.claimed) || 0;

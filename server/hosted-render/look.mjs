@@ -328,7 +328,8 @@ export function createLook({
       e.isoSince ??= now();
 
       // 为它起过、又没起成（起不来、内存超限、进程自己没了）：算一次没成；还有重试次数就再要一轮
-      if (!s.current && s.lastRun && s.lastRun.projectId === projectId && s.lastRun.at >= e.isoSince && ['prepare-failed', 'start-timeout', 'oom', 'exit'].includes(s.lastRun.reason)) {
+      // 多项目模式下这个项目的一轮可能先为它前面的请求起来、出过图（`worked`）之后才没了：那不是为它起的这一轮没起成，接着排，不算次数
+      if (!s.current && s.lastRun && s.lastRun.projectId === projectId && s.lastRun.at >= e.isoSince && s.lastRun.worked !== true && ['prepare-failed', 'start-timeout', 'oom', 'exit'].includes(s.lastRun.reason)) {
         e.attempts += 1;
         stats.retried += 1;
         const maxIsoRetries = e.retries ?? (limitsIn.retries !== undefined ? limitsIn.retries : (limitsIn.isoRetries ?? limits.isoRetries ?? 3));
