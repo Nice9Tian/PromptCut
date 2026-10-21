@@ -12,7 +12,7 @@
  */
 
 import type { Project } from "../../kernel/project";
-import { otherCutsHint } from "../../kernel/cutsIndex.mjs";
+import { otherCutsHint } from "../../kernel/agentScopes.mjs";
 
 export interface TimelineDigestClip {
   id: string;
@@ -42,7 +42,7 @@ export interface TimelineDigest {
   tracks: TimelineDigestTrack[];
   /**
    * 只在项目里还有别的有内容的剪辑时出现:上面的 tracks 只是激活剪辑的,这里告诉模型别的剪辑的片段
-   * 不用 switch_cut 就能改(索引在 get_project 的 parkedCuts / list_cuts)。见 kernel/cutsIndex.mjs。
+   * 不用 switch_cut 就能改(索引在 get_project 的 parkedCuts / list_cuts)。见 kernel/agentScopes.mjs。
    */
   otherCuts?: { cuts: { cutId: string; name: string; clipCount: number }[]; hint: string };
 }

@@ -3,7 +3,7 @@ import { getState, actions } from "../../store/project";
 import { findClip } from "../../kernel/project";
 import { cameraFor, clampFov, DEFAULT_FOV_DEG, MAX_FOV_DEG, MIN_FOV_DEG } from "../../kernel/space3d";
 import { mediaCardUrl } from "../../ai/mediaRef";
-import { parkedCutsIndex } from "../../kernel/cutsIndex.mjs";
+import { parkedCutsIndex } from "../../kernel/agentScopes.mjs";
 import { getCard } from "../../kernel/registry";
 
 /**

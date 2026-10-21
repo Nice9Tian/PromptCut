@@ -1,11 +1,11 @@
 /**
- * 停放剪辑的片段索引(`cutsIndex.mjs`):Agent 先读的 get_project / list_cuts / 工具回包用它把别的剪辑里的 clipId 摆出来,
+ * 停放剪辑的片段索引(`agentScopes.mjs` 末尾的 `parkedCutsIndex` / `otherCutsHint`):Agent 先读的 get_project / list_cuts / 工具回包用它把别的剪辑里的 clipId 摆出来,
  * 模型不必为了「看进」剪辑2 而 switch_cut(线上 2026-10-21 两次尝试两次 switch_cut -> update_clip -> switch_cut)。
  * 跑:node --test src/kernel/cutsIndex.test.mjs
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parkedCutsIndex, otherCutsHint, CUTS_INDEX_LIMITS, PARKED_EDIT_NOTE } from "./cutsIndex.mjs";
+import { parkedCutsIndex, otherCutsHint, CUTS_INDEX_LIMITS, PARKED_EDIT_NOTE } from "./agentScopes.mjs";
 
 const clip = (id, start, end, extra = {}) => ({ id, cardId: "particles", start, end, params: { count: 50 }, ...extra });
 const proj = (over = {}) => ({

@@ -3,7 +3,7 @@ import { getState, actions } from "../../store/project";
 import { describeTransition, transitionsOf, type TransitionKind } from "../../kernel/transitions";
 import { timelineDigest } from "../tools/toolEcho";
 import { listCuts, resolveCut } from "../../kernel/cuts";
-import { parkedCutsIndex } from "../../kernel/cutsIndex.mjs";
+import { parkedCutsIndex } from "../../kernel/agentScopes.mjs";
 import { getCard } from "../../kernel/registry";
 import { cutContent, activeCutIdOf } from "../../kernel/cutSegments";
 import { removeCutGate } from "./cutSegments";

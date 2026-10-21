@@ -22,7 +22,7 @@ import { createPresenceBridge } from '../presence-bridge.mjs';
 import { loadRole } from '../agent-roles.mjs';
 import { annotateError, annotateResult, createUserEditingBoard, userEditingFor } from '../user-editing.mjs';
 import { effectiveIsFile } from '../../card-overrides.mjs';
-import { parkedCutsIndex } from '../../../src/kernel/cutsIndex.mjs';
+import { parkedCutsIndex } from '../ssr-host.mjs';
 import {
   checkCloudTool, initiatorOffline, initiatorUnreachable,
   CLOUD_AGENT_SIDE, CLOUD_HOSTED_TOOLS, CLOUD_INITIATOR_TOOLS, CLOUD_LOOK_TOOLS, CLOUD_PAGE_STATE_READS, CLOUD_PAGE_TOOLS, CLOUD_PLAYHEAD_TOOLS, CLOUD_SLOW_TOOLS,

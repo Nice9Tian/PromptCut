@@ -20,7 +20,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { annotateResult, clipIdsOfOps, overwroteView } from './user-editing.mjs';
-import { parkedCutsIndex } from '../../src/kernel/cutsIndex.mjs';
+import { parkedCutsIndex } from './ssr-host.mjs';
 
 export const AGENT_EXEC_DEFAULTS = Object.freeze({
   /** 被拒(stale)后等副本追上文档服务的当前版本,Agent 马上重读就能读到最新的 */
