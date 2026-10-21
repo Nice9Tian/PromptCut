@@ -10,17 +10,40 @@
 
 | 要求 | 结果 |
 |---|---|
-| 设置里加「放弃这次搬迁」，删掉半成品云端项目 | 做成。经界面真点走通（探针「放弃」一遍 17 项全过） |
+| 设置里加「放弃这次搬迁」，删掉半成品云端项目 | 做成。经界面真点走通（探针「放弃」一遍 18 项全过） |
 | 只在确实有半成品时出现，正常的云端项目上不出现 | 做成。判据见下；探针核对了没搬过、删完之后、进了正常云端项目三种情况都不出现 |
 | 二次确认写清删哪个、不可恢复、本机不受影响 | 做成。点按钮后在设置里展开一段确认（截图 `abandon-3-confirm.png`），「删除云端项目」「不放弃」两个按钮；点「不放弃」不向云端发任何请求 |
 | 删完清掉本机的云端关联记号 | 做成。本机搬迁记录（页面存储 `pc.account.move` 里那一条）按请求号删掉；本页内存里的云端关联若指向它也清掉。项目文件本来就不记它（见「本机关联记号」） |
 | 幂等 | 做成。云端已没有这个项目（以前删过、这次删的回包丢了）算成功、只清本机记录；重复点、断网重试都不报错 |
 | 失败说清原因、不删一半 | 做成。先云端、后本机：云端确认不在了才动本机记录；云端没删成时本机记录、本机项目都原样，按钮还在 |
 
-做的时候撞上两处现成的服务端问题，不修这个按钮就用不了或删完搬不回去，都修了（最小改动，请主会话审）：
+做的时候撞上两处现成的服务端缺陷，都修了（最小改动，请主会话审）：
 
-1. **沿用本机项目号搬上去的项目读不到成员。** `server/account/project-members.mjs` 只认 `sp_…` 形状的项目号，而 0.7.18 起本地项目搬上去沿用本机项目号（`p-…`），成员接口一律回 400 `invalid-project`。放弃之前要读成员判「有没有人在用」，所以撞上。改成与账本 `authority.mjs` 的 `projectIdOK` 同一个形状。这一条也影响编辑器里这类项目的成员名单（`syncManager.ts` 的 `accountNamesFrom`），不只是这个按钮。
-2. **删掉的项目号还会被新建沿用，新建在初始化时失败。** 账本允许带原号新建时沿用已删项目的号，但文档服务里那个号的数据还在，初始化撞 503 `initialization-conflict`；搬迁流程把 5xx 当「结果不确定」留着请求号，于是**放弃之后再搬同一个本地项目，一直报「云端暂时不可用」**（探针第一次跑出来的就是这个）。改成删掉的号也回 409 `project-id-taken`，搬迁流程据此改由云端发新号（现成的路）。沿用旧号还有一个坏处：重开带着那个已删项目关联的旧文件，本该走「云端项目已删 → 转本地」，号被新项目占了就会连到新项目上。
+1. **沿用本机项目号搬上去的项目读不到成员。** `server/account/project-members.mjs` 只认 `sp_…` 形状的项目号，而 0.7.18 起本地项目搬上去沿用本机项目号（`p-…`），成员接口一律回 400 `invalid-project`。放弃之前要读成员判「有没有人在用」，所以撞上。改成与账本 `authority.mjs` 的 `projectIdOK` 同一个形状。**这是 0.7.18 起就有的缺陷，影响面超出本任务**：编辑器里这类项目的成员名单（`syncManager.ts` 的 `accountNamesFrom`）也一直读不到。
+2. **账号办法删项目只删账本登记，不删文档服务里的数据。** 删完再搬同一个本地项目（沿用原项目号），新建在初始化时撞上旧数据，503 `initialization-conflict`，一直失败。**这也是原有缺陷，影响既有功能**：网站上、接口上每次删账号项目，文档服务里都留下一份孤儿数据。现在删项目时把文档服务那一份也删掉（下一节）。
+
+**返工记录**：第一版对第 2 条的处理是改账本，让删掉的项目号不再给新建沿用（`authority.mjs`），代价是放弃之后再搬拿到的是新项目号，与一级语义「本地项目搬到云端搬上去还是同一个项目」（`workflow/project.md`，用户 2026-10-14 定）在这条路上不一致。主会话指出一级不许改，要求从根上修。现已改回：`authority.mjs` 与 main 相同（删掉的号可以沿用），改为删项目时连文档服务数据一起删。原来报告里的〔裁·H04-乙〕作废。
+
+## 查清：账号办法的 `op: delete` 删了什么（主会话第 1 步）
+
+| 位置 | 做了什么 |
+|---|---|
+| `server/account/authority.mjs` 第 470 行（`adminProject` 的 `case 'delete'`） | 账本里把项目标成 `status: 'deleted'`，全体成员记为受影响 |
+| 同文件第 502 行 | 记墓碑 `p.tombstone`（「云端项目已不存在」的签名证明靠它，`goneProofOf`） |
+| 同文件第 491、498、510～511 行 | 记一条 `project-access-changed`（`reason: 'delete'`）访问事件、给云端 Agent 任务立 `delete` 围栏、通知订阅者（`notify`、`notifyProjectChanged(projectId, 'delete')`） |
+| `server/docservice/account-hosted.mjs` 第 187 行起（`subscribeRevocations` 的回调） | 文档服务收到这条事件，只**关掉页面连接**、停掉任务连接，记关闭回执。**不删数据，也不丢掉内存里这个空间的实例** |
+| `server/agent/service/create-agent-service.mjs` 第 903 行 → `conversations.mjs` 第 376～383 行 | 云端 Agent 服务收到项目删除，删掉自己的 `tenants/<项目号>/`（对话、模型历史） |
+| `server/asset-store/project-stores.mjs` 第 66 行 `removeProject` | 素材服务有删一个项目素材库的方法，但**没有任何地方在项目删除时调它** |
+
+对照旧办法（项目名 + 密码的共享项目）删项目：`server/docservice/modules/shared.mjs` 第 531 行起的 `case 'delete'` 关连接后调 `dropSpace`，`server/docservice/shared-service.mjs` 第 346 行起的 `dropSpace` 丢掉各模块里这个空间的实例、删掉 `<dataDir>/tenants/<项目号>/`（第 355 行）。**账号办法少了这一步**——这就是第 2 条缺陷的根因。
+
+### 修法
+
+`server/docservice/shared-service.mjs`（第 300 行起，22 行）：文档服务订阅账本的项目变化（`authority.subscribeProjectChanges`，`hosted.mjs` 已经在用的同一个钩子），`op === 'delete'` 时照旧办法删项目的那几步做：还连着的会话以 4004 `deleted` 关掉（与旧办法同一个关闭码）、各模块丢掉这个空间的实例、去掉存储与模块缓存、删 `<dataDir>/tenants/<项目号>/`。账本里的登记与墓碑不动。
+
+为什么文档服务能删：账本与文档数据在同一个文档服务进程里（`account-hosted.mjs` 建的账本，`initializeProject` 写的就是这个 `tenants/<项目号>/` 目录），不需要新的权限或通道。
+
+**没修的**：素材服务那一份（第 6 行那条）。素材服务是另一个进程，素材按内容哈希存、沿用同一个号时不冲突，不挡这个按钮；但删项目同样留下孤儿素材库。记为**待用户项**：要不要在素材服务里也接上项目删除（它已经订阅访问事件，`project-access.mjs`），影响面是素材服务。
 
 ## 半成品的判据
 
@@ -61,7 +84,8 @@
 | `src/editor/sync/CollabSection.tsx` | 「放弃这次搬迁」那一块：按钮、确认、状态行 | 在 |
 | `src/account/client.ts` | 加 `deleteProject`（同一个 admin 接口的 `op: "delete"`） | **不在**。账号客户端原来没有删项目的方法，不加就只能在别处另写一条请求，违背「照现有的路走」 |
 | `server/account/project-members.mjs` | 项目号形状与账本一致（见上第 1 条） | **不在**。不修，沿用本机号搬上去的半成品（现在的缺省情形）放弃时一律失败 |
-| `server/account/authority.mjs` | 删掉的项目号不再给新建沿用（见上第 2 条），3 行 | **不在**。不修，放弃之后再搬同一个本地项目一直失败 |
+| `server/docservice/shared-service.mjs` | 账号项目删除时连文档服务数据一起删（见「修法」），22 行 | **不在**。不修，放弃之后再搬同一个本地项目一直失败，而且这是删项目的原有缺陷 |
+| `server/account/authority.mjs` | 第一版改过，返工后**改回与 main 相同** | — |
 | `src/editor/sync/accountMove.test.mjs` | AM-26（11 条） | 测试 |
 | `server/test/account-move.test.mjs` | 真服务第 10 步 | 测试 |
 | `scripts/probes/account-move-probe.mjs` | 「放弃」一遍；`--editor-ports`、`--fixture-ports auto` 两个参数（分到的端口段只有 10 个，探针要 14 个） | **不在**清单里，是验收要求的探针 |
@@ -79,7 +103,7 @@
 ### 另两处〔裁〕（没改语义文字，请主会话审）
 
 - 〔裁·H04-甲〕（二级，用户看得出）有别的成员加入、或有人的页面正开着那个云端项目时，「放弃」不删，提示「已经有其他成员加入，或有设备正打开着它，不当作没搬完的项目删除」。按钮照样显示（判据是本机记录，读云端要点了才读）。
-- 〔裁·H04-乙〕（三级，用户一般看不出）删掉的项目号不再给新建沿用（服务端第 2 条）。后果：放弃之后再搬同一个本地项目，云端项目号是新发的，不是本机原来那个号；历史序号照样接着本机往上数。与 `workflow/project.md`「本地项目搬到云端搬上去还是同一个项目」在这一种情形下不一致——那个号已经被删掉的项目用过、留着墓碑，再给出去会让重开旧文件的「云端项目已删」判错。建议语义补半句：「（这个号以前搬上去后删掉过的，云端另发新号）」。
+- ~~〔裁·H04-乙〕删掉的项目号不再给新建沿用~~：**作废**（返工，见「结论」末尾）。放弃之后再搬同一个本地项目，项目号不变、历史序号接着往上数，与一级语义一致；`workflow/project.md` 不加任何例外。
 
 ## 界面文字（草稿，等用户审）
 
@@ -107,7 +131,7 @@
 
 ### 类型检查
 
-`npx tsc -b --force`：退出码 0，零错误（最后一个代码提交 `e3e09e28` 上）。
+`npx tsc -b --force`：退出码 0，零错误（第一版 `e3e09e28` 上；返工后的代码上再跑一次，也是 0）。
 
 ### 单测 `src/editor/sync/accountMove.test.mjs`
 
@@ -124,30 +148,40 @@
 
 ### 真服务 `server/test/account-move.test.mjs`
 
-`npm test -- server/test/account-move.test.mjs`：退出码 0，**11 条全过**（原 9 步 + 新第 10 步 + 外层 1 条）。第 10 步对着真的账号服务、文档服务：
+`npm test -- server/test/account-move.test.mjs`：退出码 0，**11 条全过**（原 9 步 + 新第 10 步 + 外层 1 条；返工后的代码上）。第 10 步对着真的账号服务、文档服务：
 
-- 本机项目号 `p-local-content-10`，搬到一半失败，云端项目沿用这个号；认得出是半成品。
-- 删的请求到了云端、回包丢了 → 流程报删成；本机记录清掉；`members` 回 404 `no-project`，`session` 回 404。
+- 本机项目号 `p-local-content-10`、本机历史序号 7，搬到一半失败，云端项目沿用这个号；文档服务里有它的数据目录；认得出是半成品。
+- 删的请求到了云端、回包丢了 → 流程报删成；本机记录清掉；**文档服务里这个项目的数据目录没了**；`members` 回 404 `no-project`，`session` 回 404。
 - 再用新请求号删 → 404 `no-project`；本机记录已清 → 「没有可放弃的」；本机记录还在而云端已删 → 只清本机、报成功。
-- 带这个已删的号新建 → 409 `project-id-taken`；改了内容再搬 → 搬成，新号是 `sp_…`、不是删掉的那个。
+- **放弃之后再搬同一个本地项目**（本机又改过，历史序号到了 9）→ 搬成，**项目号还是 `p-local-content-10`**，新建只发一次，**占位是第 9 号、正文接着是第 10 号**（一级语义「搬上去还是同一个项目，历史序号接着往上数」）。
 - 另一个账号凭号加入了另一个半成品 → `in-use`，记录不动，云端还在（成员 2 个）。
+- 反证：把 `shared-service.mjs` 换回 main 那一份再跑，第 10 步失败在「文档服务里这个项目的数据目录也删掉了」，即这一步确实测到了原有缺陷。
 - 成员接口相关的三份旧测试一起跑也全过：`account-member-projection`、`account-member-native-route`、`account-member-controls`（17 条全过，含第 10 步那一份）。
+- 返工后与「删项目」相关的旧测试一起跑：`account-page-link`、`account-card-sync`、`accept-018-conv-readexception`、`account-projects-provider`、`asset-wiring-integration`、`account-member-projection`，加上 `accountMove.test.mjs`：106 条全过。
 
 ### 端到端探针 `scripts/probes/account-move-probe.mjs`
 
 ```
-node scripts/probes/account-move-probe.mjs --editor-ports 5860,5865 --fixture-ports auto --out out/abandon-move/probe-full2
+node scripts/probes/account-move-probe.mjs --editor-ports 5860,5865 --fixture-ports auto --out out/abandon-move/probe-full5
 ```
 
-**退出码 0，102 项核对全过，`fails: []`**（四遍：本地项目、协作房间、续搬、放弃；原探针 85 项 + 「放弃」17 项）。两台编辑器在 5860、5865（各占 +1、+2）；夹具 8 个端口用测试同款的随机空闲端口（20000～49151，不落在 5xxx、58xx、59xx），因为探针要 14 个端口、分到的段只有 10 个。证据 `out/abandon-move/probe-full2/evidence.json`，过程日志 `out/abandon-move/probe-full2.err`。
+**返工之后（工作区的最后代码）：退出码 0，103 项核对全过，`fails: []`**（四遍：本地项目、协作房间、续搬、放弃；原探针 85 项 + 「放弃」18 项）。证据 `out/abandon-move/probe-full5/evidence.json`，过程日志 `out/abandon-move/probe-full5.err`。「放弃」一遍核对了：删完文档服务里这个项目的数据目录没了；再搬一次**还是原来的项目号**、新建只发一次。
 
-这一遍之前跑过一遍（`out/abandon-move/probe-full`）：100 项过、2 项没过——
-- 「房间-失败后房间照常能改、能存」：等文档服务确认 5 秒超时（那一遍协作房间用了 63 秒，第二遍 20 秒；机器上同时有四个别的任务在跑）。这一遍不走我改的代码（本机文档服务、本机房间），第二遍通过，判为机器忙时的偶发。
-- 「放弃-点『不放弃』没有向云端发请求」：是探针写宽了——同一个账号的上一页（续搬那一遍）这时停在一个云端项目里，按时读成员，记到了全局的请求表里。改成只看对这个云端项目发的请求（`e3e09e28`），第二遍通过。
+**端口（以后排查用）**：两台编辑器固定在 5860、5865（各占 +1、+2，在分到的段里）。**夹具的 7 个端口和云端 Agent 入口这 8 个用了随机空闲端口**（`--fixture-ports auto`，`server/test/free-ports.mjs`，20000～49151，不落在 5xxx、58xx、59xx）：探针一共要 14 个端口，分到的段只有 10 个。四遍（local、room、resume、abandon）共用同一个夹具，所以四遍都在随机端口上；每次跑的实际端口记在那次 `evidence.json` 的 `ports` 里，`probe-full5` 那一次是夹具 47925、45975、31718、22199、30303、48105、30092，云端 Agent 22235。
 
-再之前只跑「放弃」一遍时撞出了上面「服务端两处」：成员接口 400 `invalid-project`、再搬 503 `initialization-conflict`。修完之后「放弃」一遍单跑与整遍都通过。
+跑的过程（都在 `out/abandon-move/` 下，不入库）：
 
-### 看过的截图（`out/abandon-move/probe-full2/`）
+| 哪一次 | 代码 | 结果 |
+|---|---|---|
+| `probe-full` | 第一版 | 100 过、2 不过：房间那一遍等确认超时（机器忙，那一遍 63 秒、平时 20 秒）；「不放弃」那一项探针写宽了（已改） |
+| `probe-full2` | 第一版 | 102 项全过 |
+| `probe-full3`、`probe-full4` | 返工后 | 续搬、房间那几项不过：上传 6 秒超时、关本机协作时拉素材失败（`pull-failed`），房间那一遍 72 秒。都在本机房间那一段，不经过这次改的代码（改的是云端文档服务删账号项目、成员接口） |
+| `probe-rra`（`--only room,resume,abandon`） | 返工后 | 66 项全过，房间 19.6 秒 |
+| `probe-full5` | 返工后 | **103 项全过** |
+
+判为机器忙时的偶发：同一份代码随后整遍通过；不过的几次耗时是平时的 2～3 倍。
+
+### 看过的截图（`out/abandon-move/probe-full2/`；返工后另看了 `probe-full5/abandon-5-cloud-no-button.png`，界面与第一版相同）
 
 - `abandon-1-failed.png`：搬到一半失败后，「云端」表单上是「上次搬到云端没有做完…点「确定」接着做，不会多建一个。」，下面「放弃这次搬迁」按钮，红字「项目内容没有传完。本机项目没有改动…」。
 - `abandon-3-confirm.png`：重开设置（没勾协作），说明「上次搬到云端没有做完…不搬了可以放弃这次搬迁。」；点按钮后黄色提示写着删哪一个、不能恢复、本机不受影响，红色「删除云端项目」、灰色「不放弃」。
@@ -169,7 +203,8 @@ node scripts/probes/account-move-probe.mjs --editor-ports 5860,5865 --fixture-po
 ## 对任务书或语义的更正建议
 
 - 任务书说「0.7.18 已经做过『删除云端项目』的入口，照现有的路走」：服务端接口（`/hosted/shared/account/admin` 的 `op: "delete"`）是现成的，但桌面版账号客户端没有调它的方法，项目设置里的「删除项目」对账号项目也不通（见上）。这次加了 `client.deleteProject`。
-- `workflow/project.md`「本地项目搬到云端搬上去还是同一个项目」：建议补半句「这个号以前搬上去后删掉过的，云端另发新号」（〔裁·H04-乙〕）。
+- 原来建议给 `workflow/project.md` 补「项目号会变」的例外——**撤回**，返工后不需要。
+- 账号办法删项目时素材服务那一份不删（见「修法」末尾），记为待用户项。
 
 ## 全量测试
 
@@ -177,6 +212,7 @@ node scripts/probes/account-move-probe.mjs --editor-ports 5860,5865 --fixture-po
 
 - 失败的是 `server/test/syntax.test.mjs` 的「.mjs 脚本全部能解析」：它对每个 .mjs 起一个 `node --check`，其中 `server/test/hosted-render-process.test.mjs`（我没碰）那一个进程报 `low_level_alloc.cc : 554] RAW: Check new_pages != nullptr failed: VirtualAlloc failed`——Node 自己分配内存失败，不是语法错误。当时机器上另有四个任务在并行跑。
 - 单跑复核 `npm test -- server/test/syntax.test.mjs`：退出码 0，3 条全过。
-- 所以：全量里只有这一条，单跑通过，判为机器内存吃紧时的偶发；**没有拿到一遍零失败的全量**，合入前请主会话在空闲时再跑一遍。本分支加的、改的测试在全量里都过。
+- 所以：全量里只有这一条，单跑通过，判为机器内存吃紧时的偶发（主会话也已确认，空闲时由主会话跑干净的全量）。本分支加的、改的测试在全量里都过。
+- 这一遍是第一版代码上跑的；返工只动了 `shared-service.mjs`（加）、`authority.mjs`（改回 main），返工后没再跑全量，跑了上面列的相关测试（106 条全过）和探针。
 
 完整输出 `out/abandon-move/npm-test.txt`（不入库）。

@@ -298,6 +298,28 @@ export function createSharedDocService({
     return b;
   }
   docAssembly?.bindTenantResolver(space => bundleForSpace(space));
+
+  /**
+   * 账号项目删除(`/hosted/shared/account/admin` 的 `op: "delete"`)之后,与旧办法删共享项目(下面 `sharedModule` 的 `dropSpace`)
+   * 一样把这个空间清掉:还连着的会话以 4004 关掉、各模块丢掉这个空间的实例、文档服务数据目录 `<dataDir>/tenants/<项目号>/` 删掉。
+   * 原来账号办法只在账本里记「已删除」、关掉页面连接,文档服务里的内容一直留着:成了孤儿数据,而且这个号再被新建沿用时
+   * (搬到云端沿用本机项目号)初始化撞上旧数据,503 `initialization-conflict`(〔裁〕H04 查出,报告 docs/reports/AGENT-claude-abandon-move.md)。
+   * 账本里的登记与墓碑不动(「云端项目已不存在」的证明靠它)。
+   */
+  accountRuntime?.authority?.subscribeProjectChanges?.((projectId, op) => {
+    if (op !== 'delete' || projectId === LOCAL_SPACE || !accountRuntime.hasProject?.(projectId)) return;
+    try {
+      service.closeSpace(projectId, 4004, 'deleted');
+      service.dropSpace(projectId);
+      spaceStores.delete(projectId);
+      bundles.delete(projectId);
+      const dir = tenantDir(projectId);
+      if (dir) fs.rmSync(dir, { recursive: true, force: true });
+      say?.('account.project.purged', { projectId });
+    } catch (err) {
+      say?.('module.error', { module: 'shared', hook: 'account-delete', message: String(err?.message ?? err) });
+    }
+  });
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).project }));
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).content }));
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).events }));

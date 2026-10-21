@@ -348,8 +348,9 @@ test('账号办法的搬到云端:真的账号服务与文档服务', { timeout:
     remove: (projectId, rev, requestId) => who.client.deleteProject(projectId, rev, requestId),
     newRequestId: () => `abandon-${randomUUID()}`,
   });
-  const failedMove = async (who, local) => {
+  const failedMove = async (who, local, lineage = null) => {
     const d = desk(who, local, { link: { timeoutMs: 2500 } });
+    if (lineage) d.deps.lineage = lineage;
     d.ticketFault = Object.assign(new Error('authority-unavailable'), { status: 503, code: 'authority-unavailable' });
     const failed = await d.move();
     d.ticketFault = null;
@@ -360,8 +361,11 @@ test('账号办法的搬到云端:真的账号服务与文档服务', { timeout:
   await t.test('10 放弃这次搬迁(〔裁〕H04):删掉云端的半成品、清掉本机记录;幂等;有人加入了不删', async () => {
     const name = '搬迁测试·放弃';
     // 本机项目号是 p-… 的形状:搬上去沿用这个号(10-14 第 3.3 节),删的时候走的也是它
-    const { d, projectId } = await failedMove(a, bigProject('p-local-content-10', name, 2000));
+    // 本机这一份的历史序号:先是 7,放弃之后本机又改了两次是 9(云端从这个序号接着往上数)
+    let localRev = 7;
+    const { d, projectId } = await failedMove(a, bigProject('p-local-content-10', name, 2000), () => ({ rev: localRev, history: [] }));
     assert.equal(projectId, 'p-local-content-10');
+    assert.ok(cloudProjects().includes(projectId), '文档服务里有这个项目的数据');
     assert.equal(M.pendingAttempt(d.deps.attempts, a.account.id, d.deps.source())?.projectId, projectId, '半成品认得出');
     // 删的请求到了云端、回包丢了:再问一次云端,确认不在了就算删成
     a.b.fault = (p) => (p === '/hosted/shared/account/admin' ? 'drop-response' : null);
@@ -370,6 +374,7 @@ test('账号办法的搬到云端:真的账号服务与文档服务', { timeout:
     assert.deepEqual(r, { ok: true, projectId, name, already: false });
     assert.equal(d.attempt(), null, '本机记录清掉');
     assert.deepEqual(d.touchedLocal(), [], '本机一侧什么都没被调');
+    assert.ok(!cloudProjects().includes(projectId), '文档服务里这个项目的数据目录也删掉了(原来账号办法删项目会留下孤儿数据)');
     await assert.rejects(a.client.members(projectId), (e) => e.status === 404 && e.code === 'no-project');
     await assert.rejects(a.client.session(projectId), (e) => e.status === 404, '云端项目进不去了');
     // 重复删:用新请求号再删回 404 no-project(流程把它当「已经不在」)
@@ -381,14 +386,16 @@ test('账号办法的搬到云端:真的账号服务与文档服务', { timeout:
     d.deps.attempts.put(ghost);
     assert.deepEqual(await abandonOf(a, d), { ok: true, projectId, name, already: true });
     assert.equal(d.attempt(), null);
-    // 删掉的项目号不再给(账本留着墓碑,文档服务里还有它的数据)
-    await assert.rejects(a.client.create('搬迁测试·沿用已删的号', d.deps.stub('x', projectId), randomUUID(), { projectId }), (e) => e.status === 409 && e.code === 'project-id-taken');
-    // 删完再搬:名字放出来了;带原号新建回 project-id-taken,流程改由云端发新号另建一个,不去连已经删掉的那个
+    // 删完再搬同一个本地项目(本机又改过、内容和历史序号都变了):项目号不变,历史序号接着本机往上数
+    // (语义 workflow/project.md「本地项目搬到云端搬上去还是同一个项目，历史序号接着往上数」)
     d.local = { ...d.local, name: `${name}·删完改了一处` };
+    localRev = 9;
+    const creates = d.calls.filter((c) => c === 'create').length;
     const again = await d.move(name);
     assert.equal(again.ok, true, JSON.stringify(again));
-    assert.notEqual(again.projectId, projectId);
-    assert.match(again.projectId, /^sp_[a-z2-7]{26}$/);
+    assert.equal(again.projectId, projectId, '还是原来的项目号');
+    assert.equal(d.calls.filter((c) => c === 'create').length, creates + 1, '新建只发了一次(没有撞上旧数据)');
+    assert.equal(d.lastUpload.rev, 10, '占位是本机的第 9 号,正文接着是第 10 号');
     assert.equal(again.name, name);
     assert.equal((await a.client.members(again.projectId)).members.length, 1, '新建的项目只有创建者');
     assert.equal(M.sameContent(await readAs(other, again.projectId), d.local), true);

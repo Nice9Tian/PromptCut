@@ -30,7 +30,7 @@
  *                  设置里选云端点确定,用原来的请求号接着补上。再把搬之前那份带房间关联的旧草稿原样放回去打开:按本地项目开。
  *   放弃这次搬迁  (〔裁〕H04,报告 `docs/reports/AGENT-claude-abandon-move.md`)小的本地项目搬到一半失败 → 设置里出现「放弃这次搬迁」;
  *                  重开设置也在;点了先出确认(写着删哪一个、不能恢复、本机不受影响),点「不放弃」什么都不发;确认后删的回包丢了
- *                  也算删成 → 云端项目没了、本机记录清掉、按钮消失、本机项目与草稿一字未变照常能改能存;再搬一次另建一个,
+ *                  也算删成 → 云端项目没了(文档服务数据目录也删了)、本机记录清掉、按钮消失、本机项目与草稿一字未变照常能改能存;再搬一次还是原来的项目号,
  *                  进了云端项目后设置里没有这个按钮。
  * 每遍截图:搬之前、进行中、失败的提示、成功后的提示(`docs/reports/assets/v18-move/`)。
  * 输出:过程写 stderr;stdout 最后一行是一行 JSON(`fails` 为空才算过)。不打印密码、令牌、票据。
@@ -863,6 +863,7 @@ async function scenarioAbandon({ A, stateA }) {
   check(!Object.values(await records()).some((r) => r.contentId === contentId), '放弃-本机的搬迁记录清掉');
   const members = await edge('/hosted/shared/account/members', { body: { projectId: out.projectId }, token: stateA.token });
   check(members.status === 404, '放弃-云端那个项目没了(成员接口回 404)', { status: members.status, code: members.body?.code });
+  check(!cloudProjects().includes(out.projectId), '放弃-文档服务里这个项目的数据目录也删掉了');
   const v = await viewOf(page);
   check(v.kind === 'local' && v.shared === null && v.status === 'online', '放弃-编辑器仍在本机项目里', v);
   check((await contentOf(page)) === contentBefore, '放弃-本机项目内容一字未变');
@@ -880,11 +881,11 @@ async function scenarioAbandon({ A, stateA }) {
   await waitFor(async () => { const t = await statusText(page); return t && !/^正在/.test(t); }, 120_000, '再搬一次的结果');
   out.againText = await statusText(page);
   const v2 = await viewOf(page);
-  // 删掉的项目号云端不再给:先带原号新建回 project-id-taken,流程改由云端发新号,所以新建发两次、都是新请求号
+  // 删的时候文档服务那一份数据也删了,这个号空出来:再搬还是原来的项目号(本地项目搬上去还是同一个项目),新建只发一次、用新请求号
   const creates = stateA.requests.filter((q) => q.path === '/hosted/shared/account/create').slice(createsBefore.length);
-  check(out.againText === M.ACCOUNT_MOVE_TEXT.doneLocal && !!v2.shared?.accountId && v2.shared.projectId !== out.projectId &&
-    creates.length >= 1 && creates.every((q) => q.requestId !== rec?.requestId),
-    '放弃-之后再搬:另建一个云端项目搬成(不去连删掉的那个)', { text: out.againText, creates: creates.length, sameProject: v2.shared?.projectId === out.projectId });
+  check(out.againText === M.ACCOUNT_MOVE_TEXT.doneLocal && !!v2.shared?.accountId && v2.shared.projectId === out.projectId &&
+    creates.length === 1 && creates[0].requestId !== rec?.requestId,
+    '放弃-之后再搬:还是原来的项目号,新建只发一次(新请求号),搬成', { text: out.againText, creates: creates.length, sameProject: v2.shared?.projectId === out.projectId });
   await closeSettings(page);
   await openSettings(page);
   await sleep(1500);

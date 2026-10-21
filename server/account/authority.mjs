@@ -307,10 +307,9 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
       if (Object.values(state.projects).some(p => p.status !== 'deleted' && p.name === name)) reject(409, 'name-taken');
       let projectId;
       if (reqProjectId) {
-        // 删掉的项目号也不再给:账本里它留着墓碑(重开旧文件时据此认「云端项目已不存在」),文档服务里它的数据也还在,
-        // 沿用会让新建在初始化时撞上旧数据(503 initialization-conflict),再点一次也一样。回 project-id-taken,
-        // 搬到云端的流程据此改由云端发新号(〔裁〕H04「放弃这次搬迁」之后再搬时发现,报告 docs/reports/AGENT-claude-abandon-move.md)
-        if (state.projects[reqProjectId]) reject(409, 'project-id-taken');
+        if (state.projects[reqProjectId] && state.projects[reqProjectId].status !== 'deleted') {
+          reject(409, 'project-id-taken');
+        }
         projectId = reqProjectId;
       } else {
         do { projectId = newProjectId(); } while (state.projects[projectId]);
