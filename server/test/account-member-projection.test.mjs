@@ -78,3 +78,21 @@ test('snapshot refuses a state revision changed between fresh authorization and 
   } });
   await assert.rejects(snapshot({ accessToken: 'a' }, { projectId: f.projectId }), { code: 'members-changed' });
 });
+test('cloud Agent task connection (no device, run-scoped) is listed under the initiating member, even while that member is offline', async t => {
+  const f = await setup(t);
+  // 创建者 a 的页面已断开,只剩他的云端 Agent 的任务连接(`doc-agent-assembly.mjs` 给的身份:无设备号,带 runId、service: 'agent')
+  const run = f.conn(a, undefined, { role: 'agent', service: 'agent', runId: 'run_1234', userId: a, accountName: '发起人' });
+  delete run.principal.deviceId; delete run.principal.deviceName;
+  // 没有任务号也没有设备号的连接照旧不列
+  const stray = f.conn(a, undefined, { role: 'agent', service: 'agent' });
+  delete stray.principal.deviceId;
+  f.connections.push(f.conn(b, 'b-page'), run, stray);
+  const value = await f.snapshot({ accessToken: 'b' }, { projectId: f.projectId });
+  const agentRow = value.devices.find(row => row.accountId === a);
+  assert.ok(agentRow, 'initiator row present');
+  assert.equal(agentRow.deviceId, 'run:run_1234');
+  assert.deepEqual(agentRow.conns, [{ role: 'agent', service: 'agent' }]);
+  assert.equal(agentRow.accountName, '同名', 'name comes from the member record, same as the member row');
+  assert.equal(value.devices.filter(row => row.accountId === a).length, 1);
+  assert.equal(JSON.stringify(value).includes('run_1234') && !JSON.stringify(value).includes('login-a'), true);
+});

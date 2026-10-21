@@ -2,6 +2,10 @@ import { accountError } from './client.mjs';
 
 const fail = (status, code) => { throw accountError(status, code); };
 const accountOK = id => typeof id === 'string' && /^acc_[a-f0-9]{24}$/.test(id);
+/** 连接归在哪台「设备」下。云端 Agent 的任务连接(`role: 'agent'`、`service: 'agent'`)不带设备号,
+ * 按这一轮的任务号归成一项 `run:<任务号>`;它仍按 `accountId` 记在发起成员名下(语义 `product/agent.md`「成员列表怎么数」) */
+const deviceOf = p => typeof p?.deviceId === 'string' && p.deviceId ? p.deviceId
+  : p?.role === 'agent' && p.service === 'agent' && typeof p.runId === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(p.runId) ? `run:${p.runId}` : null;
 const nameOf = name => typeof name === 'string' && name.length > 0 && name.length <= 200 && !/[\u0000-\u001f]/.test(name) ? name : null;
 
 /** Fresh authorization followed by a synchronous, whitelist-only projection.
@@ -21,16 +25,16 @@ export function createProjectMembers({ ledger, authority, getConnections }) {
     if (!Array.isArray(connections)) fail(503, 'members-unavailable');
     const names = new Map(), groups = new Map();
     for (const connection of connections) {
-      const p = connection?.principal;
+      const p = connection?.principal, deviceId = deviceOf(p);
       if (!connection.transport || connection.detached || p?.realm !== 'account' || p.identityVersion !== 2 ||
           p.tenantId !== project.projectId || !accountOK(p.accountId) || !['page', 'agent', 'render'].includes(p.role) ||
-          typeof p.deviceId !== 'string' || !p.deviceId || project.bans[p.accountId] ||
+          !deviceId || project.bans[p.accountId] ||
           !project.members[p.accountId] || state.revokedLogins[`login:${p.loginId}`]) continue;
       const name = nameOf(p.accountName);
       if (name && p.role === 'page') names.set(p.accountId, name);
-      const key = `${p.accountId}\n${p.deviceId}`;
+      const key = `${p.accountId}\n${deviceId}`;
       if (!groups.has(key)) groups.set(key, { accountId: p.accountId, accountName: name,
-        deviceId: p.deviceId, deviceName: nameOf(p.deviceName) ?? p.deviceId,
+        deviceId, deviceName: nameOf(p.deviceName) ?? deviceId,
         creator: p.accountId === project.creatorAccountId, conns: [] });
       const conn = { role: p.role };
       if (['agent', 'render'].includes(p.service)) conn.service = p.service;

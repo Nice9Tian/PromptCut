@@ -14,6 +14,7 @@
  * 解码按帧号递增顺着来(导出本来就是顺推):同一个分段里接着喂,不重置解码器;跨分段时从下一段的关键帧起。
  * 同一份字节、同一个解码器解出来的像素是确定的,所以同一个项目导两次逐帧相同。
  */
+import { isFlatClipId } from "../kernel/cutFlatten.mjs";
 import { LAYER_MAP_PREFIX, parseLayerMap, streamSpansInWindow, type OnlineStream } from "../render/snapshotSource";
 import { chunkTimestamp, parseInit, parseSegment, type SegmentSample } from "../render/streamPlayer";
 import { streamInputSig, streamSigStale } from "../render/streamInputSig.mjs";
@@ -91,6 +92,8 @@ export async function loadReadableStreams(projectId: string | null, project: unk
     if (row.clipIds.length !== 1 || (row.kind as string) === "group") continue;
     const clipId = row.clipIds[0];
     if (clipIds && !clipIds.has(clipId)) continue;
+    // 剪辑段里的卡(`kernel/cutFlatten.mjs` 的虚拟片段)不从流取:导出时嵌套场景整帧活渲
+    if (isFlatClipId(clipId)) continue;
     // 旧输入的流不取(行里的签名和页面按这一版项目算的不同)。没带签名的行没法核对,导出时同样不取(预览照旧贴,那是它自己的规矩):
     // 成片里贴进一段别的版本的画面比慢一点更糟
     if (!row.inputSig || streamSigStale(row.inputSig, streamInputSig(project, row))) continue;

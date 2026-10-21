@@ -42,6 +42,9 @@ import { actorOf } from './actor.mjs';
 import { applyOps, entitiesOf, normalizeEntity, parsePath, formatPath, idSegment, OpError } from '../json-ops.mjs';
 import { canonical, digest as historyDigest, historyError } from './operation-history.mjs';
 
+/** 账号项目的一次提交从收到到回包超过这么久,记一行 `project.op.slow`(诊断;三级数字) */
+export const SLOW_OP_MS = 5_000;
+
 export const PROJECT_MODULE = 'project';
 
 const PROJECT_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
@@ -678,7 +681,20 @@ export function projectModule({
     if (msg.expectRev != null && (!Number.isSafeInteger(msg.expectRev) || msg.expectRev < 0)) bad('expectRev 必须是非负整数');
     const undoOf = msg.undoOf == null ? null : checkToken(msg.undoOf, 'undoOf');
     const request = { opId, ops: msg.ops, expectRev: msg.expectRev ?? null, undoOf, session };
+    /*
+     * 慢提交的诊断(线上 2026-10-21:Agent 的 switch_cut 约 60 秒才落地,日志里看不出卡在哪;`docs/archive/agent-reports/AGENT-cut-stream-fix.md`
+     * 缺陷 5):从收到到回包超过 `SLOW_OP_MS` 记一行 `project.op.slow`,分出排队(进有序提交之前:授权核对、项目锁)与落地(进锁之后)各多久。
+     */
+    const t0 = Date.now();
+    let tPrepare = null, tCommitted = null;
+    const slow = (outcome) => {
+      const ms = Date.now() - t0;
+      if (ms < SLOW_OP_MS) return;
+      log('project.op.slow', { projectId, opId: String(opId).slice(0, 48), role: principal?.role ?? null, ms, outcome,
+        queuedMs: tPrepare === null ? null : tPrepare - t0, landMs: tPrepare === null || tCommitted === null ? null : tCommitted - tPrepare });
+    };
     return operationCoordinator.execute({ projectId, principal, actor, request }, (binding) => {
+      tPrepare = Date.now();
       const st = stateOf(projectId);
       if (request.expectRev !== null && request.expectRev !== st.projectRev) throw historyError('stale');
       let ops, used, applied;
@@ -699,6 +715,7 @@ export function projectModule({
       return { ...binding, projectId, opId, expectedRev: st.projectRev, actor, ops,
         beforeProjection: snapshotOf(projectId, st), projection: snapshotOf(projectId, next), result: { record, overwrote, victims, used: used ?? [] } };
     }, result => {
+      tCommitted = Date.now();
       const { operation, duplicate } = result;
       const { record, overwrote, victims, used } = operation.result;
       for (const key of used) bodyUploads.delete(key);
@@ -717,7 +734,7 @@ export function projectModule({
         delete broadcast.ops; broadcast.resync = true;
       }
       ctx.publish(channelOf(projectId), broadcast, { except: connId });
-    });
+    }).then((out) => { slow('ok'); return out; }, (error) => { slow(String(error?.code ?? 'error').slice(0, 40)); throw error; });
   }
 
   /** 落一次真身快照，再把日志截断到快照之后（存储支持时）。出错只记日志：日志本身已经完整 */

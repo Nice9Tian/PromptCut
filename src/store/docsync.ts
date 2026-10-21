@@ -24,11 +24,11 @@ import {
   diffProject,
   entitiesOf,
   entitiesOverlap,
-  entityOfOp,
   entityValuePath,
   getAt,
   type PathOp,
 } from "../kernel/diffProject";
+import { relocateOps, undoEntitiesOf, undoEntityOfOp } from "../kernel/cutPaths";
 import type { Project } from "../kernel/project";
 import { attachProjectSync, set, state } from "./core";
 import { pageStateAfterRemote } from "./remotePageState";
@@ -666,7 +666,7 @@ export class DocSync {
     this.confirmedRev = msg.rev;
     const by: Writer = { actor: msg.actor, session: msg.session ?? (msg.actor as { session?: string } | undefined)?.session };
     const remoteEntities = entitiesOf(msg.ops);
-    this.remoteWrites.push({ rev: msg.rev, opId: msg.opId, by, entities: remoteEntities });
+    this.remoteWrites.push({ rev: msg.rev, opId: msg.opId, by, entities: undoEntitiesOf(msg.ops) });
     this.noteCommit(msg.rev, msg.opId, msg.actor, msg.ops, remoteEntities);
     this.emit("notice", { kind: "remote", rev: msg.rev, opId: msg.opId, entities: remoteEntities, by, ...(msg.undoOf ? { undoOf: msg.undoOf } : {}) });
     this.pruneRemoteWrites();
@@ -729,7 +729,7 @@ export class DocSync {
     }
     this.confirmedRev = msg.rev;
     this.pending.shift();
-    this.localWrites.push({ rev: msg.rev, entities: entitiesOf(entry.ops) });
+    this.localWrites.push({ rev: msg.rev, entities: undoEntitiesOf(entry.ops) });
     this.noteCommit(msg.rev, entry.opId, null, entry.ops, entitiesOf(entry.ops));
     this.pruneRemoteWrites();
     if (this.gateOpId === entry.opId) {
@@ -918,7 +918,7 @@ export class DocSync {
     const now = this.now();
     if (target) {
       // 撤销 / 重做本身:它的逆操作进对面的栈
-      const step: Step = { opIds: [entry.opId], inverse: d.inverse, entities: entitiesOf(d.ops), lastAt: now };
+      const step: Step = { opIds: [entry.opId], inverse: d.inverse, entities: undoEntitiesOf(d.ops), lastAt: now };
       this.stepOf.set(entry.opId, step);
       const stack = target === "undo" ? this.redoStack : this.undoStack;
       stack.push(step);
@@ -928,11 +928,11 @@ export class DocSync {
       if (opts.mergeKey && top && top.mergeKey === opts.mergeKey && now - top.lastAt <= (opts.mergeWindowMs ?? MERGE_WINDOW_MS) && this.redoStack.length === 0) {
         top.opIds.push(entry.opId);
         top.inverse = [...d.inverse, ...top.inverse];
-        for (const e of entitiesOf(d.ops)) if (!top.entities.includes(e)) top.entities.push(e);
+        for (const e of undoEntitiesOf(d.ops)) if (!top.entities.includes(e)) top.entities.push(e);
         top.lastAt = now;
         this.stepOf.set(entry.opId, top);
       } else {
-        const step: Step = { opIds: [entry.opId], inverse: d.inverse, entities: entitiesOf(d.ops), mergeKey: opts.mergeKey, lastAt: now };
+        const step: Step = { opIds: [entry.opId], inverse: d.inverse, entities: undoEntitiesOf(d.ops), mergeKey: opts.mergeKey, lastAt: now };
         this.stepOf.set(entry.opId, step);
         this.undoStack.push(step);
         if (this.undoStack.length > UNDO_LIMIT) this.undoStack.shift();
@@ -1053,7 +1053,7 @@ export class DocSync {
     const kept = this.remoteInverses.get(remote.opId);
     const rev = remote.rev ?? own?.rev ?? kept?.rev;
     const inverse = remote.inverse?.length ? remote.inverse : kept?.inverse ?? [];
-    const entities = entitiesOf(inverse);
+    const entities = undoEntitiesOf(inverse);
     const blocked = new Map<string, Writer>();
     const mine: Writer = { session: this.session };
     if (rev !== undefined) {
@@ -1071,7 +1071,7 @@ export class DocSync {
     }
     // 还没确认的本地修改也算「后来改过」
     for (const p of this.pending) {
-      for (const x of entitiesOf(p.ops)) for (const e of entities) if (entitiesOverlap(x, e)) blocked.set(e, mine);
+      for (const x of undoEntitiesOf(p.ops)) for (const e of entities) if (entitiesOverlap(x, e)) blocked.set(e, mine);
     }
     const step: Step = { opIds: [remote.opId], inverse, entities, lastAt: this.now() };
     const result = this.applyRevert(step, blocked, undefined);
@@ -1089,7 +1089,9 @@ export class DocSync {
   /** 按冲突表撤一步:落得下的照撤;kind 为空时(撤别人那一步)结果当一次普通修改进撤销栈 */
   private applyRevert(step: Step, blocked: Map<string, Writer>, kind: "undo" | "redo" | undefined): UndoResult {
     const skipped: SkippedEntity[] = [...blocked].map(([entity, by]) => ({ entity, by }));
-    const allowed = step.inverse.filter((op) => !blocked.has(entityOfOp(op)));
+    // 逆操作记的是写入当时序列住的位置(激活剪辑的 /tracks 或停放剪辑的 /cuts/@X/tracks);之后切换剪辑搬过家的,
+    // 按序列 id 找到它现在住哪儿再套用,不切换激活剪辑(kernel/cutPaths.ts)
+    const allowed = relocateOps(this.local, step.inverse.filter((op) => !blocked.has(undoEntityOfOp(op))));
     const failed: string[] = [];
     let candidate = this.local;
     if (allowed.length) {
@@ -1099,7 +1101,7 @@ export class DocSync {
         // 整批落不下:按实体分组逐组试,落不下的那组记为没撤成
         const groups = new Map<string, PathOp[]>();
         for (const op of allowed) {
-          const e = entityOfOp(op);
+          const e = undoEntityOfOp(op);
           if (!groups.has(e)) groups.set(e, []);
           groups.get(e)!.push(op);
         }

@@ -40,7 +40,6 @@ const FALLBACK_CUT_DURATION = 30;
 export const MAX_CUT_DEPTH = 32;
 
 import type { CutEnvelope } from "./cutAudio.mjs";
-import { cutSegmentContent } from "./cutIdentity.mjs";
 import { clipFrameMode } from "./frameMode.mjs";
 import { getCard } from "./registry.ts";
 
@@ -405,67 +404,6 @@ export function cutSegmentRender(p: CutRenderProject, clip: TrackClip): CutSegme
   if (!sub) return null;
   const pre = cutPreroll(p, clip, sub);
   return { cutId: clip.cutId!, offset: Math.max(0, clip.cutOffset ?? 0) - pre, from: clip.start, duration: sub.duration, project: sub, frameMode: cutFrameMode(sub) };
-}
-
-/* ───────────────────── 测量与预渲染:剪辑段当一张卡(`mechanism/rendering.md`「剪辑段」) ───────────────────── */
-
-/** 剪辑段在卡片计划的图里那个节点的 id 后缀:`@clip/<片段 id>/cut` */
-export const CUT_SEGMENT_NODE_SUFFIX = "/cut";
-
-type PlanGraph = { nodes: Record<string, unknown>[]; outputs: Record<string, unknown>[]; levels?: string[][]; [k: string]: unknown };
-
-/**
- * 给卡片计划用的图(`projectCardGraph` 的结果)补上激活剪辑序列里每个剪辑段的节点与输出,让剪辑段**作为一个整体**
- * 参与测量(成本键 `clipCostIndex`)、分派(`planPipelines`)和预渲染(`server/card-cache.mjs` 的 `plan()`、
- * `server/frame-stream.mjs` 的 `planStreams` 按它产一条剪辑段级的单卡流)。
- *
- * 节点:`{ id: '@clip/<片段 id>/cut', adapter: 'chrome', cardId: '@cut', clipId, cut, capabilities }`。`cut` 是这一段的内容身份
- * (`cutIdentity.mjs` 的 `cutSegmentContent`:被引用剪辑任意深度的内容、用到的素材与节点、效果库条目),外加预卷与
- * 里面每张卡的源码版本(`versionOf`):被引用剪辑或里面哪张卡的源码改了,节点就变,成本键、预渲染键、流键跟着变。
- * 能力表:`frameMode` 是被引用剪辑的推帧口径(`cutFrameMode`),`compositing: 'independent'`(包裹层自己的坐标系里出整帧,
- * 裁在框里),`need_prerendering: false`,另带 `cutSegment: true` 与 `cutPreroll`(秒,产流要从更早的挂载帧回放)。
- *
- * 只往图的末尾加:没有剪辑段时原样返回同一个对象,图、键、表一个字节不变。**不改 `cardGraph.mjs`**:它在有声卡的源码闭包里
- * (`render/audioCardSourceVersion.test.mjs`),改一个字就让已生成的卡片声音全部判过期。
- * 渲染用的图(`Timeline.graph`)不经这里,舞台照旧按 `clip.cut` 认剪辑段。
- */
-export function withCutSegmentOutputs<G extends PlanGraph>(project: Project, graph: G, versionOf: (cardId: string) => string | null | undefined = () => null): G {
-  if (!graph || !Array.isArray(graph.nodes) || !Array.isArray(graph.outputs) || !hasCutSegments(project?.tracks)) return graph;
-  const taken = new Set(graph.nodes.map((n) => n?.id));
-  const nodes: Record<string, unknown>[] = [];
-  const outputs: Record<string, unknown>[] = [];
-  for (const track of [...project.tracks].reverse()) {
-    if (track.hidden) continue;
-    for (const clip of track.clips) {
-      if (!isCutSegment(clip)) continue;
-      const start = Number(clip.start), end = Number(clip.end);
-      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
-      const render = cutSegmentRender(project as CutRenderProject, clip);
-      if (!render) continue; // 悬空、成环:这一段不画,也不测不产
-      const id = `@clip/${clip.id}${CUT_SEGMENT_NODE_SUFFIX}`;
-      if (taken.has(id)) continue;
-      taken.add(id);
-      const content = cutSegmentContent(project, clip);
-      const versions: Record<string, string | null> = {};
-      for (const cardId of content.cardIds) versions[cardId] = versionOf(cardId) ?? null;
-      const preroll = Math.max(0, Math.max(0, clip.cutOffset ?? 0) - render.offset);
-      const capabilities = { frameMode: render.frameMode, compositing: "independent", need_prerendering: false, cutSegment: true, cutPreroll: preroll };
-      nodes.push({ id, adapter: "chrome", cardId: CUT_SEGMENT_CARD, clipId: clip.id, params: {}, inputs: {}, cut: { ...content, preroll, versions }, capabilities });
-      outputs.push({ nodeId: id, clipId: clip.id, trackId: track.id, start, end, frame: clip.frame, opacity: clip.opacity, fadeIn: clip.fadeIn, fadeOut: clip.fadeOut, capabilities });
-    }
-  }
-  if (!nodes.length) return graph;
-  return {
-    ...graph,
-    nodes: [...graph.nodes, ...nodes],
-    outputs: [...graph.outputs, ...outputs],
-    ...(Array.isArray(graph.levels) ? { levels: [...graph.levels.map((l) => [...l]), nodes.map((n) => n.id as string)] } : null),
-  };
-}
-
-/** 卡片计划里的这个节点 / 控件是不是剪辑段那一个 */
-export function isCutSegmentNode(node: { cardId?: unknown; capabilities?: { cutSegment?: unknown } } | null | undefined): boolean {
-  return !!node && (node.cardId === CUT_SEGMENT_CARD || node.capabilities?.cutSegment === true);
 }
 
 /* ───────────────────── 包络与声音(实现在 cutAudio.mjs:导出混音在服务端直接 import) ───────────────────── */

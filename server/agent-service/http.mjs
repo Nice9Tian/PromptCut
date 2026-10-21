@@ -273,7 +273,11 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
         // 对话被删(文档服务回 404 conversation-deleted，只对开对话的人、创建者和共有对话的成员这么说)单独发 conversation.deleted：页面据此退到一个新对话。
         if (!released && !res.destroyed) {
           if (error?.status === 404 && error?.code === 'conversation-deleted') { try { res.write('data: {"type":"conversation.deleted"}\n\n'); } catch {} }
-          else if (DENIAL_STATUS.has(error?.status)) { try { res.write('data: {"type":"access.revoked"}\n\n'); } catch {} }
+          else if (DENIAL_STATUS.has(error?.status)) {
+            // 创建者关了「云端 Agent」时读取被文档服务拒（403 agent-disabled）：带上原因，页面据此在对话里写明，不说成「无权读取」
+            const reason = error?.code === 'agent-disabled' ? ',"reason":"agent-disabled"' : '';
+            try { res.write(`data: {"type":"access.revoked"${reason}}\n\n`); } catch {}
+          }
           entry.close();
         }
       } finally { polling = false; }

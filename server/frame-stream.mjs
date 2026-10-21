@@ -44,7 +44,8 @@ import { directCaptureMode, directSegmentCapture, newDirectRecord, rgbaAlphaBox 
 import { belowSegmentCapture, newBelowRecord } from './bakery/capture-below.mjs';
 import { prepareFrameMedia } from './bakery/frame-media.mjs';
 import { findFfmpeg, openStreamSegmentEncoder, pickStreamEncoder, STREAM_ENCODERS, streamFilterIdentity, STREAM_SEGMENT_FRAMES } from './bakery/ffmpeg.mjs';
-import { cutSegmentHasVisualMedia, reachableMediaIds } from '../src/kernel/cutIdentity.mjs';
+import { reachableMediaIds } from '../src/kernel/cutIdentity.mjs';
+import { flatPlanProject, isolatedFlatProject } from '../src/kernel/cutFlatten.mjs';
 import { mountFrameOf } from '../src/render/frameWindow.mjs';
 import { resolveFrameSize } from '../src/kernel/frameSize.mjs';
 import { cardStreamIdentity } from './card-identity.mjs';
@@ -432,8 +433,7 @@ export function paintLayers(project, fps) {
   tracks.forEach((track, ti) => {
     if (track.hidden || track.sourceOnly) return;
     (track.clips ?? []).forEach((clip, ci) => {
-      // 剪辑段(`cutId`)按一层画面算,和卡片一样(它挂在包裹层里、整块盖住下面)
-      const card = !!clip.cardId || (typeof clip.cutId === 'string' && !!clip.cutId);
+      const card = !!clip.cardId;
       const m = clip.mediaId ? media.get(clip.mediaId) : null;
       if (!card && !(m && m.kind !== 'audio')) return;
       const from = card ? mountFrameOf(clip, fps) : Math.max(0, Math.floor(clip.start * fps));
@@ -499,7 +499,8 @@ export function streamNeedsReplay(controls) {
  */
 export function planStreams(entry, { picked = () => true, budget = STREAM_DECODER_BUDGET, codeVersion = '', envFingerprint, below = belowStreamsEnabled(), projectId = null, projectScoped = false } = {}) {
   if (typeof envFingerprint !== 'string' || !envFingerprint) return [];
-  const project = entry?.project;
+  // 剪辑段换成它里面的卡(`src/kernel/cutFlatten.mjs`;没有剪辑段时原样):卡片计划里的虚拟片段在这份视图里找得到
+  const project = flatPlanProject(entry?.project);
   const plan = entry?.cardPlan;
   if (!project || !Array.isArray(plan) || !plan.length) return [];
   const scopeProjectId = typeof projectId === 'string' && projectId
@@ -532,9 +533,7 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
     const firstFrame = control.sampling?.firstFrame ?? Math.ceil(at.clip.start * fps - 1e-9);
     const lastFrame = Math.min(total - 1, firstFrame + control.count - 1);
     if (lastFrame < firstFrame) continue;
-    // 剪辑段:嵌套场景从预卷之前起推(`capabilities.cutPreroll`,页面按被引用剪辑算好的秒数),回放要从那里的挂载帧起
-    const preroll = solo === 'cut' ? Math.max(0, Number(control.capabilities?.cutPreroll) || 0) : 0;
-    const mountFrame = mountFrameOf(preroll ? { ...at.clip, start: at.clip.start - preroll } : at.clip, fps);
+    const mountFrame = mountFrameOf(mountClipOf(at.clip), fps);
     // 开销:每秒要解的像素(编码画幅 × 帧率,`src/render/streamBudget.mjs`)。单卡流按它的矩形上界算
     const bound = localPlacement(at.clip, stage).bound;
     const item = { control, clip: at.clip, clipIds: [control.clipId], order: orderOf.get(control.clipId) ?? 0, from: Math.min(mountFrame, firstFrame), to: lastFrame,
@@ -592,10 +591,7 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
       ...streamSegmentSpan(firstVisible, m.to),
       fps, stage, total,
       replay: m.solo === 'source' ? sourceNeedsReplay(project, m.clip, m.control) : streamNeedsReplay([m.control]),
-    }), solo: m.solo,
-    // 剪辑段里有视频、图片时截图前要等它们就位(`runSegment` 的 `hasMedia`);发层时带上这一版的输入签名(`belowLayerMark`):
-    // 被引用剪辑改了以后、这边换版本之前,页面按当前项目算的签名对不上,旧流不贴
-    ...(m.solo === 'cut' ? { hasMedia: cutSegmentHasVisualMedia(project, m.clip), inputSig: streamInputSig(project, { clipIds: [m.control.clipId] }) } : {}) });
+    }), solo: m.solo });
   }
   if (belows.length) {
     specs.push(...belowStreamSpecs(entry, belows, { fps, stage, total, codeVersion: effectiveCodeVersion, envFingerprint }).map(s => ({ ...s, ...projectTag })));
@@ -661,6 +657,12 @@ export function planListStreams(entry, clips, options = {}) {
  */
 export function isolatedStreamProject(project, spec) {
   if (spec?.kind === 'below') return isolatedBelowProject(project, spec);
+  // 剪辑段里摊出来的卡(`solo: 'flat'`):带着这条剪辑段链隔离,嵌套场景照常算预卷(`src/kernel/cutFlatten.mjs` 的 `isolatedFlatProject`)
+  if (spec?.solo === 'flat') {
+    const isolated = isolatedFlatProject(project, spec.topClipId, c => localClip(c, spec));
+    if (!isolated) throw new Error(`隔离工程:项目里没有剪辑段里的片段 ${spec.topClipId}`);
+    return isolated;
+  }
   const members = new Set(spec.clipIds);
   const ids = new Set((project.tracks ?? []).map(t => t.id));
   const tracks = [];
@@ -678,6 +680,15 @@ export function isolatedStreamProject(project, spec) {
     }
   }
   return { ...structuredClone(project), tracks, _cardRender: { mode: 'final', frames: {}, missing: {} } };
+}
+
+/**
+ * 回放从哪一刻挂载算:剪辑段里摊出来的片段(带 `flat`)从嵌套场景最早挂上的那一刻起(`flat.mount`,预卷不会比它更早),
+ * 别的片段就是它自己。
+ */
+function mountClipOf(clip) {
+  const mount = clip?.flat?.mount;
+  return Number.isFinite(mount) ? { ...clip, start: Math.min(clip.start, mount) } : clip;
 }
 
 function localClip(clip, spec) {
@@ -742,12 +753,12 @@ export function belowLayerExtra(project, clip) {
  *     藏起来的源片段也算,素材效果卡可能接着它们)。
  */
 function belowStreamSpecs(entry, targets, { fps, stage, total, codeVersion, envFingerprint }) {
-  const project = entry.project;
+  const project = flatPlanProject(entry.project);
   const controlOf = new Map();
   for (const control of entry.cardPlan ?? []) if (control?.clipId && !controlOf.has(control.clipId)) controlOf.set(control.clipId, control);
   const visualMedia = new Set((project.media ?? []).filter(m => m && m.kind !== 'audio').map(m => m.id));
   // 剪辑段里的素材也算(kernel/cutIdentity.mjs):截图前要等它们就位
-  const hasMedia = [...reachableMediaIds(project)].some(id => visualMedia.has(id));
+  const hasMedia = [...reachableMediaIds(entry.project)].some(id => visualMedia.has(id));
   const view = { x: 0, y: 0, w: stage.width, h: stage.height };
   const specs = [];
   for (const target of targets) {
@@ -770,13 +781,11 @@ function belowStreamSpecs(entry, targets, { fps, stage, total, codeVersion, envF
     let mountFrame = target.from;
     const stateful = [control];
     for (const layer of found.below) {
-      const cut = typeof layer.clip.cutId === 'string' && !!layer.clip.cutId;
-      if (!layer.clip.cardId && !layer.clip.nodeId && !cut) continue;
+      if (!layer.clip.cardId && !layer.clip.nodeId) continue;
       const lower = controlOf.get(layer.id) ?? null;
       stateful.push(lower);
-      // 剪辑段从预卷之前起推(同 `planStreams` 里剪辑段自己的流)
-      const preroll = cut ? Math.max(0, Number(lower?.capabilities?.cutPreroll) || 0) : 0;
-      if (streamNeedsReplay([lower])) mountFrame = Math.min(mountFrame, mountFrameOf(preroll ? { ...layer.clip, start: layer.clip.start - preroll } : layer.clip, fps));
+      // 剪辑段里摊出来的层从嵌套场景最早挂上的那一刻起推(`mountClipOf`)
+      if (streamNeedsReplay([lower])) mountFrame = Math.min(mountFrame, mountFrameOf(mountClipOf(layer.clip), fps));
     }
     specs.push({
       clipIds: [control.clipId], topClipId: control.clipId, mountFrame,
@@ -803,10 +812,6 @@ function belowStreamSpecs(entry, targets, { fps, stage, total, codeVersion, envF
  *   - `inputSig`:产这条流的那一版项目的输入签名(`belowStreamSpecs` 算的)。只给这条流自己的目标卡;算不出不带(页面不比)。
  */
 export function belowLayerMark(spec, clipId) {
-  // 剪辑段级的流(`solo: 'cut'`):照单卡流贴(包裹层里),只另带 `streamKind: 'cut'` 和输入签名,页面据此认出被引用剪辑改过的旧流
-  if (spec?.solo === 'cut') {
-    return clipId === spec.topClipId && typeof spec.inputSig === 'string' && spec.inputSig ? { streamKind: 'cut', inputSig: spec.inputSig } : {};
-  }
   if (spec?.kind !== 'below') return {};
   const sig = clipId === spec.topClipId && typeof spec.inputSig === 'string' && spec.inputSig ? { inputSig: spec.inputSig } : {};
   return { streamKind: 'below', ...sig };
@@ -1576,7 +1581,7 @@ export class StreamProducer {
         streamSignature: spec.streamKey, fromFrame: drawAll ? drawFrom : fromFrame, toFrame: bakeTo, stride: drawAll ? 1 : stride, fps,
         ...(replay ? { mountFrame: spec.mountFrame } : { warm: 0 }),
         // 每一拍都画的那一种:素材只在真要取的帧前面等(丢掉的那几张不用等视频就位),所以不交给 `bakeStream` 逐帧等
-        clip: viewRect, hasMedia: (below ? !drawAll : spec.solo === 'cut') && spec.hasMedia === true, signal: abort.signal,
+        clip: viewRect, hasMedia: below && !drawAll && spec.hasMedia === true, signal: abort.signal,
         ...(drawAll ? { capture: async (frame, shoot, info) => {
           if (!wanted(frame)) {
             await bakery.beginFrame({ screenshot: BELOW_DISCARD_SHOT });

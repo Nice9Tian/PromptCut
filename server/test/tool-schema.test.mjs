@@ -297,3 +297,45 @@ test('卡片参数的 anyOf 分支过完兼容模式,还认得出是哪张卡', 
   const out = sanitizeSchema(schema, 'gemini', { compat: true });
   assert.deepEqual(out.anyOf.map((b) => b.title), ['stat-proof', 'mu-number-ticker']);
 });
+
+// ── update_clip 的 params 是增量补丁(线上 2026-10-21:模型带回旧整份参数,把用户刚撤销的颜色写回去) ──
+test('update_clip 的工具说明写明 params 是增量补丁:只传要改的键、没传的保持、别凭记忆整份带回', () => {
+  const desc = mcpTools.find((t) => t.name === 'update_clip').description;
+  assert.match(desc, /params 是增量补丁/);
+  assert.match(desc, /只传你这次要改的键/);
+  assert.match(desc, /没传的键保持它现在的值/);
+  assert.match(desc, /不要凭记忆把以前读到的整份参数带回来/);
+  assert.match(desc, /get_clip/, '要知道现在的值怎么办');
+  assert.match(desc, /changedParams/, '回包里的哪些键真的变了');
+});
+
+test('update_clip.params 的静态 schema 也带着补丁说明,而 add_clip.params 没有', () => {
+  const upd = mcpTools.find((t) => t.name === 'update_clip').inputSchema.properties.params;
+  assert.match(upd.description, /增量补丁/);
+  assert.match(upd.description, /没写的键保持当前值/);
+  const add = mcpTools.find((t) => t.name === 'add_clip').inputSchema.properties.params;
+  assert.doesNotMatch(add.description ?? '', /增量补丁/);
+});
+
+test('注入真实 schema 之后,模型收到的 update_clip.params 仍是补丁说明,且没有 required;add_clip 不变', () => {
+  const sent = sentToModel(CARDS);
+  const upd = sent.update_clip.properties.params;
+  assert.match(upd.description, /增量补丁/);
+  assert.match(upd.description, /不要凭记忆把旧的整份参数带回来/);
+  for (const branch of upd.anyOf) assert.equal(branch.required, undefined, `${branch.title} 补丁里不该要求必填`);
+  const add = sent.add_clip.properties.params;
+  assert.doesNotMatch(add.description, /增量补丁/);
+  assert.deepEqual(add.anyOf.find((b) => b.title === 'caption-track').required, ['lines'], 'add_clip 仍要传必填');
+});
+
+test('补丁版 schema 的字段与完整版一一对应,只是少了 required', () => {
+  const full = buildParamsSchema(CARDS);
+  const patch = buildParamsSchema(CARDS, { patch: true });
+  assert.deepEqual(patch.anyOf.map((b) => [b.title, Object.keys(b.properties)]), full.anyOf.map((b) => [b.title, Object.keys(b.properties)]));
+});
+
+test('set_clip 的说明写明 params 段是整份替换,与 update_clip 的补丁区分', () => {
+  const desc = mcpTools.find((t) => t.name === 'set_clip').description;
+  assert.match(desc, /整份替换/);
+  assert.match(desc, /update_clip/);
+});

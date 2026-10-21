@@ -3,7 +3,7 @@ import { coalesceRunEvents } from './coalesce-run-events.mjs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { createAgentInstance } from './instance.mjs';
-import { renderableClips } from './render-request.mjs';
+import { createRenderClipPicker, FLAT_KERNEL_MODULE } from './render-clips.mjs';
 import { createAccountConversationService } from './conversation-policy.mjs';
 import { createWorkspaces } from './workspace.mjs';
 import { createEgressGate } from './egress.mjs';
@@ -107,6 +107,9 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
   const gate = createGate({ limitsFile: limitsFileOf(dataDir), usage, now, log });
   const workspaces = createWorkspaces({ dataDir, limits: workspaceLimits, log });
   const egress = createEgressGate({ ...egressOptions, log });
+  // 剪辑段的摊平视图(发布预渲染时收剪辑段里的卡,`render-clips.mjs`):经载入缝取内核函数,载不了就只按片段 id 挑
+  let flatKernel = null;
+  const flatKernelReady = Promise.resolve().then(() => loadModule(FLAT_KERNEL_MODULE)).then((m) => { flatKernel = m; }, () => {});
   const hostedTools = createHostedTools({ root, loadModule, workspaces, egress, assetBase, voiceConfig, collect: toolOptions?.config?.collect ?? collect,
     ...(toolFetch ? { fetchImpl: toolFetch } : {}), limits: toolLimits, log,
     recordService: row => gate.record(row) });
@@ -120,6 +123,7 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       fail(503, 'look-context-unavailable');
     const assignmentDigest = grant.assignmentDigest ?? grant.scopeBinding?.assignmentDigest ?? null;
     let inst, DataWebSocket, projectAssets = null, toolset = null, bound = null, heartbeatTimer = null;
+    const renderPicker = createRenderClipPicker(() => flatKernel);
     let removeAbort = () => {};
     if (look && typeof look.heartbeat === 'function') {
       heartbeatTimer = setInterval(() => {
@@ -282,6 +286,7 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       throw new Error(`云端的渲染服务不提供 ${pathname}`);
     };
 
+    await flatKernelReady;
     inst = createAgentInstance({ profile: 'hosted', server: { httpServer: null, ssrLoadModule: loadModule,
       config: { root }, middlewares: { use() {} } },
       // 这一轮被停掉(signal)时,它排在渲染服务队列里的看画面请求一并撤回,不占着队列、不在失权之后还出图
@@ -299,7 +304,8 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       onWrite: (_agent, write) => {
         try {
           const replica = inst?.replica?.();
-          const clips = renderableClips(replica?.project, write?.clipIds ?? []);
+          // 剪辑段里的卡按摊平视图里的虚拟片段 id 发(`render-clips.mjs`):改被引用剪辑、切激活剪辑也收得到
+          const clips = renderPicker.pick(replica?.project, write?.clipIds ?? []);
           const rev = Number.isSafeInteger(write?.rev) ? write.rev : replica?.rev;
           if (!clips.length || !Number.isSafeInteger(rev)) return;
           onEvent({ type: 'render_request', clips, rev, userCards: inst.hasProjectCards?.() === true });
@@ -308,6 +314,8 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       onFinalClose: () => { /* The next model/tool gate fails closed via doc. */ }, log });
       const binding = await Promise.race([inst.bindAgent({ projectId: grant.projectId, mode: 'hosted', signal }), aborted]);
       bound = binding;
+      // 绑定后记一份摊平视图的签名,第一次写入只发变了的剪辑段里的卡
+      try { renderPicker.prime(inst?.replica?.()?.project); } catch { /* 拿不到就第一次全发 */ }
       if (signal?.aborted) fail(403, 'run-fenced');
       // A signed welcome and current project.open reply must arrive before the
       // local read intent can move to execution-started or any model/tool call.
@@ -328,7 +336,10 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
             if (phase === 'before') {
               await onModelCall({ phase, info });
               const admitted = await gate.admitModelCall({ projectId: grant.projectId, userId: grant.accountId, model });
-              if (admitted?.ok !== true) fail(429, admitted?.code ?? 'quota');
+              // 带上闸门写好的话(额度:「已用 N / 上限 M」;开关:「项目创建者已关闭云端 Agent」)和代号:
+              // api 运行器据 runErrorCode 发 `error{code,message}`,页面直接显示;只抛代号会让对话里只剩一个英文代号
+              if (admitted?.ok !== true) throw Object.assign(new Error(admitted?.message ?? admitted?.code ?? 'quota'),
+                { status: 429, code: admitted?.code ?? 'quota', runErrorCode: admitted?.code ?? 'quota' });
             } else {
               gate.record({ t: now(), projectId: grant.projectId, userId: grant.accountId,
                 username: grant.initiatorName ?? record.senderNameAtSend, conversationId: grant.conversationId, runId: grant.runId,

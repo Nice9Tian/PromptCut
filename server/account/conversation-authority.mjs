@@ -78,8 +78,17 @@ function publicMessage(message) {
   const { credentialId: _credentialId, loginId: _loginId, loginGeneration: _loginGeneration, ...visible } = message;
   return visible;
 }
+// 历史列表上标「出错」「已中断」:最近一轮文档服务签的终态是失败或中断就带 `state`(没有就不带,页面当 idle)
+export function lastRunState(conversation) {
+  if (conversation.currentRunId) return null;
+  let last = null;
+  for (const m of conversation.messages ?? []) if (m?.terminalOutcome && (!last || m.arrivalSeq > last.arrivalSeq)) last = m;
+  const status = last?.terminalOutcome?.status;
+  return status === 'failed' || status === 'interrupted' ? status : null;
+}
 function publicConversation(conversation, creatorReadOnly = false) {
-  return { v: 2, id: conversation.id, projectId: conversation.projectId, ownerAccountId: conversation.ownerAccountId,
+  const runState = lastRunState(conversation);
+  return { v: 2, ...(runState ? { state: runState } : {}), id: conversation.id, projectId: conversation.projectId, ownerAccountId: conversation.ownerAccountId,
     visibility: conversation.visibility, aclRevision: conversation.aclRevision, queueRevision: conversation.queueRevision,
     currentRunId: conversation.currentRunId, title: conversation.title, createdAt: conversation.createdAt,
     updatedAt: conversation.updatedAt, creatorReadOnly, ...(conversation.deletion ? { deleting: true, deletingBy: conversation.deletion.byAccountId } : {}) };

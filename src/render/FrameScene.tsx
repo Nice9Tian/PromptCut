@@ -159,7 +159,7 @@ function CostMark({ at }: { at: (now: number) => void }) {
 export function FrameScene({
   project, sourceProject = project, t, directT = t, playToken, graph,
   mediaMode = "placeholder", mediaT = t, scrubbing = false, playing = false, proxy,
-  suppressed, streamPlanes, snapshots, remountGen, settling, awaiting, localHashes, onMediaFrame, onCardCost, nested = false,
+  suppressed, streamPlanes, snapshots, remountGen, settling, awaiting, localHashes, onMediaFrame, onCardCost, nested = false, flatPrefix,
 }: {
   project: Project; sourceProject?: Project; t: number; directT?: number; playToken: number; graph?: Timeline["graph"];
   /**
@@ -167,6 +167,8 @@ export function FrameScene({
    * (预渲染按轨道前缀拆层、命中测试、钉动画只认舞台顶层)。顶层一律 false,DOM 一个字不变。
    */
   nested?: boolean;
+  /** 剪辑段里的嵌套场景:片段在计划一侧的 id 前缀(`Stage` 的 `flatPrefix`;`kernel/cutFlatten.mjs`)。顶层不传 */
+  flatPrefix?: string;
   /** 素材层怎么画:导出页 / legacy 的占位,还是舞台里真的在放的那套(E7 第 1 条) */
   mediaMode?: "placeholder" | "live";
   /** 素材层跟的时刻(秒)。平时等于 `t`;K5 第二路的补跑里父页会单独给 `back` 下发目标拍 */
@@ -332,7 +334,7 @@ export function FrameScene({
         // `placeholder` 路一个都不传(宿主本来就不给),DOM 一个字不变。
         if (!timeline.clips.length) return null;
         const stage = (
-          <Stage timeline={timeline} t={t} directT={directT} playToken={playToken} nested={nested}
+          <Stage timeline={timeline} t={t} directT={directT} playToken={playToken} nested={nested} flatPrefix={flatPrefix}
             proxy={proxy} snapshots={snapshots} suppressed={suppressed} streamPlanes={streamPlanes}
             remountGen={remountGen} settling={settling} awaiting={awaiting} />
         );

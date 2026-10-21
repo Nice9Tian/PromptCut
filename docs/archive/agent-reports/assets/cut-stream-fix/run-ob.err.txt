@@ -1,0 +1,7 @@
+00:47:44.396 site up http://pc.localhost:29300
+00:47:44.967 seeded project.op.ok
+00:47:56.670 entered
+00:48:04.740 idle {"heavy":[],"long":0}
+00:48:14.806 seek 1.5 {"count":0,"totalMs":0,"top":[],"heavy":[],"streams":[],"swap":[{"at":6855,"t":0,"stale":1,"ready":true,"swapped":true},{"at":15105,"t":1.5,"stale":2,"ready":true,"swapped":true}]}
+00:48:24.845 seek 5.5 {"count":0,"totalMs":0,"top":[],"heavy":[],"streams":[],"swap":[{"at":6855,"t":0,"stale":1,"ready":true,"swapped":true},{"at":15105,"t":1.5,"stale":2,"ready":true,"swapped":true}]}
+00:48:34.957 seek 2.5 {"count":0,"totalMs":0,"top":[],"heavy":[],"streams":[],"swap":[{"at":6855,"t":0,"stale":1,"ready":true,"swapped":true},{"at":15105,"t":1.5,"stale":2,"ready":true,"swapped":true},{"at":35362,"t":2.5,"stale":2,"ready":true,"swapped":true}]}

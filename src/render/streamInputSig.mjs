@@ -24,6 +24,7 @@
 import { cardJson } from "../kernel/cardGraph.mjs";
 import { hashString } from "./changedClips.mjs";
 import { clipInputSig } from "./layerInputSig.mjs";
+import { flatPlanProject } from "../kernel/cutFlatten.mjs";
 
 /** 签名算法的版本;改了进签名的内容就加一 */
 export const STREAM_INPUT_SIG_VERSION = 1;
@@ -52,14 +53,17 @@ const BELOW_OVERLAP_LEAD = 0.05;
  * 「依赖下层的流」的身份全靠这一份:服务端算流键(`server/frame-stream.mjs` 的 `planStreams`)、建隔离工程
  * (`isolatedBelowProject`)和页面算输入签名(下面的 `streamInputs`)用的是同一个函数,所以三处对「哪些层算下层、谁在谁下面」
  * 的认定不会各说各话。口径:
- *   - 画面层 = 所在序列没隐藏、时长为正,而且是卡片段(`cardId`)、挂着节点的素材效果卡片段(`nodeId`)、剪辑段(`cutId`)或画面素材段(素材不是纯音频);
+ *   - 画面层 = 所在序列没隐藏、时长为正,而且是卡片段(`cardId`)、挂着节点的素材效果卡片段(`nodeId`)或画面素材段(素材不是纯音频);
+ *     剪辑段先摊平(`kernel/cutFlatten.mjs` 的 `flatPlanProject`:换成它里面的卡与素材),所以签名、下层认定看的是里面的那些层;
  *     只出声音的素材效果卡片段也会被算进来(这里分不出它出不出画),只是多作废;
  *   - 画家顺序同 `FrameScene`:`project.tracks` 里靠前的序列在上面,同一条序列里靠后的片段在上面;
  *   - 时间重叠按秒算,两头都放宽一个挂载提前量。没有再按「会不会碰到这块区域」筛(契约第 5.2 节:第一版宁可多作废)。
  * @param {any} project
  * @param {string} clipId
  */
-export function belowLayersOf(project, clipId) {
+export function belowLayersOf(raw, clipId) {
+  // 剪辑段换成它里面的层(没有剪辑段时原样);页面、服务端从这里取同一份认定
+  const project = flatPlanProject(raw);
   const tracks = Array.isArray(project?.tracks) ? project.tracks : [];
   const media = new Map((Array.isArray(project?.media) ? project.media : []).filter((m) => m && typeof m.id === "string").map((m) => [m.id, m]));
   const span = (clip) => ({ start: Number(clip.start) || 0, end: Number(clip.end) || 0 });
@@ -69,7 +73,7 @@ export function belowLayersOf(project, clipId) {
       if (!clip || typeof clip.id !== "string" || where.has(clip.id)) return;
       const m = typeof clip.mediaId === "string" ? media.get(clip.mediaId) : null;
       const { start, end } = span(clip);
-      const visual = !track?.hidden && !track?.sourceOnly && end > start && (!!clip.cardId || !!clip.nodeId || !!clip.cutId || (!!m && m.kind !== "audio"));
+      const visual = !track?.hidden && !track?.sourceOnly && end > start && (!!clip.cardId || !!clip.nodeId || (!!m && m.kind !== "audio"));
       where.set(clip.id, { clip, order: (tracks.length - 1 - ti) * 1e6 + ci, visual });
     });
   });
@@ -111,7 +115,8 @@ function belowInputs(project, clipId, fps, total) {
  * @param {any} project
  * @param {{ clipIds: readonly string[], kind?: string }} stream
  */
-export function streamInputs(project, stream) {
+export function streamInputs(raw, stream) {
+  const project = flatPlanProject(raw);
   const ids = Array.isArray(stream?.clipIds) ? stream.clipIds.filter((id) => typeof id === "string" && id) : [];
   if (!ids.length) return null;
   // 依赖下层的流:成员只有目标卡一张,下层由项目自己定(不由层表那一行列出来 —— 下层多了一层也要认得出)
@@ -130,7 +135,7 @@ export function streamInputs(project, stream) {
     (Array.isArray(track?.clips) ? track.clips : []).forEach((clip, ci) => {
       if (!clip || typeof clip.id !== "string" || where.has(clip.id)) return;
       const m = typeof clip.mediaId === "string" ? media.get(clip.mediaId) : null;
-      const visual = !track.hidden && !track.sourceOnly && (!!clip.cardId || !!clip.nodeId || !!clip.cutId || (!!m && m.kind !== "audio"));
+      const visual = !track.hidden && !track.sourceOnly && (!!clip.cardId || !!clip.nodeId || (!!m && m.kind !== "audio"));
       where.set(clip.id, { clip, order: (tracks.length - 1 - ti) * 1e6 + ci, visual });
     });
   });

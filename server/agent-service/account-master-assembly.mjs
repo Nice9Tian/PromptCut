@@ -29,6 +29,8 @@ import { AgentServiceError } from '../agent/service/create-agent-service.mjs';
 import { createAccountRunEvents } from '../agent/service/account-run-events.mjs';
 import { createWorkspaces } from '../agent/service/workspace.mjs';
 import { createConversationPurger } from '../agent/service/conversation-purge.mjs';
+import { createGate, limitsFileOf } from '../agent/service/gate.mjs';
+import { queryUsage } from '../agent/service/usage.mjs';
 import { saveAttachment } from '../agent/service/hosted-tools.mjs';
 import { createWorkerEventInternalHandler, WORKER_EVENT_PATH } from './worker-event-internal.mjs';
 import { createAccountRenderRequests } from './account-render-requests.mjs';
@@ -385,6 +387,16 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
   // ---------- 接待人的那一面 ----------
   // 用量:任务进程把每次模型请求、每次外部服务与工具调用记在共用数据目录的 usage/ 下(`account-runner.mjs`),成员查用量读的就是那里。
   // 主服务自己不跑任务、不写这份流水,只读。
+  // 发消息前的额度预检：用量读共用数据目录的流水（任务进程写的，这里只读、不记），上限读同一份 limits.json
+  const usageWindowStart = (window, at) => {
+    const d = new Date(at);
+    return window === 'month' ? Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1) : window === 'day' ? Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) : null;
+  };
+  const sendGate = createGate({ limitsFile: limitsFileOf(sharedDataDir), now, log,
+    usage: { append() {}, used: (projectId, window = 'total', at = now()) => {
+      try { return queryUsage(path.join(sharedDataDir, 'usage'), { projectId, since: usageWindowStart(window, at) }).projects[projectId]?.tokens ?? 0; }
+      catch { return 0; }
+    } } });
   const base = createAccountConversationService({ conversationClient, now, usageDir: path.join(sharedDataDir, 'usage'), deleteWaitMs: stopWaitMs, onConversationDeleted: conversationDeleted,
     // 页面的模型下拉与思考强度:读任务进程用的那一份模型配置(缺省是共用数据目录,同 account-task-worker-config.mjs),不解 Key
     modelInfo: () => readPublicModelInfo(modelConfigDir ?? sharedDataDir),
@@ -432,6 +444,13 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
     mirrorAccepted: mirror,
     schedulerAlive,
     async send(identity, conversationId, body = {}) {
+      // 项目额度已用完：发消息当场明确拒绝并说明（不收下一条注定在第一次调模型时失败的消息）。
+      // 额度的话与任务进程里的闸同一份（`gate.mjs`）；开关由文档服务在收消息时核，这里只管额度
+      const over = sendGate.admitModelCall({ projectId: identity?.projectId });
+      if (over?.ok === false && over.code === 'quota-exceeded') {
+        say('agent.master.send-quota-refused', { projectId: identity?.projectId, message: String(over.message).slice(0, 160) });
+        throw new AgentServiceError(over.code, over.message, 429);
+      }
       // 页面带回来的附件地址只认这个对话工作目录里真有的文件（先经 attach 传上来的）；别的一律拒，不悄悄丢掉
       let verifiedAttachments = null;
       if (body.verifiedAttachments !== undefined) throw new AgentServiceError('bad-request', 'bad-request', 400);

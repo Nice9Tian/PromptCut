@@ -230,7 +230,8 @@ test('账号模式云端 Agent：隔离（跨项目、伪造/过期证明、只�
       const quotaEvent = () => fx.rows(P5, 'quota').map(row => row.event).find(event => event.type === 'error');
       await waitUntil(quotaEvent, 'quota rejection shows up', 90_000);
       const rejected = quotaEvent();
-      assert.equal(rejected.message, 'quota-exceeded', '额度用完：明确的拒绝原因');
+      assert.equal(rejected.code, 'quota-exceeded', '额度用完：明确的拒绝代号');
+      assert.match(rejected.message, /额度已用完\(已用 \d+ \/ 上限 \d+\)/, '额度用完：对话里写明已用与上限');
       assert.equal(rejected.projectId, P5);
       assert.ok(!fx.rows(P5, 'quota').some(row => row.event.type === 'text'), '被拒的那一轮没有再说话');
       assert.ok(fx.rows(P5, 'quota').some(row => row.event.type === 'tool_result' && row.event.name === 'get_project'), '额度内的第一步照做');

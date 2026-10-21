@@ -70,3 +70,12 @@ test('一切正常：先发队列快照，之后不写 access.revoked，流保�
   assert.equal(revoked(out.wire), false);
   assert.equal(out.ended, false, '流没有被服务端关掉');
 });
+
+test('创建者关了云端 Agent(文档服务 403 agent-disabled)：access.revoked 带 reason，页面据此写明原因；别的拒绝不带', async t => {
+  const off = await readStream(t, new AgentServiceError('agent-disabled', 'agent-disabled', 403));
+  assert.equal(revoked(off.wire), true, off.wire);
+  assert.ok(off.wire.includes('"reason":"agent-disabled"'), off.wire);
+  const other = await readStream(t, new AgentServiceError('not-listed', 'not-listed', 403));
+  assert.equal(revoked(other.wire), true, other.wire);
+  assert.equal(other.wire.includes('"reason"'), false, other.wire);
+});

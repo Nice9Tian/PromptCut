@@ -20,6 +20,7 @@
  * - `costs` / `tuning`：`probeRunner` 每轮开头拉到的那一份 + 每写完一条记录顺手合并一条
  *   （再 GET 一次等于每张卡多一次往返，而我们手里本来就有这条记录）。
  */
+import { flatPlanProject } from "../kernel/cutFlatten.mjs";
 import type { Project } from "../kernel/project";
 import type { CardCostRecord } from "../render/cardCostKey.mjs";
 import { clipWeight, planPipelines, type PipelinePlan } from "../render/pipelinePlan.mjs";
@@ -115,7 +116,8 @@ function recompute(): void {
    * 两边都没有定义的卡片段(未知卡片)舞台不画:不当重卡、不进预渲染集合(桌面与在线一致;`knownCardsOnly`)。
    * 不去掉的话它们没有身份、没有成本记录,会按声明兜底判重,进清单计划与低内存档预渲染重试。
    */
-  const planned = knownCardsOnly(project);
+  // 剪辑段换成它里面的卡(`kernel/cutFlatten.mjs`):剪辑段里的卡和父时间轴上的卡一起分派。没有剪辑段时原样
+  const planned = knownCardsOnly(flatPlanProject(project));
   const opts3D = view3d ? { includeLightCardsFor3D: true, view3d: true } : {};
   plan = planPipelines(planned, costs, fps, { tuning, identityKeys, frameModes, ...(lowMemory ? { allHeavy: true } : {}), ...opts3D, ...dead });
   judged = lowMemory ? planPipelines(planned, costs, fps, { tuning, identityKeys, frameModes, lowMemoryLight: lowMemoryLight ?? [], ...opts3D, ...dead }) : plan;

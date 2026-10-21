@@ -34,6 +34,7 @@
 import { getState } from "../store/project";
 import { flattenOverlay, type Project } from "../kernel/project";
 import { cutOf } from "../kernel/cutSegments";
+import { flatPlanProject, isFlatClipId } from "../kernel/cutFlatten.mjs";
 import { cardMountedAt, mountFrameOf } from "../render/frameWindow.mjs";
 import { createPlayRun, enteredNaturally, notePlayBeat, notePlaySeam, notePlayStart } from "../render/playEntry.mjs";
 import { catchUpEstimateMs, playingLeadMs, sceneCatchUpCost } from "../render/catchUpEstimate.mjs";
@@ -44,7 +45,7 @@ import { backStage, frontStage, onStageEvent, pushProject, syncProject } from ".
 import { runBackJob } from "./stageJobs";
 import { currentCosts, currentPlan, currentTuning, sendPlanTo } from "./planDispatch";
 import { clipIdentityOf } from "./costIdentity";
-import { clearSettled, cutStreamHeavy, markAllSettled, markBaselineReset, setExtraSuppressed, streamPlanesAt, suppressedAt } from "./snapshotFeed";
+import { clearSettled, markAllSettled, markBaselineReset, setExtraSuppressed, streamPlanesAt, suppressedAt } from "./snapshotFeed";
 import { onStageDemote } from "./demote";
 
 /** K5 (3)：等后台舞台的素材层画出一帧，最多等这么久（真墙钟），超时照样换 */
@@ -231,15 +232,19 @@ export function needsBackCatchUp(project: Project, t: number): string[] {
     out.push(clip.id);
   }
   /*
-   * 贴着剪辑段级轨道流的剪辑段(`snapshotFeed.ts` 的 `cutStreamHeavy`):停下时它的活子树还冻在开始贴流那一刻,
-   * 和判重的 `vtOk = false` 卡一样整场景在后台补跑后互换(补跑好之前照旧贴流)。没贴流、照旧活渲的剪辑段不在这里
-   * (要按历史推进的那些另由 `statefulSegmentsAt` 收)。
+   * 剪辑段里判重、贴着自己的流(或占位)的卡(`kernel/cutFlatten.mjs` 的虚拟片段):停下时它在嵌套场景里的活子树还冻在开始抑制那一刻。
+   * 舞台的第一路(子树虚拟时间)只认顶层片段,嵌套场景里的卡推不动,所以要按历史推进的那些一律整场景在后台补跑后互换
+   * (补跑好之前照旧贴流或占位)。remotion 式的不用补:撤了抑制当场就画对。
    */
-  for (const tr of project.tracks) {
+  const { frameModes } = clipIdentityOf(project);
+  for (const tr of flatPlanProject(project).tracks) {
     if (tr.hidden) continue;
     for (const clip of tr.clips) {
-      if (!clip.cutId || !cardMountedAt(clip, t) || out.includes(clip.id)) continue;
-      if (cutStreamHeavy(project, clip, t)) out.push(clip.id);
+      if (!isFlatClipId(clip.id) || !clip.cardId || !cardMountedAt(clip, t)) continue;
+      if (pipelineAt(plan, clip.id, t) !== "heavy" || frameModes[clip.id] === "direct") continue;
+      if (clipIdentityOf(project).capabilities.get(clip.id)?.compositing !== "independent") continue;
+      if (!recordOf(project, clip.id)) continue;
+      out.push(clip.id);
     }
   }
   return out;

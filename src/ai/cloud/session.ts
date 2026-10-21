@@ -75,6 +75,11 @@ const isAbsent = (err: unknown) => err instanceof CloudError && err.status === 4
 /** 账号读取被撤销(设为私有、被踢、退出登录、Agent 被关、对话被删)时给用户看的话(已有的句子,不新增) */
 const REVOKED_TEXT = "当前账号已无法读取这个对话，请重新选择有权限的对话。";
 /** 账号模式下文档服务明确拒绝读取的 403 错误码:被踢、不在成员名单里 → 同一句「已无法读取」;Agent 被关用它自己已有的句子;别的原样 */
+/** 创建者关了「云端 Agent」:读取被拒、正文清掉以后,对话里留的这一条(出错留痕:停掉的对话要有明确原因)。重新能读时撤掉 */
+const AGENT_OFF_NOTE_ID = "cr-agent-off";
+const AGENT_OFF_NOTE = "项目创建者已关闭云端 Agent,这个对话已停止。已经落地的改动保留在项目里;重新打开云端 Agent 后可继续。";
+const agentOffNote = (): ChatMessage[] => [{ id: AGENT_OFF_NOTE_ID, role: "assistant", text: "", parts: [], tools: [], statuses: [], pending: false,
+  outcome: "error", error: AGENT_OFF_NOTE, finishedAt: Date.now() } as ChatMessage];
 const deniedText = (err: unknown): string => {
   const code = err instanceof CloudError ? err.code : "";
   if (code === "not-listed" || code === "banned") return REVOKED_TEXT;
@@ -257,7 +262,10 @@ export function createCloudSession(deps: CloudSessionDeps) {
   const listeners = new Set<() => void>();
 
   function publish() {
-    const next: CloudSessionView = { conversationId, streaming: hasOpenRun(store.get()), connection, problem, lastSeq, queue, senders, revoked };
+    // 账号模式:队列里有已被领走或在跑的消息就算这个对话在跑,即使它的第一个事件还没到、对话里还没有这一轮的助手消息——
+    // 输入框此刻已是「排队 / 停止」而不是「发送」(`cloudConversationControlPolicy` 按队列算),streaming 要与它一致。空闲时刚收下、还没轮到的排第一那条不算(它显示「已发出，等待云端开始处理…」)
+    const queueActive = Boolean(queue?.items.some((item) => item.state === "preparing" || item.state === "running"));
+    const next: CloudSessionView = { conversationId, streaming: hasOpenRun(store.get()) || queueActive, connection, problem, lastSeq, queue, senders, revoked };
     if (next.conversationId === view.conversationId && next.streaming === view.streaming && next.connection === view.connection && next.problem === view.problem && next.lastSeq === view.lastSeq && next.queue === view.queue && next.senders === view.senders && next.revoked === view.revoked) return;
     view = next;
     for (const l of [...listeners]) l();
@@ -302,8 +310,9 @@ export function createCloudSession(deps: CloudSessionDeps) {
     if (ev.type === 'access.revoked') {
       if (conversationId) markConversationRevoked(deps, conversationId);
       revoked = true;
-      queue = null; senders = {}; queued = []; store.set([]);
-      problem = REVOKED_TEXT; publish(); return;
+      const off = ev.reason === 'agent-disabled';
+      queue = null; senders = {}; queued = []; store.set(off ? agentOffNote() : []);
+      problem = off ? cloudErrorText("disabled") : REVOKED_TEXT; publish(); return;
     }
     if (ev.type === 'queue.state' && conversationId) {
       const snapshot = queueSnapshot(ev, conversationId);
@@ -369,6 +378,8 @@ export function createCloudSession(deps: CloudSessionDeps) {
             if (myGen !== gen || streamReadEpoch !== readEpoch) return;
             attempt = 0;
             known = true; seenLive = true;
+            // 又读得到了(创建者把开关打开):撤掉「已关闭」那条说明,真正的记录随事件流补回来
+            if (store.get().some((m) => m.id === AGENT_OFF_NOTE_ID)) store.set((prev) => prev.filter((m) => m.id !== AGENT_OFF_NOTE_ID));
             if (revoked || isConversationRevoked(deps, id)) {
               revoked = false;
               unmarkConversationRevoked(deps, id);
@@ -388,7 +399,9 @@ export function createCloudSession(deps: CloudSessionDeps) {
               markConversationRevoked(deps, id);
               revoked = true;
               clearAccountReadState();
-              problem = REVOKED_TEXT;
+              const off = ev.reason === "agent-disabled";
+              if (off) store.set(agentOffNote());
+              problem = off ? cloudErrorText("disabled") : REVOKED_TEXT;
               setConnection("idle");
               return;
             }
@@ -403,6 +416,8 @@ export function createCloudSession(deps: CloudSessionDeps) {
           const accountAuthFailure = Boolean(deps.accountMode &&
             ((status === 401 || status === 403) || (err instanceof CloudError && FATAL.has(err.code))));
           if (accountAuthFailure) clearAccountReadState();
+          // 重连取票据时文档服务拒签 `service-disabled`(cloudApi 的 identityError 记成 `disabled`)或读取 403 `agent-disabled`:都是创建者关了开关
+          if (accountAuthFailure && err instanceof CloudError && (err.code === "agent-disabled" || err.code === "disabled")) store.set(agentOffNote());
           if (accountAuthFailure || (err instanceof CloudError && FATAL.has(err.code))) {
             const code = err instanceof CloudError ? err.code : "";
             if (deps.accountMode && (code === "not-listed" || code === "banned")) {

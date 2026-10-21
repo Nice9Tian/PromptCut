@@ -11,6 +11,8 @@
  * 两条路现在共用这一份,不会再出现「CLI 能传、API 传不了」的不对称。
  */
 
+import { PARAMS_PATCH_DESC } from "./tools/clips.mjs";
+
 /** 控件类型 → JSON Schema 类型 */
 function typeOf(control) {
   if (control.type === "number") return { type: "number" };
@@ -33,16 +35,21 @@ function describe(control) {
 
 /**
  * @param cards list_cards({ detail: 'full' }) 的返回,每项要有 id / controls
- * @returns 可直接塞进 add_clip.params 的 schema
+ * @param opts.patch true:给 update_clip 用的「增量补丁」版本。params 在那里是补丁,只写要改的键,
+ *        所以不带 `required`(必填的键已经在 clip 上了,不用每次重传)并且说明里写明「没传的键保持当前值」。
+ *        线上 2026-10-21:模型看到 required 和一整份字段,就把凭记忆的整份参数带回来,把用户刚撤销的颜色写了回去。
+ * @returns 可直接塞进 add_clip.params / update_clip.params 的 schema
  */
-export function buildParamsSchema(cards) {
+export function buildParamsSchema(cards, opts = {}) {
   const usable = (cards || []).filter((c) => c && typeof c.id === "string" && Array.isArray(c.controls));
   if (usable.length === 0) return null;
+  const patch = opts.patch === true;
 
   return {
     type: "object",
-    description:
-      "卡片参数,合法字段取决于 cardId。下面每个分支对应一张卡;先用 list_cards({cardId}) 看清该卡的 controls 再填。",
+    description: patch
+      ? `${PARAMS_PATCH_DESC}合法字段取决于这张卡当前的 cardId（换卡时才取新卡的字段）;下面每个分支对应一张卡。`
+      : "卡片参数,合法字段取决于 cardId。下面每个分支对应一张卡;先用 list_cards({cardId}) 看清该卡的 controls 再填。",
     anyOf: usable.map((card) => {
       const properties = {};
       const required = [];
@@ -54,7 +61,7 @@ export function buildParamsSchema(cards) {
         title: card.id,
         type: "object",
         properties,
-        ...(required.length ? { required } : {}),
+        ...(required.length && !patch ? { required } : {}),
         // 留个口子:卡片刚加的参数还没进这份 schema 时也能传进来
         additionalProperties: true,
       };
@@ -69,11 +76,13 @@ export function buildParamsSchema(cards) {
 export function injectCardParams(tools, cards) {
   const schema = buildParamsSchema(cards);
   if (!schema) return tools;
+  const patchSchema = buildParamsSchema(cards, { patch: true });
   for (const tool of tools) {
     // 只碰卡片的两个工具:add_part / set_part 也有 params,那是部件的,由 injectPartParams 管
     if (tool?.name !== "add_clip" && tool?.name !== "update_clip") continue;
     const props = tool?.inputSchema?.properties ?? tool?.parameters?.properties;
-    if (props && "params" in props) props.params = schema;
+    // update_clip 的 params 是增量补丁,用补丁版(不带 required、说明写明没传的键保持当前值)
+    if (props && "params" in props) props.params = tool.name === "update_clip" ? patchSchema : schema;
   }
   return tools;
 }
