@@ -220,7 +220,7 @@ function nativeBridge(state) {
       if (operation === 'request') {
         if ((!ROUTES.includes(args.path) && args.path !== '/api/account/cloud-agent-consent') || !args.accessToken) throw new Error('bad-path');
         if (Buffer.byteLength(JSON.stringify({ operation, args })) > 1024 * 1024) return { ok: false, status: 503, code: 'desktop-account-request-too-large' };
-        state.requests.push({ path: args.path, bytes: Buffer.byteLength(JSON.stringify(args.body ?? null)), requestId: args.body?.requestId ?? null });
+        state.requests.push({ path: args.path, bytes: Buffer.byteLength(JSON.stringify(args.body ?? null)), requestId: args.body?.requestId ?? null, projectId: args.body?.projectId ?? null });
         const fault = state.fault?.(args.path);
         if (typeof fault === 'number') return { ok: false, status: fault, code: 'authority-unavailable' };
         const r = await edge(args.path, { body: args.body, token: args.accessToken });
@@ -833,7 +833,8 @@ async function scenarioAbandon({ A, stateA }) {
   await shot(page, 'abandon-2-reopened');
 
   // —— 点了先确认;「不放弃」什么都不发
-  const mark0 = cloudLog.length;
+  // 只看对这个云端项目发的(同一个账号别的页面这时可能正在别的云端项目里读成员)
+  const mark0 = stateA.requests.length;
   await page.click('[data-pc="collab-move-abandon"]');
   await page.waitForSelector('[data-pc="collab-abandon-confirm"]', { timeout: 5000 });
   out.confirmText = await P(page, () => document.querySelector('[data-pc="collab-abandon-confirm"] .pc-sync-warn')?.textContent ?? null);
@@ -841,7 +842,7 @@ async function scenarioAbandon({ A, stateA }) {
   await shot(page, 'abandon-3-confirm');
   await page.click('[data-pc="collab-abandon-no"]');
   await sleep(500);
-  const sentOnCancel = cloudSince(mark0, /\/hosted\/shared\/account\/(admin|members)/);
+  const sentOnCancel = stateA.requests.slice(mark0).filter((q) => q.projectId === out.projectId);
   const buttonBack = await P(page, () => !!document.querySelector('[data-pc="collab-move-abandon"]'));
   check(sentOnCancel.length === 0 && buttonBack, '放弃-点「不放弃」:没有向云端发任何请求,按钮还在', { sentOnCancel, buttonBack });
 
