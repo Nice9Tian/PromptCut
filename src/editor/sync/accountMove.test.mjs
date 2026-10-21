@@ -24,6 +24,10 @@
  *   AM-18 本机协作关掉之后:先存本机再补传;补传失败时存下的是最新内容;存不下如实说;记下「这个房间是搬迁关的」
  *   AM-19 401 不作废请求号(云端可能已经落账);记录不过期
  *   AM-20 两个窗口:别的窗口正在搬就不动;各删各的记录(按请求号),占位过期后可以接手
+ *   AM-26 放弃这次搬迁(〔裁〕H04):半成品的判据(正常的、不确定的、正在云端项目里的都不算);删成、删完本机记录清掉、
+ *         本机项目没动;幂等(对面已没有、删的回包丢了、重复调);有别的成员或设备连着不删;失败不动本机记录;两个窗口
+ *   AM-26 放弃这次搬迁(〔裁〕H04):半成品的判据(正常的、不确定的、正在云端项目里的都不算);删成、删完本机记录清掉、
+ *         本机项目没动;幂等(对面已没有、删的回包丢了、重复调);有别的成员或设备连着不删;失败不动本机记录;两个窗口
  */
 import "../../testing/registerTs.mjs";
 import test from "node:test";
@@ -998,3 +1002,240 @@ test("AM-24 账本 authority.mjs 真实持久化：原编号保持、重生成�
 });
 
 
+
+/* ---------------- AM-26 放弃这次搬迁(〔裁〕H04) ---------------- */
+
+/** 在 `harness` 上加一个替身云端账号接口:`members` 读状态,`admin delete` 删 */
+function abandonHarness(o = {}) {
+  const h = harness(o);
+  h.gone = new Set();
+  h.cloudState = new Map();   // projectId -> { accessRevision, creator, otherMembers, liveDevices }
+  h.inspectError = null; h.removeError = null; h.forgotten = [];
+  const state = (id) => h.cloudState.get(id) ?? { accessRevision: 5, creator: true, otherMembers: 0, liveDevices: 0 };
+  h.abandonDeps = {
+    source: h.deps.source,
+    account: h.deps.account,
+    attempts: h.attempts,
+    inspect: async (projectId) => {
+      h.calls.push(`inspect:${projectId}`);
+      const e = typeof h.inspectError === "function" ? h.inspectError() : h.inspectError; if (e) throw e;
+      if (h.gone.has(projectId) || !h.cloud.has(projectId)) throw err(404, "no-project");
+      return state(projectId);
+    },
+    remove: async (projectId, rev, requestId) => {
+      h.calls.push(`remove:${projectId}:${rev}:${requestId}`);
+      const e = typeof h.removeError === "function" ? h.removeError(projectId) : h.removeError;
+      if (e?.before) throw e.before;
+      if (h.gone.has(projectId) || !h.cloud.has(projectId)) throw err(404, "no-project");
+      if (rev !== state(projectId).accessRevision) throw err(409, "access-revision-mismatch");
+      h.gone.add(projectId); h.cloud.delete(projectId);
+      for (const [n, id] of h.names) if (id === projectId) h.names.delete(n);   // 删了的项目名字放出来(与账本一致)
+      if (e?.after) throw e.after;
+      return { eventId: "e", accessRevision: rev + 1 };
+    },
+    forget: (projectId) => h.forgotten.push(projectId),
+    newRequestId: () => `del-${++h.seq}`,
+    owner: o.owner ?? "window-1",
+    now: () => h.now ?? 1_000_000,
+  };
+  h.abandon = () => M.abandonMove(h.abandonDeps);
+  h.pending = () => M.pendingAttempt(h.attempts, h.account.id, h.deps.source());
+  /** 先让一次搬迁在传内容时失败,留下半成品 */
+  h.failMove = async (input) => { h.uploadError = err(0, "network"); const r = await h.move(input); h.uploadError = null; return r; };
+  return h;
+}
+
+test("AM-26 放弃这次搬迁", async (t) => {
+  await t.test("判据:只有「记录还在、带着云端回的项目号」才算半成品", async () => {
+    const h = abandonHarness();
+    assert.equal(h.pending(), null, "没搬过");
+    // 新建的结果不确定(连不上):云端建没建成不知道,不算
+    h.createError = { before: err(0, "network") };
+    assert.equal((await h.move()).error, "network");
+    assert.ok(h.attempt() && !h.attempt().projectId);
+    assert.equal(h.pending(), null, "结果不确定的不算");
+    h.createError = null;
+    // 建成了、传内容失败:算
+    const r = await h.failMove();
+    assert.equal(r.error, "upload-failed");
+    assert.equal(h.pending()?.projectId, PID);
+    // 别的账号登录时看不到它(记录按「账号 + 本机项目号」存)
+    assert.equal(M.pendingAttempt(h.attempts, "acc_000000000000000000000009", h.deps.source()), null);
+    // 正在打开的是云端项目(不能搬的东西):不算
+    assert.equal(M.pendingAttempt(h.attempts, h.account.id, null), null);
+    // 搬成了:记录删掉,正常的云端项目上不再出现
+    const ok = await h.move();
+    assert.equal(ok.ok, true);
+    assert.equal(h.pending(), null);
+    assert.equal(M.pendingAttempt(h.attempts, h.account.id, { kind: "local", contentId: h.local.id }), null, "搬成之后回到本地项目也不出现");
+    // 对搬成的项目调「放弃」也没有东西可删
+    h.entered = null;
+    const none = await h.abandon();
+    assert.deepEqual(none, { ok: false, error: "no-pending", name: null });
+    assert.equal(h.did("remove"), 0);
+  });
+
+  await t.test("删成:先问云端再删,删完本机记录清掉,本机项目一个字没动", async () => {
+    const h = abandonHarness();
+    await h.failMove();
+    const before = structuredClone(h.local);
+    h.calls.length = 0;
+    const r = await h.abandon();
+    assert.deepEqual(r, { ok: true, projectId: PID, name: "片子", already: false });
+    assert.deepEqual(h.calls, ["account", `inspect:${PID}`, `remove:${PID}:5:del-2`]);
+    assert.equal(h.cloud.has(PID), false, "云端那个项目删了");
+    assert.equal(h.attempt(), null, "本机的搬迁记录清掉");
+    assert.equal(h.pending(), null, "按钮不再出现");
+    assert.deepEqual(h.forgotten, [PID], "本页指向它的关联一并清掉");
+    assert.deepEqual(h.local, before, "本机项目没动");
+    assert.equal(h.did("save") + h.did("close") + h.did("enter") + h.did("upload"), 0);
+    assert.equal(h.storage.map.has(M.MOVE_LOCKS_KEY), false, "占位放掉");
+    assert.equal(h.storage.map.has(M.MOVE_ATTEMPTS_KEY), false);
+    // 之后重新搬:另起一个请求号、建一个新项目,不去连已经删掉的那个
+    h.nextId = [PID2];
+    const again = await h.move();
+    assert.equal(again.ok, true); assert.equal(again.projectId, PID2);
+    assert.ok(!h.calls.some((c) => c.startsWith("create:") && c.endsWith(":req-1")), "没有重放旧的请求号");
+  });
+
+  await t.test("幂等:对面已经没有这个项目了,只清本机记录,不报错", async () => {
+    const h = abandonHarness();
+    await h.failMove();
+    h.cloud.delete(PID);            // 比如在网站上删过了
+    const r = await h.abandon();
+    assert.deepEqual(r, { ok: true, projectId: PID, name: "片子", already: true });
+    assert.equal(h.did("remove"), 0);
+    assert.equal(h.attempt(), null);
+    // 再调一次(按钮已经没了;接口被重复调也不发请求、不动别的)
+    const twice = await h.abandon();
+    assert.equal(twice.error, "no-pending");
+    assert.equal(h.did("remove"), 0);
+  });
+
+  await t.test("幂等:删的回包丢了 —— 再问一次云端,确认不在了就算删成", async () => {
+    const h = abandonHarness();
+    await h.failMove();
+    h.removeError = { after: err(0, "network") };
+    const r = await h.abandon();
+    assert.deepEqual(r, { ok: true, projectId: PID, name: "片子", already: false });
+    assert.equal(h.attempt(), null);
+  });
+
+  await t.test("断网:删没删成都确认不了 → 失败,本机记录和本机项目都不动;联网后再点一次删成", async () => {
+    const h = abandonHarness();
+    await h.failMove();
+    const record = structuredClone(h.attempt());
+    // 删的请求到了云端、回包丢了,随后再问也连不上
+    h.removeError = { after: err(0, "network") };
+    h.inspectError = () => (h.did("inspect") >= 2 ? err(0, "network") : null);
+    const r = await h.abandon();
+    assert.deepEqual(r, { ok: false, error: "network", name: "片子", detail: "network" });
+    assert.deepEqual(h.attempt(), record, "本机记录原样(不删一半)");
+    assert.equal(h.pending()?.projectId, PID, "按钮还在");
+    assert.match(M.abandonFailureText(r), /本机项目没有改动.*不会出错/);
+    h.inspectError = null; h.removeError = null;
+    const again = await h.abandon();
+    assert.deepEqual(again, { ok: true, projectId: PID, name: "片子", already: true }, "云端其实删了:再点一次只清本机");
+    assert.equal(h.attempt(), null);
+    // 一开始就连不上:什么都没发
+    const h2 = abandonHarness();
+    await h2.failMove();
+    h2.inspectError = err(0, "network");
+    assert.equal((await h2.abandon()).error, "network");
+    assert.equal(h2.did("remove"), 0);
+    assert.equal(h2.pending()?.projectId, PID);
+  });
+
+  await t.test("云端 5xx:失败,说清原因,本机记录不动", async () => {
+    const h = abandonHarness();
+    await h.failMove();
+    h.removeError = { before: err(503, "authority-unavailable") };
+    const r = await h.abandon();
+    assert.equal(r.ok, false); assert.equal(r.error, "delete-failed"); assert.equal(r.detail, "authority-unavailable");
+    assert.equal(h.cloud.has(PID), true);
+    assert.equal(h.pending()?.projectId, PID);
+    assert.match(M.abandonFailureText(r), /authority-unavailable/);
+  });
+
+  await t.test("有别的成员加入、或有设备正开着:不当半成品删", async () => {
+    for (const extra of [{ otherMembers: 1 }, { liveDevices: 1 }]) {
+      const h = abandonHarness();
+      await h.failMove();
+      h.cloudState.set(PID, { accessRevision: 5, creator: true, otherMembers: 0, liveDevices: 0, ...extra });
+      const r = await h.abandon();
+      assert.deepEqual(r, { ok: false, error: "in-use", name: "片子" });
+      assert.equal(h.did("remove"), 0);
+      assert.equal(h.cloud.has(PID), true);
+      assert.equal(h.pending()?.projectId, PID, "记录不动");
+      assert.match(M.abandonFailureText(r), /和本机项目都没有改动/);
+    }
+  });
+
+  await t.test("查完到删之间有人改了成员状态:重新查;这回有人加入了就不删", async () => {
+    const h = abandonHarness();
+    await h.failMove();
+    let first = true;
+    h.removeError = () => { if (first) { first = false; h.cloudState.set(PID, { accessRevision: 6, creator: true, otherMembers: 1, liveDevices: 0 }); } return null; };
+    const r = await h.abandon();
+    assert.equal(r.error, "in-use");
+    assert.equal(h.cloud.has(PID), true);
+    // 只是改了设置(没有人加入):重新查后照新修订号删成
+    const h2 = abandonHarness();
+    await h2.failMove();
+    let once = true;
+    h2.removeError = () => { if (once) { once = false; h2.cloudState.set(PID, { accessRevision: 7, creator: true, otherMembers: 0, liveDevices: 0 }); } return null; };
+    const r2 = await h2.abandon();
+    assert.equal(r2.ok, true);
+    assert.ok(h2.calls.includes(`remove:${PID}:5:del-2`) && h2.calls.includes(`remove:${PID}:7:del-3`), "第二次用新的修订号、新的请求号");
+  });
+
+  await t.test("没登录、登录失效、不是创建者、不是账号节点:不删,本机记录不动", async () => {
+    const h = abandonHarness();
+    await h.failMove();
+    const saved = h.account; h.account = null;
+    assert.deepEqual(await h.abandon(), { ok: false, error: "login-required", name: null });
+    h.account = saved;
+    h.inspectError = err(401, "credential-revoked");
+    assert.equal((await h.abandon()).error, "login-required");
+    h.inspectError = null;
+    h.cloudState.set(PID, { accessRevision: 5, creator: false, otherMembers: 0, liveDevices: 0 });
+    assert.equal((await h.abandon()).error, "not-creator");
+    h.cloudState.delete(PID);
+    h.removeError = { before: err(403, "creator-required") };
+    assert.equal((await h.abandon()).error, "not-creator");
+    assert.equal(h.cloud.has(PID), true);
+    assert.equal(h.pending()?.projectId, PID);
+    // 不是账号模式的节点回 404 no-route:不当成「项目不在了」
+    h.removeError = null; h.inspectError = err(404, "no-route");
+    assert.equal((await h.abandon()).error, "delete-failed");
+    assert.equal(h.pending()?.projectId, PID, "没有误清本机记录");
+  });
+
+  await t.test("两个窗口:另一个窗口正在搬时不删;删的时候另一个窗口也搬不了", async () => {
+    const storage = memoryStorage();
+    const a = abandonHarness({ storage, owner: "window-a" });
+    await a.failMove();
+    assert.equal(storage.map.has(M.MOVE_LOCKS_KEY), false);
+    // 乙正在搬(占着位)
+    const b = abandonHarness({ storage, owner: "window-b" });
+    assert.equal(b.attempts.lock(b.account.id, b.local.id, "window-b", 1_000_000), true);
+    assert.deepEqual(await a.abandon(), { ok: false, error: "busy", name: "片子" });
+    assert.equal(a.did("inspect"), 0);
+    b.attempts.unlock(b.account.id, b.local.id, "window-b");
+    // 甲删的时候乙点了搬:乙回「另一个窗口正在搬」
+    let bMove = null;
+    a.abandonDeps.inspect = async () => { bMove = await b.move(); return { accessRevision: 5, creator: true, otherMembers: 0, liveDevices: 0 }; };
+    const r = await a.abandon();
+    assert.equal(r.ok, true);
+    assert.equal(bMove.error, "busy");
+    assert.equal(b.did("create"), 0);
+  });
+
+  await t.test("每一种失败都有一句话", () => {
+    for (const error of ["not-ready", "login-required", "no-pending", "busy", "not-creator", "in-use", "network", "delete-failed"]) {
+      const text = M.abandonFailureText({ ok: false, error, name: "片子" });
+      assert.ok(text && !text.includes("undefined"), error);
+    }
+    assert.match(M.ACCOUNT_MOVE_TEXT.abandonConfirm("片子"), /永久删除云端项目「片子」.*不能恢复.*本机这一份项目不受影响/);
+  });
+});
