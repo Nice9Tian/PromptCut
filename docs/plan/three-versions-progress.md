@@ -185,6 +185,8 @@ Claude 主会话与 Antigravity 主会话接手后合进 `main` 的（每块的�
 | 前置 1 | 手机版补「滤镜」入口；缩略卡、素材格子显示真画面（经素材票据）。另调研「速度」入口的代价，不实现 | `opus-dev`（Opus，medium）——复杂前端 + 素材票据 | `.worktrees/mobile-entries` / `claude/mobile-entries` | 5820～5829 |
 | 前置 3 | 登录框加「粘贴授权码」输入框，登录任务接上标准输入 | `sonnet-dev-high`（Sonnet，high）——简单前端 + 一处服务端 | `.worktrees/cli-paste-code` / `claude/cli-paste-code` | 5830～5839 |
 | 前置 4 | 云端 Agent 的发送接口不再重复核「首次使用告知」 | `opus-dev`（Opus，medium）——告知与授权，属通讯安全 | `.worktrees/consent-once` / `claude/consent-once` | 5840～5849 |
+| 前置 2 的证据 | 补音频看门狗的**正向**探针（现有 `playback-probe.mjs` 只验了它不误触发，没验它真管用）：造一次真停顿，断言不等迟到的那一拍就跳闸、声音当场停、拍子回来后恢复 | `sonnet-dev-high`（Sonnet，high）——只改 `scripts/probes/` | `.worktrees/stall-audio-probe` / `claude/stall-audio-probe` | 5850～5859 |
+| 并行分支 | 〔裁〕H04「放弃这次搬迁」按钮：删掉搬到云端失败留下的半成品项目（破坏性操作，要二次确认、幂等、清本机关联记号） | `opus-dev`（Opus，medium）——破坏性 + 云端项目删除 | `.worktrees/abandon-move` / `claude/abandon-move` | 5860～5869 |
 
 「速度」入口单独说明：`TrackClip` 上没有任何 per-clip 的速度字段（`src/kernel/project.ts` 里没有 `speed`；`rate` 只出现在 `cardNodes` 的 source 输入时间映射里，即素材效果卡的机制）。所以「补速度入口」可能不是接线，而是新增一项用户看得见的能力（二级语义），还会牵动渲染取帧、导出、混音和导出像素基线。先让前置 1 调研并按解法表给候选，再由主会话定做法。
 
