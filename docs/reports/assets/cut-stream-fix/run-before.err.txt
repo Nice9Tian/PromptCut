@@ -1,0 +1,7 @@
+00:41:57.556 origin http://127.0.0.1:29300
+00:42:09.503 stages up
+00:42:15.236 probe idle
+00:42:15.250 plan {"segments":[{"from":0,"to":3,"heavy":[],"light":["c-mvfr1yvi-1","k-mvfskg83-2~c-mvfsjn5m-1","k-mvfskg83-2~c-mvhdf6ef-2"]},{"from":3,"to":4,"heavy":[],"light":["c-mvfr1yvi-1"]},{"from":4,"to":7,"heavy":[],"light":["c-mvgz82ix-2"]}],"prerender":[],"identityKeys":{"c-mvfr1yvi-1":"1555c66fcea3f3","k-mvfskg83-2~c-mvfsjn5m-1":"bd7b1294d7720","k-mvfskg83-2~c-mvhdf6ef-2":"1fbf0198c5c366","c-mvgz82ix-2":"c2f64141acfd8"},"frameModes":{"c-mvfr1yvi-1":"stateful","k-mvfskg83-2~c-mvfsjn5m-1":"stateful","k-mvfskg83-2~c-mvhdf6ef-2":"stateful","c-mvgz82ix-2":"stateful"},"costs":[{"k":"1555c66fcea3f3","stepMs":0.9,"catchUpMs":73.4,"kind":"stepped","seekOk":false,"seekMs":0.8,"vtOk":false},{"k":"bd7b1294d7720","stepMs":0.7,"catchUpMs":44.6,"kind":"stepped","seekOk":false,"seekMs":0.6,"vtOk":false},{"k":"1fbf0198c5c366","stepMs":1.9,"catchUpMs":71.5,"kind":"stepped","seekOk":true,"seekMs":0.5,"vtOk":true},{"k":"c2f64141acfd8","stepMs":2.9,"catchUpMs":104.8,"kind":"stepped","seekOk":true,"seekMs":0.4,"vtOk":true}]}
+00:42:52.437 seek 1.5 {"count":0,"totalMs":0,"top":[]}
+00:43:02.510 seek 5.5 {"count":0,"totalMs":0,"top":[]}
+00:43:12.567 seek 2.5 {"count":0,"totalMs":0,"top":[]}

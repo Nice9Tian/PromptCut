@@ -28,6 +28,14 @@ export const AGENT_EXEC_DEFAULTS = Object.freeze({
   bodyWaitMs: 5_000,
   /** 写入落地后等副本追上这一版 */
   landWaitMs: 5_000,
+  /**
+   * 提交(`project.op`)一次等回包等到超时(连接的 `requestTimeoutMs`,15 秒)之后,同一个 opId 原样重发几次。
+   * 提交按项目排队落地(账号项目要过顺序服务与授权核对),渲染节点、看画面同时在跑时一次可以排上几十秒;
+   * 文档服务按 opId 去重 —— 已经落地的回 `project.op.ok`(`duplicate: true`)、还在排队的排在它后面一起落 ——
+   * 所以重发不会落两次,只是把「这一次到底落没落」问清楚。线上 2026-10-21:switch_cut 第一次等了 15 秒没回包就报失败,
+   * 其实约 60 秒后落地了(`docs/reports/AGENT-cut-stream-fix.md` 缺陷 5)。
+   */
+  opResends: 4,
   /** 页面侧工具写了项目:等这些提交出现在副本里 */
   pageWritesWaitMs: 3_000,
   /** 聊天栏「看得见的结果」:交可视化记录最多等多久 */
@@ -343,6 +351,22 @@ export function createAgentExecutor({
     return { wire: [{ op: 'set', path: '', upload: uploadId }], local: [{ op: 'set', path: '', value: JSON.parse(text) }] };
   }
 
+  /** 发一次提交;等回包超时就同一个 opId 原样重发(见 `opResends`),文档服务按 opId 去重 */
+  async function submitOp(conn, message, tool) {
+    const accept = (m) => m.type === 'project.op.ok' || m.type === 'project.op.rejected' || m.type === 'error';
+    const started = Date.now();
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        const reply = await conn.request(message, accept);
+        if (attempt > 0) say('agent.op-slow', { tool, opId: message.opId, attempts: attempt + 1, ms: Date.now() - started, reply: reply.type, ...(reply.duplicate ? { duplicate: true } : {}) });
+        return reply;
+      } catch (err) {
+        if (err?.code !== 'timeout' || attempt >= limits.opResends) throw err;
+        say('agent.op-resend', { tool, opId: message.opId, attempt: attempt + 1, ms: Date.now() - started });
+      }
+    }
+  }
+
   /**
    * `apply`(可省):不走路由表,由调用方直接在放好项目的 host 上改(托管档在服务端实现的工具,如导入素材后登记素材)。
    * 给了它就不查路由表、不要页面状态;其余(进锁、清场、算差异、带期望版本提交、记这次写入)与路由表的工具完全相同。
@@ -397,10 +421,7 @@ export function createAgentExecutor({
       wireOps = up.wire;
       landedOps = up.local;
     }
-    const reply = await conn.request(
-      { type: 'project.op', projectId, opId, session: conv.session, expectRev, ops: wireOps },
-      (m) => m.type === 'project.op.ok' || m.type === 'project.op.rejected' || m.type === 'error',
-    );
+    const reply = await submitOp(conn, { type: 'project.op', projectId, opId, session: conv.session, expectRev, ops: wireOps }, tool);
     if (reply.type === 'project.op.ok') {
       stats.committed += 1;
       link.replica.offer(reply.rev, landedOps, { opId, actor: { role: 'agent', conversation: conv.n, session: conv.session }, session: conv.session });

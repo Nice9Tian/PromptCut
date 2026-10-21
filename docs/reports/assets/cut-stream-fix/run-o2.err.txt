@@ -1,0 +1,11 @@
+01:02:03.725 site up http://pc.localhost:29300
+01:02:03.942 seeded project.op.ok
+01:03:04.740 desk up
+01:03:07.324 entered
+01:03:13.346 costs [{"identityKey":"1fbf0198c5c366","stepMs":1.8,"pinned":false},{"identityKey":"bd7b1294d7720","stepMs":0.5,"pinned":false}]
+01:03:48.157 raw stream ready 34163 {"ready":true,"heavy":["c-mvhdf6ef-2"]}
+01:03:53.216 back to cut-1
+01:04:01.220 idle {"heavy":[],"long":0}
+01:04:12.702 seek 1.5 {"count":0,"totalMs":0,"top":[],"heavy":[],"streams":[],"swap":[{"at":3243,"t":0,"stale":1,"ready":true,"swapped":true},{"at":13921,"t":1.5,"stale":2,"ready":true,"swapped":true}]}
+01:04:22.715 seek 5.5 {"count":0,"totalMs":0,"top":[],"heavy":[],"streams":[],"swap":[{"at":3243,"t":0,"stale":1,"ready":true,"swapped":true},{"at":13921,"t":1.5,"stale":2,"ready":true,"swapped":true}]}
+01:04:32.725 seek 2.5 {"count":0,"totalMs":0,"top":[],"heavy":[],"streams":[],"swap":[{"at":3243,"t":0,"stale":1,"ready":true,"swapped":true},{"at":13921,"t":1.5,"stale":2,"ready":true,"swapped":true},{"at":35319,"t":2.5,"stale":2,"ready":true,"swapped":true}]}
