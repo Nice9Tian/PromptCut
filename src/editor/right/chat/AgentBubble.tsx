@@ -317,7 +317,7 @@ export function AgentBubble(props: {
         </div>
       )}
 
-      {m.error && <div className="ai-message-error">{m.error}</div>}
+      {m.error && <div className="ai-message-error" data-pc="agent-error" role="alert">{m.error}</div>}
       {outcome && <div className="ai-message-outcome">{outcome}</div>}
       {/* 云端对话:改动引出的预渲染重试进展常驻一行(渲染失败不能只藏在「Agent 操作」里) */}
       {m.cloudRender && (
