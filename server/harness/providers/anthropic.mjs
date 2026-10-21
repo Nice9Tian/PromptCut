@@ -1,6 +1,6 @@
 // 对应 claude-quickstarts/agents/providers/anthropic.py
 // 本家 API 要点: Messages API, role 为 user/assistant, content 是 block 数组 (text/tool_use/tool_result).
-import { readSse, assertOk } from './base.mjs';
+import { readSse, assertOk, STREAM_CUT, isCutReadError, streamCutNotice } from './base.mjs';
 import { toolToVendor } from '../schema.mjs';
 import { resolveMaxOutput, lowerOutputAfter400 } from '../model-limits.mjs';
 import { noteOutputFallback, asRead } from './output-fallback.mjs';
@@ -57,7 +57,9 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
         body.tools = anthropicTools;
       }
 
-      const post = (b) => fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(b), signal });
+      /** 最后一次真正发出请求的时刻(按速度设上限时算用时用,见 harness/output-speed.mjs) */
+      let sentAt = Date.now();
+      const post = (b) => { sentAt = Date.now(); return fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(b), signal }); };
       let response = await post(body);
 
       // 数太大被拒(「max_tokens: 200000 > 128000 …」):降一档重发一次,记日志(A07)
@@ -74,6 +76,7 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
       }
 
       await assertOk(response, 'anthropic');
+      yield { type: 'response_open', sentAt };
 
       let inputTokens = 0;
       let outputTokens = 0;
@@ -82,7 +85,12 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
       let partialTools = {};
       /** 参数 JSON 解不开的工具调用,等收尾时按停止原因决定怎么交 */
       const broken = [];
+      /** 流已经出过数据(内容块):之后再断就按截断收尾(STREAM_CUT),见 base.mjs */
+      let started = false;
+      /** 流在 message_stop 之前断了:{ how, detail } */
+      let cut = null;
 
+      try {
       for await (const { event, data } of readSse(response, { signal })) {
         if (data === '[DONE]') continue;
         let parsed;
@@ -93,8 +101,14 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
         }
 
         if (event === 'error' || parsed.type === 'error' || parsed.error) {
-          throw new Error(typeof parsed.error === 'string' ? parsed.error : (parsed.error?.message || parsed.message || 'API 流返回错误'));
+          const message = typeof parsed.error === 'string' ? parsed.error : (parsed.error?.message || parsed.message || 'API 流返回错误');
+          if (receivedStop) break; // 已经正常收尾,后面来的错不影响这次回复
+          // 流已经出过内容之后来的 error(网关中途掐断、上游 overloaded):按截断收尾,不扔掉已经写出的东西
+          if (!started) throw new Error(message);
+          cut = { how: 'error-event', detail: message };
+          break;
         }
+        if (event === 'content_block_start' || event === 'content_block_delta') started = true;
         if (event === 'message_start') {
           if (parsed.message?.usage?.input_tokens) {
             inputTokens = parsed.message.usage.input_tokens;
@@ -154,6 +168,22 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
           yield { type: 'usage', input: inputTokens, output: outputTokens };
           yield { type: 'stop', reason: stopReason || 'end_turn' };
         }
+      }
+      } catch (err) {
+        // 连接在流中途被断:出过内容、还没收尾的按截断收尾;别的照旧抛
+        if (!isCutReadError(err, signal) || (!started && !receivedStop)) throw err;
+        if (!receivedStop) cut = { how: 'connection', detail: err?.message || String(err) };
+      }
+
+      if (!receivedStop && !cut && started && !signal?.aborted) cut = { how: 'no-finish', detail: '流在 message_stop 之前结束' };
+      if (cut) {
+        // 没写完的工具调用(参数解不开的、连 content_block_stop 都没等到的)交成 tool_use_partial,由 agent.mjs 存代码块、让模型接着写
+        yield streamCutNotice('anthropic', cut.how, cut.detail, { pendingToolCalls: broken.length + Object.keys(partialTools).length });
+        for (const tool of [...broken, ...Object.values(partialTools)]) yield { type: 'tool_use_partial', id: tool.id, name: tool.name, args: tool.partialJson || '' };
+        broken.length = 0; partialTools = {};
+        yield { type: 'usage', input: inputTokens, output: outputTokens };
+        yield { type: 'stop', reason: STREAM_CUT };
+        return;
       }
 
       if (!receivedStop && !signal?.aborted) {

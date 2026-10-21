@@ -1,6 +1,6 @@
 // 对应 claude-quickstarts/agents/providers/openai.py
 // 本家 API 要点: Chat Completions 接口，tool 变成 role=tool 的独立消息，工具定义为 function，增量流在 choices[0].delta 拼装。
-import { readSse, assertOk } from './base.mjs';
+import { readSse, assertOk, STREAM_CUT, isCutReadError, streamCutNotice } from './base.mjs';
 import { toolToVendor } from '../schema.mjs';
 import { createThinkSplitter } from '../think-tags.mjs';
 import { resolveMaxOutput, usesMaxCompletionTokens, lowerOutputAfter400, swapOutputParamAfter400 } from '../model-limits.mjs';
@@ -153,12 +153,14 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
        */
       if (cfg.effort) body.reasoning_effort = cfg.effort;
 
-      const post = (b) => fetchImpl(url, {
+      /** 最后一次真正发出请求的时刻(按速度设上限时算用时用,见 harness/output-speed.mjs) */
+      let sentAt = Date.now();
+      const post = (b) => { sentAt = Date.now(); return fetchImpl(url, {
         method: 'POST',
         headers,
         body: JSON.stringify(b),
         signal
-      });
+      }); };
       /** 最后一次发出去的请求体(思考档被去掉、输出字段换过之后,下一次重发以它为准) */
       let sentBody = body;
       let response = await post(body);
@@ -232,6 +234,7 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
       }
 
       await assertOk(response, 'openai');
+      yield { type: 'response_open', sentAt };
 
       let partialToolCalls = {}; // index -> {id, name, args}
       let stopReason = null;
@@ -245,107 +248,152 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
       let promptTokens = 0;
       let completionTokens = 0;
       let cacheRead = 0;
+      /** 流已经出过数据(文字、思考、工具调用):之后再断就按截断收尾,不当错误(STREAM_CUT) */
+      let started = false;
+      /** 流在收尾之前断了:{ how, detail }(how 是 error-event / connection / no-finish) */
+      let cut = null;
 
-      for await (const { data } of readSse(response, { signal })) {
-        if (data === '[DONE]') {
-          break; // break instead of continue for openai DONE
-        }
-        
-        let parsed;
-        try {
-          parsed = JSON.parse(data);
-        } catch {
-          continue;
-        }
-
-        if (parsed.usage) {
-          promptTokens = parsed.usage.prompt_tokens || 0;
-          completionTokens = parsed.usage.completion_tokens || 0;
-          /*
-           * 网关自动做的提示词缓存,命中量在这里。prompt_tokens 本身已经**含着**它
-           * (实测 openlux:prompt_tokens 34057、cached_tokens 27877),所以 input 不用再加,
-           * 这个数只拿来看命中率。不报这个字段的兼容接口就是 0。
-           */
-          cacheRead = Number(parsed.usage.prompt_tokens_details?.cached_tokens) || 0;
-        }
-
-        if (parsed.error) throw new Error(typeof parsed.error === 'string' ? parsed.error : (parsed.error.message || 'API 流返回错误'));
-        const choice = parsed.choices?.[0];
-        if (choice) {
-          if (choice.delta?.content) {
-            for (const ev of think.push(choice.delta.content)) {
-              yield ev.kind === 'think'
-                ? { type: 'thinking_delta', text: ev.text }
-                : { type: 'text_delta', text: ev.text };
-            }
+      /**
+       * 把攒着的工具调用交出去。finishReason 是 `length`(写到上限)或 cutNow 为真(中途被掐断)时,参数 JSON 解不开的那一个
+       * 交成 tool_use_partial(A07 / stream-cut);别的情况坏 JSON 照旧按参数错误报回模型。
+       */
+      function* emitToolCalls(finishReason, cutNow) {
+        const sorted = Object.keys(partialToolCalls).map(Number).sort((a, b) => a - b);
+        /*
+         * 网关偶尔把一次调用拆成两条(不同 id):前一条有名字、参数是空的,后一条有参数、名字是空的。
+         * 实跑见过 set_position 就这样拆开:前一条报「缺少 clipId」,后一条空名进了历史,
+         * 下一次请求整个 400。条件卡得很窄 —— 只在「无名有参」紧跟「有名无参」时合并,
+         * 正常的并行调用各自都有名字,碰不到这里。
+         */
+        for (let k = 1; k < sorted.length; k++) {
+          const cur = partialToolCalls[sorted[k]], prev = partialToolCalls[sorted[k - 1]];
+          if (cur && prev && !cur.name && cur.args && prev.name && !String(prev.args || '').replace(/[{}\s]/g, '')) {
+            prev.args = cur.args;
+            delete partialToolCalls[sorted[k]];
           }
-
-          // 各家兼容接口给推理过程起的名字不一样,常见这三个,取到哪个算哪个
-          const reasoning =
-            choice.delta?.reasoning_content ?? choice.delta?.reasoning ?? choice.delta?.thinking;
-          if (typeof reasoning === 'string' && reasoning) {
-            yield { type: 'thinking_delta', text: reasoning };
+        }
+        const indices = sorted.filter((i) => partialToolCalls[i]);
+        for (const idx of indices) {
+          const pt = partialToolCalls[idx];
+          // 被掐断时参数还一个字没来的那一个:没写完,不能当 `{}` 执行
+          if (cutNow && !String(pt.args || '').trim()) {
+            yield { type: 'tool_use_partial', id: pt.id, name: pt.name, args: '' };
+            continue;
           }
-
-          if (Array.isArray(choice.delta?.tool_calls)) {
-            for (const tc of choice.delta.tool_calls) {
-              const idx = tc.index;
-              if (!partialToolCalls[idx]) {
-                partialToolCalls[idx] = { id: '', name: '', args: '' };
-              }
-              if (tc.id) partialToolCalls[idx].id = tc.id;
-              if (tc.function?.name) partialToolCalls[idx].name = tc.function.name;
-              if (tc.function?.arguments) partialToolCalls[idx].args += tc.function.arguments;
-            }
-          }
-
-          if (choice.finish_reason) {
-            stopReason = choice.finish_reason;
-            
-            // output tools
-            const sorted = Object.keys(partialToolCalls).map(Number).sort((a, b) => a - b);
+          let input = {};
+          try {
+            input = JSON.parse(pt.args || '{}');
+          } catch (error) {
             /*
-             * 网关偶尔把一次调用拆成两条(不同 id):前一条有名字、参数是空的,后一条有参数、名字是空的。
-             * 实跑见过 set_position 就这样拆开:前一条报「缺少 clipId」,后一条空名进了历史,
-             * 下一次请求整个 400。条件卡得很窄 —— 只在「无名有参」紧跟「有名无参」时合并,
-             * 正常的并行调用各自都有名字,碰不到这里。
+             * 写到输出上限(`length`)或中途被掐断时没写完的那一个:不执行,把已经收到的参数原文交给 agent.mjs,
+             * 由它从半截 JSON 里取出写了一半的字段存进代码块,让模型接着写(A07,2026-10-22 用户定)。
+             * 不是截断引起的坏 JSON 照旧按参数错误报回模型。
              */
-            for (let k = 1; k < sorted.length; k++) {
-              const cur = partialToolCalls[sorted[k]], prev = partialToolCalls[sorted[k - 1]];
-              if (cur && prev && !cur.name && cur.args && prev.name && !String(prev.args || '').replace(/[{}\s]/g, '')) {
-                prev.args = cur.args;
-                delete partialToolCalls[sorted[k]];
+            if (finishReason === 'length' || cutNow) {
+              yield { type: 'tool_use_partial', id: pt.id, name: pt.name, args: pt.args || '' };
+              continue;
+            }
+            yield { type: 'tool_use', id: pt.id, name: pt.name, input: {}, inputError: `工具参数 JSON 不完整：${error.message}。请缩小批量或提高输出长度后重试。` };
+            continue;
+          }
+          yield { type: 'tool_use', id: pt.id, name: pt.name, input };
+        }
+        partialToolCalls = {}; // clear
+      }
+
+      try {
+        for await (const { data } of readSse(response, { signal })) {
+          if (data === '[DONE]') {
+            break; // break instead of continue for openai DONE
+          }
+
+          let parsed;
+          try {
+            parsed = JSON.parse(data);
+          } catch {
+            continue;
+          }
+
+          if (parsed.usage) {
+            promptTokens = parsed.usage.prompt_tokens || 0;
+            completionTokens = parsed.usage.completion_tokens || 0;
+            /*
+             * 网关自动做的提示词缓存,命中量在这里。prompt_tokens 本身已经**含着**它
+             * (实测 openlux:prompt_tokens 34057、cached_tokens 27877),所以 input 不用再加,
+             * 这个数只拿来看命中率。不报这个字段的兼容接口就是 0。
+             */
+            cacheRead = Number(parsed.usage.prompt_tokens_details?.cached_tokens) || 0;
+          }
+
+          if (parsed.error) {
+            const message = typeof parsed.error === 'string' ? parsed.error : (parsed.error.message || 'API 流返回错误');
+            /*
+             * 流已经出过数据之后来的 error(2026-10-22 实测 openlux:约 300 秒时来一条
+             * 「The upstream stream ended before the response was complete.」,HTTP 仍是 200,没有 finish_reason):
+             * 按截断收尾,不把已经写出的东西扔掉。还没出过数据的照旧抛错。
+             */
+            if (stopReason) break; // 已经正常收尾,后面来的错不影响这次回复
+            if (!started) throw new Error(message);
+            cut = { how: 'error-event', detail: message };
+            break;
+          }
+          const choice = parsed.choices?.[0];
+          if (choice) {
+            if (choice.delta?.content) {
+              started = true;
+              for (const ev of think.push(choice.delta.content)) {
+                yield ev.kind === 'think'
+                  ? { type: 'thinking_delta', text: ev.text }
+                  : { type: 'text_delta', text: ev.text };
               }
             }
-            const indices = sorted.filter((i) => partialToolCalls[i]);
-            for (const idx of indices) {
-               const pt = partialToolCalls[idx];
-               let input = {};
-               try {
-                 input = JSON.parse(pt.args || '{}');
-               } catch (error) {
-                 /*
-                  * 写到输出上限(`length`)时没写完的那一个:不执行,把已经收到的参数原文交给 agent.mjs,
-                  * 由它从半截 JSON 里取出写了一半的字段存进代码块,让模型接着写(A07,2026-10-22 用户定)。
-                  * 不是截断引起的坏 JSON 照旧按参数错误报回模型。
-                  */
-                 if (choice.finish_reason === 'length') {
-                   yield { type: 'tool_use_partial', id: pt.id, name: pt.name, args: pt.args || '' };
-                   continue;
-                 }
-                 yield { type: 'tool_use', id: pt.id, name: pt.name, input: {}, inputError: `工具参数 JSON 不完整：${error.message}。请缩小批量或提高输出长度后重试。` };
-                 continue;
-               }
-               yield { type: 'tool_use', id: pt.id, name: pt.name, input };
+
+            // 各家兼容接口给推理过程起的名字不一样,常见这三个,取到哪个算哪个
+            const reasoning =
+              choice.delta?.reasoning_content ?? choice.delta?.reasoning ?? choice.delta?.thinking;
+            if (typeof reasoning === 'string' && reasoning) {
+              started = true;
+              yield { type: 'thinking_delta', text: reasoning };
             }
-            partialToolCalls = {}; // clear
+
+            if (Array.isArray(choice.delta?.tool_calls)) {
+              started = true;
+              for (const tc of choice.delta.tool_calls) {
+                const idx = tc.index;
+                if (!partialToolCalls[idx]) {
+                  partialToolCalls[idx] = { id: '', name: '', args: '' };
+                }
+                if (tc.id) partialToolCalls[idx].id = tc.id;
+                if (tc.function?.name) partialToolCalls[idx].name = tc.function.name;
+                if (tc.function?.arguments) partialToolCalls[idx].args += tc.function.arguments;
+              }
+            }
+
+            if (choice.finish_reason) {
+              stopReason = choice.finish_reason;
+              yield* emitToolCalls(choice.finish_reason, false);
+            }
           }
         }
+      } catch (err) {
+        // 连接在流中途被断(网关掐断、对端关了连接):出过数据、还没收尾的按截断收尾;别的照旧抛
+        if (!isCutReadError(err, signal) || (!started && !stopReason)) throw err;
+        if (!stopReason) cut = { how: 'connection', detail: err?.message || String(err) };
+      }
+
+      if (!stopReason && !cut && started && !signal?.aborted) {
+        // 流读完了却没有 finish_reason:同样是没写完
+        cut = { how: 'no-finish', detail: '流在 finish_reason 之前结束' };
+      }
+      if (cut) {
+        yield streamCutNotice('openai', cut.how, cut.detail, { pendingToolCalls: Object.keys(partialToolCalls).length });
+        yield* emitToolCalls(null, true);
+        stopReason = STREAM_CUT;
       }
 
       if (!stopReason) throw new Error('API 响应流提前结束或未返回 SSE 数据，请检查接口协议。');
       // 写到长度上限时没写完的工具调用已在上面 finish_reason 那一支交成 tool_use_partial;照常报 `length` 收尾,
-      // 由 `agent.mjs` 存代码块、让模型接着写,连续截断超限再明说没做成。
+      // 由 `agent.mjs` 存代码块、让模型接着写,连续截断超限再明说没做成。中途被掐断的以 `stream_cut` 收尾,做法相同。
       yield { type: 'usage', input: promptTokens, output: completionTokens, cacheRead };
       // 收尾:扣住的尾巴要放出来(可能是半个标签,也可能就是正常正文)
       for (const ev of think.flush()) {

@@ -1,7 +1,7 @@
 /** 文字 / 思考增量攒成一条再交:次序不变、收尾前交齐、字数到顶就交(`server/agent/service/coalesce-run-events.mjs`) */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { coalesceRunEvents } from '../agent/service/coalesce-run-events.mjs';
+import { coalesceRunEvents, COALESCE_WINDOW_MS, COALESCE_MAX_CHARS } from '../agent/service/coalesce-run-events.mjs';
 
 function fakeWriter() {
   const emitted = []; let id = 0;
@@ -55,4 +55,13 @@ test('其余接口原样透出;终态事件的返回值照旧', () => {
   assert.equal(c.binding, w.binding); assert.equal(c.failed, w.failed); assert.equal(c.stop, w.stop);
   c.emit({ type: 'text', delta: 'x' });
   assert.equal(c.emit({ type: 'runner_done', settlement: 'pending', outcome: 'done' }), 'e2');
+});
+
+test('合并窗口缺省 1 秒(2026-10-22 用户定),字数阈值 4000;计时器按窗口定', () => {
+  assert.equal(COALESCE_WINDOW_MS, 1000);
+  assert.equal(COALESCE_MAX_CHARS, 4000);
+  const waits = [];
+  const w = fakeWriter(), c = coalesceRunEvents(w, { setTimer: (fn, ms) => { waits.push(ms); return 1; }, clearTimer: () => {} });
+  c.emit({ type: 'text', delta: 'x' }); c.emit({ type: 'text', delta: 'y' });
+  assert.deepEqual(waits, [1000], '一段攒着的只起一个计时器,1000 毫秒');
 });

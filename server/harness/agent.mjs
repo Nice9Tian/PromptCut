@@ -5,7 +5,12 @@ import { salvageTruncation } from './truncation.mjs';
 
 const canonical = value => JSON.stringify(value, (_key, v) => v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
 /** 各家「写到单次输出上限被截断」的停止原因：OpenAI 兼容口 `length`、Anthropic `max_tokens`、Gemini `MAX_TOKENS` */
-const TRUNCATED = new Set(['length', 'max_tokens', 'MAX_TOKENS']);
+const LENGTH_STOPS = new Set(['length', 'max_tokens', 'MAX_TOKENS']);
+/**
+ * 按截断处理的停止原因：写到上限，加上流在正常收尾之前被断（`stream_cut`，provider 判，见 providers/base.mjs）。
+ * 2026-10-22 用户定：「中途被网关掐断按截断处理（保住半截参数、走代码块续写）」。
+ */
+const TRUNCATED = new Set([...LENGTH_STOPS, 'stream_cut']);
 /** 连续几次截断都没留下能接着写的内容，就不再让它接着写，明说没做成 */
 const MAX_TRUNCATIONS = 2;
 /**
@@ -107,7 +112,8 @@ export class Agent {
       : '';
     const system = this.system + `\n\n执行规则：${speak}；需要做多件事时，在同一次回复里一次返回多个工具调用，它们会在同一轮内依次执行。依赖上一步返回值的操作留到下一轮。后台作业由工具自动等待，请勿反复启动或紧密轮询。遇到重复错误应改变方法或说明阻碍。工具返回成功后核对一次即可，完成后向用户总结结果。${cacheRule}`;
     // truncations：连续几次截断没留下内容；salvaged：这一轮里有几次截断留下了内容；truncTotal：这一轮一共截断几次；cutBlocks：截断时存进的代码块
-    let summaryReason = '', truncations = 0, salvaged = 0, truncTotal = 0;
+    // cutCount：truncTotal 里有几次是被网关中途掐断（其余是写到上限），停下时的话按它说
+    let summaryReason = '', truncations = 0, salvaged = 0, truncTotal = 0, cutCount = 0;
     const cutBlocks = new Set();
     // 这一轮有没有交过收尾汇报、有没有用 send_message 对用户说过话:说过的话就是给用户的交代,最后一次空回复不算出错
     let reported = false, spoke = false;
@@ -217,13 +223,19 @@ export class Agent {
          * 或者到了轮次上限，就明说没做成，结束这一轮。
          */
         truncTotal++;
-        const s = salvageTruncation(partials, this.codeCache);
+        const cause = stopReason === 'stream_cut' ? 'cut' : 'length';
+        if (cause === 'cut') cutCount++;
+        const s = salvageTruncation(partials, this.codeCache, { cause });
         for (const x of s.saved) cutBlocks.add(x.block);
         if (s.progress) { salvaged++; truncations = 0; } else truncations++;
-        this.onEvent({ type: 'diagnostic', stage: 'truncated', data: { round, stopReason, partials: partials.map((p) => p.name), saved: s.saved, salvaged, stalled: truncations } });
+        this.onEvent({ type: 'diagnostic', stage: 'truncated', data: { round, stopReason, cause, partials: partials.map((p) => p.name), saved: s.saved, salvaged, stalled: truncations } });
         if (truncations > MAX_TRUNCATIONS || salvaged > MAX_SALVAGED_TRUNCATIONS || round >= this.maxIterations) {
           const kept = cutBlocks.size ? `已经写出的部分存在代码块 ${[...cutBlocks].join('、')} 里，下一条消息可以让它接着写。` : '';
-          throw new Error(`${truncTotal > 1 ? `模型的回复连续 ${truncTotal} 次` : '模型的回复'}超过单次输出上限被截断，这一轮没能完成。${kept}可以把要求拆小一点再发，或请管理员调大单次输出上限。`);
+          const times = truncTotal > 1 ? `模型的回复连续 ${truncTotal} 次` : '模型的回复';
+          // 全是被网关掐断的不说「调大单次输出上限」：那不是上限的事，调大只会更容易撞上网关的时长上限
+          if (cutCount === truncTotal) throw new Error(`${times}被网关中途掐断（网关对单次请求有时长上限），这一轮没能完成。${kept}可以把要求拆小一点再发。`);
+          if (cutCount === 0) throw new Error(`${times}超过单次输出上限被截断，这一轮没能完成。${kept}可以把要求拆小一点再发，或请管理员调大单次输出上限。`);
+          throw new Error(`${times}被截断（超过单次输出上限或被网关中途掐断），这一轮没能完成。${kept}可以把要求拆小一点再发。`);
         }
         this.onEvent({ type: 'status', text: s.status });
         if (!calls.length) {
@@ -237,7 +249,7 @@ export class Agent {
         if (!text.trim() && !reported && !spoke) throw new Error('API 没有返回文字或工具调用，请检查模型和接口协议设置。');
         break;
       }
-      if (!truncationNote) { truncations = 0; truncTotal = 0; }
+      if (!truncationNote) { truncations = 0; truncTotal = 0; cutCount = 0; }
       progress(round, 'executing', `本轮收到 ${calls.length} 个工具调用，正在执行…`);
       const results = [];
       // 工具返回的图片不留在 tool_result 里，改挂到同一条 user 消息的末尾。

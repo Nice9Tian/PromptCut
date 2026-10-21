@@ -12,8 +12,33 @@
  *   input 是这一轮完整的输入长度(含命中缓存的部分);cacheRead 是其中命中缓存的量,报得出来的家才有
  * - { type: 'stop', reason: string }
  * - { type: 'tool_use_partial', id, name, args: string }  写到输出上限时没写完的工具调用,args 是收到的参数原文(A07)
- * - { type: 'notice', stage: string, data: object }       给运行日志的提示(输出上限 400 降档、换字段)
+ * - { type: 'notice', stage: string, data: object }       给运行日志的提示(输出上限 400 降档、换字段、流被中途掐断)
+ * - { type: 'response_open', sentAt: number }             响应头到了;sentAt 是最后一次真正发出请求的时刻(按速度设上限时算用时用)
+ *
+ * 停止原因 `stream_cut`(STREAM_CUT):流已经开始出数据之后、正常收尾之前断了 —— 流里来了 error 事件、连接被断、
+ * 或者流读完却没有收尾标志。三家都按截断收尾:已经收到的文字照常交出,没写完的工具调用交成 tool_use_partial,
+ * 由 agent.mjs 存代码块、让模型接着写(2026-10-22 用户定:「中途被网关掐断按截断处理(保住半截参数、走代码块续写)」)。
+ * 还没收到任何数据就断的,照旧抛错。
  */
+
+/** 停止原因:流在正常收尾之前被断了(多半是网关单次请求约 300 秒的上限,2026-10-22 实测) */
+export const STREAM_CUT = 'stream_cut';
+
+/**
+ * 读流时抛的这个错,能不能当「中途被掐断」:用户点停止(signal 已中止)和我们自己的闲置超时(TimeoutError / AbortError)不算,
+ * 照旧抛 —— 闲置超时是上游 120 秒不出字,有现成的续跑(runners/api.mjs 的 retryable),这次不改〔裁:stream-cut 2026-10-22〕。
+ */
+export function isCutReadError(err, signal) {
+  if (signal?.aborted) return false;
+  const name = err?.name || '';
+  if (name === 'TimeoutError' || name === 'AbortError') return false;
+  return true;
+}
+
+/** 掐断时交给运行日志的那条提示 */
+export function streamCutNotice(vendor, how, detail, extra = {}) {
+  return { type: 'notice', stage: 'stream-cut', data: { vendor, how, detail: String(detail || '').slice(0, 300), ...extra } };
+}
 
 /**
  * 创建 SSE 解析器。返回一个函数 feed(chunkString)，返回本次解析出的事件数组，元素形如 {event, data}。

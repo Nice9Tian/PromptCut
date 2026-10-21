@@ -9,6 +9,7 @@
 //       { "sleepMs": 300 }                        等这么久再做下一项(测停止与并发;认中止信号)
 //       { "fail": "<原因>" }                      这一次模型请求报错
 //       { "truncate": { "tool", "args", "say" } } 这一回合写到输出上限被截断(见下面那一支)
+//       { "cut": { "tool", "args", "say" } }      这一回合写到一半被网关中途掐断(停止原因 stream_cut,其余同 truncate)
 //     脚本走完还没有 say 的,补一句「完成。」结束。每个回合报一次 usage(按字符数算的确定值)。
 //     一轮对话里有多个脚本块时用最近一条用户消息里的那个。
 
@@ -74,11 +75,13 @@ export function createProvider(cfg) {
            * 写到输出上限被截断(A07):`{ "truncate": { "tool": "create_card", "args": "{\"source\":\"写了一半" }, "say"?: "…" }`
            * 交一个没写完的工具调用(参数原文就是 args)、以 `length` 收尾;不给 tool 时只交 say 的文字、以 `length` 收尾。
            */
-          if (step.truncate && typeof step.truncate === 'object') {
-            if (typeof step.truncate.say === 'string') yield { type: 'text_delta', text: step.truncate.say };
-            if (typeof step.truncate.tool === 'string') yield { type: 'tool_use_partial', id: `mock_${at}`, name: step.truncate.tool, args: String(step.truncate.args ?? '') };
-            yield { ...usage, output: Math.ceil(String(step.truncate.args ?? '').length / 4) + 8 };
-            yield { type: 'stop', reason: 'length' };
+          const cutStep = step.truncate && typeof step.truncate === 'object' ? step.truncate : (step.cut && typeof step.cut === 'object' ? step.cut : null);
+          if (cutStep) {
+            if (typeof cutStep.say === 'string') yield { type: 'text_delta', text: cutStep.say };
+            if (typeof cutStep.tool === 'string') yield { type: 'tool_use_partial', id: `mock_${at}`, name: cutStep.tool, args: String(cutStep.args ?? '') };
+            yield { ...usage, output: Math.ceil(String(cutStep.args ?? '').length / 4) + 8 };
+            // 被网关中途掐断(stream-cut,2026-10-22):停止原因 stream_cut,agent.mjs 按截断处理
+            yield { type: 'stop', reason: cutStep === step.truncate ? 'length' : 'stream_cut' };
             return;
           }
           if (typeof step.say === 'string') {

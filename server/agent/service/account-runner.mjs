@@ -355,6 +355,8 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
           apiConfig: cfg, model, historyFile: path.join(dir, 'history.json'),
           // 代码块空间按项目放(A07,2026-10-22 用户:「给项目一个代码块空间」):和这个项目的对话目录同级,各代任务进程共用
           codeCacheDir: path.join(dataDir, 'tenants', grant.projectId, 'code-cache'),
+          // 输出速度记录(按实测速度设单次输出上限,2026-10-22):任务进程每轮新开一代,放共用数据目录的 usage/ 下(任务进程写用量的地方),各代都读得到
+          outputSpeedFile: path.join(dataDir, 'usage', 'model-speed.json'),
           sessionKey: `account-v2-${grant.conversationId}`, onModelCall: async (phase, info) => {
             if (phase === 'before') {
               await onModelCall({ phase, info });
