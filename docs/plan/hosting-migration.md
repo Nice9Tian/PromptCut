@@ -132,7 +132,7 @@ $PROMPTCUT_DATA_DIR/
 用户定用 `hosted.visuhive.com`，在 Namecheap 给 `visuhive.com` 加了一条 A 记录 `hosted`（和 `@`、`www`、`s1`、`s2` 一样指向节点）。
 
 1. **节点**：新站点 `/etc/nginx/sites-available/promptcut-hosted-domain`。443 那一块照抄 `promptcut` 站点（`149-88-94-84.sslip.io`），只换 `server_name` 与证书、去掉开发信箱；80 端口只发证书续期的验证文件（`/var/www/landing`），其余跳 https。证书 `certbot certonly --webroot -w /var/www/landing -d hosted.visuhive.com`，续期演练通过。没动已有的三个站点和任何服务。
-2. **客户端**：`server/auth/hosted-default.mjs` 的缺省托管地址从 `http://<节点 IP>:8787` 改成 `https://hosted.visuhive.com/hosted`。0.7.18 部署后节点的 8787、8788 只听本机，旧缺省地址从外面已经连不上，这一改顺带把它修好。旧项目文件、恢复凭证、本机记录里的旧地址读进来自动换成新的：「IP:8787 / 8788」换成新域名下的 `/hosted`、`/media`（协议换成 https / wss），sslip.io 名字只换主机名，`s1.`、`s2.` 舞台子域换成 `s1.visuhive.com`、`s2.visuhive.com`。桌面版随下一版补丁拿到；在那之前，0.7.18 的桌面版可以在加入项目界面把托管地址填成 `https://hosted.visuhive.com/hosted`。
+2. **客户端**：`server/auth/hosted-default.mjs` 的缺省托管地址从 `http://<节点 IP>:8787` 改成 `https://hosted.visuhive.com/hosted`。0.7.18 部署后节点的 8787、8788 只听本机，旧缺省地址从外面已经连不上，这一改顺带把它修好。旧项目文件、恢复凭证、本机记录里的旧地址读进来自动换成新的：「IP:8787 / 8788」换成新域名下的 `/hosted`、`/media`（协议换成 https / wss），sslip.io 名字只换主机名，`s1.`、`s2.` 舞台子域换成 `s1.visuhive.com`、`s2.visuhive.com`。代码在 main `265fe56d`，桌面版随 0.7.19 拿到，不单独出补丁（用户 2026-10-22 定）；在那之前，0.7.18 的桌面版可以在加入项目界面把托管地址填成 `https://hosted.visuhive.com/hosted`。
 3. **以后换机器**：新机器上照现在的四个站点（`landing`、`promptcut`、`promptcut-stages`、`promptcut-hosted-domain`）配好 nginx 与证书，按上面第 2～7 步迁数据，最后在 Namecheap 把 `@`、`www`、`s1`、`s2`、`hosted` 五条 A 记录改到新地址。客户端不用改代码、不用发版，旧服务器也不用留着做转发（第 8、9 步只对还在用 IP 缺省地址的 0.7.18 及更早的客户端有意义）。
 
 ## 2a. 渲染服务的迁移与重建
