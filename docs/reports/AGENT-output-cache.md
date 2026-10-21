@@ -85,7 +85,7 @@
 
 ### 2. 新增单测与端到端测试（`server/test/output-cache.test.mjs`，假模型，不调真模型）
 
-`npm test -- server/test/output-cache.test.mjs`：18 项全过（结果见下面全量一节的复跑）。覆盖：
+`npm test -- server/test/output-cache.test.mjs`：tests 18、pass 18、fail 0。覆盖：
 
 - 三家 provider 发出的上限参数（OpenAI 兼容口 `max_tokens` 65536、推理模型只发 `max_completion_tokens` 128000；Anthropic `max_tokens` 128000；Gemini `maxOutputTokens` 65536）。
 - 400 降档重发一次、再 400 不再重发；字段名不对换字段重发一次；Anthropic 按报错里的上限降；Gemini 降一档。
@@ -102,7 +102,13 @@
 
 ### 4. 全量
 
-（全量结果见下一次提交补上。）
+`npm test`（带 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT`、`PROMPTCUT_PASSWORD_ORDER_MODULE`）：EXIT=1；tests 7388、pass 7372、fail 1、skipped 15、cancelled 0。
+
+唯一失败的是 `server/test/hosted-render-memory.test.mjs` 的 HR37（「本机真量一次」）：用 Windows 的系统查询实际量本进程这棵树的内存，到 20 秒超时（20027 ms）。单独重跑 `npm test -- server/test/hosted-render-memory.test.mjs`：10 项 9 过，HR37 照样在 20019 ms 超时。这个测试只引用 `server/hosted-render/` 的内存测量模块，和本分支改的文件（见 `git diff cc716da3 --name-only`：`server/harness/**`、`server/tools/code-cache.mjs`、`server/runners/api.mjs`、`server/agent/service/` 四个文件、提示词与文档）没有任何引用关系，判定是这台机器上系统查询慢，不是本分支引起的；没有在 main 上对照重跑（不碰主工作区）。请主会话在 main 上复核一次 HR37。
+
+本分支新增的 `server/test/output-cache.test.mjs` 在全量里与单独重跑都是 18 项全过。
+
+**基线结论**：类型检查零错误；全量测试除 HR37（与本分支无关、待主会话在 main 上复核）外全过。按「零失败」的标准，这一项没有达到。
 
 ### 5. 对照表行号
 
