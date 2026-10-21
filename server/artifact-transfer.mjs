@@ -377,6 +377,8 @@ function canvasHeavyOf(task, opts) {
 const blobReader = files => async hash => {
   const file = files.get(hash);
   if (!file) throw fail(`清单里没有块 ${hash}`);
+  // 轨道流的块在列清单时已经读进内存(见 `collectStreamResult`):推的就是列清单那一刻的字节
+  if (Buffer.isBuffer(file)) return file;
   return fs.readFile(file);
 };
 
@@ -532,10 +534,17 @@ export async function collectStreamResult(pipeline, task, opts = {}) {
   const files = new Map();
   const inits = {};
   const segments = {};
+  /*
+   * 块的字节留在内存里(只是这一任务范围里的几个分段与开头,读来算哈希本来就要读一遍),推的时候不再按路径重读:
+   * 同一条流的稀疏版任务与满密度任务会同时在本机跑(结果键相同、目录相同),满密度那一趟换掉某一段时,旧的稀疏分段文件
+   * 过 `REPLACED_DELETE_MS`(5 秒)就删(`frame-stream.mjs` 的 `storeSegment`)。稀疏任务列完清单、推得慢于 5 秒,
+   * 按路径重读就 ENOENT(线上 2026-10-21:`push-failed:ENOENT …/4-<hash>.m4s`,推了 6/7)。推列清单时那份字节,
+   * 素材服务按哈希收,清单与块一致,不受之后的替换影响。
+   */
   const readHashed = async file => {
     const buf = await fs.readFile(file);
     const hash = sha256(buf);
-    files.set(hash, file);
+    files.set(hash, buf);
     return { hash, bytes: buf.length };
   };
   for (let n = from; n <= to; n++) {
