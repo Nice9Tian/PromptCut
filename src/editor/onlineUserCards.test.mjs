@@ -76,14 +76,13 @@ test("OU-01 clipIdentityOf:在线时本页运行不了的卡没有身份,能运�
     assert.equal(ready1.capabilities.has("s"), true);
     R.setCardRunStates([["synced-card", { state: "ready", version: "g2" }]]);
     assert.notEqual(CI.clipIdentityOf(p).identityKeys.s, ready1.identityKeys.s, "源码换代:身份跟着换(重新测量)");
-    // 低内存档不执行用户卡的代码:构建时的用户卡在低内存档照旧没有身份(它的现有规则不动)
+    // 2026-10-21 起低内存档不另挡用户卡:构建时的用户卡本页能运行,低内存档里照内置卡有身份(停下追精确帧)
     D.setPlanLowMemory(true);
     const low = CI.clipIdentityOf(p);
-    assert.equal(low.identityKeys.u, undefined, "低内存档:构建时的用户卡没有身份");
-    assert.equal(low.frameModes.u, undefined, "也没有声明的帧模式(否则 direct 会判轻)");
+    assert.ok(low.identityKeys.u, "低内存档:构建时的用户卡照旧有身份");
     assert.ok(low.identityKeys.b, "低内存档:内置卡照旧有身份");
     D.setPlanLowMemory(false);
-    assert.ok(CI.clipIdentityOf(p).identityKeys.u, "回到普通档:又有了");
+    assert.ok(CI.clipIdentityOf(p).identityKeys.u, "回到普通档:照旧有");
   } finally {
     H.setOnlineBrowserMode(false);
     R.setSyncedUserCards([]);
@@ -135,11 +134,11 @@ test("OU-02 planDispatch:在线时本页运行不了的卡一律判重、进预�
     R.setCardRunStates([["synced-card", { state: "unsupported-syntax", detail: "namespace" }]]);
     await settle();
     assert.deepEqual([...D.currentPlan().prerenderSet], ["g", "s"], "运行不了:判重");
-    // 低内存档:构建时的用户卡也回到按重(判定的表;界限搜索没有结果时全部按重,有结果时它也不在判轻的集合里)
+    // 低内存档(2026-10-21 起不另挡用户卡):构建时的用户卡照内置卡按界限搜索的结果判
     D.setPlanLowMemory(true);
     D.setPlanLowMemoryLight([keys.b, keys.u]);
     await settle();
-    assert.equal(D.judgedPlan().prerenderSet.has("u"), true, "低内存档:构建时的用户卡没有身份,判定的表里按重");
+    assert.equal(D.judgedPlan().prerenderSet.has("u"), false, "低内存档:构建时的用户卡照界限搜索的结果判轻");
     assert.equal(D.judgedPlan().prerenderSet.has("b"), false, "低内存档:内置卡照界限搜索的结果判轻");
   } finally {
     H.setOnlineBrowserMode(false);
@@ -196,7 +195,7 @@ test("OU-05 未知卡片(两边都没有定义):桌面与在线都不测、不�
   D.resetPlanDispatch();
 });
 
-test("OU-03 时间轴:标签与「需要本地 PC 渲染辅助」徽标的判定", () => {
+test("OU-03 时间轴:标签;不再有「需要本地 PC 渲染辅助」徽标(2026-10-21 用户定撤掉)", () => {
   setup();
   R.setSyncedUserCards([{ id: "synced-card", name: "探针同步卡" }, { id: "builtin", name: "撞内置" }]);
   try {
@@ -204,16 +203,7 @@ test("OU-03 时间轴:标签与「需要本地 PC 渲染辅助」徽标的判定
     assert.equal(B.clipCardLabel(R.knownCardName("synced-card")), "探针同步卡");
     assert.equal(B.clipCardLabel(R.knownCardName("builtin")), "名-builtin", "撞车的同步条目忽略");
     assert.equal(B.clipCardLabel(R.knownCardName("nobody")), "未知卡片");
-    const badge = (online, cardId, coverage) => B.showLocalPcBadge({ online, localOnly: online && H.needsLocalPc(cardId, R.getCard(cardId)), coverage });
-    assert.equal(badge(true, "synced-card", "none"), true, "同步卡没有层:出");
-    assert.equal(badge(true, "synced-card", "partial"), true, "没覆盖整段:出");
-    assert.equal(badge(true, "synced-card", "full"), false, "覆盖齐了:撤");
-    assert.equal(badge(true, "mine", null), false, "没有在线来源(判不了覆盖):还不知道,不出");
-    assert.equal(badge(true, "synced-card", "unknown"), false, "层表没取到、有哪一段清单从没取到过:还不知道,不出");
-    assert.equal(badge(true, "graphish", "partial"), true, "素材效果卡");
-    assert.equal(badge(true, "builtin", "none"), false, "内置卡从不出");
-    assert.equal(badge(true, "nobody", "none"), false, "两边都没有的 id:只标未知卡片,不挂徽标");
-    assert.equal(badge(false, "mine", "none"), false, "桌面从不出");
+    assert.equal(B.showLocalPcBadge, undefined, "徽标的判定撤掉了");
   } finally {
     R.setSyncedUserCards([]);
   }

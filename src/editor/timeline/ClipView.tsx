@@ -7,10 +7,8 @@ import { useTimelineContext } from "./TimelineContext";
 import { actions, useStore, getState } from "../../store/project";
 import { cardRunStatesGen, getCard, knownCardName, onCardRunStatesChanged, onSyncedUserCardsChanged, syncedCardView, syncedUserCardsGen } from "../../kernel/registry";
 import { clipSubtitleOf, paramsCardView } from "../left/paramsView";
-import { onlineBrowserMode, unsupportedHere } from "../../render/placeholderHost";
-import { clipCoverage, subscribeCoverage } from "../onlineCoverage";
-import { clipCardLabel, showLocalPcBadge } from "./localPcBadge";
-import { ONLINE_CUSTOM_CARD_TEXT, onlinePage, onlineUnsupported } from "../../online/pageFlag";
+import { clipCardLabel } from "./localPcBadge";
+import { onlinePage, onlineUnsupported } from "../../online/pageFlag";
 import { snapTime, isOccupied, getGap, xOfTime, formatTime, ROW_SIZE_H } from "./utils";
 import { ShotMarkers } from "./ShotMarkers";
 import { TrackClip, Track } from "../../kernel/project";
@@ -32,26 +30,18 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   const media = useStore((s) => s.project.media.find((m) => m.id === clip.mediaId));
   const selection = useStore((s) => s.selection);
   const isSelected = selection.includes(clip.id);
-  const cardDef = clip.cardId ? getCard(clip.cardId) : null;
   // 副标题看的参数视图:先查定义,没有再看同步来的用户卡的只读视图(源码里解析出的默认值与控件)
   const paramsView = clip.cardId ? paramsCardView(clip.cardId, { getCard, syncedCardView }) : undefined;
   // 同步来的用户卡(在线页面从内容库卡片源码认出来的)表变了要重绘:标签换成真名
   useSyncExternalStore(onSyncedUserCardsChanged, syncedUserCardsGen);
-  // 同步来的卡的运行状态变了也重绘:载入成功的不再挂「需要本地 PC 渲染辅助」的徽标,运行不了的照挂
+  // 同步来的卡的运行状态变了也重绘(标签、轻重跟着它)
   useSyncExternalStore(onCardRunStatesChanged, cardRunStatesGen);
   // 标签:构建时定义的名字 → 同步表里的名字 →「未知卡片」(C10 契约第 9 节)
   // 剪辑段(kernel/cutSegments.ts):标签跟着被引用剪辑现在的名字走;找不到(悬空引用)就写明
   const cutName = useStore((s) => (clip.cutId ? s.project.cuts?.find((c) => c.id === clip.cutId)?.name ?? null : null));
   const cutTotal = useStore((s) => (clip.cutId ? cutDuration(s.project, clip.cutId) : 0));
   const label = clip.cutId ? (cutName ? `剪辑 · ${cutName}` : "剪辑 · (已不存在)") : clip.cardId ? clipCardLabel(knownCardName(clip.cardId)) : clip.label;
-  /*
-   * 在线浏览器模式下这台设备跑不了的卡(用户卡、素材效果卡、同步来的用户卡),预渲染结果又还没覆盖整段时:片段里挂个小徽标,
-   * 悬停出「需要本地 PC 渲染辅助」(与舞台上的图标同一句、同一条件;C10 契约第 9 节)。覆盖变了重绘,齐了撤掉。
-   * 两边都没有的 id 只标「未知卡片」,不挂徽标。片段照常可选中、移动、删除、改参数(只是个提示,不挡任何操作)。
-   */
-  const localOnly = !!clip.cardId && unsupportedHere(clip.cardId, cardDef ?? undefined);
-  const coverage = useSyncExternalStore(subscribeCoverage, () => (localOnly ? clipCoverage(clip.id) : null));
-  const customCard = showLocalPcBadge({ online: onlineBrowserMode(), localOnly, coverage });
+  // 这台设备跑不了的卡不挂任何「本地 PC 辅助渲染」的徽标(2026-10-21 用户定:没有这种情况;画面由渲染节点出)
   // 按素材类型上色:文字 / 视频 / 转场… 各一档,一眼读得出片段是什么
   const trackKind = clipTrackKind(clip, (id) => getState().project.media.find((m) => m.id === id));
   // 这一段是不是「有画面的素材」:只有它能转成声音(卡片、图片、已经是声音的都不行)
@@ -302,15 +292,6 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
           <span className="pc-clip-link" title={lock.message}>
             <svg width="9" height="9" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
               <path d="M4.6 7.4L7.4 4.6M5 2.6l.9-.9a2.3 2.3 0 013.3 3.3l-.9.9M7 9.4l-.9.9a2.3 2.3 0 01-3.3-3.3l.9-.9" />
-            </svg>
-          </span>
-        )}
-
-        {customCard && (
-          <span className="pc-clip-custom" data-pc="clip-custom-card" title={ONLINE_CUSTOM_CARD_TEXT} aria-label={ONLINE_CUSTOM_CARD_TEXT}>
-            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <rect x="1.5" y="2" width="9" height="6" rx="1" />
-              <path d="M4.5 10.5h3M6 8v2.5M1.5 1.5l9 8" />
             </svg>
           </span>
         )}

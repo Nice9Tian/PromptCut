@@ -956,13 +956,16 @@ async function errorsStep() {
     const conv = await runAndWait(mockSteps([writeStep(1, 'q'), { sleepMs: 300 }, writeStep(4, 'q'), writeStep(7, 'q'), { say: '不会到' }]));
     const e = await errText(c.page);
     const s = await sane(before, okOf(conv));
-    // 再发:被明确拒绝并说明
+    // 再发:被明确拒绝并说明。等的必须是这次再发引出的拒绝:点之前那一轮的助手消息已经带着「额度」,
+    // 只看「最后一条助手消息带额度」会在点下去的那一刻就成立,接着清额度,再发的那条就被合法收下开跑(探针自己的竞态)
+    const assistantsBefore = (await msgs(c.page)).filter((x) => x.role === 'assistant').length;
     await sendText(c.page, mockSteps([{ say: 'x' }]));
     const notice = await until('E2:再发被拒绝并说明', async () => {
       const n = await c.page.$eval('[data-pc="cloud-notice"]', (el) => el.textContent ?? '').catch(() => null);
       if (n) return n;
-      const a = lastAssistant(await msgs(c.page));
-      return a && !a.pending && /额度/.test(String(a.error ?? '')) && (await msgs(c.page)).filter((x) => x.role === 'user').length >= 2 ? `对话里:${a.error}` : null;
+      const all = await msgs(c.page);
+      const a = lastAssistant(all);
+      return a && !a.pending && /额度/.test(String(a.error ?? '')) && all.filter((x) => x.role === 'assistant').length > assistantsBefore ? `对话里:${a.error}` : null;
     }, 30_000, 100);
     admin('quota', 'clear', PID);
     await sleep(400);

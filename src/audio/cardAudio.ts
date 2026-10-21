@@ -270,7 +270,7 @@ export function shouldMuteNativeAudio(project: Project, clip: TrackClip, globall
 /** Active generated audio is independent of whether its source happened to be an audio asset, video, or no media asset. */
 export function generatedCardAudioClipsAt(project: Project, t: number): { clip: TrackClip; media?: MediaAsset; volume: number }[] {
   const out: { clip: TrackClip; media?: MediaAsset; volume: number }[] = [];
-  // 在线浏览器模式:素材效果卡(含音频素材效果卡)在这台设备上渲染不了(C10 契约第 9 节,常驻「需要本地 PC 渲染辅助」),
+  // 在线浏览器模式:素材效果卡(含音频素材效果卡)在这台设备上渲染不了(C10 契约第 9 节,由渲染节点出),
   // 不求值、不发 `/@media/<hash>/pcm` 请求;这一段的原生声音照旧被 `shouldMuteNativeAudio` 静掉,不拿素材声音顶上
   for (const track of project.tracks) for (const clip of track.clips) {
     if (track.hidden || track.muted || clip.audioMuted || !cardAudioNodeOf(project, clip) || t < clip.start || t >= clip.end) continue;

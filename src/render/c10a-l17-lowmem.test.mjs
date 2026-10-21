@@ -137,7 +137,7 @@ test("C10A-L17-S2 时限到了:画到一半的与还没开始画的都维持占�
   assert.equal(r2.timeoutMs, 60_000);
 });
 
-test("C10A-L17-S3 用户卡、素材效果卡不追:单列 skipped;在线浏览器模式下贴小尺寸,没有才显示「需要本地 PC 渲染辅助」", async () => {
+test("C10A-L17-S3 本机跑不了的用户卡、素材效果卡不追:单列 skipped;在线浏览器模式下贴小尺寸,没有就是沙漏、等渲染节点", async () => {
   const H = await import(srcUrl("render/placeholderHost.ts"));
   const isUser = (id) => id === "my-user-card";
   const graphDef = { card: () => null };
@@ -155,7 +155,7 @@ test("C10A-L17-S3 用户卡、素材效果卡不追:单列 skipped;在线浏览�
     ];
     const f = fakeDraw({ b: 100 });
     const r = await S.runLowMemorySettle({ sec: 2, items, timeoutMs: 5000, now: f.now, draw: f.draw });
-    assert.deepEqual(r.skipped, ["g", "u"], "不追:舞台上贴着小尺寸,没有才是 unsupported 占位(电脑 + 离线图标、需要本地 PC 渲染辅助)");
+    assert.deepEqual(r.skipped, ["g", "u"], "不追:舞台上贴着小尺寸,没有就是沙漏(结果由渲染节点出;2026-10-21 起没有「需要本地 PC 渲染辅助」)");
     // 同步来的用户卡:本机没有定义,缺省判法查注册表的同步表
     const R = await import(srcUrl("kernel/registry.ts"));
     R.setSyncedUserCards([{ id: "synced-card", name: "同步卡" }]);
