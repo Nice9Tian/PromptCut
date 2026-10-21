@@ -116,3 +116,19 @@ test('TH9 缓存超过上限按最近使用淘汰', async () => {
   assert.equal(L.peek('/m/b'), null, '最久没用的 b 被淘汰');
   assert.equal(L.peek('/m/a'), 'data:a');
 });
+
+test('TH10 别处取到了同一张,等着它的也收到(先失败的那处不用等重试)', async () => {
+  const g = fakeGrab();
+  const L = createThumbLoader({ grab: g.grab, maxActive: 1 });
+  const seen = [];
+  const off = L.watch(thumbKey('/m/v?t=1', 'video', 0), (v) => seen.push(v));
+  L.request('/m/v?t=2', 'video', 0, () => {});
+  g.calls[0].resolve('data:v');
+  await tick(); await tick();
+  assert.deepEqual(seen, ['data:v']);
+  off();
+  L.request('/m/w', 'video', 0, () => {});
+  g.calls[1].resolve('data:w');
+  await tick(); await tick();
+  assert.deepEqual(seen, ['data:v'], '退订后不再回调');
+});

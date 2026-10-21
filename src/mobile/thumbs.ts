@@ -60,10 +60,14 @@ export function createThumbLoader(opts: { grab: Grab; maxActive?: number; cacheM
   const jobs = new Map<string, Job>();
   const queue: Job[] = [];
   let active = 0;
+  /** 谁在等某一张:别处取到了也告诉它(同一素材同一时刻在格子和缩略卡上各出现一次,先失败的那处不用等重试) */
+  const watchers = new Map<string, Set<(v: string) => void>>();
 
   const remember = (key: string, v: string) => {
+    const fresh = !cache.has(key);
     cache.delete(key);
     cache.set(key, v);
+    if (fresh) for (const w of [...(watchers.get(key) ?? [])]) w(v);
     while (cache.size > cacheMax) cache.delete(cache.keys().next().value as string);
   };
 
@@ -113,6 +117,13 @@ export function createThumbLoader(opts: { grab: Grab; maxActive?: number; cacheM
           if (i >= 0) { queue.splice(i, 1); jobs.delete(j.key); j.resolve(null); }
         }
       };
+    },
+    /** 这一张一旦取到(不论是谁要的)就回调;回退订 */
+    watch(key: string, fn: (v: string) => void): () => void {
+      let set = watchers.get(key);
+      if (!set) { set = new Set(); watchers.set(key, set); }
+      set.add(fn);
+      return () => { set!.delete(fn); if (!set!.size) watchers.delete(key); };
     },
     /** 单测用:排队数、在解码数、缓存数 */
     stats() { return { queued: queue.length, active, cached: cache.size }; },

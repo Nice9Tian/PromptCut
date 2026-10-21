@@ -10,6 +10,11 @@ const loader = createThumbLoader({ grab: grabFrame });
 
 /** 进了视口附近(上下左右各多看一屏的一小截)才去取 */
 const NEAR = "120px";
+/**
+ * 取不到时隔一会儿再试(刚导入的素材还在上传,素材服务先答 404):2、4、8、15、15、15 秒,试满就停,
+ * 等格子下次出现(面板重开)或素材上传完(`pending` 变了)再从头试。只为不让刚导入的格子一直是底色。
+ */
+const RETRY_MS = [2000, 4000, 8000, 15000, 15000, 15000];
 
 /**
  * 给一个素材(和取帧时刻)拿缩略图。返回挂到 <img> 上的 ref 与地址:地址为 null 时别显示。
@@ -20,6 +25,10 @@ export function useThumb(media: MediaAsset | null | undefined, t = 0): { ref: Re
   const url = usePreviewMediaUrl(kind ? media : null);
   const ref = useRef<HTMLImageElement | null>(null);
   const key = kind && url ? thumbKey(url, kind, t) : "";
+  const [attempt, setAttempt] = useState(0);
+  const pending = !!media?.pending;
+  useEffect(() => setAttempt(0), [key, pending]);
+  useEffect(() => (key ? loader.watch(key, (v) => setGot({ key, src: v })) : undefined), [key]);
   const [got, setGot] = useState<{ key: string; src: string } | null>(() => (key ? (() => { const s = loader.peek(key); return s ? { key, src: s } : null; })() : null));
 
   useEffect(() => {
@@ -28,11 +37,15 @@ export function useThumb(media: MediaAsset | null | undefined, t = 0): { ref: Re
     if (hit) { setGot({ key, src: hit }); return; }
     const el = ref.current;
     let cancel: (() => void) | null = null;
+    let retry = 0;
     const start = () => {
       if (cancel) return;
-      cancel = loader.request(url, kind, t, (v) => { if (v) setGot({ key, src: v }); });
+      cancel = loader.request(url, kind, t, (v) => {
+        if (v) { setGot({ key, src: v }); return; }
+        if (attempt < RETRY_MS.length) retry = window.setTimeout(() => setAttempt((n) => n + 1), RETRY_MS[attempt]);
+      });
     };
-    const stop = () => { cancel?.(); cancel = null; };
+    const stop = () => { cancel?.(); cancel = null; window.clearTimeout(retry); };
     if (!el || typeof IntersectionObserver === "undefined") { start(); return stop; }
     const io = new IntersectionObserver((entries) => {
       if (entries.some((e) => e.isIntersecting)) start();
@@ -42,7 +55,7 @@ export function useThumb(media: MediaAsset | null | undefined, t = 0): { ref: Re
     return () => { io.disconnect(); stop(); };
     // url 里的票据会轮换,key 不变就不重取
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [key, attempt, pending]);
 
   return { ref, src: got && got.key === key ? got.src : null };
 }
