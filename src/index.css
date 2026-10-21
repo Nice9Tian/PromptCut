@@ -31,6 +31,16 @@
 
 html, body, #root { height: 100%; margin: 0; background: #111; color: #eee; font-family: system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
 
+/* 触屏设备上输入框字号不小于 16px:手机浏览器(iOS Safari 等)遇到更小的字号会在聚焦时自动放大页面,
+   失焦后不缩回。兜底见 ui/focusZoomReset.ts。!important 盖过各界面里 `font: inherit` 之类的写法。 */
+@media (pointer: coarse) {
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="button"], [type="submit"], [type="color"], [type="file"]),
+  textarea,
+  select {
+    font-size: max(16px, 1em) !important;
+  }
+}
+
 /* 拖面板时别让预览的 iframe 抢走鼠标(见 editor/ResizeHandle.tsx) */
 body[data-pc-resizing] iframe {
   pointer-events: none;
