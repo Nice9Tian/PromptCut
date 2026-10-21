@@ -159,3 +159,36 @@ export function createClipGuard(opts: ClipGuardOptions = {}) {
   };
 }
 export type ClipGuard = ReturnType<typeof createClipGuard>;
+
+/**
+ * update_clip 改完参数后回显「这次真正变了什么」。
+ *
+ * 为什么:params 是增量补丁(store 的 setClipParams 默认合并),但模型常凭几轮前的记忆把整份参数带回来;
+ * 线上 2026-10-21 它在只想改大小的一轮里把 color 带成了旧值,把用户刚点「撤销这步」撤掉的颜色悄悄写了回去。
+ * 回包里列出每个真正变了的键(from → to),带回旧值的那一刻它自己就看得见;`params` 给改完后的全貌,
+ * 下一轮不必再靠记忆。太大的值只给摘要、太大的整份只给键名,不撑爆上下文。
+ */
+const ECHO_VALUE_MAX = 80;
+const ECHO_PARAMS_MAX = 2000;
+
+function briefValue(v: unknown): unknown {
+  if (typeof v === "string") return v.length > ECHO_VALUE_MAX ? `${v.slice(0, ECHO_VALUE_MAX)}…(共 ${v.length} 字)` : v;
+  if (v === null || typeof v !== "object") return v;
+  const text = JSON.stringify(v);
+  return text.length > ECHO_VALUE_MAX ? `${text.slice(0, ECHO_VALUE_MAX)}…(共 ${text.length} 字)` : v;
+}
+
+export function paramsEcho(before: Record<string, unknown> | undefined, after: Record<string, unknown> | undefined) {
+  const b = before ?? {};
+  const a = after ?? {};
+  const changedParams: Record<string, { from: unknown; to: unknown }> = {};
+  for (const k of new Set([...Object.keys(b), ...Object.keys(a)])) {
+    if (JSON.stringify(b[k]) === JSON.stringify(a[k])) continue;
+    changedParams[k] = { from: briefValue(b[k]), to: briefValue(a[k]) };
+  }
+  const whole = JSON.stringify(a);
+  return {
+    changedParams,
+    ...(whole.length <= ECHO_PARAMS_MAX ? { params: a } : { paramKeys: Object.keys(a), paramsNote: "参数太长没有全部回显,用 get_clip 读" }),
+  };
+}

@@ -7,7 +7,7 @@ import { timingLock } from "../../kernel/transitions";
 import { describeEmphasis } from "../../kernel/emphasis";
 import { CAPTION_CARD_ID } from "../../kernel/captions";
 import { findClip } from "../../kernel/project";
-import { timelineDigest, lookHint } from "../tools/toolEcho";
+import { timelineDigest, lookHint, paramsEcho } from "../tools/toolEcho";
 
 import { stageSize, clipGuard } from "../common";
 import { segmentInfo } from "./cutSegments";
@@ -66,6 +66,8 @@ export const clipsHandlers = {
         }
       }
     }
+    // params 是增量补丁(setClipParams 默认合并):回显里列出真正变了的键,带回旧值时模型自己看得见
+    const paramsBefore = args.params ? (findClip(getState().project, args.clipId)?.clip.params as Record<string, unknown> | undefined) : undefined;
     if (args.params) actions.setClipParams(args.clipId, args.params);
     // 不透明度 / 淡入淡出 / 标签:store 早就支持,以前只是没暴露给模型 —— 系统提示词让它
     // 「遮到人就降不透明度」,它却没有工具能做。
@@ -90,6 +92,7 @@ export const clipsHandlers = {
     clipGuard.noteMutation();
     return {
       ok: true, clipId: args.clipId, look: lookHint(args.clipId), timeline: timelineDigest(getState().project),
+      ...(args.params ? paramsEcho(paramsBefore, findClip(getState().project, args.clipId)?.clip.params) : null),
       ...(lock ? { movedGroup: lock.members, note: "这段挂着转场,整组一起挪了" } : {}),
     };
   },
