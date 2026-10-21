@@ -289,4 +289,6 @@ export interface CliSetupJob {
   logs: string[];
   url?: string;
   deviceCode?: string;
+  /** 这条登录任务的标准输入接着，能接用户粘贴的授权码（只有 Claude Code 的登录有；任务一结束就变 false） */
+  acceptsCode?: boolean;
 }

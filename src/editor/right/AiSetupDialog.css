@@ -293,6 +293,19 @@
 .ais-setup-progress { margin-top: 8px; display: grid; gap: 8px; overflow-wrap: anywhere; }
 .ais-setup-progress pre { max-height: 140px; overflow: auto; white-space: pre-wrap; font-size: 11px; }
 .ais-setup-progress a { width: fit-content; text-decoration: none; }
+/* 粘贴授权码：平时收着，不抢「打开登录网页」的位置 */
+.ais-code-paste > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--ink-muted);
+  user-select: none;
+}
+.ais-code-paste > summary:hover { color: var(--ink); }
+.ais-code-paste[open] { display: grid; gap: 8px; }
+.ais-code-row { display: flex; align-items: center; gap: 8px; }
+.ais-code-row input { flex: 1 1 auto; min-width: 0; }
+.ais-code-row button { flex: 0 0 auto; white-space: nowrap; }
+.ais-code-paste .ais-detail { font-size: 12px; line-height: 1.5; }
 
 /* ── API 配置的加密分发 ───────────────────────────────── */
 .ais-share-toggle {
