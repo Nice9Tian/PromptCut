@@ -20,9 +20,10 @@ import { adminOp, currentDocLineage, dismissToast, ensureDevice, enterAccountPro
 import { disableCollab, localCollab, pullOriginals, queueExistingMedia } from "./collab";
 import { hosted } from "./sharedApi";
 import {
-  ACCOUNT_MOVE_TEXT, createAttemptStore, isAccountCloudTarget, moveToAccountCloud, readProjectContent, sameContent, uploadProjectContent,
-  type ContentLinkOptions, type MoveAttempt, type MoveResult, type MoveSource, type MoveStage,
+  ACCOUNT_MOVE_TEXT, abandonMove, createAttemptStore, isAccountCloudTarget, moveToAccountCloud, pendingAttempt, readProjectContent, sameContent, uploadProjectContent,
+  type AbandonResult, type ContentLinkOptions, type MoveAttempt, type MoveResult, type MoveSource, type MoveStage,
 } from "./accountMove";
+import { currentCloudAssociation, setCloudAssociation } from "./recoveryAssociation";
 
 /**
  * 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」)。在线页面没有编辑器进程,
@@ -87,11 +88,44 @@ export function moveSource(): MoveSource | null {
 
 const attempts = createAttemptStore(typeof localStorage === "undefined" ? null : localStorage);
 
-/** 上一次没做完、云端已经建好项目的那次搬迁(设置里据此提示「接着做」);没有回 null */
+/**
+ * 上一次没做完、云端已经建好项目的那次搬迁(设置里据此提示「接着做」、给「放弃这次搬迁」);没有回 null。
+ * 判据见 `accountMove.ts` 的 `pendingAttempt`:当前打开的是能搬的本机项目或本机协作房间,且本机记录里有云端回的项目号
+ */
 export function pendingMove(accountId: string): MoveAttempt | null {
-  const contentId = getState().project.id ?? "";
-  const a = contentId ? attempts.get(accountId, contentId) : null;
-  return a?.projectId ? a : null;
+  return pendingAttempt(attempts, accountId, moveSource());
+}
+
+let abandoning: Promise<AbandonResult> | null = null;
+
+/**
+ * 放弃这次搬迁(〔裁〕H04):删掉上一次搬到云端没做完时建好的那个云端项目,再清掉本机的搬迁记录。流程在 `accountMove.ts` 的 `abandonMove`。
+ * 这个窗口正在搬时不做;同一时间只做一次;不抛错
+ */
+export function abandonPendingMove(c: AccountCloud): Promise<AbandonResult> {
+  if (ONLINE_BUILD || ONLINE) return Promise.resolve({ ok: false, error: "not-ready", name: null });
+  if (moving) return Promise.resolve({ ok: false, error: "busy", name: null });
+  if (abandoning) return abandoning;
+  const { client } = c;
+  const task = abandonMove({
+    source: moveSource,
+    account: () => accountCloudLogin(c),
+    attempts,
+    inspect: async (projectId) => {
+      const m = await client.members(projectId);
+      return { accessRevision: m.accessRevision, creator: m.self.creator,
+        otherMembers: m.members.filter((x) => x.accountId !== m.creatorAccountId).length,
+        // 只算人开着的页面:托管方的渲染节点、云端 Agent 的连接不算(它们跟着项目走,不代表有人在用)
+        liveDevices: m.devices.filter((d) => d.conns.some((x) => x.role === "page")).length };
+    },
+    remove: (projectId, rev, requestId) => client.deleteProject(projectId, rev, requestId),
+    // 搬迁失败时编辑器没有进过那个云端项目,本页的云端关联本来就不指向它;万一指向(进项目的半路出的错),一并清掉,另存文件时不再写进去
+    forget: (projectId) => { if (currentCloudAssociation()?.projectId === projectId) setCloudAssociation(null); },
+    newRequestId: () => `abandon-${crypto.randomUUID()}`,
+    owner: pageSession(),
+  }).finally(() => { if (abandoning === task) abandoning = null; });
+  abandoning = task;
+  return task;
 }
 
 /* ---------------- 素材 ---------------- */
@@ -211,6 +245,8 @@ export function moveCurrentToAccountCloud(c: AccountCloud, request: MoveRequest)
   // 在线页面没有本机项目可搬:在线构建里下面整段(连同存草稿、问本机素材库的那些调用)剪掉
   if (ONLINE_BUILD) return Promise.resolve({ ok: false, error: "not-ready", stage: "check", localClosed: false, cloud: null, kind: "local" });
   if (moving) return moving;
+  // 正在放弃这次搬迁(删云端那个项目)时不搬:等它做完
+  if (abandoning) return Promise.resolve({ ok: false, error: "busy", stage: "check", localClosed: false, cloud: null, kind: moveSource()?.kind ?? "local" });
   const task = run(c, request).finally(() => { if (moving === task) moving = null; });
   moving = task;
   return task;

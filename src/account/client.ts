@@ -194,6 +194,17 @@ export function createAccountClient(options: AccountClientOptions) {
       }, current.accessToken);
       return out as any;
     },
+    /**
+     * 创建者删除云端项目(`op: "delete"`,与网站和项目设置的「删除项目」同一个接口)。同一个请求号重放回原结果;
+     * 项目已经删了再用新请求号删,云端回 404 `no-project`。现在只有「放弃这次搬迁」用(`accountMoveFlow.ts`,〔裁〕H04)
+     */
+    async deleteProject(projectId: string, expectedAccessRevision: number, requestId: string): Promise<{ eventId: string; accessRevision: number }> {
+      const current = await ensureLogin(), identity = authIdentity(), revision = authVersion;
+      const out = await request('/hosted/shared/account/admin', { projectId, op: 'delete', expectedAccessRevision, requestId }, current.accessToken);
+      if (identity !== authIdentity() || revision !== authVersion) throw new AccountFailure(401, 'credential-revoked');
+      if (typeof out.eventId !== 'string' || !out.eventId || !Number.isSafeInteger(out.accessRevision)) throw new AccountFailure(503, 'account-protocol');
+      return { eventId: out.eventId, accessRevision: out.accessRevision };
+    },
     async setSecondaryPassword(projectId: string, password: string | null, expectedAccessRevision: number, requestId: string): Promise<{ eventId: string; accessRevision: number; hasSecondaryPassword: boolean }> {
       const current = await ensureLogin();
       const out = await request('/hosted/shared/account/admin', {

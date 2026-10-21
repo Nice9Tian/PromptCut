@@ -577,6 +577,131 @@ export async function moveToAccountCloud(deps: MoveDeps, input: MoveInput): Prom
   }
 }
 
+/* ---------------- 放弃这次搬迁(〔裁〕H04,用户 2026-10-22 定) ---------------- */
+
+/**
+ * 「半成品」的判据:这台设备的页面存储里,有一条「当前登录账号 + 当前打开的本机项目号」的搬迁记录(`MoveAttempt`),
+ * 而且记录里**已经有云端回的项目号**(云端确实建成了)。这条记录只由搬迁流程写(先记请求号再发新建,回了项目号再补上),
+ * 搬成了在进项目之后就删掉,所以「记录还在、带着项目号」= 上一次搬到云端建好了云端项目、但没做完。
+ * 正在打开的是云端项目(不能搬的东西)时 `source` 是 null,不算;请求结果不确定(记录里没有项目号)的不算 —— 云端建没建成不知道。
+ */
+export function pendingAttempt(attempts: AttemptStore, accountId: string, source: MoveSource | null): (MoveAttempt & { projectId: string }) | null {
+  if (!source?.contentId) return null;
+  const a = attempts.get(accountId, source.contentId);
+  return a?.projectId ? a as MoveAttempt & { projectId: string } : null;
+}
+
+export type AbandonErrorCode =
+  /** 现在打开的不是本机项目或本机协作房间 */
+  | "not-ready"
+  | "login-required"
+  /** 没有半成品可放弃(记录没了、或云端建没建成不确定) */
+  | "no-pending"
+  /** 这个窗口或另一个窗口正在搬这个项目 */
+  | "busy"
+  /** 云端说当前账号不是那个项目的创建者 */
+  | "not-creator"
+  /** 云端那个项目已经有别的成员、或有设备正连着:不当半成品删 */
+  | "in-use"
+  /** 连不上云端;删的请求发出去了而回包丢了、再查也查不到的,也是这一种(再点一次照样安全) */
+  | "network"
+  /** 云端回了别的错误 */
+  | "delete-failed";
+
+export type AbandonResult =
+  | { ok: true; projectId: string; name: string; /** 点之前云端那个项目已经不在了(只清了本机的记录) */ already: boolean }
+  | { ok: false; error: AbandonErrorCode; name: string | null; detail?: string };
+
+/** 云端那个项目此刻的样子(账号接口 `/hosted/shared/account/members` 读到的) */
+export interface CloudProjectState {
+  accessRevision: number;
+  /** 当前账号是不是它的创建者 */
+  creator: boolean;
+  /** 除创建者之外的成员个数 */
+  otherMembers: number;
+  /** 此刻连着这个项目的设备个数(含创建者自己的别的设备) */
+  liveDevices: number;
+}
+
+export interface AbandonDeps {
+  source(): MoveSource | null;
+  /** 当前登录的账号;没登录回 null;连不上抛错 */
+  account(): Promise<{ id: string; name: string } | null>;
+  attempts: AttemptStore;
+  /** 读云端项目此刻的样子;项目不在了抛 404(`no-project` / `project-gone`) */
+  inspect(projectId: string): Promise<CloudProjectState>;
+  /** 删云端项目(`/hosted/shared/account/admin` 的 `op: "delete"`,「删除项目」走的同一个接口) */
+  remove(projectId: string, expectedAccessRevision: number, requestId: string): Promise<unknown>;
+  /** 本页内存里记着、指向这个云端项目的关联清掉(另存文件时会写进文件的那一份,`recoveryAssociation.ts`) */
+  forget?(projectId: string): void;
+  newRequestId(): string;
+  owner?: string;
+  now?(): number;
+}
+
+/** 云端确认这个项目不在了(删了、或从来没有):只认账号接口的这两种 404,`no-route`(不是账号模式的节点)不算 */
+const projectGone = (error: unknown): boolean => statusOf(error) === 404 && ["no-project", "project-gone"].includes(codeOf(error));
+
+/** 删的那一下成员状态刚变过(`access-revision-mismatch`):重新查一遍再决定,最多几轮 */
+export const ABANDON_ROUNDS = 3;
+
+/**
+ * 放弃这次搬迁:删掉上一次搬到云端没做完时建好的那个云端项目,再清掉本机记的搬迁记录。不抛错。
+ *
+ * - 只认 `pendingAttempt` 的判据;删之前再问一次云端:必须是当前账号建的、没有别的成员、没有设备正连着,否则不删(`in-use`)。
+ * - **幂等**:云端已经没有这个项目(以前删过、这次删的回包丢了)算成功,只清本机记录;重复点、断网后重试都不会报错。
+ * - **先云端、后本机**:云端确认不在了才删本机记录;云端没删成时本机记录、本机项目都原样不动(下次「再点一次」照旧能接着搬)。
+ * - 本机项目文件不动:搬迁失败时项目文件里本来就不记这个云端项目(进云端项目成功才记云端关联,`enterAccountProject`)。
+ * - 和搬迁共用「正在搬这个项目」的占位:另一个窗口正在搬时不删。
+ */
+export async function abandonMove(deps: AbandonDeps): Promise<AbandonResult> {
+  const now = deps.now ?? Date.now;
+  const source = deps.source();
+  if (!source?.contentId) return { ok: false, error: "not-ready", name: null };
+  let account: { id: string; name: string } | null;
+  try { account = await deps.account(); }
+  catch (error) { return { ok: false, error: statusOf(error) === 401 ? "login-required" : "network", name: null, detail: detailOf(error) }; }
+  if (!account) return { ok: false, error: "login-required", name: null };
+  const attempt = pendingAttempt(deps.attempts, account.id, source);
+  if (!attempt) return { ok: false, error: "no-pending", name: null };
+  const { projectId, name } = attempt;
+  const fail = (error: AbandonErrorCode, e?: unknown): AbandonResult => ({ ok: false, error, name, ...(e !== undefined ? { detail: detailOf(e) } : {}) });
+  const failOf = (e: unknown): AbandonResult => {
+    const s = statusOf(e);
+    if (s === 401) return fail("login-required", e);
+    if (s === 403) return fail("not-creator", e);
+    return fail(s === 0 || codeOf(e) === "network" || codeOf(e) === "timeout" ? "network" : "delete-failed", e);
+  };
+  const finish = (already: boolean): AbandonResult => {
+    // 云端已经确认不在了:本机的记录删掉(按请求号,只删这一条),本页内存里指向它的关联也清掉
+    deps.attempts.drop(account!.id, source.contentId, attempt.requestId);
+    deps.forget?.(projectId);
+    return { ok: true, projectId, name, already };
+  };
+  const owner = deps.owner ?? `w-${Math.random().toString(36).slice(2)}-${now()}`;
+  if (!deps.attempts.lock(account.id, source.contentId, owner, now())) return fail("busy");
+  try {
+    for (let round = 1; ; round++) {
+      let state: CloudProjectState;
+      try { state = await deps.inspect(projectId); }
+      catch (error) { return projectGone(error) ? finish(true) : failOf(error); }
+      if (!state.creator) return fail("not-creator");
+      if (state.otherMembers > 0 || state.liveDevices > 0) return fail("in-use");
+      try { await deps.remove(projectId, state.accessRevision, deps.newRequestId()); return finish(false); }
+      catch (error) {
+        if (projectGone(error)) return finish(true);
+        // 查完到删之间成员状态变了(有人加入、改了设置):重新查一遍,有人加入的就不删了
+        if (codeOf(error) === "access-revision-mismatch" && round < ABANDON_ROUNDS) continue;
+        if (statusOf(error) === 401 || statusOf(error) === 403) return failOf(error);
+        // 回包丢了、云端 5xx:删没删成不确定,再问一次;问到不在了就是删成了
+        try { await deps.inspect(projectId); }
+        catch (again) { if (projectGone(again)) return finish(false); }
+        return failOf(error);
+      }
+    }
+  } finally { deps.attempts.unlock(account.id, source.contentId, owner); }
+}
+
 /* ---------------- 内容的上传与读回(真的文档连接) ---------------- */
 
 export interface ContentLinkOptions {
@@ -712,7 +837,33 @@ export const ACCOUNT_MOVE_TEXT = {
   /** 旧文件带着搬到云端时关掉的那个房间的关联:重开时当普通本地项目开,提示一次 */
   reopenedLocal: "这个文件原来的本机协作已在搬到云端时关闭，现在按普通的本地项目打开。",
   versionExpired: "当前软件版本已过期，无法搬到云端",
+  /* 放弃这次搬迁(〔裁〕H04) */
+  /** 有没搬完的云端项目、但设置里没在「云端」表单上时的那一行(表单上是 `pending`) */
+  pendingIdle: (name: string, room: boolean) => `上次搬到云端没有做完，云端项目「${name}」已经建好。${room ? "点「搬到云端」接着做" : "勾「多用户协作」、选云端、点「确定」接着做"}；不搬了可以放弃这次搬迁。`,
+  abandonButton: "放弃这次搬迁",
+  abandonConfirm: (name: string) => `放弃这次搬迁会永久删除云端项目「${name}」（上次搬到云端没做完时建好的那一个），云端上的内容删了不能恢复。本机这一份项目不受影响，照常能改能存；以后还可以重新搬到云端。`,
+  abandonConfirmButton: "删除云端项目",
+  abandonCancel: "不放弃",
+  abandoning: (name: string) => `正在删除云端项目「${name}」…`,
+  abandoned: (name: string) => `已放弃这次搬迁：云端项目「${name}」已删除。本机项目没有改动。`,
+  abandonedAlready: (name: string) => `已放弃这次搬迁：云端项目「${name}」已经不在了，本机记的搬迁记录已清掉。本机项目没有改动。`,
 } as const;
+
+/** 放弃这次搬迁没成时的那句话:说清云端项目、本机项目现在是什么样 */
+export function abandonFailureText(r: Extract<AbandonResult, { ok: false }>): string {
+  const what = r.name ? `云端项目「${r.name}」` : "云端项目";
+  const kept = `${what}和本机项目都没有改动。`;
+  switch (r.error) {
+    case "not-ready": return "现在打开的不是本机项目，没有可放弃的搬迁。";
+    case "login-required": return "删除云端项目需要先登录网站账号（当初搬的那个账号）。";
+    case "no-pending": return "没有没搬完的云端项目可放弃。";
+    case "busy": return "另一个窗口正在搬这个项目，等它做完再试。";
+    case "not-creator": return `当前登录的账号不是${what}的创建者，不能删除。${kept}`;
+    case "in-use": return `${what}已经有其他成员加入，或有设备正打开着它，不当作没搬完的项目删除。${kept}`;
+    case "network": return `连不上云端，没能确认${what}已删除。本机项目没有改动；稍后再点一次，已经删掉的也不会出错。`;
+    case "delete-failed": return `云端暂时不可用，没能删除${what}（${r.detail || "未知原因"}）。本机项目没有改动；稍后再点一次。`;
+  }
+}
 
 const unchanged = (kind: "local" | "room") => (kind === "room" ? "本机协作没有改动，原房间照常可用。" : "本机项目没有改动。");
 const resume = "再点一次会接着用云端已经建好的那个项目，不会多建一个。";
