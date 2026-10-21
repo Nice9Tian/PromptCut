@@ -14,12 +14,13 @@
  *     重复点同一项不重复放;点 ✕ 去掉;发送时消息带着引用(气泡上画成标记、正文里是「@卡片 名字(片段 id)」),发送后标记条清空;
  *   T 标签:「+」在有会话时新开 Agent 2(取最小空号),每个会话都能关(有对话先问一声);
  *   D 和演示稿对得上(同 375×812):对话标签行高 30、创造力一行、输入框 40 高、发送钮 40×40、快捷提问 28 高、整块输入区高度与位置、引用标记条的尺寸;
- *   V 对话页的画法(往对话 store 里放几条消息看画面):我的气泡靠右、Agent 气泡靠左、操作卡片(Agent 操作 + 轮次 + 条目状态)、小结行;
+ *   (对话页的画法 —— 气泡、操作卡片、小结行、开始页动画、标签行、停止钮 —— 在 `mobile-agent-view-probe.mjs` 里用假消息测。)
  *   W 375 宽无横向溢出,页面无未捕获错误。
  * 截图:`agent-*.png` 与演示稿同尺寸并排的 `side-*.png`。结果最后一行是一行 JSON(`ok`、`fails`、各项数字)。
  *
  * 说明:本机托管组合没有云端 Agent 服务、也没有网站账号,所以发消息走到「请先登录当前项目的账号」就停(气泡标「没有发出去」);
- * 这正好够验「点发送建会话、消息带引用」。对话页的画面用往对话 store 里放消息的办法看(通过 React 内部节点找到那个 store,只在探针里)。
+ * 这正好够验「点发送建会话、消息带引用」(读页面上的只读口子 `window.__pcMobileAgent[会话].lastSend()`,同 `__pcCloud` 一类)。
+ * 为了让页面走到发送那一段,探针在页面收到成员列表时把 `hosted.agent` 改成「可用、开着」(模拟托管端有云端 Agent;本机组合没有)。
  */
 import puppeteer from 'puppeteer';
 import fs from 'node:fs';
@@ -46,7 +47,7 @@ fs.mkdirSync(OUT, { recursive: true });
 
 const PRESET = '做一个动画告诉我使用软件可以干什么';
 const fails = [];
-const out = { ok: false, out: OUT, S: {}, C: {}, Q: {}, T: {}, D: {}, V: {}, W: {} };
+const out = { ok: false, out: OUT, S: {}, C: {}, Q: {}, T: {}, D: {}, W: {} };
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ' :: ' + JSON.stringify(extra).slice(0, 500))); return !!cond; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(what, fn, ms = 20_000, every = 200) {
@@ -78,21 +79,6 @@ function sideBySide(left, right, file) {
   fs.writeFileSync(file, PNG.sync.write(o));
 }
 
-/** 往当前会话的对话 store 里放消息:从那一页的 React 节点往上找到 AgentChat,再在它的 hook 里找出对话 store(只给探针用) */
-const injectMessages = (page, messages) => page.evaluate((msgs) => {
-  const el = document.querySelector('[data-pcm="agent-chat"][data-shown="1"]');
-  if (!el) return 'no-chat';
-  const key = Object.keys(el).find((k) => k.startsWith('__reactFiber$'));
-  let f = el[key];
-  while (f && !(f.memoizedProps && f.memoizedProps.counts && f.memoizedProps.tabId)) f = f.return;
-  if (!f) return 'no-fiber';
-  for (let h = f.memoizedState; h; h = h.next) {
-    const v = h.memoizedState;
-    if (Array.isArray(v) && v[0] && typeof v[0].set === 'function' && typeof v[0].subscribe === 'function' && typeof v[0].get === 'function') { v[0].set(msgs); return 'ok'; }
-  }
-  return 'no-store';
-}, messages);
-
 const env = await startMobileEnv({ dist: DIST, basePort: BASE, docPort: DOC, assetPort: ASSET, name: `mobile-agent-${Date.now().toString(36)}` });
 const seeded = await env.seed(emptyProject('夏日海边 Vlog'));
 check(!/error|reject/i.test(`${seeded.opened}${seeded.seeded}`), '替创建者写进初始项目', seeded);
@@ -102,6 +88,9 @@ try {
   A = await env.newPage(browser, 'phone');
   // 本机托管组合没有云端 Agent 服务(成员列表里 hosted.agent.available 是假):在页面收到成员列表时把它改成「可用、开着」,让发送走得到页面自己的那一段
   await A.evaluateOnNewDocument(`(() => {
+    // 模拟「创建者开了云端 Agent」会让同步层弹一条桌面样式的气泡(盖在标签行上、拦触摸),与本探针要测的东西无关,藏掉
+    const hideToasts = () => { const st = document.createElement('style'); st.textContent = '.pc-toasts{display:none!important}'; (document.head || document.documentElement).appendChild(st); };
+    if (document.documentElement) hideToasts(); else document.addEventListener('DOMContentLoaded', hideToasts);
     const fix = (data) => { if (typeof data !== 'string' || !data.includes('shared.members.list')) return data; try { const m = JSON.parse(data); if (m && m.type === 'shared.members.list') { m.hosted = { ...(m.hosted || {}), agent: { available: true, enabled: true, url: location.origin + '/agent/v1' } }; return JSON.stringify(m); } } catch (e) {} return data; };
     const wrap = (ev) => new Proxy(ev, { get: (t, k) => (k === 'data' ? fix(t.data) : typeof t[k] === 'function' ? t[k].bind(t) : t[k]) });
     const add = WebSocket.prototype.addEventListener;
@@ -229,110 +218,79 @@ try {
     out.Q.sent = sent?.last;
     await shot(A, 'agent-sent');
   }
-  // 本机环境没有云端 Agent 服务与账号,消息发不出去、没有会话 store 的气泡:放一条带引用的用户消息进去,看气泡与关会话要问一声
-  {
-    const r = await injectMessages(A, [{ id: 'u0', role: 'user', text: out.Q.sent.text }]);
-    await sleep(300);
-    const refs = await A.evaluate(() => [...document.querySelectorAll('[data-pcm="msg-me"] .ref')].map((e) => e.textContent.trim()));
-    out.Q.bubbleRefs = refs;
-    check(r === 'ok' && refs.length === 1 && refs[0] === `@ ${out.Q.label}`, 'Q 消息气泡上把开头的引用画成标记', { r, refs });
-  }
-
-  /* ================================================================ C 清空:关掉 Agent 1 → 开始页不放引导动画 */
+  /* ================================================================ C 清空:关掉 Agent 1 → 开始页不放引导动画
+     (本机环境发不出消息,会话里没有消息;关「有对话的会话」先问一声,经 AgentPage 里那份各会话消息条数的记录来触发) */
+  await A.evaluate(() => {
+    const el = document.querySelector('[data-pcm="agent-page"]');
+    let f = el[Object.keys(el).find((k) => k.startsWith('__reactFiber$'))];
+    while (f && !(f.memoizedProps && typeof f.memoizedProps.active === 'boolean' && typeof f.type === 'function')) f = f.return;
+    for (let h = f?.memoizedState; h; h = h.next) { const v = h.memoizedState; if (v && v.current instanceof Map && v.current.size > 0 && [...v.current.keys()].every((k) => typeof k === 'string' && k.endsWith('_start'))) { for (const k of [...v.current.keys()]) v.current.set(k, 2); window.__counts = v.current; return; } }
+  });
+  out.C.countsHooked = await A.evaluate(() => !!window.__counts);
+  check(out.C.countsHooked, 'T (探针)找得到各会话消息条数的记录', null);
   await tap(A, '[data-pcm="atab-close"]');
   await sleep(300);
   {
     const confirm = await A.$('[data-pcm="confirm"]');
-    check(!!confirm, 'T 关有对话的会话先问一声', null);
-    if (confirm) await tap(A, '[data-pcm="confirm-ok"]');
+    check(!!confirm, 'T 关有对话的会话先问一声(取消不关)', null);
+    if (confirm) {
+      const cancel = await A.evaluate(() => { const b = [...document.querySelectorAll('[data-pcm="confirm"] .btn')].find((x) => x.textContent === '取消'); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+      await A.touchscreen.tap(cancel.x, cancel.y);
+      await sleep(300);
+      check((await labels()).some((x) => x.t === 'Agent 1'), 'T 取消之后会话还在', await labels());
+      await tap(A, '[data-pcm="atab-close"]');
+      await sleep(300);
+      await tap(A, '[data-pcm="confirm-ok"]');
+    }
     await until('回到开始页', () => A.$('[data-pcm="agent-start"]'), 8000);
     await sleep(500);
     const l = await labels(), c = await shownChat(), t2 = await tabsOf();
-    out.C = { labels: l, chat: c, stored: t2 };
+    out.C = { ...out.C, labels: l, chat: c, stored: t2 };
     check(l.length === 1 && l[0].draft && l[0].t === '开始' && !l[0].x, 'C 最后一个会话也能关,关光后回到只有「开始」一项', l);
     check(c?.start && c.animated === '0' && !c.orb && !c.cue && c.preset === PRESET, 'C 手动清空后开始页不放引导动画,只有预设和输入框', c);
     check(c?.guide === null, 'C 清空后输入框不带引导', c);
     check(t2?.cleared === true && t2.tabs.length === 0, 'C 记下「手动清空过」(按项目)', t2);
     await noOverflow('agent-cleared');
     await shot(A, 'agent-cleared');
+    // 清空后点预设仍会催发送(预设那一下的提示两种开始页都有),但不带引导动画
+    await tap(A, '[data-pcm="agent-start-preset"]');
+    const c2 = await shownChat();
+    check(c2?.input === PRESET && c2.guide === 'send' && !c2.orb, 'C 清空后点预设:句子进输入框、发送钮催发送,仍没有光点', c2);
   }
 
-  /* ================================================================ T 标签:有会话时「+」新开 Agent 2(最小空号);可关 */
-  await A.evaluate(() => { const ta = document.querySelector('[data-pcm="chat-input"]'); ta.focus(); });
-  await A.keyboard.type('你好');
+  /* ================================================================ T 标签:有会话时「+」新开 Agent 2(最小空号);可关;切换 */
   await tap(A, '[data-pcm="chat-send"]');
   await until('建出 Agent 1', async () => (await labels()).some((x) => x.t === 'Agent 1'), 15_000);
+  const firstId = (await tabsOf())?.tabs[0]?.id;
   await tap(A, '[data-pcm="atab-new"]');
   await until('新开 Agent 2', async () => (await labels()).some((x) => x.t === 'Agent 2'), 8000);
   {
     const l = await labels();
     out.T.two = l;
     check(l.length === 2 && l[0].t === 'Agent 1' && l[1].t === 'Agent 2' && l[1].on && l.every((x) => x.x), 'T 有会话时「+」新开 Agent 2 并切过去,每个标签都有 ✕', l);
-    // 空的新会话:可以直接关(不用问)
     const c = await shownChat();
-    check(c && !c.start, 'T 新开的会话不是开始页(只有没有会话时才是)', c);
+    check(c && !c.start && c.id !== firstId, 'T 新开的会话不是开始页(只有没有会话时才是),显示的是新会话', c);
+    // 切回 Agent 1:显示的页跟着换,另一页还挂着(后台的对话照跑)
+    await tap(A, '[data-pcm="atab"]:nth-of-type(1)');
+    const c1 = await shownChat();
+    const mounted = await A.evaluate(() => document.querySelectorAll('[data-pcm="agent-chat"]').length);
+    check(c1?.id === firstId && mounted === 2, 'T 点标签切换会话;没显示的会话仍挂着(不卸载)', { c1, mounted });
+    await tap(A, '[data-pcm="atab"]:nth-of-type(2)');
+    // 空的新会话:直接关(不用问)
     await tap(A, '[data-pcm="atab"]:nth-of-type(2) [data-pcm="atab-close"]');
     await sleep(400);
     const l2 = await labels();
-    check(!(await A.$('[data-pcm="confirm"]')) && l2.length === 1 && l2[0].t === 'Agent 1', 'T 空会话直接关掉、不用问', l2);
+    check(!(await A.$('[data-pcm="confirm"]')) && l2.length === 1 && l2[0].t === 'Agent 1' && l2[0].on, 'T 空会话直接关掉、不用问;关的是当前页就切到相邻的', l2);
     await tap(A, '[data-pcm="atab-new"]');
     await until('再开一个', async () => (await labels()).length === 2);
     const l3 = await labels();
     check(l3[1].t === 'Agent 2', 'T 新建取当前最小的空号', l3);
+    // 刷新页面:这个项目的两个标签还在(按项目存在本机)
+    const stored = await tabsOf();
+    check(stored?.tabs.length === 2 && stored.tabs.every((t) => t.id.startsWith(projectId + '_')), 'T 标签清单按项目存,每个标记是「项目ID_AgentID」', stored);
     await tap(A, '[data-pcm="atab"]:nth-of-type(2) [data-pcm="atab-close"]');
     await sleep(300);
   }
-
-  /* ================================================================ V 对话页的画法 */
-  {
-    const now = Date.now();
-    const msgs = [
-      { id: 'u1', role: 'user', text: '给开头加个标题,要有夏天的感觉,然后配点轻松的音乐' },
-      { id: 'a1', role: 'assistant', text: '', startedAt: now, finishedAt: now, outcome: 'completed', parts: [
-        { kind: 'tool', name: 'mcp__promptcut__send_message', input: { to: 'user', text: '好的,我先看了一下前 6 秒的画面,打算用大号手写感标题 + 暖色调。马上做。' }, ok: true },
-        { kind: 'tool', name: 'mcp__promptcut__list_media', input: {}, ok: true },
-        { kind: 'tool', name: 'mcp__promptcut__add_clip', input: {}, ok: true },
-        { kind: 'tool', name: 'mcp__promptcut__set_clip_param', input: {}, ok: false },
-        { kind: 'tool', name: 'mcp__promptcut__see_frames', input: {}, ok: true },
-        { kind: 'tool', name: 'mcp__promptcut__report_progress', input: { final: true, done: ['新建文字卡「夏日海边」'], todo: ['检查音乐与字幕是否冲突'], problems: [] }, ok: true },
-        { kind: 'tool', name: 'mcp__promptcut__send_message', input: { to: 'user', text: '标题和音乐都放好了。你可以直接在预览里拖动标题,或者告诉我想怎么改。' }, ok: true },
-      ] },
-      { id: 'u2', role: 'user', text: '@卡片 沙滩奔跑.mp4(c-9) 把这段剪短一点' },
-      { id: 'a2', role: 'assistant', text: '', startedAt: now, pending: true, progress: { phase: 'run', text: '正在读取当前时间轴与你引用的片段' }, parts: [
-        { kind: 'tool', name: 'mcp__promptcut__get_project', input: {}, ok: true },
-        { kind: 'tool', name: 'mcp__promptcut__split_clip', input: {} },
-      ] },
-    ];
-    const r = await injectMessages(A, msgs);
-    out.V.inject = r;
-    check(r === 'ok', 'V 能往对话 store 里放消息', r);
-    await sleep(600);
-    const v = await A.evaluate(() => {
-      const q = (s) => document.querySelector(s);
-      const me = [...document.querySelectorAll('[data-pcm="msg-me"]')], ag = [...document.querySelectorAll('[data-pcm="msg-ag"]')], cards = [...document.querySelectorAll('[data-pcm="ops-card"]')];
-      const box = q('[data-pcm="chat-msgs"]').getBoundingClientRect();
-      const rr = (e) => { const r = e.getBoundingClientRect(); return { x: r.x, r: r.right, w: r.width }; };
-      return {
-        me: me.map(rr), ag: ag.map(rr), box: { x: box.x, r: box.right },
-        cards: cards.map((c) => ({ open: c.open, title: c.querySelector('summary')?.textContent?.trim(), items: [...c.querySelectorAll('.it')].map((i) => ({ cls: i.className, text: i.textContent.trim() })), w: c.getBoundingClientRect().width })),
-        refInBubble: [...document.querySelectorAll('[data-pcm="msg-me"] .ref')].map((e) => e.textContent.trim()),
-        typing: !!q('[data-pcm="msg-typing"]'), typingText: q('[data-pcm="msg-typing"] .act')?.textContent ?? null,
-      };
-    });
-    out.V.view = v;
-    check(v.me.length === 2 && v.me.every((m) => near(m.r, v.box.r - 14, 2)), 'V 我的气泡靠右(右边距 14)', v.me);
-    check(v.ag.length >= 2 && v.ag.every((m) => near(m.x, v.box.x + 14, 2)), 'V Agent 的气泡靠左(左边距 14)', v.ag);
-    check(v.cards.length === 2 && v.cards[0].title.startsWith('Agent 操作') && v.cards[0].title.includes('第 1 轮 · 4 项操作'), 'V 操作卡片:Agent 操作 + 轮次 + 项数', v.cards[0]);
-    check(v.cards[0].items.slice(0, 4).map((i) => i.cls.replace('it ', '')).join() === 'done,done,err,done', 'V 卡片条目的状态:完成 / 失败', v.cards[0].items);
-    check(v.cards[0].items.some((i) => i.text.includes('新建文字卡')) && v.cards[0].items.some((i) => i.cls.includes('ask') === false && i.cls.includes('todo') && i.text.includes('检查音乐')), 'V 小结的已完成 / 待办变成卡片里的行', v.cards[0].items);
-    check(v.cards[1].items.map((i) => i.cls.replace('it ', '')).join() === 'done,run', 'V 还在跑的一轮:最后一项是「在做」', v.cards[1].items);
-    check(v.refInBubble.length === 1 && v.refInBubble[0] === '@ 沙滩奔跑.mp4', 'V 消息开头的引用画成标记', v.refInBubble);
-    check(v.typing && v.typingText?.includes('正在读取'), 'V 还在跑时末尾有「正在做什么」', v);
-    await shot(A, 'agent-chat');
-    await noOverflow('agent-chat');
-  }
-  out.W.pageErrors = A.errors;
-  check(A.errors.length === 0, 'W 页面没有未捕获的错误', A.errors);
 
   /* ================================================================ D 和演示稿对得上 + 并排截图 */
   {
@@ -362,15 +320,15 @@ try {
     const dm = demoMetrics;
     const same = (a, b, keys, tol = 1) => keys.every((k) => near(a[k], b[k], tol));
     check(same(m.atab, dm.atab, ['h']), 'D 对话标签高 30', { mine: m.atab, demo: dm.atab });
-    check(same(m.top, dm.top, ['x', 'y', 'w']), 'D 标签行的位置(顶栏之下、左右各 10)', { mine: m.top, demo: dm.top });
+    check(same(m.top, dm.top, ['x', 'w']) && near(m.info.y - m.top.y, dm.info.y - dm.top.y), 'D 标签行左右各 10、与创造力一行的间距同演示稿(演示稿多一条状态栏,只比相对位置)', { mine: m.top, demo: dm.top });
     check(same(m.plus, dm.plus, ['w', 'h']), 'D 「+」按钮 34×34', { mine: m.plus, demo: dm.plus });
-    check(same(m.info, dm.info, ['y', 'h']), 'D 创造力一行的位置与高度', { mine: m.info, demo: dm.info });
+    check(near(m.info.h, dm.info.h) && near(m.msgs.y - m.info.y, dm.msgs.y - dm.info.y), 'D 创造力一行的高度、与消息区的间距', { mine: m.info, demo: dm.info });
     check(same(m.level, dm.level, ['w', 'h']) && same(m.levelBtn, dm.levelBtn, ['h']), 'D 创造力分段控件尺寸', { mine: m.level, demo: dm.level });
     check(same(m.composer, dm.composer, ['y', 'h', 'b']), 'D 输入区整块的位置与高度', { mine: m.composer, demo: dm.composer });
     check(same(m.input, dm.input, ['x', 'h', 'w']), 'D 输入框 40 高、宽度对齐', { mine: m.input, demo: dm.input });
     check(same(m.send, dm.send, ['w', 'h', 'x']), 'D 发送钮 40×40、位置对齐', { mine: m.send, demo: dm.send });
     check(same(m.quick, dm.quick, ['h', 'y']) && same(m.quicks, dm.quicks, ['y', 'h']), 'D 快捷提问 28 高、位置对齐', { mine: m.quick, demo: dm.quick });
-    check(same(m.msgs, dm.msgs, ['y', 'h', 'b']), 'D 消息区的位置与高度', { mine: m.msgs, demo: dm.msgs });
+    check(near(m.msgs.b, dm.msgs.b) && near(m.msgs.b, m.composer.y), 'D 消息区底边贴着输入区(同演示稿)', { mine: m.msgs, demo: dm.msgs });
     check(same(m.pager, dm.pager, ['y', 'h']), 'D 底部导航栏同位', { mine: m.pager, demo: dm.pager });
     await shot(A, 'agent-chat-metrics');
 
@@ -390,7 +348,7 @@ try {
     const mr = await A.evaluate(() => { const r = (s) => { const e = document.querySelector(s); if (!e) return null; const b = e.getBoundingClientRect(); return { x: b.x, y: b.y, w: b.width, h: b.height, b: b.bottom }; }; return { bar: r('[data-pcm="refbar"]'), chip: r('[data-pcm="ref-chip"]'), x: r('[data-pcm="ref-remove"]'), input: r('[data-pcm="chat-input"]'), composer: r('[data-pcm="agent-composer"]') }; });
     out.D.mineRef = mr;
     check(near(mr.chip.h, demoRef.chip.h) && near(mr.x.w, demoRef.x.w) && near(mr.x.h, demoRef.x.h) && near(mr.chip.x, demoRef.chip.x), 'D 引用标记尺寸(高、✕ 18×18、左边距)与演示稿一致', { mine: mr.chip, demo: demoRef.chip });
-    check(near(mr.composer.h, demoRef.composer.h) && near(mr.input.y, demoRef.input.y) && near(mr.bar.y, demoRef.bar.y), 'D 带引用标记条时输入区高度、输入框与标记条的位置与演示稿一致', { mine: mr, demo: demoRef });
+    check(near(mr.composer.h, demoRef.composer.h) && near(mr.input.y, demoRef.input.y) && near(mr.bar.y, demoRef.bar.y) && near(mr.bar.h, demoRef.bar.h), 'D 带引用标记条时输入区高度、输入框与标记条的位置与演示稿一致', { mine: mr, demo: demoRef });
     await shot(A, 'agent-quote');
     await noOverflow('agent-quote');
 
