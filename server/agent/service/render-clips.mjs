@@ -55,11 +55,18 @@ export function renderClipsOf(project, clipIds, { kernel = null, before = null, 
  *
  * 语义 `product/agent.md`「发出任务后可以离开」:托管方的渲染节点生成的是**被改动的重卡**给成员预览用的轨道流。渲染节点把清单里的
  * 片段一律当重卡产流(`server/render-node/local-node.mjs` 的 `listPlanOverrides`),所以轻卡不能进清单。轻重的判定照在线页面同一套
- * (`src/editor/agentHeavyClips.ts`):文档服务里的共享成本记录 + `planPipelines`;没有记录的卡按页面测完之前的兜底(声明 `direct` 判轻,其余判重)。
+ * (`src/editor/agentHeavyClips.ts`):文档服务里的共享成本记录 + `planPipelines`;这个身份没有记录时先按同一张卡(同一个卡片 id、
+ * 同一份源码版本)别的身份的记录估,同一张卡也没有记录才按页面测完之前的兜底(声明 `direct` 判轻,其余判重)。
  *
  * 判定不在写入那一刻做,在写入攒满 `delayMs`(取预渲染重试同一个防抖,`render-request.mjs` 的 `debounceMs`)之后做:Agent 改了参数,
- * 卡的成本身份就变了,要等在线成员的页面把新身份测完、写进文档服务才有记录;没人在线时等不到,按没有记录办。
+ * 卡的成本身份就变了,要等在线成员的页面把新身份测完、写进文档服务才有记录;没人在线时等不到,按同一张卡估。
+ * 「同一张卡」的身份除了此刻项目里的,还有这个 gate 见过的项目状态里的:每次写入之前(`note` 的 `before`,改之前的那一版)
+ * 与之后各记一份。
  * 一轮收尾时(`flush`)不再等,攒着的马上判、马上交出去。
+ *
+ * 每次判定的摘要(`judged`:候选、判重、判轻、为什么、记录条数、估了几张、判轻的片段 id 截前 `JUDGED_CLIP_IDS` 个)既记日志,
+ * 也交给调用方:有判重的随 `emit` 一起交,一张重的都没有时交给 `report`。账号模式下它随 `render_request` 事件进主服务,
+ * 由主服务记进自己的日志(`account-render-requests.mjs`),线上从主服务的日志里就能看到每次判了什么。
  *
  * 退路(都按原来的做法:候选片段全部交出去):判定模块载不了;成本记录取不到(连不上、旧文档服务不许 Agent 读成本记录)。
  */
@@ -67,13 +74,20 @@ export function renderClipsOf(project, clipIds, { kernel = null, before = null, 
 /** 判定模块在 `src/` 里的位置(宿主用 `loadModule` 载;先载注册表,卡片定义靠 import 时的副作用登记) */
 export const HEAVY_JUDGE_MODULE = '/src/editor/agentHeavyClips.ts';
 const HEAVY_JUDGE_PRELOAD = ['/src/cards/index.ts', '/src/parts/index.ts'];
+/** 判定摘要里判轻的片段 id 最多带几个(只为日志看得过来,不影响判定) */
+export const JUDGED_CLIP_IDS = 10;
 
-/** 经载入缝载判定函数 `judgeHeavyClips(project, records, candidates) → { heavy, light }`;载不了抛 */
+/**
+ * 经载入缝载判定函数 `judgeHeavyClips(project, records, candidates, opts) → { heavy, light, estimated }`;载不了抛。
+ * 回的函数带一个 `groups(project)`(`cardIdentityGroups`:这个项目里每张卡出现过的成本身份),gate 用它记见过的项目状态。
+ */
 export async function loadHeavyJudge(loadModule) {
   for (const id of HEAVY_JUDGE_PRELOAD) await loadModule(id);
   const mod = await loadModule(HEAVY_JUDGE_MODULE);
   if (typeof mod?.judgeHeavyClips !== 'function') throw new Error('判定模块没有 judgeHeavyClips');
-  return mod.judgeHeavyClips;
+  const judge = (...args) => mod.judgeHeavyClips(...args);
+  if (typeof mod.cardIdentityGroups === 'function') judge.groups = (project) => mod.cardIdentityGroups(project);
+  return judge;
 }
 
 /**
@@ -84,16 +98,35 @@ export async function loadHeavyJudge(loadModule) {
  * @param {() => ({ project: any, rev?: number } | null)} o.replica 此刻的项目副本与版本
  * @param {() => (Function | null)} o.judge 判定函数(`loadHeavyJudge` 的结果);还没载好、载不了回 null
  * @param {() => Promise<object[] | null>} o.records 本项目的共享成本记录;取不到回 null
- * @param {(clips: string[], info: { rev: number | null }) => void} o.emit 交出判重的片段
+ * @param {(clips: string[], info: { rev: number | null, judged: object }) => void} o.emit 交出判重的片段(带这次判定的摘要)
+ * @param {(judged: object, info: { rev: number | null }) => void} [o.report] 一张重的都没有时交出这次判定的摘要
  * @param {number} o.delayMs
  */
-export function createHeavyRenderGate({ picker, replica, judge = () => null, records = async () => null, emit, delayMs, log = () => {} }) {
+export function createHeavyRenderGate({ picker, replica, judge = () => null, records = async () => null, emit, report = () => {}, delayMs, log = () => {} }) {
   let pending = new Set();
   let timer = null;
   let closed = false;
   let chain = Promise.resolve();
+  // 见过的项目状态:判定模块到了才算得出身份,先留着引用,判定时折成「同一张卡 → 身份」
+  let snapshots = [];
+  const sameCard = new Map();
   const say = (event, fields) => { try { log(event, fields); } catch { /* 日志不影响发布 */ } };
   const current = () => { try { return replica() ?? null; } catch { return null; } };
+  const remember = (project) => { if (project && snapshots.at(-1) !== project) snapshots.push(project); };
+
+  function foldSnapshots(fn) {
+    if (typeof fn?.groups !== 'function') { snapshots = snapshots.slice(0, 1); return; }
+    for (const project of snapshots) {
+      let groups = null;
+      try { groups = fn.groups(project); } catch { groups = null; }
+      for (const [g, keys] of Object.entries(groups ?? {})) {
+        let set = sameCard.get(g);
+        if (!set) sameCard.set(g, (set = new Set()));
+        for (const k of keys ?? []) if (typeof k === 'string') set.add(k);
+      }
+    }
+    snapshots = [];
+  }
 
   async function judgeNow() {
     if (!pending.size) return;
@@ -101,6 +134,7 @@ export function createHeavyRenderGate({ picker, replica, judge = () => null, rec
     pending = new Set();
     let clips = candidates;
     let light = [];
+    let estimated = 0;
     let why = 'no-judge';
     let count = null;
     const fn = (() => { try { return judge(); } catch { return null; } })();
@@ -110,9 +144,11 @@ export function createHeavyRenderGate({ picker, replica, judge = () => null, rec
       if (Array.isArray(recs)) {
         count = recs.length;
         try {
-          const r = fn(current()?.project ?? null, recs, candidates);
+          foldSnapshots(fn);
+          const r = fn(current()?.project ?? null, recs, candidates, { sameCard: Object.fromEntries([...sameCard].map(([g, set]) => [g, [...set]])) });
           clips = r.heavy;
           light = r.light;
+          estimated = Array.isArray(r.estimated) ? r.estimated.length : 0;
           why = 'judged';
         } catch (err) {
           why = 'judge-failed';
@@ -120,10 +156,13 @@ export function createHeavyRenderGate({ picker, replica, judge = () => null, rec
         }
       } else why = 'no-records';
     }
-    say('agent.render.judged', { candidates: candidates.length, heavy: clips.length, light: light.length, why, ...(count === null ? {} : { records: count }) });
-    if (!clips.length) return;
+    const judged = { candidates: candidates.length, heavy: clips.length, light: light.length, why, ...(count === null ? {} : { records: count }),
+      ...(estimated ? { estimated } : {}), ...(light.length ? { lightClips: light.slice(0, JUDGED_CLIP_IDS) } : {}) };
+    say('agent.render.judged', judged);
     const rev = current()?.rev;
-    emit(clips, { rev: Number.isSafeInteger(rev) ? rev : null });
+    const info = { rev: Number.isSafeInteger(rev) ? rev : null };
+    if (!clips.length) { try { report(judged, info); } catch { /* 摘要交不出去不影响判定 */ } return; }
+    emit(clips, { ...info, judged });
   }
 
   function flush() {
@@ -134,10 +173,16 @@ export function createHeavyRenderGate({ picker, replica, judge = () => null, rec
   }
 
   return {
-    /** 一次写入落地了:按此刻的项目挑候选,攒着 */
-    note(clipIds) {
+    /**
+     * 一次写入落地了:按此刻的项目挑候选,攒着。`before` 是写之前的项目(Agent 改参数之前的那个身份多半已经有页面测好的记录,
+     * 判定时按同一张卡估用得上);写之前、写之后的项目都记下
+     */
+    note(clipIds, before = null) {
       if (closed) return;
-      for (const id of picker.pick(current()?.project ?? null, clipIds)) pending.add(id);
+      const project = current()?.project ?? null;
+      remember(before);
+      remember(project);
+      for (const id of picker.pick(project, clipIds)) pending.add(id);
       if (!pending.size) return;
       clearTimeout(timer);
       timer = setTimeout(() => { void flush(); }, Math.max(0, Number(delayMs) || 0));
@@ -151,6 +196,8 @@ export function createHeavyRenderGate({ picker, replica, judge = () => null, rec
       clearTimeout(timer);
       timer = null;
       pending.clear();
+      snapshots = [];
+      sameCard.clear();
     },
     /** 诊断、测试 */
     pending: () => [...pending],

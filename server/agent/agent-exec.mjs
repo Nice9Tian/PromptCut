@@ -432,7 +432,8 @@ export function createAgentExecutor({
       await link.replica.waitRev(reply.rev, limits.landWaitMs);
       markRead(conv, reply.rev);
       const overwrote = Array.isArray(reply.overwrote) ? reply.overwrote : [];
-      ctx.write = { opId, rev: reply.rev, inverse, overwrote, clipIds: clipIdsOfOps(ops) };
+      // `before`:写之前的项目(不进事件、不进结果;宿主判轻重时用它找同一张卡改之前的成本身份,`render-clips.mjs`「只发重卡」)
+      ctx.write = { opId, rev: reply.rev, inverse, overwrote, clipIds: clipIdsOfOps(ops), before: base };
       say('agent.write', { tool, conversation: conv.n, opId, rev: reply.rev, ops: ops.length, ...(overwrote.length ? { overwrote: overwrote.length } : {}) });
       const shown = await withVisual(tool, args, result, base, prepared.after);
       // 覆盖了别人 10 分钟内写过的实体(文档服务算的,A2):放进结果;写入方是页面的标「用户刚改过」,别的 Agent 标「Agent <身份> 刚改过」

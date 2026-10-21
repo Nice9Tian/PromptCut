@@ -5,8 +5,11 @@
  * 账号模式一条任务一个进程,一轮收尾这一代进程就关了;渲染要等渲染节点认领、做完,常常比一轮长。所以发布与跟进放在
  * 常驻的**主服务**里,任务进程只报「这一轮写到了哪些要预渲染的片段」:
  *
- * - 任务进程在每次写入落地后发一条 `render_request { clips, rev, userCards }` 事件(`account-runner.mjs`),和别的事件一样
+ * - 任务进程在每次写入落地后发一条 `render_request { clips, rev, userCards, judged? }` 事件(`account-runner.mjs`),和别的事件一样
  *   经主服务的内部口交上来;主服务每条都回文档服务核过是哪个项目、哪条任务(`worker-event-internal.mjs`)。
+ * - `judged` 是任务进程那次判轻重的摘要(`render-clips.mjs`「只发重卡」):主服务原样核过形状后记一条日志
+ *   `agent.render.judged`,线上从主服务的日志里就看得到每次判了几张、判重几张、为什么(任务进程自己的日志不一定有人收)。
+ *   一张重的都没有时任务进程也发一条片段为空、只带摘要的事件:只记日志,不发布。旧任务进程不带摘要,照旧只发布。
  *   这里**只用核过的那份绑定里的项目号**,事件里的字段改不了项目:一条任务只能让本项目的片段被发布。
  * - 主服务以**托管方的服务身份**(Agent 服务的服务私钥,控制连接)要只能发布的连接票据、发清单计划(`render-publisher.mjs`),
  *   任务进程拿不到这把私钥,也拿不到任何成员的凭证。
@@ -22,6 +25,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { createRenderRequests } from '../agent/service/render-request.mjs';
+import { JUDGED_CLIP_IDS } from '../agent/service/render-clips.mjs';
 import { createQueuePublisher } from './render-publisher.mjs';
 import { WORKER_EVENT_BINDING_FIELDS } from './worker-event-internal.mjs';
 
@@ -33,6 +37,16 @@ const OWNER = 'account';
 const MAX_CLIPS = 2000;
 const ref = (v) => typeof v === 'string' && /^[A-Za-z0-9_.:-]{1,256}$/.test(v);
 const clipOk = (v) => typeof v === 'string' && v.length > 0 && v.length <= 256 && ![...v].some((ch) => ch.charCodeAt(0) < 32);
+const countOk = (v) => Number.isSafeInteger(v) && v >= 0;
+/** 判定摘要只留认得的几项(都来自任务进程,形状不对的项不记):张数、为什么、判轻的片段 id(截前 `JUDGED_CLIP_IDS` 个) */
+function judgedOf(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const out = {};
+  for (const k of ['candidates', 'heavy', 'light', 'records', 'estimated']) if (countOk(v[k])) out[k] = v[k];
+  if (typeof v.why === 'string' && /^[a-z-]{1,32}$/.test(v.why)) out.why = v.why;
+  if (Array.isArray(v.lightClips)) out.lightClips = v.lightClips.filter(clipOk).slice(0, JUDGED_CLIP_IDS);
+  return countOk(out.candidates) ? out : null;
+}
 
 /** 没配发布通道时用的:渲染节点永远「不可用」,每次如实记一条 */
 export const UNAVAILABLE_PUBLISHER = Object.freeze({
@@ -103,6 +117,8 @@ export function createAccountRenderRequests({ dir, eventStore, publisher = null,
       const binding = bindingOf(row);
       if (!binding) return;
       if (event.type === RENDER_REQUEST_EVENT) {
+        const judged = judgedOf(event.judged);
+        if (judged) say('agent.render.judged', { projectId: binding.projectId, runId: binding.runId, ...judged });
         const clips = Array.isArray(event.clips) ? event.clips.filter(clipOk).slice(0, MAX_CLIPS) : [];
         if (!clips.length || !Number.isSafeInteger(event.rev)) return;
         try { writeBinding(binding); } catch (error) { say('agent.render.binding-failed', { code: error?.code ?? 'io' }); return; }
