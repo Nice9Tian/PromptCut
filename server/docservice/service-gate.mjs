@@ -52,6 +52,8 @@ export const SERVICE_ALLOW = Object.freeze({
     'content.get', 'content.list', 'content.put',
     // 素材票据（导入素材、配音等产物入库）：只许 asset，要读写票据得成员本人有读写权限（下面再判）
     'auth.ticket',
+    // 读本项目的共享成本记录（只读、只有耗时）：发布预渲染之前判轻重，只发重卡（`server/agent/service/render-clips.mjs`「只发重卡」）
+    'cost.list',
   ]),
 });
 

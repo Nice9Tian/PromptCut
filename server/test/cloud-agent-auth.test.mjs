@@ -360,10 +360,11 @@ test('CA-AUTH-04 / AU19 只读成员发起的对话改不了项目：project.op�
 
 // ------------------------------------------------------------------ CA-AUTH-05
 
-test('CA-AUTH-05 白名单：代成员的连接只有表里的十四种（内容库只许卡片源码、票据只许素材票据），表外逐个 forbidden；发布连接另一张表', async (t) => {
+test('CA-AUTH-05 白名单：代成员的连接只有表里的十五种（内容库只许卡片源码、票据只许素材票据、成本记录只读），表外逐个 forbidden；发布连接另一张表', async (t) => {
   assert.deepEqual([...SERVICE_ALLOW.agent].sort(), [
     'auth.ticket',
     'content.get', 'content.list', 'content.put',
+    'cost.list',
     'events.complete', 'events.create', 'events.text',
     'presence.clear', 'presence.list', 'presence.set',
     'project.close', 'project.op', 'project.open', 'project.upload',
@@ -396,6 +397,7 @@ test('CA-AUTH-05 白名单：代成员的连接只有表里的十四种（内容
     'content.put': { kind: 'card-source', key: 'src/cards/user/probe-card.tsx', body: 'export const x = 1;' },
     'content.get': { kind: 'card-source', key: 'src/cards/user/probe-card.tsx' }, 'content.list': { kind: 'card-source', prefix: 'src/' },
     'auth.ticket': { kind: 'asset', access: 'r' },
+    'cost.list': { projectId: proj.projectId },
   };
   assert.deepEqual(Object.keys(samples).sort(), [...SERVICE_ALLOW.agent].sort());
   for (const [type, fields] of Object.entries(samples)) {
