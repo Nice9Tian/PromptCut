@@ -341,14 +341,9 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
     }
 
     try {
-      if (op === 'release') {
-        await masterLook.release?.(targetProjectId, { runId: grant.runId, aborted: params?.aborted === true });
-        return reply(res, 200, { ok: true });
-      }
-      if (op === 'heartbeat') {
-        await masterLook.heartbeat?.(targetProjectId, { runId: grant.runId });
-        return reply(res, 200, { ok: true });
-      }
+      // 0.7.18「按轮占用」的收尾通知与心跳：0.7.19 起渲染服务是多项目模式，不再转发。滚动重启时还没换代的任务进程可能还会发，
+      // 照样过上面的授权核对，回 200 什么都不做（不回错，免得它记一条失败）
+      if (op === 'release' || op === 'heartbeat') return reply(res, 200, { ok: true, ignored: true });
       if (op === 'cancel') {
         masterLook.cancel?.(params?.requestId);
         return reply(res, 200, { ok: true });
