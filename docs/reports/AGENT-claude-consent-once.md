@@ -95,3 +95,51 @@
 
 - 任务书说「`useCloud.ts` 第 455、501、536、608 行调 `requireCloudConsent`」，核对无误；其中只有 455（发送）属于「一次发送」，501 是附件、536 切权限、608 删除对话，都是各自独立的一次操作，每次一读，不算重复。
 - `consent.ts` 原注释「A fresh server read is required at every data operation」是代码里的约定，不在语义里；本次在它下面写明了唯一的例外。若主会话希望把「一次发送只核一次告知、许可 5 秒」写进 `mechanism/agent.md`，建议加一条（修改前：无；修改后：「页面发一条消息只向账号服务读一次告知：开头读到已同意时发一次性许可，发出前同步核对，账号、绑定、登录、告知状态有变或过了 5 秒就重读；服务端收消息时照旧核告知」），按规则需用户确认，我没写。
+
+## 返工（主会话 2026-10-22，依据安全专审 `docs/reports/REVIEW-consent-once.md`）
+
+先把 main 合进本分支（`git merge main`，无冲突），再改。审查者的提交 `771b5d3d`（`REVIEW-consent-once.md` 与 `REVIEW-consent-once.probe.mjs`）没动。
+
+### 1. 已同意的用户不再被误弹告知框
+
+- 问题：`grantCloudConsent` 回 `null` 有多种原因（别处读取在路上 `state.pending`、绑定刚变、本次读取被更新的读取取代），面板一律当「没同意」弹框。改前不会。
+- 做法：`grantCloudConsent` 改回 `{ accepted, permit }`，两件事分开：
+  - `accepted`：本次新读取说同意了；或者本次被更新的读取取代，但此刻页面状态是同一账号的「已同意」（与面板挂载时那次读取的判断一致，`CloudAiPanel.tsx` 原有的 `!accepted && cloudConsentState().accepted !== true`）。
+  - `permit`：只在本次读取没被取代、读完时状态是已同意、没有读取在路上、绑定没变时才发；否则 `null`。
+- 面板 `consentForUse`：只有 `!accepted` 才弹框；`accepted` 而 `permit === null` 时照常往下发，`chat.send` 发出前自己真读一次（原设计的退化路径）。
+- 单测：「别处有读取在路上（state.pending）：服务端已同意就不弹告知框、照常发出，发出前自己再读一次」（断言 `pending === true` 时 `accepted === true`、`permit === null`，随后 `requireCloudConsent` 多读 1 次并放行）；「被取代、此前也没同意过：仍按没同意处理（弹框）」；接线单测核对面板只在 `!accepted` 时 `setConsentOpen(true)`。
+
+### 2. 服务端回 `consent-required` 时给正常文案并弹框
+
+- `src/ai/cloud/cloudApi.ts`（主会话授权改）：`cloudErrorText` 加 `consent-required` →「使用云端 Agent 前，请先阅读并确认告知。」（与页面自己拦下时的话一致，不用服务端原话）。气泡里是「没有发出去：使用云端 Agent 前，请先阅读并确认告知。」
+- 弹框：`consent.ts` 新增 `onCloudConsentRequired` / `reportCloudConsentRequired(binding, origin)`。`useCloudChat.send` 在两处报告：发出前那次读取抛 `CloudConsentRequiredError`（例如许可作废后重读得「没同意」），以及服务端回 `CloudError` 的 `consent-required`。报告带发消息的分页号（`tabId`），绑定已变的旧报告丢掉；`CloudAiPanel` 只在分页号和绑定都对上时弹框。
+- 单测：「consent-required 有正常文案，并只叫发消息的那个分页弹告知框」。
+
+### 3. 有效期改用单调钟
+
+- `consent.ts`：缺省时钟从 `Date.now()` 改成 `performance.now()`（环境没有 `performance` 时才退回 `Date.now()`）；`setCloudConsentClockForTest` 保留，传 `null` 恢复单调钟。
+- 单测：「有效期用单调钟：系统时间往回拨不会把有效期拉长」（把 `Date.now` 拨回一小时、`performance.now` 走过 5 秒，许可照样过期并重读）。
+
+### 语义（主会话授权，三级，标〔裁〕）
+
+`docs/semantics/mechanism/agent.md`「云端对话权限与发送者」一节末尾加一条。
+
+- 修改前：无此条（`mechanism/agent.md` 没有告知相关条目）。
+- 修改后：
+
+  > - 首次使用告知（承诺见 `../product/agent.md`「告知托管方能读」）在页面上一次发送只向账号服务读一次：发送开头那次读到已同意，就发一张一次性许可，发出前当场核对；账号、绑定、登录或告知状态有变（含期间别处又读或确认了一次），或者过了 5 秒（按单调钟计），许可作废，发出前照旧再读一次。读到已同意但没拿到许可的照常发，不弹告知框；服务端收消息时照旧核告知，没通过回 `consent-required`，页面写「使用云端 Agent 前，请先阅读并确认告知。」并弹告知框。附件上传、切权限、删除对话仍各自每次读。〔裁：主会话 2026-10-22，三级，`docs/reports/AGENT-claude-consent-once.md`〕
+
+- 顺带发现、没改（按「只写这一处」）：同一文件「出错时的话对照表」→「云端：发消息被拒」引的是 `cloudApi.ts` 行号，加了一行以后「其它代号」的 `:83` 变成 `:85`；表里也没有 `consent-required` 这一行。建议主会话合并时顺手补。
+
+### 返工后的验证
+
+| 命令 | 退出码 | 结果 |
+|---|---|---|
+| `npx tsc -b --force` | 0 | 零错误 |
+| `npm test -- src/ai/cloud/consent-once.test.mjs src/ai/cloud/consent.test.mjs` | 0 | 26 / 26（新 20 + 原 6） |
+| `npm test` 全量（并行五个别的任务，机器满载） | 1 | tests 7457，pass 7437，fail 4，cancelled 1，skipped 15，约 393 秒 |
+| 单跑 `server/test/account-move.test.mjs` | 0 | 10 / 10 |
+| 单跑 `server/test/asset-project-workers.test.mjs` | 0 | 11 / 11 |
+| 单跑 `server/test/cloud-agent-page.test.mjs` | 0 | 12 / 12 |
+
+满载那次失败的三个文件（「6 中途云端不可用…」6.2 秒、「真实ffmpeg项目worker…」20.2 秒、「CA-REV-09…」15.0 秒，fail 4 里多出的一个是 `account-move` 的父用例，cancelled 1 随这几处超时）都是服务端时序用例，不碰 `src/ai/cloud/` 和 `CloudAiPanel.tsx`；各单跑一次全部通过，没用到第二次复核。
