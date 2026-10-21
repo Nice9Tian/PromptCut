@@ -12,7 +12,7 @@
  *   AR-08  主服务的发布通道:按目录里的渲染节点与「生成轨道流」开关答 availability
  *   AR-09  (要账号后端)真实任务进程里 Agent 加一张重卡:render_request 经内部口进主服务,主服务发计划,渲完对话里有「完成」;
  *          同一节点关掉「生成轨道流」后再改:不发、对话里是 off
- *   AR-10  判定摘要:render_request 带 judged 时主服务记 agent.render.judged(项目号取核过的绑定);片段为空、只带摘要的事件
+ *   AR-13  判定摘要:render_request 带 judged 时主服务记 agent.render.judged(项目号取核过的绑定);片段为空、只带摘要的事件
  *          (一张重的都没有)只记日志、不发布、不记 render 事件;旧事件不带摘要照旧;摘要形状不对的项不记
  *   AR-12  (要账号后端)真实任务进程:一张重卡一张轻卡 → 主服务日志 judged heavy:1、只发重的;只改轻卡 → 主服务日志 judged heavy:0、不发
  * 跑:npm test -- server/test/account-render-publish.test.mjs
@@ -175,7 +175,7 @@ test('AR-07 一轮收尾马上发;主服务重启后按盘上的清单重发;对
   assert.deepEqual(fs.readdirSync(dir), []);
 });
 
-test('AR-10 判定摘要:主服务记 agent.render.judged;片段为空只记日志不发布;旧事件照旧;形状不对的项不记', async (t) => {
+test('AR-13 判定摘要:主服务记 agent.render.judged;片段为空只记日志不发布;旧事件照旧;形状不对的项不记', async (t) => {
   const pub = fakePublisher();
   const store = fakeStore();
   const logs = [];
