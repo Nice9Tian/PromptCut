@@ -31,7 +31,7 @@ export const TOOL_ROUTES = {
   get_selection: { method: "getSelection", passArgs: false, awaited: false },
   add_clip: { method: "addClip", passArgs: true, awaited: false },
   update_clip: { method: "updateClip", passArgs: true, awaited: false },
-  list_cuts: { method: "listCuts", passArgs: false, awaited: false },
+  list_cuts: { method: "listCuts", passArgs: true, awaited: false },
   switch_cut: { method: "switchCut", passArgs: true, awaited: false },
   add_cut: { method: "addCut", passArgs: true, awaited: false },
   rename_cut: { method: "renameCut", passArgs: true, awaited: false },

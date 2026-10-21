@@ -110,7 +110,7 @@ export interface EditorApi {
   /** 自定义测量(计划 A6):PCM 交专用 Chrome 的沙箱跑 Agent 写的 JS(server/audio-measure-js.mjs) */
   measureAudioJs(args: { code: string; clipId?: string; mediaId?: string; scope?: string; start?: number; duration?: number; sampleRate?: number; mono?: boolean; timeoutMs?: number }): Promise<any>;
   // 多条剪辑(时间轴)。其余 clip / 序列工具都只作用于当前激活的那条
-  listCuts(): any;
+  listCuts(args?: { cutId?: string }): any;
   switchCut(args: { cutId?: string; name?: string }): any;
   addCut(args?: { name?: string; switch?: boolean }): any;
   renameCut(args: { cutId: string; name: string }): any;

@@ -32,13 +32,18 @@ export const cutsTools = [
   },
   {
     name: "list_cuts",
-    description: "列出项目里的全部剪辑(时间轴)。一个项目可以有多条剪辑,新项目只有「剪辑1」,其余由用户或你新建(add_cut)。用户在时间轴上方的标签栏和素材库的「剪辑」组里切换、打开。**所有 clip / 序列 / 定位 / 导出 / see_frames 工具都只作用于当前激活的那条剪辑**(active:true 的),get_project 的 tracks 也是它的内容;要动别的剪辑先 switch_cut。一条剪辑可以作为**剪辑段**放进另一条剪辑(add_cut_segment),引用而不是复制。返回每条的 id、name、active、trackCount、clipCount、duration,以及 referencedBy(哪些剪辑的哪几段引用了它)和 references(它里面的剪辑段引用了哪些剪辑)。",
-    inputSchema: { type: "object", properties: {} },
+    description: "列出项目里的全部剪辑(时间轴)。一个项目可以有多条剪辑,新项目只有「剪辑1」,其余由用户或你新建(add_cut)。用户在时间轴上方的标签栏和素材库的「剪辑」组里切换、打开。**add_clip / 序列 / 导出 / see_frames / get_layout 等工具只作用于当前激活的那条剪辑**(active:true 的),get_project 的 tracks 也是它的内容。**但改别的剪辑里已有的片段不用 switch_cut**:传 `cutId` 给本工具,多返回那条剪辑的 timeline 一览(片段 id、起止),再把 clipId 直接交给 update_clip / set_clip / get_clip / set_position / set_rect / align / nudge / set_emphasis / set_clip_volume / set_clip_muted,它们会就地改那条剪辑里的片段,**不切换激活的剪辑**(激活的剪辑是共享状态,切换会让所有成员的界面一起翻,所以能不切就不切)。要在别的剪辑里新增 / 删除 / 切分 / 复制片段或看它的画面,才 switch_cut。一条剪辑可以作为**剪辑段**放进另一条剪辑(add_cut_segment),引用而不是复制。返回每条的 id、name、active、trackCount、clipCount、duration,以及 referencedBy(哪些剪辑的哪几段引用了它)和 references(它里面的剪辑段引用了哪些剪辑)。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        cutId: { type: "string", description: "给了就多返回这条剪辑的 timeline 一览(各序列和片段的 id、起止),不用切换过去;要改它里面已有的片段,拿到 clipId 直接交给 update_clip 等" }
+      }
+    },
     side: "agent"
   },
   {
     name: "switch_cut",
-    description: "切换到另一条剪辑(按 cutId 或 name 二选一)。切换后 get_project / add_clip / update_clip 等看到和改到的都是这条的内容;播放头回到这条上次离开的位置,选中清空。返回切换后的 cuts 列表和这条的 timeline 摘要。",
+    description: "切换到另一条剪辑(按 cutId 或 name 二选一)。切换后 get_project / add_clip / update_clip 等看到和改到的都是这条的内容(**注意:激活的剪辑是共享状态,切换会让所有成员的界面一起翻;只是要改别的剪辑里已有的片段时不用切,见 list_cuts 的 cutId**);播放头回到这条上次离开的位置,选中清空。返回切换后的 cuts 列表和这条的 timeline 摘要。",
     inputSchema: {
       type: "object",
       properties: {

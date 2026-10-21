@@ -252,3 +252,27 @@ test("折回时项目级的新东西(素材等)照 edited,不凭空给条目加�
   assert.equal("transitions" in entry, false, "原来没有 transitions 键,改完仍是空,不凭空多一个");
   assert.equal("duration" in entry, false, "原来没有 duration 键、值没变,不凭空多一个");
 });
+
+test("list_cuts 带 cutId:多返回那条剪辑的 timeline,拿到片段 id 不用切换", () => {
+  fresh();
+  const plain = call("list_cuts", undefined);
+  assert.equal("timeline" in plain, false);
+  const r = call("list_cuts", { cutId: "B" });
+  assert.equal(r.activeCutId, "A");
+  assert.equal(r.timeline.cutId, "B");
+  assert.equal(r.timeline.active, false);
+  assert.deepEqual(r.timeline.tracks.map((t) => [t.trackId, t.clips.map((c) => c.id)]), [["tb1", ["b1", "b2"]], ["tb2", ["bm"]]]);
+  assert.equal(r.timeline.duration, 6);
+  assert.equal(getState().project.activeCutId, "A", "只读,没切换");
+  assert.throws(() => call("list_cuts", { cutId: "nope" }), /找不到剪辑/);
+});
+
+test("工具说明:list_cuts / switch_cut / update_clip 写明改别的剪辑里已有的片段不用 switch_cut", async () => {
+  const { tools } = await import("../../../server/mcp-tools.mjs");
+  const d = (n) => tools.find((t) => t.name === n).description;
+  assert.match(d("list_cuts"), /不用 switch_cut/);
+  assert.match(d("list_cuts"), /不切换激活的剪辑/);
+  assert.match(d("switch_cut"), /共享状态/);
+  assert.match(d("update_clip"), /不用 switch_cut/);
+  assert.ok(tools.find((t) => t.name === "list_cuts").inputSchema.properties.cutId, "list_cuts 收 cutId");
+});
