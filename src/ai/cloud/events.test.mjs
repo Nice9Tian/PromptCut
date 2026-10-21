@@ -199,6 +199,14 @@ test('friendlyErrorMessage:各类模型错误说人话,不外露密钥与请求�
   assert.ok(odd.length < 120);
   assert.match(friendlyErrorMessage('something broke'), /^云端 Agent 出错了:something broke$/);
   assert.equal(friendlyErrorMessage('云端 Agent 服务中断,这一轮没有做完。'), '云端 Agent 服务中断,这一轮没有做完。');
+  // 服务端写好的中文话整句给出,不截到 80 字(2026-10-22 用户定);英文原文照旧截短
+  const longZh = '模型的回复连续 7 次超过单次输出上限被截断，这一轮没能完成。已经写出的部分存在代码块 cut_create_card_1 里，下一条消息可以让它接着写。可以把要求拆小一点再发，或请管理员调大单次输出上限。';
+  assert.ok(longZh.length > 80);
+  assert.equal(friendlyErrorMessage(longZh, true), longZh);
+  assert.equal(friendlyErrorMessage(`  ${longZh}\n`), longZh);
+  const longEn = `something broke: ${'x '.repeat(80)}`;
+  assert.ok(friendlyErrorMessage(longEn).endsWith('…'));
+  assert.ok(friendlyErrorMessage(longEn).length <= '云端 Agent 出错了:'.length + 81);
   assert.equal(cloudErrorMessage('model'), '模型调用失败。');
   assert.equal(shortReason('Bearer abc.def-ghi token https://x.y/z  end'), 'token end');
 });

@@ -225,7 +225,7 @@ test('CA-KEY-01 set-key:不收命令行与环境变量里的 Key;不是终端拒
     assert.equal(sealed.includes(KEY), false);
     assert.equal(fs.readFileSync(file, 'utf8').includes(KEY), false);
     if (process.platform !== 'win32') assert.equal(fs.statSync(keyFile).mode & 0o777, 0o600);
-    assert.deepEqual(readModelConfig(dataDir), { vendor: 'openai', baseUrl: 'https://api.example.test/v1', model: 'model-a|model-b', maxTokens: 4096, apiKey: KEY });
+    assert.deepEqual(readModelConfig(dataDir), { vendor: 'openai', baseUrl: 'https://api.example.test/v1', model: 'model-a|model-b', maxTokens: 0, apiKey: KEY }); // 没填 = 按模型最大(2026-10-22 用户定)
 
     const mock = await run({ argv: ['--mock'], tty: false });
     assert.equal(mock.code, 0);
