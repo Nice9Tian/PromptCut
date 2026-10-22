@@ -268,6 +268,25 @@ Claude 主会话与 Antigravity 主会话接手后合进 `main` 的（每块的�
 
 **并行数压在 3 个**：实测这台 PC 上 5～6 个子 Agent 同时跑全量测试，假失败和拖慢比并行省下的时间更多（`docs/local.md`「这台 PC 上并行跑 npm test 的实际上限」）。
 
+## 合入门槛改了：全量测试挪到 0.7.20 发版前（2026-10-22 用户定）
+
+用户原话：「**可以 .20 发版之前再做全量测试，加快整体速度。在此之前合入只测试改动影响部分。**」
+
+这一条**覆盖** `guide_files/verification.md`「小阶段与发版分别验什么」里「`npm test` 零失败」那一项，只在这次 0.7.19／0.7.20 连做期间有效。新门槛：
+
+| 时机 | 要跑什么 |
+|---|---|
+| 每次合入 `main` | ① `npx tsc -b --force` 零错误（主会话保留这一项：只要约 20 秒，能抓到跨目录的连带错）；② **只跑改动影响到的测试文件**（新加的，加改到的模块的既有测试）；③ 这一块对应的探针；④ `npm run build` |
+| **0.7.20 发版前** | 整套全量 `npm test` 跑一次 |
+
+**渲染附加项不在放宽范围内**：改到画面的改动照旧要跑导出确定性、与开工提交的导出像素比对、快照重放（`verification.md`「按改动范围验证」），那和全量测试是两件事。
+
+**主会话的配套做法**：每次合入时记下**这一次没覆盖到的范围**，汇总成一张清单；0.7.20 发版前那一遍全量照这张清单核，免得漏掉回归。各子 Agent 的报告里也要列明「跑了哪些测试文件、哪些范围没覆盖」。
+
+**已汇总的「发版前全量要特别核」清单**（随合入持续追加）：
+
+- 截至本条写下时，`main` 上最后一次**干净全量**是 `07fca42d`：7635 条 7620 通过 **0 失败 0 取消** 15 跳过（918,637 字节日志、有汇总行）。此后合入的改动只做了影响范围测试，发版前要补回整套。
+
 ## 分支去向
 
 2026-10-13 清掉的（都是 `main` 的祖先，提交全在 `main` 里；清之前核过没有未提交的文件、没有目录联接）：本机和远端的 `codex/018-account-path-main`、`codex/018-agent-worker-doc`、`codex/018-agent-worker-runtime`（三条同一个提交，随块一进了 `main`，三个工作区一并清了）、`codex/018-run-assets-current-v2`、`codex/018-run-assets-current`（随块六进了 `main`）、`codex/018-instance-http-repair-verification`；只在远端的 `codex/018-account-public-path`、`codex/018-asset-root-publisher`、`codex/018-cloud-consent-user-path`、`codex/018-member-native-route`、`codex/018-root-registry-stage`、`codex/render-scheduling-doc-sync`、`claude/render-service`。
