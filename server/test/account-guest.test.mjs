@@ -126,11 +126,6 @@ test('传素材：视频原件三条封顶，每一条源文件 100 MB 封顶，
   assert.equal(GUEST_LIMITS.videos, 3);
   assert.equal(GUEST_LIMITS.assetBytes, 100 * 1024 * 1024);
 });
-  assert.deepEqual(checkGuestAsset({ accountId: guest, bytes: 1, storedCount: GUEST_LIMITS.assets }),
-    { ok: false, code: 'guest-asset-limit' });
-  assert.deepEqual(checkGuestAsset({ accountId: guest, bytes: -1, storedCount: 0 }), { ok: false, code: 'invalid-asset' });
-  assert.deepEqual(checkGuestAsset({ accountId: account, bytes: GUEST_LIMITS.assetBytes * 10, storedCount: 1000 }), ok);
-});
 
 test('三天清理：到点算过期，差一毫秒不算', () => {
   const born = at;
