@@ -180,7 +180,8 @@
   border-radius: 8px;
   background: var(--fill-subtle);
 }
-.ps-search:focus-within { border-color: var(--accent); }
+.ps-search:focus-within { border-color: var(--accent); box-shadow: var(--ui-glow); }
+.ps-search input[type="search"]:focus { box-shadow: none; }
 .ps-search input {
   flex: 1 1 auto;
   min-width: 0;
@@ -707,7 +708,8 @@
   background: var(--bg-panel);
   box-sizing: border-box;
 }
-.ps-chat-box:focus-within { border-color: var(--accent); }
+.ps-chat-box:focus-within { border-color: var(--accent); box-shadow: var(--ui-glow); }
+.ps-chat-box textarea.ps-chat-input:focus { box-shadow: none; }
 .ps-chat-input {
   flex: 1 1 auto;
   min-width: 0;
@@ -1002,7 +1004,15 @@
   background: var(--bg-panel);
   box-sizing: border-box;
 }
-.ps-prompt:focus-within { border-color: var(--accent); }
+/*
+ * 聚焦发光:全局样式(`src/skins/motion.css` 的「焦点发光阴影」)给每个 input / textarea 都挂了
+ * `box-shadow: var(--ui-glow)`。但这一页的文字输入框都是**嵌在一个圆角容器里的**、自己没有圆角,
+ * 那层矩形光晕套在圆角框里看着就是「框里又有一个框」(用户 2026-10-23 报的就是这个)。
+ * 所以:光晕挪到外面那层圆角容器上(跟着圆角走),里面的输入框自己不发光。
+ */
+.ps-prompt:focus-within { border-color: var(--accent); box-shadow: var(--ui-glow); }
+/* 选择器写这么长是为了压过全局那条 `[data-skin] textarea:focus`(特异性 0-2-1),短了压不过 */
+.ps-prompt textarea.ps-prompt-input:focus { box-shadow: none; }
 .ps-prompt-input {
   display: block;
   width: 100%;
