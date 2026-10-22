@@ -67,6 +67,16 @@
 4. **`src/online/stageIsolation.test.mjs`**：
    - 新增用例 `(f) 路径号按账号加项目固定(createStageSidStore 与会话 setScope / reload):同账号同项目稳定复用、跨项目跨账号隔离、存储异常与脏值兜底、缺标识不碰存储、换项目强制重载舞台且守单向规矩`。
 
+### 第三阶段（无头 Chrome 浏览器缓存与跨项目路径号隔离探针）
+
+1. **`scripts/probes/media-cache-probe.mjs`（新建）**：
+   - 端口 `6420`（项目授权模式素材服务）、`6421`（编辑器页源 `http://pc.localhost:6421`）、`6422`（舞台源 `http://s1.pc.localhost:6422`），启动前检查端口空闲，仅绑定 `127.0.0.1`；
+   - 用 `rolldown` 将真实的 `src/online/stageIsolation.ts` 打包为浏览器 IIFE（全局 `PCStageIso`），在真实无头 Chrome 中跨两次同 `userDataDir` 会话验证：会话 1 舞台经 `/media-s/<sid>/media/<hash>` 拉取获得 `Cache-Control: private, max-age=31536000, immutable` 与 `Vary: Authorization`；会话 2 复用 `localStorage` 中的 `sid` 直接命中浏览器缓存（素材服务收到 0 次无 `t` 的 `GET` 请求，并报告 ResourceTiming `transferSize`）；`?t=` 路由两轮会话共 4 次请求每次均回源且带 `Cache-Control: no-store`；同账号下项目 B 获得不同 `sid`，经项目 B 的 `sid` 拉取项目 A 的素材哈希回源返回 404（跨项目不命中缓存）。
+
+## 原地换项目与舞台重载
+
+编辑器页可以在不重新挂载 `Preview` 组件的情况下原地切换项目（例如 `src/editor/sync/syncManager.ts` 的 `onLoad` 在检测到云项目关联时调用 `enterAccountProject`）。若不重载舞台 iframe，原先拿过项目 A 路径号 `sid` 的同一个舞台文档稍后会接着运行项目 B 的卡片代码，从而让项目 B 的代码有机会从该文档（ResourceTiming、DOM 或内存）拿到项目 A 的 `sid` 并读取项目 A 已缓存的素材。因此在 `pushMediaPolicy` 与 `stageIsolation.plan` 中强制实施「单舞台文档单路径号」并在路径号变化时整页重载舞台 iframe。
+
 ## 验证结果
 
 ### 第一阶段（提交 `c273466c`）
@@ -77,11 +87,40 @@
   - 变异核对（mutation check）：去掉「不含 `t` 查询参数」条件会使测试 `(c)` 失败；去掉「仅限 `media` 命名空间」条件会使测试 `(e)` 失败；原代码 6 条全过。
   - `npx tsc -b --force` -> 退出码 0，无输出。注：`tsconfig.json` 的 `include` 仅含 `src/`，因此基线类型检查不覆盖 `server/asset-service.ts`；对该文件单独跑 `tsc` 在修改前后均仅报相同的 6 条既有 `TS7016`（未声明类型的 `.mjs` 导入），无新增错误。
 
-### 第二阶段
+### 第二阶段（提交 `707c745b`）
 
-- `npm test -- src/online/stageIsolation.test.mjs src/online/stagePolicy.test.mjs` -> `ℹ tests 25` / `ℹ pass 25` / `ℹ fail 0`（`✓ npm test 最终结果：零失败`）
-- 读取 `Preview.tsx` 或 `stageIsolation.ts` 源码的相关单测：`npm test -- src/editor/measureGate.test.mjs src/editor/onlineCardsL.test.mjs src/online/cardRuntime/onlineCardsG.test.mjs src/online/modeImportGuard.test.mjs server/test/c10-ui-gates.test.mjs` -> `ℹ tests 33` / `ℹ pass 33` / `ℹ fail 0`（`✓ npm test 最终结果：零失败`）
-- `npx tsc --noEmit` -> 退出码 0，无输出（零错误；沙箱内 `npx tsc -b --force` 无代码类型错误，仅因沙箱禁止写根下 `tsconfig.tsbuildinfo` 报 `TS5033: EPERM`）。
+- 沙箱内单测与类型检查：
+  - `npm test -- src/online/stageIsolation.test.mjs src/online/stagePolicy.test.mjs` -> `ℹ tests 25` / `ℹ pass 25` / `ℹ fail 0`（`✓ npm test 最终结果：零失败`）
+  - 读取 `Preview.tsx` 或 `stageIsolation.ts` 源码的相关单测：`npm test -- src/editor/measureGate.test.mjs src/editor/onlineCardsL.test.mjs src/online/cardRuntime/onlineCardsG.test.mjs src/online/modeImportGuard.test.mjs server/test/c10-ui-gates.test.mjs` -> `ℹ tests 33` / `ℹ pass 33` / `ℹ fail 0`（`✓ npm test 最终结果：零失败`）
+  - `npx tsc --noEmit` -> 退出码 0，无输出（零错误；沙箱内 `npx tsc -b --force` 无代码类型错误，仅因沙箱禁止写根下 `tsconfig.tsbuildinfo` 报 `TS5033: EPERM`）。
+- manager 在沙箱外对提交 `707c745b` 实跑的结果：
+  - 引用 `stageIsolation` / `stagePolicy` / `Preview.tsx` 的 12 个测试文件（`server/test/c10-ui-gates.test.mjs`、`server/test/legacy-preview-target.test.mjs`、`server/test/stage-policy-nginx.test.mjs`、`src/editor/measureGate.test.mjs`、`src/editor/onlineCardsL.test.mjs`、`src/editor/stageSwapBaseline.test.mjs`、`src/online/cardRuntime/cardRuntime.test.mjs`、`src/online/cardRuntime/onlineCardsG.test.mjs`、`src/online/modeImportGuard.test.mjs`、`src/online/stageIsolation.test.mjs`、`src/online/stagePolicy.test.mjs`、`src/render/c10-cost-plan.test.mjs`）执行 `npm test` -> `ℹ tests 93` / `ℹ pass 93` / `ℹ fail 0`；
+  - `npx tsc -b --force` -> 退出码 0，无输出；
+  - 变异核对（mutation check）：将 `needReload` 改为恒 `false` 会使测试 `(f)` 失败。
+
+### 第三阶段（浏览器探针 `scripts/probes/media-cache-probe.mjs`）
+
+- 沙箱内语法检查：`node --check scripts/probes/media-cache-probe.mjs` -> 退出码 0，无输出。
+- 沙箱外实跑结果（待填入）：
+  - manager 在沙箱外实跑 `node scripts/probes/media-cache-probe.mjs`（端口 6420～6422，探针自建临时配置目录，跑完删除），退出码 0，输出：
+    ```
+    PASS session1: grantMediaCookie succeeded (sid=8a30870bcdbccbb94e4a8eb6305e414a)
+    PASS session1: stage fetch status 200 and SHA-256 matches (status=200, bytes=262144)
+    PASS session1: stage response Cache-Control is long-cache immutable (cache-control="private, max-age=31536000, immutable")
+    PASS session1: stage response Vary is Authorization (vary="Authorization")
+    PASS session1: asset service saw >= 1 GET without t (delta=1)
+    PASS session2: sid equals session 1 sid (persisted in editor localStorage) (s1=8a30870bcdbccbb94e4a8eb6305e414a, s2=8a30870bcdbccbb94e4a8eb6305e414a)
+    PASS session2: stage fetch status 200 and SHA-256 matches (status=200, bytes=262144)
+    PASS session2: asset service saw 0 GET requests without t (served from browser cache) (before=1, after=1, delta=0)
+    INFO session2 stage transferSize=0 (hasPerfEntry=true)
+    PASS session2: ResourceTiming transferSize is 0 (transferSize=0)
+    PASS query-ticket route: GET with t count increased by exactly 2 in session 1 and 2 in session 2 (s1Delta=2, s2Delta=2)
+    PASS query-ticket route: all 4 fetches returned status 200 and Cache-Control: no-store (fetches=[{"status":200,"cc":"no-store"},{"status":200,"cc":"no-store"},{"status":200,"cc":"no-store"},{"status":200,"cc":"no-store"}])
+    PASS project B: sid differs from project A sid (sidA=8a30870bcdbccbb94e4a8eb6305e414a, sidB=71920173b76bd17fada1180970851923)
+    PASS project B: stage fetch of project A hash through B sid returns 404 and reached asset service (grantOk=true, status=404, assetDelta=1)
+    media-cache-probe: PASS
+    ```
+  - 反向对照（确认探针不是空过）：临时把 `server/asset-service.ts` 的长期缓存条件改成恒假后再跑，探针按预期失败 4 项（会话 1 的 `Cache-Control` 为 `no-store`、`Vary` 为空；会话 2 回源 1 次，`transferSize=262444`），`media-cache-probe: FAIL (4 failed)`；随即还原，文件与提交内容逐字节一致。
 
 ## 编辑器页仍用 `?t=` 读素材字节的地方（任务第 5 步）
 
@@ -128,7 +167,10 @@
 2. **`src/skins/useSkin.ts:18, 20`**（因 `src/main.tsx:9` 静态导入 `Shell.tsx` → `Editor.tsx` → `useSkin.ts`，在模块求值阶段执行一次旧默认皮肤迁移）：
    - 写入：`localStorage.setItem("pc.skin", "studio-dark")`（仅当原值为 `"indigo-dark"` 时）与 `localStorage.setItem("pc.skin.studioMigrated", "1")`。
    - 能否含素材 URL、素材基址或 `sid`：**不能**。键与值均为写死的皮肤常量字符串。
-3. **其余存储 API（`sessionStorage`、`IndexedDB`、`Cache` API、`document.cookie`）**：
+3. **`src/store/actions/playback.ts:48`**（`setVolume`，经 `src/store/index.ts` 导入链可达）：
+   - 写入：`localStorage.setItem(VOLUME_KEY, String(volume))`（`VOLUME_KEY = "promptcut:volume"`，值为 `0`～`1` 的音量数值字符串）。
+   - 能否含素材 URL、素材基址或 `sid`：**不能**。键为固定常量，值仅为音量数字。
+4. **其余存储 API（`sessionStorage`、`IndexedDB`、`Cache` API、`document.cookie`）**：
    - `src/online/boot.ts:25-29` 在 `?stage` 存在时 `editorPage` 为 `false`，不调用 `bootStageGate`（因此 `src/online/stageGate.ts:267` 的 `sessionStorage` 与 `src/online/crashLog.ts:151` 的 `localStorage` 在舞台文档里不执行）；
    - `src/online/stageIsolation.ts:192` 的 `localStorage.setItem("pc.stageSid.v1:...", sid)` 仅在编辑器页调用 `iso.setScope(...)` → `sidStore.sidFor(...)` 时执行，模块导入时不触碰存储，舞台文档从不调用；
    - `src/online/l2.ts`、`src/online/cardRuntime/transpileCache.ts`、`src/editor/sync/offlineCache.ts` 均不在舞台中调用，模块顶层也不打开 `IndexedDB`；
@@ -136,9 +178,12 @@
 
 ## 没做成的及原因
 
-- 第一、二阶段代码、单测与报告要求均已完成。沙箱内 `npx tsc -b --force` 仅在写 `tsconfig.tsbuildinfo` 时受沙箱 `EPERM` 限制，`npx tsc --noEmit` 零错误通过。
+- 第一、二、三阶段代码、单测、探针与报告要求均已完成。沙箱内无法启动回环监听，探针 `scripts/probes/media-cache-probe.mjs` 已在沙箱内通过 `node --check` 语法校验，由 manager 在沙箱外实跑并填入结果。
 
 ## 对任务书或语义的更正建议
 
 - `docs/semantics/mechanism/asset-service.md` 的「缓存头」条没有限定账号模式；本分支按任务书要求只在账号云模式（`projectAccess`）下实现，因此旧局域网 / 本机 Bearer 读仍不发 `Cache-Control`（浏览器可能按 `Last-Modified` 做启发式缓存）。建议该条语义注明仅限账号云模式，或由后续任务覆盖旧模式。
 - 本分支在长期缓存响应上同时返回了 `Vary: Authorization`（manager 要求的纵深防御；语义未写）。建议将其补入「缓存头」条。
+- **残余风险（供主会话与用户决策，本分支不作修改）**：
+  - **(a) 原地切换项目时的过渡期定时器**：`syncManager` 原地切换项目时会先断开旧项目的素材连接，促使 `pushMediaPolicy` 先下发一份不带 `cardExec` 的策略，使舞台执行闸门关闭（`src/online/isolation/execGate.ts` 的 `noteMediaPolicy`：`parentAllows = policy?.cardExec === true && !hasTicket`）；随后在新项目路径号生效前，旧舞台文档即被整页重载而不会拿到新项目的 `sid`。但旧项目卡片此前已在该舞台文档里启动的代码（如定时器）在文档重载完成前仍会短暂继续运行；该现象早于本分支存在，且与素材缓存无关。
+  - **(b) 舞台卡片参数携带 `/media-s/<sid>/media/<hash>` 地址**：`src/render/mediaTier.ts` 的 `resolveCardParams` 会将 `/media-s/<sid>/media/<hash>` 地址传入舞台卡片的 `params`。若项目 A 的某张卡片把自己的 `params` 写进舞台源的持久化存储（如 `localStorage` / `IndexedDB`），就会把项目 A 的 `sid` 暴露给同舞台源上其它项目的卡片；在本分支之前，该暴露受限于 15 分钟 cookie 寿命与 `no-store`，而在开启长期缓存后，已缓存的素材字节在浏览器保留缓存期间可持续被读取。建议在卡片编写指南中明确禁止将素材 URL 持久化到存储，或在后续改动中不再向卡片代码直接提供含 `sid` 的地址。
