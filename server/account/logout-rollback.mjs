@@ -160,7 +160,8 @@ function isIdStructure(entry, current) {
   return (entry.op.changes ?? []).some((other) => other !== c && other.path.startsWith(prefix));
 }
 
-/** 撤回的硬上限：一个项目一次最多处理这么多个修改项；超出的不撤，逐条记进「保留」（原因 `over-limit`），账本与网页的数目里都算上。 */
+/** 撤回的硬上限：一个项目一次最多处理这么多个修改项；超出的不撤，`planRollback` 的 kept 里逐条标原因 `over-limit`，
+ * 账本与上报里单独记 `overLimit`（不并进「被别人接着改过而保留」：它们没人改过），网页上另一句话说明。 */
 export const ROLLBACK_ITEM_LIMIT = 50_000;
 
 /**
@@ -370,11 +371,12 @@ export function createLogoutRollback({ ledger, operations, report = null, now = 
   };
 
   async function settle(row) {
-    if (row.reported || !(row.totals.reverted + row.totals.kept > 0)) return true;
+    if (row.reported || !(row.totals.reverted + row.totals.kept + (row.totals.overLimit ?? 0) > 0)) return true;
     if (typeof report !== 'function') return true;
     try {
       await report(row.eventId, { reportId: `logout-rollback:${row.eventId}`, version: ROLLBACK_VERSION,
-        reverted: row.totals.reverted, kept: row.totals.kept, projects: row.totals.projects });
+        // 三个数分开：kept 只算「真的被别人接着改过所以保留」，超过上限没撤的单独是 overLimit（网页上另一句话）
+        reverted: row.totals.reverted, kept: row.totals.kept, overLimit: row.totals.overLimit ?? 0, projects: row.totals.projects });
       save(row.eventId, (rows) => { rows[row.eventId].reported = true; rows[row.eventId].reportedAt = now(); });
       return true;
     } catch (error) {
@@ -441,7 +443,8 @@ export function createLogoutRollback({ ledger, operations, report = null, now = 
           target.projects[cursor.projectId] = { ...was, state: finished ? 'done' : 'running', attempt: outcome.opId ? attempt + 1 : attempt,
             lastOpId: outcome.opId ?? was.lastOpId ?? null, parts: (was.parts ?? 0) + (outcome.opId ? 1 : 0), reverted, notice, gone: Boolean(outcome.gone),
             revertedPaths: [...(was.revertedPaths ?? []), ...outcome.reverted.map((item) => clipPath(item.path))].slice(0, ROLLBACK_PATHS_KEPT),
-            ...(finished ? { kept: outcome.kept.length + stranded, overLimit: (outcome.overLimit ?? 0) + stranded,
+            // kept 不含超过上限没撤的（它们没人改过）；那些单独记 overLimit
+            ...(finished ? { kept: outcome.kept.filter((item) => item.reason !== 'over-limit').length, overLimit: (outcome.overLimit ?? 0) + stranded,
               keptPaths: outcome.kept.slice(0, ROLLBACK_PATHS_KEPT).map((item) => `${item.reason}:${clipPath(item.path)}`) } : {}),
             at: now() };
         });

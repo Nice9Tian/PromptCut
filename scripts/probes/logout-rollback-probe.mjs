@@ -159,6 +159,16 @@ try {
     check(line === `旧设备在改密码后做的 ${done.modifications.reverted} 处修改已撤回；${done.modifications.kept} 处已被别人接着改过，保留。`, 'U3 那一行照用户定的原文', line);
     await W.evaluate(() => document.querySelector('#password-event')?.scrollIntoView({ block: 'center' }));
     await shot(W, 'website-line');
+    // U3b 超过一次能处理的上限:三个数分开说(数字取 RB-05 那一局:撤 450、别人改过 0、超限 50)
+    Object.assign(event, { modifications: { state: 'rolled-back', version: '0.7.20', reverted: 450, kept: 0, overLimit: 50 } });
+    await W.goto(`http://127.0.0.1:${sitePort}/account`, { waitUntil: 'networkidle0' });
+    await W.evaluate(() => document.querySelector('#password-event-refresh')?.click());
+    const over = await until('网页显示超限那一句', () => W.evaluate(() => { const e = document.querySelector('#password-event-modifications'); return e && !e.hidden && e.innerText.includes('另有') ? e.innerText : null; }), 10_000);
+    step('U3b', { line: over });
+    check(over === '旧设备在改密码后做的 450 处修改已撤回；0 处已被别人接着改过，保留。另有 50 处这次没有撤回：一次能处理的修改数量到了上限，不是别人改过；这些内容仍在项目里，没有丢。',
+      'U3b 超过上限的单独一句', over);
+    await W.evaluate(() => document.querySelector('#password-event')?.scrollIntoView({ block: 'center' }));
+    await shot(W, 'website-line-over-limit');
   }
   out.errors = { A: A.errors, B: B.errors };
 } catch (e) {

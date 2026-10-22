@@ -199,15 +199,18 @@ test('RB-05 要撤的很多:分批落地、批与批之间让出事件循环;总
   f.account.choose(event, true); await f.authority.synchronize();
   const barrier = f.ledger.read().barriers[`event:${event.event_id}`];
   let ticks = 0; const beat = setInterval(() => { ticks++; }, 0);
-  const rollback = executor(f, [], { batchItems: 120, itemLimit: 450 });
+  const reports = [], rollback = executor(f, reports, { batchItems: 120, itemLimit: 450 });
   const out = await rollback.run(barrier, proofOf(f, barrier.loginIds));
   clearInterval(beat);
   assert.equal(out.done, true);
   const parts = f.history.accepted(f.projectId).filter(op => op.actor.rollbackEventId === event.event_id);
   assert.equal(parts.length, 4, '450 项按 120 一批:4 批');
   const row = rollback.status(event.event_id).projects[f.projectId];
-  assert.deepEqual([row.reverted, row.kept, row.overLimit, row.parts], [450, 50, 50, 4], '超过上限的 50 项记进保留与账本,不悄悄丢');
-  assert.equal(rollback.status(event.event_id).totals.overLimit, 50);
+  // 超过上限没撤的 50 项单独记 overLimit,不并进「被别人接着改过而保留」(kept):这次没人改过它们
+  assert.deepEqual([row.reverted, row.kept, row.overLimit, row.parts], [450, 0, 50, 4], '超过上限的 50 项单独记账,不悄悄丢、也不冒充别人改过');
+  const totals = rollback.status(event.event_id).totals;
+  assert.deepEqual([totals.reverted, totals.kept, totals.overLimit], [450, 0, 50]);
+  assert.deepEqual(reports.map(r => [r.reverted, r.kept, r.overLimit]), [[450, 0, 50]], '报给账号服务时三个数分开');
   assert.ok(ticks > 0, '批与批之间让出了事件循环');
   const value = f.history.snapshot(f.projectId).value;
   assert.equal(Object.keys(value).filter(k => k.startsWith('bag')).length, 50, '没撤的正好是超过上限的那 50 项');

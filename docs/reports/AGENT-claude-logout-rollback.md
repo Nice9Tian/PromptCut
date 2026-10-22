@@ -280,3 +280,58 @@ VisuHive 全量 node --test account/test/*.test.mjs   ℹ tests 118  ℹ pass 10
 
 7. 撤回的上限与分批是三级数字，建议写进 `mechanism/document-service.md`：一批最多 1000 个修改项、256 KiB；一个项目一次最多 5 万个修改项，超出的记进保留；账本每条路径 300 字符、每个项目 50 条；续办器每个退出的撤回一遍最多等 1 秒。
 8. 「超过上限的不撤、算保留」会让网页那一行的「M 处已被别人接着改过，保留」把上限之外的也算进去，字面上不准。要不要给超限另一句话，请定（这一版没改网页的字）。
+
+## 九、超过上限的那几处单独说（协调方核返工后提出）
+
+问题：第八节的上限把「超过上限没撤的」算进了网页上「M 处已被别人接着改过，保留」。那几处没人碰过，是系统自己放弃的，这句话对用户不实。
+
+### 改法（加字段、不改已有字段的含义）
+
+- **PromptCut**（`server/account/logout-rollback.mjs`）：每个项目的 `kept` 只算「真的被别人接着改过所以保留」（以及落不下去的 `cannot-apply`），不再含 `over-limit`；超限的与「一批全落不下、剩下的」一起单独记 `overLimit`。上报给账号服务的那份多一个非负整数 `overLimit`（取账本 `totals.overLimit`），三个数分开。三个数都是 0 时照旧不报。
+- **VisuHive 后端**（提交 `e1940c3`，`account/events.mjs`、`account/store.mjs`）：`reportModifications` 多收 `overLimit`，缺省 0、必须是非负整数；`eventStatus` 的 `modifications` 带出 `overLimit`（旧报告没有这个数按 0）；同一报告号重发时也核这个数。
+- **VisuHive 网页**（提交 `8851416`，`site/assets/account.js`）：`overLimit > 0` 才在原句后面多一句，三个数都为 0 时整行照旧不显示。整行现在是：
+
+  > 旧设备在改密码后做的 450 处修改已撤回；0 处已被别人接着改过，保留。另有 50 处这次没有撤回：一次能处理的修改数量到了上限，不是别人改过；这些内容仍在项目里，没有丢。
+
+  没有超限时一字不变：「旧设备在改密码后做的 N 处修改已撤回；M 处已被别人接着改过，保留。」
+- 交付顺序不变：先装 VisuHive 后端（`69872ef`、`e1940c3`），再上 PromptCut 文档服务，最后推 `site/`（`f8cac7c`、`8851416`）。新网页配旧后端：没有 `overLimit` 按 0，和原来一样；新文档服务配旧后端：多出的字段旧后端会照旧收下前三个数（`reportModifications` 只挑认识的字段）——但按第一节，文档服务本来就不能早于后端上线。
+
+### 改前红、改后绿
+
+改前（测试先写，实现没动）：
+
+```
+PromptCut  RB-05:
+✖ RB-05 要撤的很多:分批落地、批与批之间让出事件循环;…
+  AssertionError: 超过上限的 50 项单独记账,不悄悄丢、也不冒充别人改过
+    actual: [ 450, 50, 50, 4 ],
+    expected: [ 450, 0, 50, 4 ],
+VisuHive:
+✖ 设备已退出下面那一行:超过上限没撤的单独一句,说清不是别人改过、内容还在;三个数分开
+    actual: '旧设备在改密码后做的 450 处修改已撤回；2 处已被别人接着改过，保留。',
+    expected: '旧设备在改密码后做的 450 处修改已撤回；2 处已被别人接着改过，保留。另有 50 处这次没有撤回：一次能处理的修改数量到了上限，不是别人改过；这些内容仍在项目里，没有丢。',
+✖ 撤回结果上报:超过上限没撤的单独一个数(overLimit),缺省 0;不并进「保留」;重发同一份照旧
+  AssertionError: Missing expected exception.
+ℹ tests 14  ℹ pass 12  ℹ fail 2
+```
+
+改后：
+
+```
+PromptCut（专审 5 条 + 自己的 29 条里的 24 条 + LR-E 2 条 + UC 4 条，五个文件一起跑）  ℹ tests 29  ℹ pass 29  ℹ fail 0
+  ✔ RB-05 …（[reverted, kept, overLimit, parts] = [450, 0, 50, 4]；报给账号服务的是 [450, 0, 50]）
+VisuHive 全量 node --test account/test/*.test.mjs  ℹ tests 120  ℹ pass 110  ℹ fail 0（10 条原本就跳过）
+探针 U3b：网页那一行与上面引文一字不差；截图 out/logout-rollback/website-line-over-limit.png
+```
+
+（「29 条」是这五个文件的总条数：LR-E 外层 1 + 子项 2、LP 11、RB 6、SEC 5、UC 4。）
+
+### 门槛
+
+| 项 | 结果 |
+|---|---|
+| `npx tsc -b --force` | 退出码 0 |
+| 受影响的 106 个测试文件（`npm test -- …`，清单同第八节） | 退出码 0；日志 104,875 字节；759 条，759 过、0 失败、0 取消、0 跳过 |
+| `npm run build` | 退出码 0 |
+| 探针 | 退出码 0，`ok: true`，多了 U3b 一步与一张截图 |
+| VisuHive 全量 | 120 条，110 过、0 失败、10 跳过 |
