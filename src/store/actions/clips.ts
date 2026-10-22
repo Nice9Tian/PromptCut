@@ -230,7 +230,8 @@ export const clips = {
     const p = state.project;
     const hit = findClip(p, clipId);
     if (!hit) return { ok: false, error: "找不到这个片段" };
-    const media = hit.clip.mediaId && !hit.clip.cardId && !hit.clip.cutId ? p.media.find((m) => m.id === hit.clip.mediaId) : undefined;
+    // 速度是视频素材的属性:套了素材效果卡的视频段(片段同时带 cardId)也认,取帧走素材节点的倍率(kernel/clipTime.mjs 的 withMediaRates)
+    const media = hit.clip.mediaId && !hit.clip.cutId ? p.media.find((m) => m.id === hit.clip.mediaId) : undefined;
     if (!media || media.kind !== "video") return { ok: false, error: "只有视频段能改速度" };
     if (hit.track.locked) return { ok: false, error: "请先解锁序列" };
     const next = normalizeSpeed(speed);

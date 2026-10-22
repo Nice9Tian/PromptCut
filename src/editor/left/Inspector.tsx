@@ -111,6 +111,8 @@ export function Inspector({ tab }: { tab: "form" | "code" }) {
           <NumberField attrs={{ "data-pc": "clip-end" }} step={0.1} min={0} value={clip.end} onCommit={v => actions.moveClip(clip.id, { end: v })} className="w-16 pc-left-input is-sm" />
           <span className="pc-left-faint ml-auto">{(clip.end - clip.start).toFixed(2)}s</span>
         </div>
+        {/* 套了素材效果卡的视频段(片段同时带 cardId 和 mediaId):速度照样能改,取帧走素材节点的倍率 */}
+        {clip.mediaId && project.media.find(m => m.id === clip.mediaId)?.kind === "video" && <ClipSpeedForm key={`speed-${clip.id}`} clip={clip} />}
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto pc-left-scroll" style={{ display: tab === "form" ? "block" : "none" }}>

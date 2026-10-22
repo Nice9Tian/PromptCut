@@ -43,7 +43,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   const cutTotal = useStore((s) => (clip.cutId ? cutDuration(s.project, clip.cutId) : 0));
   const label = clip.cutId ? (cutName ? `剪辑 · ${cutName}` : "剪辑 · (已不存在)") : clip.cardId ? clipCardLabel(knownCardName(clip.cardId)) : clip.label;
   // 变速的视频段:名字后面带上倍数(kernel/clipTime.mjs),一眼看得出这段改过速度
-  const shownLabel = isSpeedChanged(clip) && !clip.cardId ? `${label ?? ""} · ${speedLabel(clipSpeed(clip))}` : label;
+  const shownLabel = isSpeedChanged(clip) && clip.mediaId ? `${label ?? ""} · ${speedLabel(clipSpeed(clip))}` : label;
   // 这台设备跑不了的卡不挂任何「本地 PC 辅助渲染」的徽标(2026-10-21 用户定:没有这种情况;画面由渲染节点出)
   // 按素材类型上色:文字 / 视频 / 转场… 各一档,一眼读得出片段是什么
   const trackKind = clipTrackKind(clip, (id) => getState().project.media.find((m) => m.id === id));

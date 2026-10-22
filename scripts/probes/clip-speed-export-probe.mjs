@@ -51,6 +51,8 @@ const TREE = path.resolve(arg('tree', HERE));
 const PORT = Number(arg('port', 0)) || undefined;
 const OUT = path.resolve(arg('out', path.join(HERE, 'out', 'clip-speed-export', path.basename(TREE))));
 const SKIP_AUDIO = argv.includes('--skip-audio');
+/** 排查用:G 段(套素材效果卡的那段)的速度,缺省 2 */
+const G_SPEED = Number(arg('g-speed', 2));
 const FPS = 30, W = 640, H = 360, SRC_SECONDS = 20, DURATION = 16;
 const WORK = path.join(OUT, 'work');
 const MEDIA_DIR = path.join(WORK, 'media');
@@ -114,14 +116,15 @@ const SEGMENTS = [
   { id: 'D', start: 6, end: 8, cut: { cutOffset: 0.5, inner: { mediaOffset: 1, speed: 2, start: 0 } } },
   { id: 'E', start: 8, end: 10, mediaOffset: 2, speed: 4 },
   { id: 'F', start: 10, end: 12, mediaOffset: 5, speed: 0.25 },
-  { id: 'G', start: 12, end: 14, mediaOffset: 6, speed: 2, tint: true },
+  { id: 'G', start: 12, end: 14, mediaOffset: 6, speed: G_SPEED === 1 ? undefined : G_SPEED, tint: true },
   { id: 'H', start: 14, end: 16, mediaOffset: 9, audible: true },
 ];
 
 function projectOf(media) {
   const clips = SEGMENTS.map((s) => s.cut
     ? { id: s.id, cardId: '', cutId: 'inner', cutOffset: s.cut.cutOffset, start: s.start, end: s.end, params: {}, frame: full }
-    : { id: s.id, cardId: '', mediaId: media.id, mediaOffset: s.mediaOffset, start: s.start, end: s.end, params: {}, frame: full, label: s.id,
+    // 套素材效果卡的段(G):和 apply_card 挂上之后的样子一样,片段带着卡(cardId)、素材(mediaId)和节点(nodeId)
+    : { id: s.id, cardId: s.tint ? TINT : '', mediaId: media.id, mediaOffset: s.mediaOffset, start: s.start, end: s.end, params: s.tint ? { amount: 1 } : {}, frame: full, label: s.id,
       ...(s.speed ? { speed: s.speed } : {}), ...(s.tint ? { nodeId: 'n-tint' } : {}) });
   const inner = SEGMENTS.find((s) => s.cut).cut.inner;
   return {

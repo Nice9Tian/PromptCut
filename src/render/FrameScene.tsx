@@ -22,13 +22,6 @@ import { SceneHostContext } from "./CutSegmentScene";
 const NO_HASHES: readonly string[] = [];
 
 /**
- * 素材层上的像素映射。画面由 WebGL2 片元着色器算(render/pixelMapGl.ts):表达式在
- * kernel/pixelMap.mjs 里翻译成 GLSL,视频 / 图片帧当纹理,`to` 是另一段素材时用第二张纹理。
- * 这张 <canvas> 只有 bitmaprenderer 上下文 —— 着色器画完整块位图转移过来。
- * 原先的逐像素 CPU 循环(getImageData → mapRgba → putImageData)已整体删除、不留退路:
- * 实测 1080p 每帧 416～483 ms,超 30 fps 的每拍预算约二十倍。
- */
-/**
  * 导出 / 预渲染取帧的素材时刻(`data-pc-media-time`,截图那一步 `frameMedia.ts` 按它 seek)。
  * 变速段按 `kernel/clipTime.mjs` 的统一换算;缺省 1 时保留这里原来的运算顺序 `(mediaOffset + t) − start` ——
  * 浮点加减不满足结合律,换成 `mediaOffset + (t − start)` 可能差最后一位,导出取帧要逐位不变。
@@ -37,6 +30,13 @@ function exportMediaTime(clip: TrackClip, t: number): number {
   return Math.max(0, clipSpeed(clip) === 1 ? (clip.mediaOffset ?? 0) + t - clip.start : mediaTimeAt(clip, t));
 }
 
+/**
+ * 素材层上的像素映射。画面由 WebGL2 片元着色器算(render/pixelMapGl.ts):表达式在
+ * kernel/pixelMap.mjs 里翻译成 GLSL,视频 / 图片帧当纹理,`to` 是另一段素材时用第二张纹理。
+ * 这张 <canvas> 只有 bitmaprenderer 上下文 —— 着色器画完整块位图转移过来。
+ * 原先的逐像素 CPU 循环(getImageData → mapRgba → putImageData)已整体删除、不留退路:
+ * 实测 1080p 每帧 416～483 ms,超 30 fps 的每拍预算约二十倍。
+ */
 function PixelMappedMedia({ media, clip, t, project, style, def, live = false, playing = false, scrubbing = false, localHashes = NO_HASHES }: { media: any; clip: any; t: number; project: Project; style: React.CSSProperties; def: PixelMapDef; live?: boolean; playing?: boolean; scrubbing?: boolean; localHashes?: readonly string[] }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const source = useRef<HTMLVideoElement | HTMLImageElement>(null);
