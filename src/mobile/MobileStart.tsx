@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import { useAccountProjects } from "../account/useAccountProjects";
 import { JOIN_REQUEST_TEXT, autoJoinKey, joinRequestNotice } from "../account/joinRequestText";
+import { LogoMark } from "../ui/Logo";
 import { BrandCanvas } from "../start/BrandCanvas";
 import { Icon } from "./icons";
 import { Sheet } from "./ui";
@@ -39,14 +40,14 @@ export function MobileStart({ onEnterEditor }: { onEnterEditor: () => void }) {
       */}
       {!account && <div className="ps-m-login-bg" aria-hidden="true"><BrandCanvas /></div>}
       <div className="topbar">
-        <div className="logo">Prompt<b>Cut</b></div>
+        <div className="logo"><LogoMark size={18} /><span>Prompt<b>Cut</b></span></div>
         {account && <span className="chip accent" data-pcm="account-chip"><i className="dot" /> {account.name}</span>}
         {account && <button type="button" className="icon-btn" title="退出登录" aria-label="退出登录" disabled={busy} onClick={() => void perform(ap.logout)}><Icon name="back" /></button>}
       </div>
       <div className="home-body">
         {error && <div className="err" role="alert" data-pcm="home-error">{error}</div>}
         {!account ? (
-          <form data-pcm="login" className="ps-m-login-card" style={{ marginTop: 14 }} onSubmit={(e) => { e.preventDefault(); void perform(async () => { await ap.login(name, password, remember); setPassword(""); }); }}>
+          <form data-pcm="login" className="ps-m-login-card" onSubmit={(e) => { e.preventDefault(); void perform(async () => { await ap.login(name, password, remember); setPassword(""); }); }}>
             <h2 className="sec">登录网站账号</h2>
             <div className="field"><label>账号名</label><input className="text-in" name="username" autoComplete="username" required value={name} onChange={(e) => setName(e.target.value)} /></div>
             <div className="field"><label>密码</label><input className="text-in" name="password" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /></div>

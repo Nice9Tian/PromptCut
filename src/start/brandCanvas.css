@@ -68,17 +68,80 @@
 }
 
 /*
- * 登录卡片:**实体,不用毛玻璃**(用户 2026-10-23 改定,原来那版毛玻璃效果不好)。
- * 底色用皮肤的面板色,和软件里其它卡片是同一档;背后的渐变到这儿就被挡住,表单区域干净,
- * 衬托靠的是卡片与背景的明暗差,不再靠透背景。
+ * 登录卡片:**实体,不用毛玻璃**(用户 2026-10-23 改定,原来那版毛玻璃效果不好),
+ * 并且**颜色和设计风格照桌面浏览器版窄屏那一套**(用户 2026-10-23 定)。
+ *
+ * 桌面窄屏(<900px)时左边那块渐变是不显示的,只剩中间一张表单:卡片底色相当于桌面的 `--bg-canvas`,
+ * 输入框是 `--bg-panel` —— 所以这里照抄那组关系,输入框才站得出来。下面每一条的数值都和
+ * `start.css` 里 `.ps-login-form` / `.ps-field` / `.ps-primary-btn` 对齐。
+ *
+ * 选择器都带 `.pcm`(手机版样式的根类):`mobile.css` 里是 `.pcm .text-in` 这种两段,
+ * 不带 `.pcm` 就压不过它,只能靠加载顺序赌。
  */
-.ps-m-login-card {
-  padding: 18px 16px 20px;
+.pcm .ps-m-login-card {
+  width: 100%;
+  max-width: 340px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px 18px 22px;
   border: 1px solid var(--hairline);
-  border-radius: 16px;
-  background: var(--bg-panel);
+  border-radius: 14px;
+  background: var(--bg-canvas);
   box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5);
 }
 
-/* 卡片里第一个小标题贴着上沿,不要再撑出一截空白 */
-.ps-m-login-card > .sec:first-child { margin-top: 0; }
+/* 垂直居中:这一屏只有登录块时,整组在屏幕中间 */
+.pcm .home-body:has(.ps-m-login-card) {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+/* 标题:照桌面的 .ps-login-title,不要手机版那种小字宽字距 */
+.pcm .ps-m-login-card h2.sec {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: 0;
+  color: var(--ink);
+}
+
+.pcm .ps-m-login-card .field { display: flex; flex-direction: column; gap: 5px; }
+.pcm .ps-m-login-card .field label { font-size: 12px; color: var(--ink-muted); }
+
+.pcm .ps-m-login-card .text-in {
+  height: auto;
+  padding: 9px 11px;
+  border: 1px solid var(--hairline);
+  border-radius: 9px;
+  background: var(--bg-panel);
+  color: var(--ink);
+  font-size: 13px;
+}
+.pcm .ps-m-login-card .text-in:focus { border-color: var(--accent); }
+
+.pcm .ps-m-login-card .check-row {
+  margin: 0;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.pcm .ps-m-login-card .btn.primary {
+  margin-top: 4px;
+  height: auto;
+  padding: 10px 14px;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.pcm .ps-m-login-card .hint { margin: 0; font-size: 12px; }
+.pcm .ps-m-login-card .hint a { color: var(--accent); }
+
+/* 左上角:LOGO 标记和字标并排 */
+.pcm .topbar .logo { display: flex; align-items: center; gap: 7px; }
