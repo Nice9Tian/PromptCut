@@ -17,14 +17,14 @@
  * 数值换成 `BrandGlow.tsx` 里 LOOK 那一组（用户 2026-10-23 调定）。
  *
  * 位置用 `calc(50% ± Npx)` 写，对应 LOOK 的「以屏幕中心对齐」：
- * 偏移 = (位置 − 0.5) × 基准视口（559 × 1290）—— 冷的那团 (−363, −826)，暖的那团 (+140, +232)。
+ * 偏移 = (位置 − 0.5) × 基准视口（559 × 1290）—— 冷的那团 (−50, −774)，暖的那团 (+324, +232)。
  * 兜底只求「像」，不求逐像素一致：没有抖动，也不飘。
  */
 .ps-brand-glow--css {
   background:
-    radial-gradient(1900px 2400px at calc(50% - 363px) calc(50% - 826px),
-      color-mix(in srgb, var(--ui-accent) 17%, transparent), transparent 56%),
-    radial-gradient(1500px 730px at calc(50% + 140px) calc(50% + 232px),
-      color-mix(in srgb, #ff7b00 7.5%, transparent), transparent 64%),
+    radial-gradient(1900px 1830px at calc(50% - 50px) calc(50% - 774px),
+      color-mix(in srgb, var(--ui-accent) 22.5%, transparent), transparent 43%),
+    radial-gradient(2400px 1100px at calc(50% + 324px) calc(50% + 232px),
+      color-mix(in srgb, #ff7b00 2.5%, transparent), transparent 13%),
     var(--ui-bg);
 }

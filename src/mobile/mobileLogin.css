@@ -10,6 +10,9 @@
  * 2026-10-23 用户定：手机版不要实体方框，表单直接落在背景上，和桌面窄屏一样。
  */
 
+/* 登录键的「流光」样式（和桌面登录页共用一份，见那个文件的文件头） */
+@import "../start/brandButton.css";
+
 /* 背景：铺满整屏，和官网 `background-attachment: fixed` 是一个意思 */
 .ps-m-login-bg {
   position: fixed;
@@ -117,6 +120,7 @@
   color: var(--ink-muted);
 }
 
+/* 只管大小，长相（青紫渐变、流光、扫光）在 `../start/brandButton.css` 里和桌面共用一份 */
 .pcm .ps-m-login-form .btn.primary {
   margin-top: 4px;
   height: auto;
@@ -124,8 +128,6 @@
   border-radius: 9px;
   font-size: 13px;
   font-weight: 600;
-  background: var(--accent);
-  color: var(--on-accent);
 }
 /* 空着时那颗键的淡法也照桌面（.ps-primary-btn:disabled 是 0.5，手机版自己那套是 0.45） */
 .pcm .ps-m-login-form .btn.primary:disabled { opacity: 0.5; }

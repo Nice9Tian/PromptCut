@@ -5,6 +5,9 @@
  * 两边同时动同一个文件一定打架,所以这一支的样式一行都不进那边。
  */
 
+/* 登录键的「流光」样式（和手机版共用一份，见文件头的说明） */
+@import "./brandButton.css";
+
 .ps-brand-canvas {
   position: absolute;
   inset: 0;
