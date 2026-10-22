@@ -155,10 +155,16 @@ export function scrubWorkerEnv(env) {
 
 /**
  * 在线页面的构建里有没有嵌着这个代码版本：页面发布的清单计划把它写进 `requires.codeVersion`（`src/online/buildInfo.ts`），
- * 是 64 位十六进制串，原样出现在某个脚本里。回 true / false；目录不在、读不了回 null（没法比）。
+ * 是 64 位十六进制串。回 true / false；目录不在、读不了回 null（没法比）。
+ * 先读本代的 `version.json`（`{ codeVersion }`，语义 `mechanism/platforms.md`「新版本提示」）：`assets/` 里还留着前 3 代的脚本
+ * （「换代保留」），扫脚本会把停在旧代的渲染服务也判成一致。没有这个文件、或读出来不是 64 位十六进制串（旧的在线构建），
+ * 才退回扫一遍脚本，看它是否原样出现在某个脚本里。
  */
 export function editorHasCodeVersion(editorDir, version) {
   if (!editorDir || !/^[0-9a-f]{64}$/.test(String(version))) return null;
+  let current = null;
+  try { current = JSON.parse(fs.readFileSync(path.join(editorDir, 'version.json'), 'utf8'))?.codeVersion ?? null; } catch { /* 没有或读不了：退回扫描 */ }
+  if (typeof current === 'string' && /^[0-9a-f]{64}$/.test(current.trim())) return current.trim() === version;
   const files = [];
   const walk = (dir, depth) => {
     for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
