@@ -148,7 +148,8 @@ test('JRC-4 成员投影里的申请列表:只收创建者的;一个账号一条
 test('JRC-5 每个新 code 都有一句话,不落到「请求失败（code）」兜底', () => {
   for (const code of ['not-listed', 'banned', 'no-project', 'relocating', 'entry-open', 'join-request-limit', 'join-request-full', 'join-request-account-limit',
     'invalid-join-request', 'no-join-request', 'join-request-decided', 'join-request-banned', 'already-member', 'invalid-entry', 'invalid-member',
-    'request-mismatch', 'creator-required', 'access-revision-mismatch', 'login-required', 'credential-revoked']) {
+    'request-mismatch', 'creator-required', 'access-revision-mismatch', 'login-required', 'credential-revoked',
+    'bad-request-id', 'invalid-authority-claim', 'invalid-project', 'invalid-role']) {
     for (const status of [400, 403, 404, 409, 429]) {
       const text = accountErrorText(status, code);
       assert.ok(text && !text.includes('请求失败') && !text.includes(code), `${code} → ${text}`);
