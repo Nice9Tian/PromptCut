@@ -1,3 +1,5 @@
+import { GUEST_ID_RE, adoptGuestSession, clearGuest, guestName, loadGuest } from './guest';
+
 /** Account credentials live in RAM. Only the native vault owns desktop recovery. */
 export interface Account { id: string; name: string; email?: string | null }
 export interface EditorLogin { account: Account; loginId: string; accessToken: string; accessExpiresAt: number }
@@ -14,6 +16,11 @@ export interface ProjectSession {
   hasSecondaryPassword?: boolean;
   needsSecondaryPassword?: boolean;
 }
+/**
+ * 游客这一侧手里的东西（2026-10-23 用户定）：编号、显示名、令牌和它什么时候过期。
+ * 令牌是持有即身份的，和账号的访问令牌一样只留在内存与本机存档里（`guest.ts`），不进地址、不进日志。
+ */
+export interface GuestLogin { id: string; name: string; token: string; expiresAt: number }
 export interface CloudAgentConsent { accountId: string; accepted: boolean; noticeVersion: 1; acceptedAt?: number }
 /** Keep the standard transport protocol alongside the opaque account credential. */
 export function accountConnectionProtocols(session: ProjectSession): string[] { return ['promptcut.v1', `promptcut.account.${session.connectionTicket}`]; }
@@ -108,11 +115,13 @@ export function createAccountClient(options: AccountClientOptions) {
   const fetcher = options.fetch ?? fetch, now = options.now ?? Date.now;
   const origin = new URL(options.origin).origin;
   let login: EditorLogin | null = null, csrf = '', websiteAccount: Account | null = null;
+  /** 游客模式：非 null 时这台页面以游客身份行事，不去问网站账号 */
+  let guest: GuestLogin | null = null;
   let renewTask: Promise<EditorLogin> | null = null;
   let authVersion = 0;
   const authListeners = new Set<() => void>();
   const authChanged = () => { authVersion++; for (const listener of [...authListeners]) listener(); };
-  const authIdentity = () => login ? `${login.account.id}:${login.loginId}` : null;
+  const authIdentity = () => guest ? `${guest.id}:guest` : login ? `${login.account.id}:${login.loginId}` : null;
   const native = async (operation: string, args: Record<string, unknown> = {}) => {
     if (!options.native) throw new AccountFailure(503, 'desktop-bridge-unavailable');
     return options.native(operation, args);
@@ -150,8 +159,30 @@ export function createAccountClient(options: AccountClientOptions) {
     return login;
   }
   async function website() { const value = await request('/api/account/me'); csrf = value.csrfToken || ''; websiteAccount = value.account ?? null; return websiteAccount; }
+  /**
+   * 游客（`server/account/guest.mjs`）：向文档服务领一张令牌。带着手里那一张就是续期、编号不变；
+   * 不带、或者它已经过期，服务端就随机一个新身份。编号只由服务端给，这里报什么都不算数。
+   *
+   * 只在线页面有这条路：桌面版走外壳的账号桥，桥只放行 create / join / session / admin / members 五条，
+   * 加一条要换外壳（`desktop/src-tauri/src/account_vault.rs`），所以桌面版点游客时如实说要用官网。
+   */
+  async function guestSession(previous: string | null): Promise<GuestLogin> {
+    if (!options.online) throw new AccountFailure(503, 'desktop-bridge-unavailable');
+    const value = await request('/hosted/shared/account/guest', previous ? { token: previous } : {});
+    if (!GUEST_ID_RE.test(String(value.guestId)) || typeof value.token !== 'string' || !value.token ||
+      !Number.isSafeInteger(value.expiresAt) || value.expiresAt <= now()) throw new AccountFailure(503, 'account-protocol');
+    const before = authIdentity();
+    guest = { id: value.guestId, name: guestName(value.guestId), token: value.token, expiresAt: value.expiresAt };
+    if (authIdentity() !== before) authChanged();
+    return guest;
+  }
+  /** 游客手里那一张摆成登录的样子：下面 `/hosted/shared/account/*` 那几条不用分辨这是账号还是游客 */
+  const asLogin = (g: GuestLogin): EditorLogin =>
+    ({ account: { id: g.id, name: g.name }, loginId: `guest:${g.id}`, accessToken: g.token, accessExpiresAt: g.expiresAt });
   /** `minRemainingMs`:手里的访问令牌至少还要剩这么久,不够就先续(缺省 10 秒;页面换连接时要一张寿命足够的票据,会给得更大) */
   async function ensureLogin(minRemainingMs = 10_000): Promise<EditorLogin> {
+    // 游客模式下这一步问的是游客令牌,不去碰网站账号:游客没有账号,问了只会被 401 挡回来
+    if (guest) return asLogin(guest.expiresAt > now() + minRemainingMs ? guest : await guestSession(guest.token));
     if (login && login.accessExpiresAt > now() + minRemainingMs) return login;
     if (renewTask) return renewTask;
     renewTask = (async () => {
@@ -165,7 +196,30 @@ export function createAccountClient(options: AccountClientOptions) {
   }
   return {
     get account() { return login?.account ?? websiteAccount; },
+    /** 这台页面此刻的游客身份；不是游客就是 null。界面拿它取名字和头像 */
+    get guest() { return guest; },
     get authVersion() { return authVersion; },
+    /**
+     * 以游客身份进来（2026-10-23 用户定）：本机记着的那一张令牌交回去续期、编号不变；
+     * 没有或者过期了，服务端随机一个新身份。拿到之后以服务端给的编号为准并存回本机。
+     */
+    async enterAsGuest(): Promise<GuestLogin> {
+      const saved = loadGuest();
+      const session = await guestSession(saved?.token ?? null);
+      adoptGuestSession({ id: session.id, token: session.token, expiresAt: session.expiresAt });
+      return session;
+    },
+    /** 换一个游客身份：不交旧令牌，服务端就给个新的 */
+    async newGuest(): Promise<GuestLogin> {
+      const session = await guestSession(null);
+      adoptGuestSession({ id: session.id, token: session.token, expiresAt: session.expiresAt });
+      return session;
+    },
+    /** 不当游客了（去登录账号，或者离开）。本机那一份一并清掉：留着也用不上，还会被下次进入捡回来 */
+    leaveGuest() {
+      if (!guest) return;
+      guest = null; clearGuest(); authChanged();
+    },
     subscribeAuth(listener: () => void) { authListeners.add(listener); return () => { authListeners.delete(listener); }; },
     async restore() { if (options.online) { await website(); if (!websiteAccount) return null; return (await ensureLogin()).account; }
       const value = await native('recover', options.device); if (value === null) return null; return accept(check(value)).account; },

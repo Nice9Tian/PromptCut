@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   GUEST_ID_RE, GUEST_SHAPES, GUEST_STORAGE_KEY,
-  clearGuest, ensureGuest, guestAvatar, guestFrom, guestName, isGuestId, loadGuest, newGuestId, resetGuest,
+  adoptGuestSession, clearGuest, ensureGuest, guestAvatar, guestFrom, guestName, isGuestId, loadGuest, newGuestId, resetGuest,
 } from './guest.ts';
 
 /** 假的 localStorage。`throwOn` 里点名的方法一调就抛，用来演无痕窗口 */
@@ -113,4 +113,35 @@ test('localStorage 读写一抛就当没记住，照样给得出身份（无痕�
   // 完全没有 localStorage(Node 里跑、或者站点数据被禁):给 null 走兜底那一条
   assert.equal(loadGuest(null), null);
   assert.match(ensureGuest(null, () => 1).id, GUEST_ID_RE);
+});
+
+test('认下服务端给的身份：编号以它为准，令牌一起存；同一个编号回来不改生日', () => {
+  const s = fakeStore();
+  const local = ensureGuest(s, () => 1);            // 还没进过云端时的临时身份
+  const fromServer = { id: newGuestId(), token: 'tok-1', expiresAt: 99_000 };
+
+  const adopted = adoptGuestSession(fromServer, s, () => 2);
+  assert.equal(adopted.id, fromServer.id, '云端的编号由服务端说了算');
+  assert.notEqual(adopted.id, local.id);
+  assert.equal(adopted.createdAt, 2, '换了个编号就是换了个人，生日重记');
+  assert.equal(adopted.token, 'tok-1');
+  assert.deepEqual(loadGuest(s), adopted, '令牌也该一起存下来，下次进来好续期');
+
+  // 同一个编号续期:只换令牌,生日不动
+  const renewed = adoptGuestSession({ ...fromServer, token: 'tok-2', expiresAt: 190_000 }, s, () => 500);
+  assert.equal(renewed.createdAt, 2);
+  assert.equal(renewed.token, 'tok-2');
+  assert.equal(loadGuest(s)?.expiresAt, 190_000);
+
+  assert.throws(() => adoptGuestSession({ id: 'acc_' + 'a'.repeat(24), token: 't', expiresAt: 1 }, s), /不是游客编号/);
+});
+
+test('存档里令牌坏了只丢令牌，编号还认：人还是那个人，续期时当没带', () => {
+  const s = fakeStore();
+  const id = newGuestId();
+  s.map.set(GUEST_STORAGE_KEY, JSON.stringify({ id, createdAt: 3, token: 42, expiresAt: 'soon' }));
+  const got = loadGuest(s);
+  assert.equal(got?.id, id);
+  assert.equal(got?.token, undefined);
+  assert.equal(got?.expiresAt, undefined);
 });

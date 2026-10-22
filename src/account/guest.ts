@@ -27,6 +27,13 @@ export interface GuestIdentity {
   name: string;
   /** 什么时候分配的（毫秒）。三天清理是服务端按它自己的记录算的，这里只用来排查 */
   createdAt: number;
+  /**
+   * 云端那一张令牌（`server/account/guest.mjs` 签的），只有进过云端才有。
+   * 持有即身份：和账号的访问令牌一样，不进地址、不进日志，只留在这里和内存里。
+   */
+  token?: string;
+  /** 令牌什么时候过期（毫秒） */
+  expiresAt?: number;
 }
 
 /** 头像长什么样：色相 + 第几号图形。两样都是从 ID 推出来的，不单独存 */
@@ -97,8 +104,8 @@ function bytes(n: number): Uint8Array {
   return out;
 }
 
-export function guestFrom(id: string, createdAt: number): GuestIdentity {
-  return { id, name: guestName(id), createdAt };
+export function guestFrom(id: string, createdAt: number, cloud?: { token: string; expiresAt: number }): GuestIdentity {
+  return { id, name: guestName(id), createdAt, ...(cloud ? { token: cloud.token, expiresAt: cloud.expiresAt } : {}) };
 }
 
 /**
@@ -131,7 +138,9 @@ export function loadGuest(given?: Store | null): GuestIdentity | null {
     const value = JSON.parse(raw) as Partial<GuestIdentity> | null;
     if (!isGuestId(value?.id)) return null;
     // 名字不单独信存下来的那一份:ID 对得上就按 ID 重算,免得手改过存档之后名字和 ID 对不上
-    return guestFrom(value.id, typeof value?.createdAt === 'number' ? value.createdAt : Date.now());
+    const cloud = typeof value?.token === 'string' && value.token && typeof value?.expiresAt === 'number'
+      ? { token: value.token, expiresAt: value.expiresAt } : undefined;
+    return guestFrom(value.id, typeof value?.createdAt === 'number' ? value.createdAt : Date.now(), cloud);
   } catch {
     return null;
   }
@@ -155,6 +164,19 @@ export function ensureGuest(given?: Store | null, now: () => number = Date.now):
 /** 「换一个」：丢掉旧的，重新随机。回新的那一个 */
 export function resetGuest(given?: Store | null, now: () => number = Date.now): GuestIdentity {
   return save(guestFrom(newGuestId(), now()), given);
+}
+
+/**
+ * 认下服务端发的那一个游客身份：云端的编号由服务端给（页面报什么都不算数，见 `server/account/guest.mjs`），
+ * 所以拿到之后就以它为准 —— 本机原先那个随机编号是没进过云端时的临时身份，服务端给了新的就把它换掉。
+ * 编号变了意味着换了个人，`createdAt` 跟着重记。
+ */
+export function adoptGuestSession(session: { id: string; token: string; expiresAt: number },
+  given?: Store | null, now: () => number = Date.now): GuestIdentity {
+  if (!isGuestId(session?.id)) throw new TypeError('adoptGuestSession: 不是游客编号');
+  const had = loadGuest(given);
+  const createdAt = had && had.id === session.id ? had.createdAt : now();
+  return save(guestFrom(session.id, createdAt, { token: session.token, expiresAt: session.expiresAt }), given);
 }
 
 /** 登录了账号之后把游客身份清掉：账号才是这台设备之后的身份 */
