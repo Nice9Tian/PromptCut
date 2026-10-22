@@ -26,6 +26,22 @@ import { accountError } from './client.mjs';
 export const GUEST_ID_RE = /^gst_[0-9a-f]{24}$/;
 export const isGuestId = value => typeof value === 'string' && GUEST_ID_RE.test(value);
 
+/**
+ * 从素材票据的 `userId` 里认出游客编号。
+ *
+ * 账号这条路的 `userId` 写成 `account:<编号>@<设备>`（`server/docservice/account-hosted.mjs`），
+ * 裸编号只在托管那条路（文档服务核过的主体）和合成夹具里出现。两种都收，认不出回 null。
+ * 不认这一层的话，票据那条路上的游客限额永远不会命中 —— 看着接上了，其实是空的。
+ */
+export function guestIdOfUserId(userId) {
+  if (isGuestId(userId)) return userId;
+  if (typeof userId !== 'string') return null;
+  const at = userId.lastIndexOf('@');
+  const head = at > 0 ? userId.slice(0, at) : userId;
+  const id = head.startsWith('account:') ? head.slice('account:'.length) : null;
+  return isGuestId(id) ? id : null;
+}
+
 /** 令牌的前缀。和 `v1.`（连接票据、委托）岔开，拿错了一眼就看得出 */
 const GUEST_TOKEN_PREFIX = 'gst1';
 /** 签名段的长度：HMAC-SHA256 的 32 字节写成 base64url 固定 43 个字符。定长才能从尾部切开 */

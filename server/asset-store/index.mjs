@@ -6,7 +6,9 @@
  * - `kind: 'oss'`    → 插槽：抛 Error，`code === 'not-implemented'`，不装任何 SDK
  * - 其它             → TypeError
  *
- * 接口写在 `blob-store.mjs` 的 JSDoc 里。本目录只引 Node 内置模块。
+ * 接口写在 `blob-store.mjs` 的 JSDoc 里。本目录只引 Node 内置模块；例外是 `guest-quota.mjs`，它引 `../account/guest.mjs`
+ * 取游客限额的数和判断（那边只引 `node:crypto` 与同目录的 `client.mjs`）。`asset-service.ts` 经这里拿它，
+ * 好几个单测把 `asset-service.ts` 单独转译、只替换已有的几条静态 import，所以不在那边另加一条。
  *
  * 另外转出素材服务的 HTTP 客户端 `createAssetClient`（`client.mjs`，契约 `docs/plan/artifact-transfer-contract.md` 第 2 节），
  * 以及 fs 实现按候选文件名找文件的钩子 `candidateFileResolver`（同一契约第 10 节第 6 条）。
@@ -21,6 +23,7 @@ export { createProjectAssetStores, projectScopeOfRoot, projectStorageKey, PROJEC
 export { createAssetRevocationConsumer } from './project-revocations.mjs';
 export { authorizeAsset, openProjectStream, createProjectAssetAccess } from './project-access.mjs';
 export { assetContextOf, setAssetContext, authorizedAssetStore } from './project-access.mjs';
+export { createGuestAssetQuota, guestQuotaApplies, guestIdOfUserId } from './guest-quota.mjs';
 
 export { BLOB_CHUNK_SIZE, createFsStore, createMemoryStore, createAssetClient, ensureLayoutSync, readLayoutSync, LAYOUT_FILE, LAYOUTS };
 
