@@ -189,7 +189,7 @@ test('JRC-5 每个新 code 都有一句话,不落到「请求失败（code）」
     'secondary-password-required', 'bad-secondary-password',
     // 游客那几条(2026-10-23 用户定)
     'guest-unavailable', 'guest-rate-limited', 'guest-project-limit', 'guest-read-only',
-    'guest-asset-limit', 'guest-asset-too-large', 'invalid-asset']) {
+    'guest-video-limit', 'guest-file-too-large', 'invalid-asset']) {
     for (const status of [400, 403, 404, 409, 429]) {
       const text = accountErrorText(status, code);
       assert.ok(text && !text.includes('请求失败') && !text.includes(code), `${code} → ${text}`);

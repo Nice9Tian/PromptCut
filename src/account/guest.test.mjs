@@ -151,12 +151,17 @@ test('存档里令牌坏了只丢令牌，编号还认：人还是那个人，�
 test('界面上说的限额和服务端真正拦的那几个数对得上', () => {
   // 两边各写一份是为了「进来之前先讲清楚」,但数一旦对不上,界面就在骗人。说了算的永远是服务端
   assert.equal(GUEST_LIMITS.projects, SERVER_LIMITS.projects);
-  assert.equal(GUEST_LIMITS.assets, SERVER_LIMITS.assets);
+  assert.equal(GUEST_LIMITS.videos, SERVER_LIMITS.videos);
   assert.equal(GUEST_LIMITS.assetMB * 1024 * 1024, SERVER_LIMITS.assetBytes);
   assert.equal(GUEST_LIMITS.ttlDays * 24 * 60 * 60 * 1000, SERVER_LIMITS.ttlMs);
   // 那句话里的数也是从上面这几个拼出来的,不是手写死的
-  for (const n of [GUEST_LIMITS.projects, GUEST_LIMITS.assets, GUEST_LIMITS.assetMB, GUEST_LIMITS.ttlDays])
+  for (const n of [GUEST_LIMITS.projects, GUEST_LIMITS.videos, GUEST_LIMITS.assetMB, GUEST_LIMITS.ttlDays])
     assert.ok(GUEST_LIMITS_TEXT.includes(String(n)), `那句话里该出现 ${n}`);
+  // 用户 2026-10-23 的口径：数的是视频、每一条源文件限尺寸。界面那句话不能再说成「几条素材」
+  assert.match(GUEST_LIMITS_TEXT, new RegExp(`${GUEST_LIMITS.videos} 条视频`));
+  assert.match(GUEST_LIMITS_TEXT, /每条源文件/);
+  assert.doesNotMatch(GUEST_LIMITS_TEXT, /条素材/);
+  assert.equal(SERVER_LIMITS.assets, undefined, '服务端不该还留着按素材条数数的旧名字');
 });
 
 test('记住游客自己那一个项目：换身份不带过去，清掉之后不再挂着', () => {

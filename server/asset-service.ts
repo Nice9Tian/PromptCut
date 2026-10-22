@@ -45,6 +45,9 @@
  *   - `X-Media-Ext: <扩展名>` 与 / 或 `X-Media-Type: <MIME>` —— 选填,决定取回时的 Content-Type。
  *     扩展名优先;只给 MIME 时按表反查扩展名;都没给就是无扩展名、`application/octet-stream`。
  *     **哪一片先带上就以哪一片为准**,之后的不再改它。
+ *   - `X-Media-Tier: small | original` —— 选填,这个文件是素材小尺寸还是原尺寸(2026-10-23,游客只数视频原尺寸,
+ *     `asset-store/guest-quota.mjs`)。只认 `small`,缺失、拼错、不认识的一律当 `original`;同一个哈希只要有一片
+ *     没说 `small` 就记成 `original`。只影响游客的视频条数,取回、对账的回包不变。
  *   - 请求体的 `Content-Type` 不看(一般是 `application/octet-stream`)。
  * - 长度:除最后一片外每片必须恰好 `chunkSize` 字节,最后一片是 `size - chunkSize × (count - 1)`。
  *   `Content-Length` 对不上直接回 400;实收字节多了或少了也回 400,这一片不算收到。
@@ -77,7 +80,7 @@
  * - 本模块管的路由(`/api/asset/media/...` 和 `/@media/*`)一律回 `Access-Control-Allow-Origin: *`,
  *   `Access-Control-Expose-Headers: Content-Range, Accept-Ranges, Content-Length, Content-Type`。
  * - 预检 `OPTIONS` 回 204:方法 `GET, HEAD, PUT, POST, OPTIONS`,
- *   头 `Content-Type, Range, X-Media-Size, X-Media-Ext, X-Media-Type, Authorization`(`Authorization` 带票据);
+ *   头 `Content-Type, Range, X-Media-Size, X-Media-Ext, X-Media-Type, X-Media-Tier, Authorization`(`Authorization` 带票据);
  *   请求带 `Access-Control-Request-Private-Network` 时，**只有来源是回环或局域网地址**（`isPrivateOrigin`）
  *   才回 `Access-Control-Allow-Private-Network: true`；公网网页的预检不给这一项，浏览器照样拦下它。
  * - 不带凭据(不用 cookie),所以用 `*`。`/api/**` 的同源守卫只对这一组路径豁免
@@ -126,7 +129,7 @@ export const ASSET_CHUNK_SIZE = 8 * 1024 * 1024;
 export const ASSET_MAX_SIZE = 64 * 1024 * 1024 * 1024;
 
 export const ASSET_ALLOW_METHODS = "GET, HEAD, PUT, POST, OPTIONS";
-export const ASSET_ALLOW_HEADERS = "Content-Type, Range, X-Media-Size, X-Media-Ext, X-Media-Type, Authorization";
+export const ASSET_ALLOW_HEADERS = "Content-Type, Range, X-Media-Size, X-Media-Ext, X-Media-Type, X-Media-Tier, Authorization";
 export const ASSET_EXPOSE_HEADERS = "Content-Range, Accept-Ranges, Content-Length, Content-Type";
 
 /** 分片数:小于一片的素材也算 1 片 */
@@ -170,6 +173,14 @@ export const ARTIFACT_EXTS: readonly string[] = [
   ...new Set(["html", "mp4", "m4s", ...Object.values(ARTIFACT_MIME_TO_EXT), "htm", "m4v", "jpeg"]),
 ];
 
+/**
+ * 请求头里的档位 `X-Media-Tier`。原样交给数据层,由它归一(`blob-store.mjs` 的 `normalizeTier`:只认 `small`,
+ * 别的一律 `original`)。这是页面说的:游客可以把原件标成 `small` 绕过视频条数,为什么可以接受见 `guest-quota.mjs` 文件头
+ */
+function tierFromHeaders(req: IncomingMessage): string {
+  return String(req.headers["x-media-tier"] || "");
+}
+
 /** 请求头里的扩展名:X-Media-Ext 优先,其次按 X-Media-Type 反查。取不出给空串;`snap` / `px` 只留 `ARTIFACT_EXTS` 里的 */
 function extFromHeaders(req: IncomingMessage, ns: AssetNamespace = "media"): string {
   const raw = String(req.headers["x-media-ext"] || "").trim().toLowerCase().replace(/^\./, "");
@@ -193,7 +204,7 @@ export interface AssetBlobStore {
   stat(hash: string): Promise<{ size: number; ext: string; contentType: string; mtimeMs: number | null } | null>;
   read(hash: string, range?: { start?: number; end?: number }): Promise<Readable | null>;
   chunks(hash: string): Promise<{ size: number | null; chunkSize: number; received: number[]; complete: boolean }>;
-  putChunk(hash: string, n: number, info: { size: number; ext?: string }, source: AsyncIterable<Buffer> | Readable): Promise<
+  putChunk(hash: string, n: number, info: { size: number; ext?: string; tier?: string }, source: AsyncIterable<Buffer> | Readable): Promise<
     | { status: "ok"; bytes: number }
     | { status: "complete" }
     | { status: "size-mismatch"; size: number }
@@ -209,6 +220,8 @@ export interface AssetBlobStore {
   >;
   remove(hash: string): Promise<boolean>;
   usage(): Promise<{ blobs: number; bytes: number; staging: number }>;
+  /** 已入库与暂存,各带扩展名和档位(`blob-store.mjs`);游客视频条数用,fs、memory 两种实现都有 */
+  inventory?(): Promise<{ stored: Array<{ hash: string; ext: string; tier: "small" | "original" }>; staging: Array<{ hash: string; ext: string; tier: "small" | "original" }> }>;
 }
 
 /** 缺省的数据层:fs 实现,目录是本地内容库;找文件、写索引、Content-Type 都用 vite-plugin-media 已有的 */
@@ -316,10 +329,10 @@ async function handlePutChunk(req: IncomingMessage, res: ServerResponse, store: 
     return reject(req, res, 400, { ok: false, error: "chunk-length", expected, got: Number(declared) });
   }
 
-  // 游客往 media 传:先过游客限额(尺寸看 X-Media-Size,开新暂存时数条数),账号与别的命名空间直接写
+  // 游客往 media 传:先过游客限额(尺寸看 X-Media-Size;视频原尺寸开新暂存时数条数),账号与别的命名空间直接写
   const guest = writer.guest;
   if (guest) {
-    return guest.quota.putChunk({ accountId: writer.accountId, ns, size, hash, store, key: guest.key },
+    return guest.quota.putChunk({ accountId: writer.accountId, ns, size, hash, ext: extFromHeaders(req, ns), tier: tierFromHeaders(req), store, key: guest.key },
       () => writeChunk(req, res, store, hash, n, size, expected, ns, writer),
       (denied) => reject(req, res, denied.status, { ok: false, error: denied.error }));
   }
@@ -340,7 +353,7 @@ async function writeChunk(req: IncomingMessage, res: ServerResponse, store: Asse
 
   let out;
   try {
-    out = await store.putChunk(hash, n, { size, ext: extFromHeaders(req, ns) }, req);
+    out = await store.putChunk(hash, n, { size, ext: extFromHeaders(req, ns), tier: tierFromHeaders(req) }, req);
   } catch (err) {
     if (reservedHere) usage?.release(ns, hash, writer.projectId);
     // 磁盘满:这一片的标记没补(不算收到),已收的分片不动;请求体可能还在路上,回完就掐断
@@ -446,9 +459,9 @@ export function isLoopbackRequest(req: IncomingMessage): boolean {
 
 /** 游客限额(`asset-store/guest-quota.mjs`):中间件一份,`key` 标识同一个数据层(托管下是项目,本机是那个数据层) */
 interface GuestQuotaHook {
-  putChunk(who: { accountId?: string; ns: string; size: number; hash: string; store: AssetBlobStore; key: unknown }, put: () => Promise<unknown>, deny: (d: { status: number; error: string }) => unknown): Promise<unknown>;
+  putChunk(who: { accountId?: string; ns: string; size: number; hash: string; ext?: string; tier?: string; store: AssetBlobStore; key: unknown }, put: () => Promise<unknown>, deny: (d: { status: number; error: string }) => unknown): Promise<unknown>;
   complete(who: { accountId?: string; ns: string; hash: string; store: AssetBlobStore; key: unknown }, complete: () => Promise<unknown>, deny: (d: { status: number; error: string }) => unknown): Promise<unknown>;
-  whole(who: { accountId?: string; bytes: number | null; store: AssetBlobStore; key: unknown; needsLength: boolean }): Promise<{ ok: true; release: () => void } | { ok: false; status: number; error: string }>;
+  whole(who: { accountId?: string; bytes: number | null; ext?: string; store: AssetBlobStore; key: unknown; needsLength: boolean }): Promise<{ ok: true; release: () => void } | { ok: false; status: number; error: string }>;
 }
 
 /** 这次写入的来历:容量记账用(`usage`、`service`、`projectId`),游客限额用(`accountId`、`guest`) */
@@ -688,7 +701,7 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
    * 游客素材限额(`asset-store/guest-quota.mjs`):只管游客往 media 写。按数据层排队:托管下每个项目一个数据层,
    * 用项目编号当键;本机只有一个 media 数据层,用它本身当键。
    */
-  const guestQuota: GuestQuotaHook = createGuestAssetQuota();
+  const guestQuota: GuestQuotaHook = createGuestAssetQuota({ isVideoExt: (ext: string) => contentTypeForExt(ext).startsWith("video/") });
   const guestTrace = (who: { projectId?: string; accountId?: string }) =>
     ({ accountId: who.accountId, guest: who.accountId ? { quota: guestQuota, key: opts.projectStores && who.projectId ? `project:${who.projectId}` : media } : null });
   /**
@@ -708,7 +721,13 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
       const upload = String(req.url || "").startsWith("/api/media/upload/");
       const declared = Number(req.headers["content-length"]);
       const bytes = upload && req.headers["content-length"] !== undefined && Number.isSafeInteger(declared) && declared >= 0 ? declared : null;
-      verdict = await guestQuota.whole({ accountId, bytes, store: opts.projectStores.project(lease.projectId).stores.media, key: `project:${lease.projectId}`, needsLength: upload });
+      // 扩展名:整件上传从 URL 里的文件名拿(和 vite-plugin-media 的 handleMediaUpload 同一取法),补算内容键从 `path` 参数的文件名拿
+      let ext = "";
+      try {
+        const u = new URL(String(req.url || "/"), "http://promptcut.local");
+        ext = extOfName(upload ? decodeURIComponent(u.pathname.split("/").pop() || "") : (u.searchParams.get("path") || ""));
+      } catch { ext = ""; }
+      verdict = await guestQuota.whole({ accountId, bytes, ext, store: opts.projectStores.project(lease.projectId).stores.media, key: `project:${lease.projectId}`, needsLength: upload });
     } finally { void lease.release(); }
     if (!verdict.ok) return reject(req, res, verdict.status as 403, { ok: false, error: verdict.error });
     const release = verdict.release;

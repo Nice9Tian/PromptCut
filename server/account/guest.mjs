@@ -5,7 +5,7 @@
  *
  * 1. **谁签发、谁核对**：账号的访问令牌由 VisuHive 账号服务签发、文档服务拿去问它（`client.mjs` 的 `verify`）；
  *    游客令牌由文档服务**自己**签发、自己核对，不问账号服务。所以账号服务不认识游客，也不必认识。
- * 2. **能做的事有限**：自己建的项目最多一个、素材最多三条每条 100 MB、三天清理；进别人的项目一律只读。
+ * 2. **能做的事有限**：自己建的项目最多一个、视频最多三条、每一条源文件不超过 100 MB、三天清理；进别人的项目一律只读。
  *    前两条在这里，只读在 `authority.mjs` 的 `joinProject`（游客入别人的名单时按 `'r'` 落账）。
  *
  * 令牌是**持有即身份**的东西：编号由服务端随机生成，不收页面报上来的编号，否则谁都能自称是别人。
@@ -54,14 +54,15 @@ const MAX_TOKEN_LENGTH = 1024;
 /**
  * 游客的限额（三级机制的数，2026-10-23 用户定）。要改只改这里：
  *   projects    自己能建几个项目
- *   assets      能传几条素材
- *   assetBytes  一条素材最大多少字节
+ *   videos      能传几条视频。只数视频的**原尺寸档**：小档是系统给它生成的代理，不占额；图片、音频不计数
+ *               （用户原话「总视频素材不能大于三条」只说视频）。怎么数见 `server/asset-store/guest-quota.mjs`
+ *   assetBytes  **每一条源文件**最大多少字节：视频、图片、音频、小档，传上来的每个文件都查
  *   ttlMs       建起来多久之后清理（项目和素材一起清）
  *   tokenTtlMs  一张令牌多久过期。比 ttlMs 短，页面在这期间续期；过了就换一个新身份
  */
 export const GUEST_LIMITS = Object.freeze({
   projects: 1,
-  assets: 3,
+  videos: 3,
   assetBytes: 100 * 1024 * 1024,
   ttlMs: 3 * 24 * 60 * 60 * 1000,
   tokenTtlMs: 24 * 60 * 60 * 1000,
@@ -154,20 +155,21 @@ export const guestProjectLimitReached = ({ accountId, ownedCount }) =>
   isGuestId(accountId) && (ownedCount ?? 0) >= GUEST_LIMITS.projects;
 
 /**
- * 这条素材收不收：游客只能传 `GUEST_LIMITS.assets` 条，每条不超过 `assetBytes`。
+ * 这个文件收不收：游客传的每一个文件都不超过 `assetBytes`；算数的（视频的原尺寸档）最多 `GUEST_LIMITS.videos` 条。
  * 账号不受这两条限制，直接放行。
  *
  * @param {object} args
  * @param {string} args.accountId 谁在传
- * @param {number} args.bytes 这一条多大
- * @param {number} args.storedCount 他已经存着几条
+ * @param {number} args.bytes 这个文件多大
+ * @param {boolean} [args.countsAsVideo] 这个文件算不算一条视频（视频的原尺寸档）。不算的只查尺寸
+ * @param {number} [args.storedVideos] 他已经存着（或正在收）几条算数的视频
  * @returns {{ ok: true } | { ok: false, code: string }}
  */
-export function checkGuestAsset({ accountId, bytes, storedCount }) {
+export function checkGuestAsset({ accountId, bytes, countsAsVideo = false, storedVideos = 0 }) {
   if (!isGuestId(accountId)) return { ok: true };
   if (!Number.isSafeInteger(bytes) || bytes < 0) return { ok: false, code: 'invalid-asset' };
-  if (bytes > GUEST_LIMITS.assetBytes) return { ok: false, code: 'guest-asset-too-large' };
-  if ((storedCount ?? 0) >= GUEST_LIMITS.assets) return { ok: false, code: 'guest-asset-limit' };
+  if (bytes > GUEST_LIMITS.assetBytes) return { ok: false, code: 'guest-file-too-large' };
+  if (countsAsVideo && (storedVideos ?? 0) >= GUEST_LIMITS.videos) return { ok: false, code: 'guest-video-limit' };
   return { ok: true };
 }
 
@@ -178,7 +180,7 @@ export const guestExpired = (createdAt, at, ttlMs = GUEST_LIMITS.ttlMs) =>
 /** 人话的错误文案。页面照 `accountErrorText` 那张表显示，这里给服务端日志和测试对照用 */
 export const GUEST_ERROR_TEXT = Object.freeze({
   'guest-project-limit': `游客只能建 ${GUEST_LIMITS.projects} 个项目。`,
-  'guest-asset-limit': `游客最多上传 ${GUEST_LIMITS.assets} 条素材。`,
-  'guest-asset-too-large': `游客上传的每条素材不能超过 ${GUEST_LIMITS.assetBytes / 1024 / 1024} MB。`,
+  'guest-video-limit': `游客最多上传 ${GUEST_LIMITS.videos} 条视频。`,
+  'guest-file-too-large': `游客上传的每一条源文件不能超过 ${GUEST_LIMITS.assetBytes / 1024 / 1024} MB。`,
   'guest-read-only': '游客在别人的项目里只能查看。',
 });

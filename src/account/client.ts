@@ -94,8 +94,8 @@ export function accountErrorText(status: number, code: string): string {
     'guest-rate-limited': '领取游客身份的次数太多了，请过一会儿再试，或者登录网站账号。',
     'guest-project-limit': `游客只能建 ${GUEST_LIMITS.projects} 个项目。要建更多，请注册一个账号。`,
     'guest-read-only': '你在这个项目里只能查看，改不了内容。',
-    'guest-asset-limit': `游客最多上传 ${GUEST_LIMITS.assets} 条素材。要传更多，请注册一个账号。`,
-    'guest-asset-too-large': `游客上传的每条素材不能超过 ${GUEST_LIMITS.assetMB} MB。`,
+    'guest-video-limit': `游客最多上传 ${GUEST_LIMITS.videos} 条视频。要传更多，请注册一个账号。`,
+    'guest-file-too-large': `游客上传的每一条源文件不能超过 ${GUEST_LIMITS.assetMB} MB。`,
     'invalid-asset': '这条素材的信息不完整，请重新选择。' };
   return messages[code] || (status === 401 ? '登录已失效，请重新登录。' : status === 503 ? '云端服务暂时不可用，请稍后重试。' : status === 403 ? '没有访问这个项目的权限。' : status === 0 ? '连接云端失败，请检查网络后重试。' : `请求失败（${code}）。`);
 }
