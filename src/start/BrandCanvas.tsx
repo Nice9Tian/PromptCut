@@ -66,6 +66,11 @@ const LOOK = {
   grainSize: 1.0,
   /** 颗粒参与折射的程度:磨砂玻璃靠表面微小凹凸把光打散,这个数就是「凹凸有多乱」 */
   grainJitter: 0.0,
+  /**
+   * 颗粒的柔化。0 = 只有插值(已经不是马赛克了);往上加会再做一次 5 点平均,
+   * 相当于一道很轻的高斯,颗粒越来越绵
+   */
+  grainSoft: 0.5,
   /** 两道域扭曲各推多远 */
   warpA: 4.0,
   warpB: 4.2,
@@ -124,7 +129,7 @@ uniform float uScale, uYStretch, uSplit, uFalloff, uBlend, uMixWarp, uStreak, uG
 uniform float uAxis, uSeeThrough, uFadeEdge;
 uniform float uWarpA, uWarpB, uGamma, uGain, uFloor, uRoll, uSat;
 uniform float uStripeN, uStripeSkew, uFrostBlur, uFrost, uMilky, uEdge;
-uniform float uGrainSize, uGrainJitter;
+uniform float uGrainSize, uGrainJitter, uGrainSoft;
 
 float hash12(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -140,6 +145,24 @@ float vnoise(vec2 x) {
   float c = hash12(i + vec2(0.0, 1.0));
   float d = hash12(i + vec2(1.0, 1.0));
   return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+/**
+ * 颗粒用的噪声:**插值**过的,不是 floor 出来的方格。
+ *
+ * floor + hash 每一格是一个常数、边界上直接跳变,看着就是马赛克(用户 2026-10-23 指出)。
+ * vnoise 里四角哈希按 smoothstep 插值,所以格子之间是连成一片的。
+ * uGrainSoft > 0 时再做一次 5 点平均(上下左右加中心),相当于一道很轻的高斯,
+ * 把颗粒进一步揉软;等于 0 就只有插值那一层。
+ */
+float grainNoise(vec2 c, float soft) {
+  float n = vnoise(c);
+  if (soft > 0.001) {
+    float d = soft * 0.5;
+    n = (n + vnoise(c + vec2(d, 0.0)) + vnoise(c - vec2(d, 0.0))
+           + vnoise(c + vec2(0.0, d)) + vnoise(c - vec2(0.0, d))) * 0.2;
+  }
+  return n;
 }
 
 float fbm(vec2 p) {
@@ -183,9 +206,9 @@ void main() {
    * 原来那套每帧重算(hash 里带了时间),看着就是满屏闪(用户 2026-10-23 指出)。
    * 粗粒靠把屏幕坐标按 uGrainSize 量化:一格一个随机数,格子越大颗粒越粗。
    */
-  vec2 gcell = floor(gl_FragCoord.xy / max(1.0, uGrainSize));
-  float gn1 = hash12(gcell);
-  float gn2 = hash12(gcell + 71.3);
+  vec2 gco = gl_FragCoord.xy / max(1.0, uGrainSize);
+  float gn1 = grainNoise(gco, uGrainSoft);
+  float gn2 = grainNoise(gco + 71.3, uGrainSoft);
 
   float br = frost * uFrost * uFrostBlur;
   /*
@@ -378,6 +401,7 @@ export function BrandCanvas(): JSX.Element {
     gl.uniform1f(at("uEdge"), LOOK.edge);
     gl.uniform1f(at("uGrainSize"), LOOK.grainSize);
     gl.uniform1f(at("uGrainJitter"), LOOK.grainJitter);
+    gl.uniform1f(at("uGrainSoft"), LOOK.grainSoft);
 
     const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 
