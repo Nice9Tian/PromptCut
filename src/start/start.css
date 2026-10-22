@@ -31,8 +31,6 @@
   gap: 8px;
   padding: 14px 16px 10px;
 }
-.ps-side-brand { font-size: 14px; font-weight: 600; letter-spacing: 0.01em; }
-
 .ps-side-new {
   flex: 0 0 auto;
   margin: 2px 12px 10px;

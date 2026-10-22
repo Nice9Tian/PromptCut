@@ -75,8 +75,8 @@ export function ProjectSidebar(props: {
   return (
     <aside className="ps-side" data-pc="start-side">
       <div className="ps-side-head">
+        {/* Logo 自带字标,这里不要再写一遍产品名 */}
         <Logo size={20} />
-        <span className="ps-side-brand">PromptCut</span>
       </div>
 
       <button type="button" className="ps-side-new" data-pc="start-side-new" onClick={props.onCreate}>
@@ -104,6 +104,7 @@ export function ProjectSidebar(props: {
             type="button"
             className="ps-row"
             data-pc="start-scope-all"
+            aria-label={`全部项目，共 ${props.projects.length} 个`}
             aria-current={isAt({ kind: "all" })}
             onClick={() => props.onScope({ kind: "all" })}
           >
@@ -126,6 +127,8 @@ export function ProjectSidebar(props: {
                   className="ps-row"
                   data-pc="start-scope-folder"
                   data-folder={f.id}
+                  aria-label={`文件夹 ${f.name}，${rows.length} 个项目`}
+                  aria-expanded={expanded}
                   aria-current={isAt({ kind: "folder", id: f.id })}
                   onClick={() => {
                     props.onScope({ kind: "folder", id: f.id });
@@ -153,6 +156,7 @@ export function ProjectSidebar(props: {
             type="button"
             className="ps-row"
             data-pc="start-scope-loose"
+            aria-label={`没放进文件夹，${loose.length} 个项目`}
             aria-current={isAt({ kind: "loose" })}
             onClick={() => props.onScope({ kind: "loose" })}
           >

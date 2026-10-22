@@ -33,7 +33,8 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
   const [view, setView] = useState<"login" | "home">(initialView);
   const [scope, setScope] = useState<Scope>({ kind: "all" });
   const [notice, setNotice] = useState("");
-  const [account, setAccount] = useState<string | null>(null);
+  // `?ui=home` 是直接看开始页的预览入口,这一路没走登录,账号给个占位名,免得侧栏底下显示「未登录」
+  const [account, setAccount] = useState<string | null>(() => (initialView() === "home" ? "预览账号" : null));
 
   // 假数据按最后改动从新到旧;右边那排只给最近的,所以顺序要稳
   const projects = useMemo(

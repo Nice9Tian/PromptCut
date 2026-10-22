@@ -43,7 +43,7 @@ export function ProjectThumb({ project, onOpen }: { project: MockProject; onOpen
 /** 第一格恒定是它(翻到第几页都在),点了走和侧栏「新建项目」同一条路 */
 export function CreateTile({ onCreate }: { onCreate: () => void }): JSX.Element {
   return (
-    <button type="button" className="ps-tile ps-tile-new" data-pc="start-create-tile" onClick={onCreate}>
+    <button type="button" className="ps-tile ps-tile-new" data-pc="start-create-tile" aria-label="新建项目" onClick={onCreate}>
       <span className="ps-frame">
         <span className="ps-tile-new-plus" aria-hidden="true">+</span>
         <span className="ps-tile-new-text">Create A New</span>
