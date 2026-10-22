@@ -84,7 +84,7 @@ test("MI-03 二级文字写明改成什么、云端现在是什么;冲突按属�
   assert.equal(time.text, "时间 0–2 秒 → 0–3 秒（云端现在是 0–2 秒）");
   assert.equal(time.conflict, false, "长度云端没人动:不冲突");
   assert.equal(row.conflict, true, "一级:有一项冲突就标有冲突");
-  assert.deepEqual(M.mergeCounts([row]), { total: 2, conflicts: 1 });
+  assert.deepEqual(M.mergeCounts([row]), { total: 1, conflicts: 1, items: 2 }, "横条按一级数(一样东西一处),二级另计");
 });
 
 test("MI-04 我删了、别人改了:冲突;「合并」删掉;「删除选中」保留云端现状", () => {

@@ -1,7 +1,7 @@
 /**
  * 顶栏上的同步小部件:
- * - 「同步已暂停」:离线批次的第一条被拒、用户关掉了离线对话框(暂不决定)时一直显示,点它重新打开对话框
- *   (c65-design.md 第 8 节裁定);
+ * - 「冲突合并」:待合并表里还有待处理的项时一直显示,点它打开冲突合并窗口(`ConflictMerge.tsx`;2026-10-18 用户定);
+ * - 「同步已暂停」:离线批次逐项转表算不出基准、退回整份处理时才会出现(c65-design.md 第 8 节),点它重新打开离线对话框;
  * - 「离线」:连不上文档服务时的提示(修改照常,先攒在本机);
  * - 在线页面(C10 契约第 10 节):「离线」换成表 A 的五条状态措辞(`onlineStatus.ts`),另有「备份」小部件列出
  *   本页内存里的备份、可逐个下载(同步面板);
@@ -17,6 +17,7 @@ import { OFFLINE_SHOW_DELAY_MS, ONLINE_STATUS_TEXT, onlineStatusOf, type OnlineS
 import { RecoveryActions } from "./RecoveryActions";
 import "./sync.css";
 import { CLOUD_GONE_TEXT } from "./recoveryTexts";
+import { ConflictMergeButton } from "./ConflictMerge";
 
 function subscribeNavigator(cb: () => void): () => void {
   window.addEventListener("online", cb);
@@ -75,6 +76,8 @@ export function SyncChips() {
   const status = useSync((v) => v.status);
   const active = useSync((v) => v.active);
   const blocked = useSync((v) => v.blocked);
+  // 导航栏顶端的「冲突合并」:只要还有待处理的项就显示(断网、恢复中也显示,窗口里能删、连上后再合并)
+  const merge = <ConflictMergeButton />;
   if (reopenState && reopenState !== "connected") {
     const text: Record<string, string> = {
       recovering: "正在恢复原协作房间…", "waiting-host": "正在等待主机上线，将自动重试。",
@@ -85,11 +88,12 @@ export function SyncChips() {
       "host-conflict": "原房间已有主机，未接管。",
       "missing-unconfirmed": CLOUD_GONE_TEXT.missingUnconfirmed, "proof-rejected": CLOUD_GONE_TEXT.proofRejected,
     };
-    return <><span className="pc-sync-chip pc-sync-chip--offline" role="status" data-pc="collaboration-recovery" data-kind={reopenState}>{text[reopenState] ?? reopenState}</span><RecoveryActions state={reopenState} /></>;
+    return <>{merge}<span className="pc-sync-chip pc-sync-chip--offline" role="status" data-pc="collaboration-recovery" data-kind={reopenState}>{text[reopenState] ?? reopenState}</span><RecoveryActions state={reopenState} /></>;
   }
-  if (!active || blocked) return null;
+  if (!active || blocked) return merge;
   return (
     <>
+      {merge}
       {status === "paused" ? (
         <button type="button" className="pc-sync-chip pc-sync-chip--paused" data-pc="sync-paused" title="断网期间项目有新改动，点开决定怎么处理" onClick={() => setOfflineOpen(true)}>
           <span className="pc-sync-chip-dot" />

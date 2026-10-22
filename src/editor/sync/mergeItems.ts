@@ -605,11 +605,14 @@ export function mergeRows(project: Project, table: MergeThing[]): ThingRow[] {
   });
 }
 
-/** 一共几处、其中几处有冲突(二级项计数;冲突横条与按钮用) */
-export function mergeCounts(rows: ThingRow[]): { total: number; conflicts: number } {
-  let total = 0, conflicts = 0;
-  for (const r of rows) for (const p of r.props) { total++; if (p.conflict) conflicts++; }
-  return { total, conflicts };
+/**
+ * 冲突横条与按钮的「N 处改动待合并，其中 M 处有冲突」:按一级(被改的那样东西)数,与手机版演示稿一致;
+ * `items` 是二级项的总数(「已选 N 项」那一边用二级项数)。
+ */
+export function mergeCounts(rows: ThingRow[]): { total: number; conflicts: number; items: number } {
+  let items = 0;
+  for (const r of rows) items += r.props.length;
+  return { total: rows.length, conflicts: rows.filter((r) => r.conflict).length, items };
 }
 
 /* ---------------- 合并:把选中的二级项照我这边写进项目 ---------------- */

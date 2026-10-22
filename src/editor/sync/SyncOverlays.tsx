@@ -16,12 +16,14 @@ import {
   replayOffline,
   setOfflineOpen,
   useSync,
+  browserJournalSaved,
   type UndoNoticeView,
 } from "./syncManager";
 import { clipOfEntity, entityLabel, writerLabel } from "./labels";
 import { ONLINE } from "../../online/mode";
 import { OFFLINE_UNSENT_TEXT, offlineUnsent, unsentAtRisk } from "./onlineStatus";
 import { foldLine, NOTICE_FOLD_AT, undoNoticeTitle } from "../undoNotice";
+import { ConflictMergeDialog } from "./ConflictMerge";
 import "./sync.css";
 
 /** 提示条停留多久(稿件:约 8 秒后消失,带关闭按钮) */
@@ -213,8 +215,8 @@ function BlockingDialog() {
 }
 
 /**
- * 在线页面离线且有未提交的改动(C10 契约第 10 节,表 A「常驻提示」):顶栏下方常驻一行提示,
- * 同时挂浏览器原生的离开确认(`beforeunload`)。在线页面不把离线修改存进浏览器(F3 在线版推迟),关页面就丢。
+ * 在线页面离线且有未提交的改动(C10 契约第 10 节,表 A「常驻提示」):顶栏下方常驻一行提示。
+ * 离线修改落盘到浏览器本地缓存(2026-10-22 用户定);还没存下来的那一小会儿关页面,挂浏览器原生的离开确认(`beforeunload`)。
  */
 function OfflineUnsentNotice() {
   const on = useSync((v) => offlineUnsent(v.status, v.unconfirmed));
@@ -222,6 +224,8 @@ function OfflineUnsentNotice() {
   useEffect(() => {
     if (!atRisk) return;
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      // 离线修改已落盘到浏览器本地缓存:关页面不丢,不拦
+      if (browserJournalSaved()) return;
       e.preventDefault();
       e.returnValue = ""; // 旧浏览器要设它才弹原生的离开确认
     };
@@ -238,8 +242,8 @@ function OfflineUnsentNotice() {
 }
 
 /**
- * 挂在编辑器根上一次。手机版界面(`src/mobile/`)把离线对话框换成自己的冲突合并面板(`offlineDialog: false`),
- * 其余浮层照用这里的。
+ * 挂在编辑器根上一次。手机版界面(`src/mobile/`)把离线对话框与冲突合并窗口换成自己的冲突合并面板(`offlineDialog: false`),
+ * 其余浮层照用这里的。离线对话框(整份「加进去 / 不要了」)只在离线批次算不出逐项差异时才会出现,平时由冲突合并窗口接手。
  */
 export function SyncOverlays(props: { offlineDialog?: boolean } = {}) {
   const notice = useSync((v) => v.notice);
@@ -249,6 +253,7 @@ export function SyncOverlays(props: { offlineDialog?: boolean } = {}) {
       <Toasts />
       {ONLINE ? <OfflineUnsentNotice /> : null}
       {props.offlineDialog === false ? null : <OfflineDialog />}
+      {props.offlineDialog === false ? null : <ConflictMergeDialog />}
       <BlockingDialog />
     </>
   );

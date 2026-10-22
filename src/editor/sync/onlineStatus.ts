@@ -25,8 +25,11 @@ export const ONLINE_STATUS_TEXT = {
 
 export type OnlineStatusKind = keyof typeof ONLINE_STATUS_TEXT;
 
-/** 离线且有未提交的改动时的常驻提示(表 A) */
-export const OFFLINE_UNSENT_TEXT = "当前离线，有未提交的修改。关闭页面将丢失这些操作。";
+/**
+ * 离线且有未提交的改动时的常驻提示(表 A)。2026-10-22 用户定在线浏览器断网期间的改动落盘到浏览器本地缓存
+ * (`workflow/project.md`「断网时能做的事」),原文「关闭页面将丢失这些操作」不再成立,改成说存在哪、之后怎么办。
+ */
+export const OFFLINE_UNSENT_TEXT = "当前离线，有未提交的修改，已暂存在这台设备的浏览器里，连上后再提交。";
 
 /** 离线类措辞持续这么久才显示(不闪) */
 export const OFFLINE_SHOW_DELAY_MS = 1500;
@@ -82,4 +85,17 @@ export function nextRecovery(prev: { phase: "recovering" | "recovered" | null; w
   }
   if (prev.phase === "recovering" && unconfirmed === 0 && status === "online") return { phase: "recovered", wasOffline: false, hadUnsent: false };
   return { ...prev, wasOffline: false };
+}
+
+/** 在线浏览器断网时「导入媒体」置灰后的提示(2026-10-22 用户定,`workflow/project.md`「断网时能做的事」) */
+export const IMPORT_OFFLINE_TEXT = "当前离线";
+
+/**
+ * 「导入媒体」要不要置灰:只有在线浏览器断网时(浏览器说没网,或连不上文档服务)。桌面版照常导入,连上后再上传;
+ * 改项目内容的其它操作断网时都允许,不经这里。
+ */
+export function importOfflineOf(s: { online: boolean; status: SyncStatus; active: boolean; navigatorOnline: boolean }): boolean {
+  if (!s.online) return false;
+  if (!s.navigatorOnline) return true;
+  return s.active && s.status === "offline";
 }
