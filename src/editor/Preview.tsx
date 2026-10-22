@@ -54,7 +54,7 @@ import { createIsolatedSoundLink, type IsolatedSoundLink } from "./io/isolatedSo
 import { holdMeasureForCardSources, measureGateDiag, measureGateOpen, releaseMeasureGate, setMeasureGateLink } from "./measureGate";
 import { setCoverageSource } from "./onlineCoverage";
 import { currentCosts, currentPlan, judgedPlan, lightCostAt, onPlanUpdated, planSearch, planSearchLight, searchJudged, sendPlanTo, setPlanDeadMs, setPlanForcedHeavy, setPlanLowest, setPlanSearch, setPlanSearchLight } from "./planDispatch";
-import { benchmarkVerdict, costSearchMeasuring, costSearchState, measureNewCards, reclassify, runBenchmark, runCostSearch, type BenchmarkOutcome, type CostSearchOutcome } from "./costSearch";
+import { benchmarkVerdict, costSearchMeasuring, costSearchState, holdCostSearchMask, measureNewCards, reclassify, releaseCostSearchMask, runBenchmark, runCostSearch, type BenchmarkOutcome, type CostSearchOutcome } from "./costSearch";
 import { runBackJob } from "./stageJobs";
 import { CostSearchGate } from "./CostSearchGate";
 import { SHARED_COST_RELAY_MS, SharedCostRelay, listSharedCosts, publishSharedCosts, toSharedInput, type SharedCostInput } from "./sharedCosts";
@@ -84,7 +84,7 @@ import { createPlanPublisher, type PlanPublisher } from "../online/planPublisher
 import { CODE_VERSION } from "../online/buildInfo";
 import { backWorkDiag, startBackWorkGate } from "./backWorkGate";
 import { backStage } from "./stageBridge";
-import { holdProbe, onCostRecords, onProbeProgress, probeFrameDiag, probeProgress, probeRunDiag, probeSettledFor, releaseProbe, setCostBackend, setProbeMeasureHooks } from "./probeRunner";
+import { holdProbe, onCostRecords, onProbeProgress, probeFrameDiag, probeProgress, probeRunDiag, probeSettledFor, releaseProbe, runCardMeasuredHook, setCostBackend, setProbeMeasureHooks } from "./probeRunner";
 import { browserNodeReady, keepConfirmedProject, startBrowserNodeHost, subscribeBrowserNodeReady } from "./browserNodeHost";
 import type { SettleResult } from "../render/settleFrame";
 
@@ -1625,8 +1625,9 @@ export function Preview(props: { variant?: "mobile" } = {}) {
    * 两个舞台时的轻重判定(即时渲染闸门;语义 `product/platforms.md`「轻重判定」:项目里已经有别的机器测好的耗时时,按它排序、用二分法只测几张来划线):
    * 打开项目时常驻探针先等着(`holdProbe`)。基准卡测完、卡片源码同步完、连上共享项目后读本项目的成本记录:
    * - 一条都对不上项目里的卡:常驻探针照旧在遮罩下逐张实测(`releaseProbe({ blocking: true })`);
-   * - 有记录:界限搜索在后台舞台里只测几张(遮罩下,`borrow: false`,排进后台舞台的单飞队列),划好线就按它判轻重;常驻探针随后在后台
-   *   把其余的卡补测完(不挡界面,K3/K5 要的记录由它补齐),补测完分派表改按成本记录判。
+   * - 有记录:界限搜索在后台舞台里只测几张(遮罩下,`borrow: false`,排进后台舞台的单飞队列),划好线就按它判轻重;测过的卡里判重的,
+   *   遮罩照旧挡着、紧接着给它产稀疏版(和常驻探针同一个口子 `runCardMeasuredHook`;`mechanism/rendering.md`「测量」),没测的(按记录划线
+   *   判重的)归闲时产;常驻探针随后在后台把其余的卡补测完(不挡界面,K3/K5 要的记录由它补齐),补测完分派表改按成本记录判。
    * 读不到记录(没连上、被拒)隔一拍再试,40 拍之后照旧让常驻探针逐张测。
    */
   const dualSearchRef = useRef<"idle" | "deciding" | "searched" | "probe">("idle");
@@ -1671,7 +1672,23 @@ export function Preview(props: { variant?: "mobile" } = {}) {
         if (disposed) return;
         const latest = getState().project;
         setPlanSearchLight(latest === project ? outcome.light : reclassify(outcome, latest, clipIdentityOf(latest).identityKeys, unsupported));
-        (window as unknown as Record<string, unknown>).__pcDualSearch = () => ({ keys: outcome.keys, light: [...outcome.light].sort(), measurements: outcome.result.measurements, records: outcome.records.length, boundary: outcome.result.boundary });
+        // 测过的卡:判重的紧接着产稀疏版(遮罩照旧挡着;判不判重、产不产、等多久由接的一方定,和常驻探针那一轮同一套)
+        const measured = [...outcome.result.measured.entries()].filter(([, v]) => !v.cached && !v.failed).map(([k]) => k);
+        const sparse: string[] = [];
+        try {
+          for (const [i, key] of measured.entries()) {
+            if (disposed || getState().project !== project) break;
+            const clipIds = Object.keys(identity.identityKeys).filter((id) => identity.identityKeys[id] === key);
+            const cardId = project.tracks.flatMap((t) => t.clips).find((c) => c.id === clipIds[0])?.cardId ?? null;
+            if (!clipIds.length || !cardId) continue;
+            holdCostSearchMask(cardId, i, measured.length);
+            sparse.push(cardId);
+            await runCardMeasuredHook({ project, clipIds, cardId, identityKey: key, stale: () => disposed || getState().project !== project });
+          }
+        } finally {
+          releaseCostSearchMask();
+        }
+        (window as unknown as Record<string, unknown>).__pcDualSearch = () => ({ keys: outcome.keys, light: [...outcome.light].sort(), measurements: outcome.result.measurements, records: outcome.records.length, boundary: outcome.result.boundary, sparseAfter: sparse });
         release(false, "searched");
       } catch {
         setDualSearch(false);

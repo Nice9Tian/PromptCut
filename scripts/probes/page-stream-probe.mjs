@@ -924,7 +924,7 @@ async function instrument(page) {
         const jobs = {};
         for (const j of ps?.jobs ?? []) { const k = `${j.pass}:${j.state}`; jobs[k] = (jobs[k] ?? 0) + 1; }
         const row = {
-          mask: !!document.querySelector('[data-pc="probe-gate"]'), state: ps?.state ?? null, plan: ps?.planId ? String(ps.planId).slice(0, 8) : null,
+          mask: !!document.querySelector('[data-pc="probe-gate"], [data-pc="cost-search-gate"]'), state: ps?.state ?? null, plan: ps?.planId ? String(ps.planId).slice(0, 8) : null,
           running: ps?.running ? (String(ps.running.id).endsWith(':sparse') ? 'sparse' : 'dense') : null, jobs,
           m: ps ? { calls: ps.measure.calls, results: ps.measure.results, startedAt: ps.measure.startedAt, produced: ps.measure.produced, have: ps.measure.have, elsewhere: ps.measure.elsewhere, left: ps.measure.left } : null,
           segments: d?.streams?.segments ?? null, encoders: d?.streams?.encoders ?? null, claims: d?.counters?.claims ?? null, playing: !!window.__pcStore?.getState?.().playing,
@@ -968,8 +968,13 @@ async function manifestState(P0, row, resultKey) {
     boxed: list.filter((x) => x.box && x.box.w > 0 && x.box.h > 0).length, strides: [...new Set(list.map((x) => x.stride))] };
 }
 /** 准备:一个不当节点的页面(报非 Chromium 内核)把卡加好、关掉。它照常测量,但不产流 */
+/*
+ * 加卡的页面用最低一档(`?tier=low`)开:最低一档不测卡、不写成本记录、不产流。原来这一页是普通的电脑页面,它在后台测完加的卡会把成本记录
+ * 写进文档服务;2026-10-22 起两个舞台的页面打开时看到对得上的记录会先用界限搜索只测几张(`mechanism/rendering.md`「界限搜索与成本记录」),
+ * 那样甲走的就不是这几场要验的「常驻探针在遮罩下逐张测、紧接着产稀疏版」那条路了,而且测不测得完全看加卡的页面那 2.5 秒里测了几张。
+ */
 async function seedCards(P0, cards) {
-  const x = await P0.member(browserB, 'psp-seed', { userAgent: NON_NODE_UA });
+  const x = await P0.member(browserB, 'psp-seed', { userAgent: NON_NODE_UA, query: '?tier=low', single: true });
   const ids = [];
   try {
     for (const c of cards) ids.push(await addCard(x.page, { start: c.start, duration: c.duration }, c.label, c.burnMs ?? 40));
@@ -977,7 +982,7 @@ async function seedCards(P0, cards) {
     const rev = await until('加的卡都被文档服务确认', () => P(x.page, (n) => { const p = window.__pcStore?.getState?.().project; return p && p.tracks.flatMap((t) => t.clips).filter((c) => c.cardId === 'probe-slow-stepped').length === n; }, cards.length), 60_000, 300);
     await delay(2500);
     const d = await nodeDiag(x.page);
-    check(d?.eligibility?.reason === 'not-chromium' && (d?.streams?.frames ?? 0) === 0, '(准备)加卡的页面不当节点、一帧没产', d && { eligibility: d.eligibility, frames: d.streams?.frames, measureSparse: d.measureSparse });
+    check(['not-chromium', 'lowest'].includes(d?.eligibility?.reason) && (d?.streams?.frames ?? 0) === 0, '(准备)加卡的页面不当节点、一帧没产', d && { eligibility: d.eligibility, frames: d.streams?.frames, measureSparse: d.measureSparse });
     return { ids, docId, ok: !!rev };
   } finally { try { await x.ctx.close(); } catch { /* 已关 */ } }
 }

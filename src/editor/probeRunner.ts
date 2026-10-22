@@ -145,6 +145,16 @@ export function setCardMeasuredHook(hook: CardMeasuredHook | null): () => void {
 }
 /** 这一轮遮罩的编号 */
 let maskRound = 0;
+/**
+ * 遮罩下别的测量(两个舞台的界限搜索,`Preview.tsx`)测完一张卡之后也走同一个口子:给判重的卡产稀疏版,等它回。
+ * 遮罩编号与常驻探针的同一个(一轮遮罩只有一个 50 秒的等稀疏版上限)。没人接(桌面版)时什么都不做。
+ */
+export async function runCardMeasuredHook(info: Omit<CardMeasuredInfo, "round">): Promise<void> {
+  const hook = cardMeasuredHook;
+  if (!hook) return;
+  try { await hook({ ...info, round: maskRound }); }
+  catch (err) { console.warn("[probeRunner] 测完一张卡之后的口子出错", err); }
+}
 
 /* ------------------------------------------------------------------ 身份与设备 */
 
