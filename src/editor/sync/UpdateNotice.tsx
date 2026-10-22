@@ -6,7 +6,7 @@
  *
  * 模块顶层无副作用：舞台与导出页即使载入本模块也不会建节点或发请求。
  */
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import { ONLINE } from "../../online/mode";
 import { CODE_VERSION } from "../../online/buildInfo";
@@ -27,10 +27,31 @@ export const UPDATE_NOTICE_TEXT = {
   cancel: "先不刷新",
 } as const;
 
+/** 提示条的实际高度写到根元素的 `--pc-update-notice-h`；手机版编辑器按它在顶栏下面让出位置（`updateNotice.css`）。提示条撤下时去掉 */
+function useHeightVar() {
+  const observer = useRef<ResizeObserver | null>(null);
+  return useCallback((el: HTMLDivElement | null) => {
+    observer.current?.disconnect();
+    observer.current = null;
+    const root = document.documentElement.style;
+    if (!el) {
+      root.removeProperty("--pc-update-notice-h");
+      return;
+    }
+    const write = () => root.setProperty("--pc-update-notice-h", `${Math.ceil(el.getBoundingClientRect().height)}px`);
+    write();
+    if (typeof ResizeObserver === "function") {
+      observer.current = new ResizeObserver(write);
+      observer.current.observe(el);
+    }
+  }, []);
+}
+
 function UpdateNotice({ ctl }: { ctl: UpdateCheckController }) {
   const state = useSyncExternalStore(ctl.subscribe, ctl.getState, ctl.getState);
   const atRisk = useSync((v) => unsentAtRisk(v.status, v.unconfirmed, v.offlineStore));
   const [confirming, setConfirming] = useState(false);
+  const barRef = useHeightVar();
 
   useEffect(() => {
     if (!atRisk && confirming) setConfirming(false);
@@ -42,7 +63,7 @@ function UpdateNotice({ ctl }: { ctl: UpdateCheckController }) {
 
   if (step === "confirm") {
     return (
-      <div className="pc-update-notice pc-update-notice--warn" role="status" data-pc="update-notice" data-step="confirm">
+      <div ref={barRef} className="pc-update-notice pc-update-notice--warn" role="status" data-pc="update-notice" data-step="confirm">
         <span className="pc-update-notice-text">{UPDATE_NOTICE_TEXT.risk}</span>
         <div className="pc-update-notice-actions">
           <button
@@ -71,7 +92,7 @@ function UpdateNotice({ ctl }: { ctl: UpdateCheckController }) {
   }
 
   return (
-    <div className="pc-update-notice" role="status" data-pc="update-notice" data-step="notice">
+    <div ref={barRef} className="pc-update-notice" role="status" data-pc="update-notice" data-step="notice">
       <span className="pc-update-notice-text">{UPDATE_NOTICE_TEXT.notice}</span>
       <button
         type="button"
