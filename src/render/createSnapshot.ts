@@ -181,7 +181,8 @@ export function createSnapshot(root: Element | null, opts?: { flatControls?: boo
   const { clone, orig, copy } = cloneScene(root);
   // "IMG":canvas 换 <img> 那一支要按 IMG 的基线另算(见 rasterizeCanvas.ts)。
   // 基线在这里预热,免得 rasterizeCanvas 第一次问的时候才去挂探针、把时间算进 rasterMs。
-  const styles = inlineDOMStyles(root, orig, copy, ["IMG"]);
+  // 剪辑段里的卡也当控件取时(`flatControls`),它们包裹层的直接子节点同样一律内联继承属性(`inlineStyles.ts` 的 `isFlatClipWrapper`)
+  const styles = inlineDOMStyles(root, orig, copy, ["IMG"], { flatWrappers: opts?.flatControls === true });
   const t1 = nowMs();
 
   const { lossy } = rasterizeCanvas(orig, copy, (el) => styles.styleAs(el, "IMG", HTML_NS));
