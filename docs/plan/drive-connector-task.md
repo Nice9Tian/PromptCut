@@ -101,16 +101,41 @@
 
 本机跑通后分支留着，0.7.20 结束后合入 main。不插队 0.7.19～0.7.20 的连做。
 
-## 8. 前置：要用户办的
+## 8. 前置：开发方的一次性登记
 
-**Google Cloud OAuth 客户端**——我做不了，这是你的 Google 账号里的操作：
+### 8.1 两边是谁做什么
+
+| | 谁 | 几次 | 做什么 |
+|---|---|---|---|
+| **开发方登记** | 你 / VisuHive | 整个产品**一次** | 在 Google Cloud Console 登记「PromptCut」这个应用，拿一组 client ID 与 API 密钥，编译进软件 |
+| **终端用户授权** | 每个用户 | 每人点几下 | 素材页点「从网盘导入」→ Google 登录页 → 勾同意 → Picker 里选自己的文件 |
+
+**终端用户不碰 Google Cloud Console，也不建任何项目。** 他们登录的就是自己的 Google 账号，取的就是自己网盘里的文件——「用户直接用自己的 Google Drive」正是这个设计要达到的，开发方登记只是让 Google 认得「PromptCut」这个应用。
+
+**为什么躲不掉**：Drive 的 OAuth 只认登记过的应用，没有 client ID 连授权请求都发不出去。所有接 Drive 的软件都有且只有一组这样的登记。Google Cloud Console 不是企业产品，个人 Google 账号就能建；**Drive API 和 Picker API 都不要求绑付款账号**，这一步不产生费用。
+
+### 8.2 上线给任意用户用
+
+把 OAuth 同意屏幕从「测试」切到「正式」即可。几个要点：
+
+- 「未验证应用」的警告页和 **100 人上限只针对敏感 / 受限范围**。我们只要 `drive.file`（非敏感），按 Google 的说法不应落到我们头上。
+- CASA 安全评估只有受限范围才要，我们永远不碰。
+- 切「正式」时要填应用名、logo、主页、隐私政策地址并验证域名所有权。**品牌验证这一项对「只用非敏感范围」的应用是不是必填，官方页面没写明，未核实**，上线前实测。
+- **开发阶段停在「测试」模式**、把自己的 Google 账号加进测试用户就够，不影响本任务书任何一步。
+
+### 8.3 两条不用登记的路，都不够格当主路
+
+- **让用户粘贴 Drive 分享链接**：不需要任何登记，但只对「任何知道链接的人都可查看」的文件管用，走的是非官方的 `uc?export=download`，大文件会撞上病毒扫描中间页，Google 改一次就坏一次。可以留作兜底，不能当主路。
+- **让每个用户自己建 OAuth 客户端**（rclone 的做法）：等于把下面六步摊给每一个用户做，正是要避免的。
+
+### 8.4 六步（一次性，由你做）
 
 1. 打开 Google Cloud Console，新建一个项目（或用现成的）。
 2. 启用两个 API：**Google Drive API** 和 **Google Picker API**。
-3. 「OAuth 同意屏幕」：User Type 选 External，填应用名、支持邮箱。范围**只加 `.../auth/drive.file`**（加了 `drive.readonly` 就要安全评估，别加）。测试阶段把自己的 Google 账号加进「测试用户」。
-4. 「凭据」→ 新建 OAuth 客户端 ID → 类型选 **Web application** → 已获授权的 JavaScript 来源填本机开发服务器的地址（例如 `http://localhost:5173`）。
+3. 「OAuth 同意屏幕」：User Type 选 External，填应用名、支持邮箱。范围**只加 `.../auth/drive.file`**（加了 `drive.readonly` 就要安全评估，别加）。开发阶段把自己的 Google 账号加进「测试用户」。
+4. 「凭据」→ 新建 OAuth 客户端 ID → 类型选 **Web application** → 已获授权的 JavaScript 来源填 `http://localhost:5321`（探针用的端口，见第 6 节 D1）。
 5. 再新建一个 **API 密钥**（Picker 要用），建议限制到 Picker API。
-6. 把 **client ID** 和 **API key** 给我。两样都不是秘密（会出现在页面里），client secret 不要给、也用不上（PKCE 流程不需要）。
+6. 把 **client ID**、**API 密钥**、**Cloud 项目编号**（纯数字，Picker 的 appId）三样给我。都不是秘密，会直接出现在页面里；client secret 不要给、PKCE 流程也用不上。
 
 ## 9. 待办
 
