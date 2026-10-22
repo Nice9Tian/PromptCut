@@ -1,7 +1,7 @@
 /**
  * 云端项目的「任何知道链接的人都可加入」勾选、账号名单与申请加入(2026-10-22 用户定,`docs/semantics/workflow/project.md`
  * 「多用户协作」第 26、27 条;报告 `docs/reports/AGENT-claude-join-requests.md`)。真的账本(SQLite)、真的权威与成员投影、
- * 真的公开路由;账号服务只换成可控的替身(哪个令牌是谁、令牌作废、核对时卡住一会儿)。
+ * 真的公开路由;账号服务只换成可控的替身(哪个令牌是谁、令牌作废、核对时卡住一会儿),钟也换成可拨的。
  *
  *   JR-1  勾选与名单:取消勾选那一刻的成员都在名单里、照旧能进;之后的新人 `/join` 回 403 `not-listed`;只有创建者能改勾选
  *   JR-2  名单快照的并发规则:以账本里两笔写入的先后为准,不以请求先到为准;创建者拿旧版本号取消勾选回 409,重读后再取消
@@ -12,11 +12,12 @@
  *         申请号拿到别的项目用回 404;一个项目的通过进不了另一个项目;项目票据当登录令牌用回 401
  *   JR-7  「通过」「拒绝」只有创建者能做(服务端核):普通成员、被踢的、申请人自己、项目外的人、创建者的 Agent 身份都回 403
  *   JR-8  通过之后进项目仍过全部关卡:二级密码、禁入、登录有效、项目还在;链接作废过也不用新链接
- *   JR-9  被拒:申请人看到「被拒」;可以再发,一共 3 次,用完回 429 `join-request-limit`
+ *   JR-9  被拒:申请人看到「被拒」;可以再发;同一个项目滚动 24 小时里最多起 3 条,到数回 429 并告诉他最早什么时候能再发,过了时间窗又能发
  *   JR-10 幂等:同一个请求号重放、换请求号再做同样的决定、相反的决定、申请号对不上、回包丢了的发申请重试
- *   JR-11 上限:一个项目挂着的条数、一个账号跨项目挂着的条数、被拒记录留几条;缺省值
+ *   JR-11 上限:一个项目挂着的条数、一个账号跨项目滚动 24 小时里的条数、被拒记录满了丢最旧的(被丢的人可以再发);缺省值
  *   JR-12 申请记录存在哪、谁读得到:账本里只有账号号、名字、时间、状态;邮箱、登录号、凭证号、设备不进账本也不进任何回包;删项目连申请一起清
  *   JR-13 知道链接就能进时不收申请;等着的人在创建者改回勾选后自己凭链接进来,申请记录随之清掉
+ *   JR-14 「通过」那一刻现核:申请人在创建者页面那一眼之后被踢、账号被删,创建者再点「通过」被拒,账号进不来
  *
  * 跑:node --test server/test/account-join-requests.test.mjs
  */
@@ -31,17 +32,26 @@ import { createAccountAuthority, JOIN_REQUEST_LIMITS, joinRequestView } from '..
 import { createAccountHostedRuntime } from '../docservice/account-hosted.mjs';
 import { mountAccountProjects } from '../docservice/modules/account-projects.mjs';
 
+const DAY = 24 * 60 * 60 * 1000;
 const idOf = n => `acc_${n.toString(16).padStart(24, '0')}`;
 /** 令牌 → 账号(号、名字)。账号号只能是十六进制,所以按序号给 */
 const PEOPLE = { a: [1, 'Alice'], b: [2, 'Bob'], c: [3, 'Carol'], d: [4, 'Dave'], e: [5, 'Erin'], k: [6, 'Kim'], x: [7, 'Xavier'], y: [8, 'Yuki'] };
 const ID = Object.fromEntries(Object.entries(PEOPLE).map(([token, [n]]) => [token, idOf(n)]));
 
-/** 账号服务的替身:认得 `PEOPLE` 和后加的令牌;`gate(token)` 让这个令牌的核对卡住,直到放行;`revoke(token)` 让它作废 */
-function accountService() {
+/** 可拨的钟:从现在开始,`advance(ms)` 往后拨 */
+function clock() {
+  let t = Date.now();
+  return { now: () => t, advance: ms => { t += ms; } };
+}
+/**
+ * 账号服务的替身:认得 `PEOPLE` 和后加的令牌;`gate(token)` 让这个令牌的核对卡住,直到放行;`revoke(token)` 让它作废。
+ * 账号事件流是空的(`headSeq` 跟着权威自己的进度走),要发账号事件就直接交给权威的 `applyRevocation`
+ */
+function accountService(now = Date.now) {
   const people = new Map(Object.entries(PEOPLE).map(([token, [n, name]]) => [token, { accountId: idOf(n), accountName: name }]));
   const gates = new Map(), revoked = new Set();
   const client = {
-    events: async () => ({ events: [], headSeq: 0 }),
+    events: async cursor => ({ events: [], headSeq: cursor }),
     verify: async token => {
       const gate = gates.get(token); if (gate) await gate;
       if (revoked.has(token)) throw Object.assign(Error('credential-revoked'), { status: 401, code: 'credential-revoked' });
@@ -49,7 +59,7 @@ function accountService() {
       if (!who) throw Object.assign(Error('login-required'), { status: 401, code: 'login-required' });
       // 账号服务回的登录里还有别的字段(这里放一个邮箱):权威只能用账号号和名字,其余一样都不能落进申请记录或回包
       return { ...who, loginId: `login-${token}`, credentialId: `cred-${token}`, loginGeneration: 1, accountEventSeq: 0,
-        expiresAt: Date.now() + 3_600_000, kind: 'editor', email: `${token}@mail.invalid` };
+        expiresAt: now() + 3_600_000, kind: 'editor', email: `${token}@mail.invalid` };
     },
   };
   return {
@@ -69,9 +79,10 @@ const tmpLedger = (t, name) => {
 /** 整条:权威 + 成员投影 + 发会话 + 公开路由(与文档服务里挂的同一份 `mountAccountProjects`) */
 async function stack(t) {
   const ledger = tmpLedger(t, 'stack');
-  const accounts = accountService();
+  const time = clock();
+  const accounts = accountService(time.now);
   const runtime = createAccountHostedRuntime({ ledger, accountClient: accounts.client, dataDir: null, authorityUrl: 'https://fixture.invalid',
-    allowFixtureAssetReady: true, pollMs: 0 });
+    allowFixtureAssetReady: true, pollMs: 0, now: time.now });
   runtime.setAssetReady(true);
   runtime.bindService({ describe: () => ({ conns: [] }), fencePrincipals: async () => ({ actualClosed: true }), fenceConn: async () => {} },
     { registry: { refresh() {}, get: () => null }, urls: {} });
@@ -105,7 +116,7 @@ async function stack(t) {
   const decide = (token, op, applicant, joinRequestId, id = projectId, requestId = rid(`${op}-${token}`)) =>
     call(token, 'admin', { projectId: id, op, accountId: ID[applicant] ?? applicant, joinRequestId, requestId });
   const pendingId = (applicant, id = projectId) => record(id).joinRequests?.[ID[applicant]]?.id;
-  return { ledger, accounts, runtime, authority, projectId, call, create, record, join, session, members, send, status, admin, decide, pendingId, rid };
+  return { ledger, time, accounts, runtime, authority, projectId, call, create, record, join, session, members, send, status, admin, decide, pendingId, rid };
 }
 const listOnly = async s => { const r = await s.admin('a', { op: 'set-entry', allowLinkJoin: false }); assert.equal(r.status, 200, JSON.stringify(r.value)); };
 const expectCode = (r, status, code, label) => assert.deepEqual([r.status, r.value?.code], [status, code], `${label ?? ''} ${JSON.stringify(r.value)}`);
@@ -147,7 +158,7 @@ test('JR-2 名单快照的并发规则:以账本里落账的先后为准;创建�
   await listOnly(s);
   assert.ok(s.record().members[ID.d]?.joinedAt, '取消勾选落账之前进来的丁在名单里');
   assert.equal((await s.session('d')).status, 200);
-  // (c) 反过来:丁的取消勾选请求(甲)核对登录时卡住,戊先凭链接进来、先落账 → 甲带着进来前的版本号到达,回 409,戊不受影响
+  // (c) 反过来:甲的取消勾选核对登录时卡住,戊先凭链接进来、先落账 → 甲带着进来前的版本号到达,回 409,戊不受影响
   await s.admin('a', { op: 'set-entry', allowLinkJoin: true });
   const before = s.record().accessRevision;
   const releaseA = s.accounts.gate('a');
@@ -171,7 +182,7 @@ test('JR-3 发申请、查自己那一条;已在等的不另起一条;创建者�
   assert.match(first, /^jr_[a-f0-9]{24}$/);
   assert.deepEqual((await s.send('c')).value.joinRequest.state, 'pending', '再点一次:还是那一条');
   assert.equal(s.pendingId('c'), first, '没有另起一条');
-  assert.equal(s.record().joinRequests[ID.c].attempt, 1, '也不算第二次');
+  assert.equal(s.record().joinRequests[ID.c].sends.length, 1, '也不算又发了一次');
   assert.equal(s.record().members[ID.c], undefined, '申请不给任何权限');
   expectCode(await s.session('c'), 403, 'not-listed');
   const revision = s.record().accessRevision;
@@ -251,7 +262,7 @@ test('JR-6 伪造与跨项目:写别人的账号号被拒;别的项目的创建�
   assert.equal((await s.join('c', other)).status, 200);
   expectCode(await s.join('c'), 403, 'not-listed', '那边的通过进不了这边');
   assert.equal(s.record().joinRequests[ID.c].state, 'pending', '这边那一条不受影响');
-  // 项目里用的票据(连接票据)当账号的登录令牌用:账号服务不认
+  // 项目里用的票据(连接票据、素材票据)当账号的登录令牌用:账号服务不认
   assert.equal((await s.join('b', other)).status, 403);
   await s.admin('a', { op: 'set-entry', allowLinkJoin: true });
   const bSession = await s.join('b');
@@ -329,21 +340,33 @@ test('JR-8 通过之后进项目仍过全部关卡:二级密码、禁入、登�
   expectCode(await s.join('y', s.projectId, { secondaryPassword: '二级 密码' }), 404, 'no-project');
 });
 
-test('JR-9 被拒:申请人看到「被拒」,不给任何权限;可以再发,一共 3 次,用完回 429', async t => {
+test('JR-9 被拒:申请人看到「被拒」;同一个项目滚动 24 小时里最多起 3 条,到数回 429 并给出最早能再发的时刻;过了时间窗又能发', async t => {
   const s = await stack(t);
   await listOnly(s);
-  for (let attempt = 1; attempt <= JOIN_REQUEST_LIMITS.accountAttempts; attempt++) {
+  const sentAt = [];
+  for (let n = 1; n <= JOIN_REQUEST_LIMITS.accountProjectSends; n++) {
     const sent = await s.send('d');
-    assert.equal(sent.value.joinRequest.state, 'pending', `第 ${attempt} 次`);
-    assert.equal(s.record().joinRequests[ID.d].attempt, attempt);
+    assert.equal(sent.value.joinRequest.state, 'pending', `第 ${n} 次`);
+    sentAt.push(s.time.now());
+    assert.equal(s.record().joinRequests[ID.d].sends.length, n);
     assert.equal((await s.decide('a', 'reject-join', 'd', s.pendingId('d'))).status, 200);
     const seen = (await s.status('d')).value.joinRequest;
-    assert.deepEqual(seen, { state: 'rejected', entry: 'list', canApply: attempt < JOIN_REQUEST_LIMITS.accountAttempts });
+    const spent = n === JOIN_REQUEST_LIMITS.accountProjectSends;
+    assert.deepEqual(seen, { state: 'rejected', entry: 'list', canApply: !spent, ...(spent ? { retryAt: sentAt[0] + DAY } : {}) });
     expectCode(await s.join('d'), 403, 'not-listed', '被拒的人进不来');
     assert.equal(s.record().members[ID.d], undefined);
+    s.time.advance(60 * 60 * 1000);
   }
-  expectCode(await s.send('d'), 429, 'join-request-limit', '次数用完');
+  expectCode(await s.send('d'), 429, 'join-request-limit', '24 小时里第 4 次');
   assert.deepEqual((await s.members('a')).value.requests, [], '被拒的不在创建者的列表里');
+  // 不是终身额度:第一次发起满 24 小时后,又能发一次(创建者误拒的人不会永远进不来)
+  s.time.advance(sentAt[0] + DAY + 1 - s.time.now());
+  assert.equal((await s.status('d')).value.joinRequest.canApply, true);
+  const again = await s.send('d');
+  assert.equal(again.value.joinRequest.state, 'pending');
+  assert.deepEqual(s.record().joinRequests[ID.d].sends.length, JOIN_REQUEST_LIMITS.accountProjectSends, '只数时间窗里的那几次');
+  assert.equal((await s.decide('a', 'approve-join', 'd', s.pendingId('d'))).status, 200, '这次通过了');
+  assert.equal((await s.join('d')).status, 200);
 });
 
 test('JR-10 幂等:重放、换请求号再做同样的决定、相反的决定、申请号对不上、回包丢了的发申请重试', async t => {
@@ -374,58 +397,67 @@ test('JR-10 幂等:重放、换请求号再做同样的决定、相反的决定�
   // 申请号对不上
   expectCode(await s.decide('a', 'approve-join', 'e', `jr_${'0'.repeat(24)}`), 404, 'no-join-request', '没申请过的人');
   expectCode(await s.decide('a', 'approve-join', 'd', 'jr_bad'), 400, 'invalid-join-request', '申请号形状不对');
-  // 发申请的回包丢了,同一个请求号重试:这期间被拒了的,回「被拒」,不当成第二次
+  // 发申请的回包丢了,同一个请求号重试:这期间被拒了的,回「被拒」,不当成又发了一次
   const lost = { projectId: s.projectId, requestId: 'send-lost', joinRequest: 'send' };
   assert.equal((await s.call('e', 'join', lost)).status, 200);
   assert.equal((await s.decide('a', 'reject-join', 'e', s.pendingId('e'))).status, 200);
   const retried = await s.call('e', 'join', lost);
   assert.equal(retried.value.joinRequest.state, 'rejected');
-  assert.equal(s.record().joinRequests[ID.e].attempt, 1);
+  assert.equal(s.record().joinRequests[ID.e].sends.length, 1);
   // 同一个请求号拿去另一个项目
   const other = await s.create('x', { allowLinkJoin: false });
   expectCode(await s.call('e', 'join', { ...lost, projectId: other }), 409, 'request-mismatch');
 });
 
-test('JR-11 上限:一个项目挂着的条数、一个账号跨项目挂着的条数、被拒记录留几条;缺省值', async t => {
-  assert.deepEqual({ ...JOIN_REQUEST_LIMITS }, { projectPending: 50, accountAttempts: 3, accountPending: 20, rejectedKept: 200 });
+test('JR-11 上限:项目挂着的条数、账号跨项目滚动 24 小时的条数、被拒记录满了丢最旧的(被丢的人可以再发);缺省值', async t => {
+  assert.deepEqual({ ...JOIN_REQUEST_LIMITS }, { projectPending: 50, accountProjectSends: 3, accountSends: 20, windowMs: DAY, rejectedKept: 200 });
   assert.ok(Object.isFrozen(JOIN_REQUEST_LIMITS));
   const ledger = tmpLedger(t, 'limits');
-  const accounts = accountService();
+  const time = clock();
+  const accounts = accountService(time.now);
   for (let n = 100; n < 106; n++) accounts.add(`u${n}`, n, `用户${n}`);
-  assert.throws(() => createAccountAuthority({ ledger, accountClient: accounts.client, joinRequestLimits: { projectPending: 0, accountAttempts: 3, accountPending: 1, rejectedKept: 1 } }),
-    { code: 'join-request-configuration' });
-  const authority = createAccountAuthority({ ledger, accountClient: accounts.client, pollMs: 0, authorityUrl: 'https://fixture.invalid',
-    initializeProject: async () => ({ contentId: 'content' }), joinRequestLimits: { projectPending: 2, accountAttempts: 3, accountPending: 2, rejectedKept: 2 } });
+  assert.throws(() => createAccountAuthority({ ledger, accountClient: accounts.client,
+    joinRequestLimits: { ...JOIN_REQUEST_LIMITS, projectPending: 0 } }), { code: 'join-request-configuration' });
+  assert.throws(() => createAccountAuthority({ ledger, accountClient: accounts.client,
+    joinRequestLimits: { projectPending: 1, accountAttempts: 3 } }), { code: 'join-request-configuration' });
+  const authority = createAccountAuthority({ ledger, accountClient: accounts.client, pollMs: 0, authorityUrl: 'https://fixture.invalid', now: time.now,
+    initializeProject: async () => ({ contentId: 'content' }),
+    joinRequestLimits: { projectPending: 2, accountProjectSends: 3, accountSends: 2, windowMs: DAY, rejectedKept: 2 } });
   t.after(() => authority.close());
   let n = 0;
   const create = async () => (await authority.createProject({ accessToken: 'a' }, { name: `上限 ${++n}`, requestId: `c-${n}`, allowLinkJoin: false })).projectId;
-  const send = (token, projectId) => authority.joinRequest({ accessToken: token }, { projectId, requestId: `s-${token}-${projectId}-${++n}`, joinRequest: 'send' });
+  const send = (token, projectId) => authority.joinRequest({ accessToken: token }, { projectId, requestId: `s-${token}-${++n}`, joinRequest: 'send' });
   const decide = (op, token, projectId) => {
     const accountId = idOf(Number(token.slice(1)));
     return authority.decideJoinRequest({ accessToken: 'a' }, { projectId, op, accountId,
       joinRequestId: ledger.read().projects[projectId].joinRequests[accountId].id, requestId: `d-${++n}` });
   };
   const [p1, p2, p3] = [await create(), await create(), await create()];
-  // 一个项目最多挂 2 条
+  // 一个项目最多同时挂 2 条
   await send('u100', p1); await send('u101', p1);
   await assert.rejects(send('u102', p1), { status: 429, code: 'join-request-full' });
   // 处理掉一条就又能收
   await decide('reject-join', 'u100', p1);
   assert.equal((await send('u102', p1)).joinRequest.state, 'pending');
-  // 一个账号跨项目最多同时挂 2 条
-  await send('u103', p1).catch(error => assert.equal(error.code, 'join-request-full'));
-  await send('u103', p2); await send('u103', p3).catch(() => {});
+  // 一个账号滚动 24 小时里跨项目最多起 2 条:第 3 个项目被拒;创建者处理掉也不退还(数的是发起),过了时间窗才又能发
+  await send('u103', p2); await send('u103', p3);
   const p4 = await create();
   await assert.rejects(send('u103', p4), { status: 429, code: 'join-request-account-limit' });
-  // 被拒的记录每个项目最多留 2 条:第 3 条拒掉时,最早被拒的那条清掉(那人看到的又是「没申请过」)
+  await decide('reject-join', 'u103', p2);
+  await assert.rejects(send('u103', p4), { status: 429, code: 'join-request-account-limit' });
+  time.advance(DAY + 1);
+  assert.equal((await send('u103', p4)).joinRequest.state, 'pending', '过了时间窗');
+  // 被拒的记录每个项目最多留 2 条:第 3 条拒掉时,最早被拒的那条丢掉;被丢的那人看到的是「没申请过」,可以再发
   await decide('reject-join', 'u101', p1);
+  time.advance(1);
   await decide('reject-join', 'u102', p1);
   assert.deepEqual(Object.values(ledger.read().projects[p1].joinRequests).map(r => r.state).sort(), ['rejected', 'rejected']);
-  assert.equal(ledger.read().projects[p1].joinRequests[idOf(100)], undefined, '最早被拒的 u100 那条清掉了');
+  assert.equal(ledger.read().projects[p1].joinRequests[idOf(100)], undefined, '最早被拒的 u100 那条丢了');
   assert.deepEqual((await authority.joinRequest({ accessToken: 'u100' }, { projectId: p1, joinRequest: 'status' })).joinRequest, { state: 'none', entry: 'list', canApply: true });
+  assert.equal((await send('u100', p1)).joinRequest.state, 'pending', '被丢的人可以再发');
   // 缺省的 50 条:第 51 个人被拒
   const big = createAccountAuthority({ ledger: tmpLedger(t, 'default-limit'), accountClient: accounts.client, pollMs: 0, authorityUrl: 'https://fixture.invalid',
-    initializeProject: async () => ({ contentId: 'content' }) });
+    now: time.now, initializeProject: async () => ({ contentId: 'content' }) });
   t.after(() => big.close());
   for (let i = 200; i <= 250; i++) accounts.add(`u${i}`, i, `用户${i}`);
   const crowded = (await big.createProject({ accessToken: 'a' }, { name: '挤满', requestId: 'crowded', allowLinkJoin: false })).projectId;
@@ -440,7 +472,7 @@ test('JR-12 申请记录存在账本里、只有这几样;邮箱、登录号、�
   const sent = await s.send('c', s.projectId, { deviceId: 'device-of-c' });
   assert.equal(sent.status, 200);
   const stored = s.record().joinRequests[ID.c];
-  assert.deepEqual(Object.keys(stored).sort(), ['accountName', 'attempt', 'createdAt', 'id', 'state']);
+  assert.deepEqual(Object.keys(stored).sort(), ['accountName', 'createdAt', 'id', 'sends', 'state']);
   const ledgerText = JSON.stringify(s.ledger.read());
   for (const secret of ['c@mail.invalid', 'login-c', 'cred-c', 'device-of-c']) {
     assert.equal(ledgerText.includes(secret), false, `账本里没有 ${secret}`);
@@ -476,7 +508,44 @@ test('JR-13 知道链接就能进时不收申请;等着的人在创建者改回�
   assert.equal((await s.join('c')).status, 200);
   assert.equal(s.record().joinRequests[ID.c], undefined, '进来了,申请记录清掉');
   assert.deepEqual((await s.members('a')).value.requests, []);
-  // 纯函数:同一套判断
-  assert.deepEqual(joinRequestView({ allowLinkJoin: false, creatorAccountId: ID.a, members: {}, joinRequests: { [ID.d]: { state: 'rejected', attempt: 3 } } }, ID.d),
-    { state: 'rejected', entry: 'list', canApply: false });
+  // 纯函数:同一套判断(时间窗里的次数用完时带最早能再发的时刻)
+  const at = Date.now();
+  assert.deepEqual(joinRequestView({ allowLinkJoin: false, creatorAccountId: ID.a, members: {},
+    joinRequests: { [ID.d]: { state: 'rejected', sends: [at - 3000, at - 2000, at - 1000] } } }, ID.d, JOIN_REQUEST_LIMITS, at),
+  { state: 'rejected', entry: 'list', canApply: false, retryAt: at - 3000 + DAY });
+  assert.deepEqual(joinRequestView({ allowLinkJoin: false, creatorAccountId: ID.a, members: {},
+    joinRequests: { [ID.d]: { state: 'rejected', sends: [at - DAY - 1, at - 2000, at - 1000] } } }, ID.d, JOIN_REQUEST_LIMITS, at),
+  { state: 'rejected', entry: 'list', canApply: true }, '时间窗外的那次不算');
+});
+
+test('JR-14 「通过」那一刻现核:申请人在创建者看到申请之后被踢、账号被删,创建者再点「通过」被拒,账号进不来', async t => {
+  const s = await stack(t);
+  await listOnly(s);
+  // 被踢:创建者的页面还停在踢之前那一眼(手里有申请号),点「通过」
+  assert.equal((await s.send('c')).status, 200);
+  const seen = (await s.members('a')).value.requests.find(r => r.accountId === ID.c);
+  expectCode(await s.admin('a', { op: 'kick', accountId: ID.c }), 200, undefined);
+  expectCode(await s.decide('a', 'approve-join', 'c', seen.joinRequestId), 404, 'no-join-request', '踢人时申请已清掉,通过点不成');
+  assert.equal(s.record().members[ID.c], undefined);
+  expectCode(await s.join('c'), 403, 'banned');
+  // 账本里万一留着一条挂着的申请、人却在禁入名单里(不该出现,这里直接改账本造出来):通过照样被拒
+  assert.equal((await s.send('d')).status, 200);
+  const jr = s.pendingId('d');
+  s.ledger.transaction(state => { state.projects[s.projectId].bans[ID.d] = { reason: 'kick', requestId: 'forged-ban' }; });
+  expectCode(await s.decide('a', 'approve-join', 'd', jr), 409, 'join-request-banned', '通过那一刻现核禁入名单');
+  assert.equal(s.record().members[ID.d], undefined);
+  // 账号删了:账号事件到了以后,他的申请清掉;创建者手里那一眼的申请号再点「通过」被拒;他的登录也作废了
+  assert.equal((await s.send('e')).status, 200);
+  const er = s.pendingId('e');
+  const head = s.ledger.read().accountHead;
+  await s.authority.applyRevocation({ v: 2, issuer: 'visuhive-account', type: 'account-deleted', eventId: 'evt-delete-e',
+    accountId: ID.e, seq: head + 1, loginIds: ['login-e'] });
+  assert.equal(s.record().joinRequests[ID.e], undefined, '账号删了,申请清掉');
+  expectCode(await s.decide('a', 'approve-join', 'e', er), 404, 'no-join-request');
+  expectCode(await s.join('e'), 401, 'credential-revoked');
+  // 创建者自己的登录作废了:通过点不成
+  assert.equal((await s.send('y')).status, 200);
+  s.accounts.revoke('a');
+  expectCode(await s.decide('a', 'approve-join', 'y', s.pendingId('y')), 401, 'credential-revoked');
+  assert.equal(s.record().members[ID.y], undefined);
 });
