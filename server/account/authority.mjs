@@ -4,8 +4,13 @@ import { validateAccountEvent, validateEventBatch, requireRequestId } from './pr
 import { accountError } from './client.mjs';
 import { canonicalJson, digestOf, appendAccessEvent } from './ledger.mjs';
 import { rollbackEventOf } from './logout-rollback.mjs';
+import { guestPrincipal, guestProjectLimitReached, isGuestId, looksLikeGuestToken, readGuestToken } from './guest.mjs';
 
-const accountIdOK = value => typeof value === 'string' && /^acc_[a-f0-9]{24}$/.test(value);
+/**
+ * 主体编号：账号是 `acc_` + 24 位十六进制，游客是 `gst_` + 24 位（`guest.mjs`）。两种在成员名单、禁入表、
+ * 权限判断里当同一类键用，只有「谁签发、谁核对」和限额不同，所以这里一并收。
+ */
+const accountIdOK = value => typeof value === 'string' && (/^acc_[a-f0-9]{24}$/.test(value) || isGuestId(value));
 const projectIdOK = value => typeof value === 'string' && /^(?:sp_[a-z2-7]{26}|[A-Za-z0-9_-]{8,64})$/.test(value);
 const services = ['asset', 'agent', 'render'];
 /** 托管方服务下面有哪些子选项(与口令项目那条路 `auth/service-identity.mjs` 的 `HOSTED_OPTIONS` 同一份登记;这里不引它,账号这条路不依赖旧凭证存储的模块) */
@@ -36,8 +41,14 @@ const active = project => {
 const permission = (project, accountId, action) => {
   active(project);
   if (Object.hasOwn(project.bans, accountId)) reject(403, 'banned');
-  const access = accountId === project.creatorAccountId ? 'rw' : project.members[accountId]?.access;
-  if (!access || (action === 'write' && access !== 'rw')) reject(403, 'not-listed');
+  const creator = accountId === project.creatorAccountId;
+  // 游客在别人的项目里只能查看(2026-10-23 用户定)。判在这一个口子上:名单里哪怕写着读写也按只读算,
+  // 不指望每个调用方各记一遍。自己建的项目里他是创建者,照常读写
+  const guestReadOnly = isGuestId(accountId) && !creator;
+  const stored = creator ? 'rw' : project.members[accountId]?.access;
+  const access = stored && guestReadOnly ? 'r' : stored;
+  if (!access) reject(403, 'not-listed');
+  if (action === 'write' && access !== 'rw') reject(403, guestReadOnly ? 'guest-read-only' : 'not-listed');
   return access;
 };
 
@@ -145,6 +156,9 @@ export function joinRequestView(p, accountId, limits = JOIN_REQUEST_LIMITS, at =
  * 「要登录」不在这里：没有登录的账号过不了 `verify`，到不了这一步。
  */
 export function checkCreateProject(policy, { accountId, accountName, ownedCount, requestId }) {
+  // 游客自己建的项目有自己的上限(`guest.mjs` 的 `GUEST_LIMITS.projects`),不走下面那个可配的口子:
+  // 这一条是游客身份自带的,不该因为某次部署忘了配就没了
+  if (guestProjectLimitReached({ accountId, ownedCount })) reject(403, 'guest-project-limit');
   const max = policy?.maxProjectsPerAccount ?? null;
   if (typeof policy?.canCreate === 'function') {
     const verdict = policy.canCreate({ accountId, accountName, ownedCount, requestId });
@@ -163,7 +177,7 @@ const validCreatePolicy = policy => policy !== null && typeof policy === 'object
  */
 export function createAccountAuthority({ ledger, accountClient, initializeProject, authorityUrl,
   signingKey, keyId, now = Date.now, pollMs = 0, onDiagnostic = () => {}, getDocBarrier, verifyDocBarrier,
-  runHooks = null, createPolicy = {}, joinRequestLimits = JOIN_REQUEST_LIMITS }) {
+  runHooks = null, createPolicy = {}, joinRequestLimits = JOIN_REQUEST_LIMITS, guestKey = null }) {
   if (!validCreatePolicy(createPolicy)) reject(503, 'create-policy-configuration');
   if (!validJoinRequestLimits(joinRequestLimits)) reject(503, 'join-request-configuration');
   const limits = Object.freeze({ ...joinRequestLimits });
@@ -274,6 +288,20 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
       trustedRole = ref.role;
       const state = ledger.read();
       if (state.revokedLogins[`login:${ref.principal.loginId}`]) reject(401, 'credential-revoked');
+    }
+    // 游客:令牌是本服务自己签的,自己核对,不问账号服务,也不跟着它的事件流同步 ——
+    // 账号服务挂了不该把游客一起挡在外面(`guest.mjs` 的开头说明)。往下的关卡(撤销表、角色、授权号)照样过。
+    if (looksLikeGuestToken(token)) {
+      if (!guestKey) reject(503, 'guest-unavailable');
+      const read = readGuestToken(token, { key: guestKey, at: now() });
+      if (!read) reject(401, 'credential-revoked');
+      const guest = guestPrincipal(read);
+      if (ledger.read().revokedLogins[`login:${guest.loginId}`]) reject(401, 'credential-revoked');
+      if (ref && ['accountId', 'loginId', 'loginGeneration'].some(k => guest[k] !== ref.principal[k])) reject(401, 'principal-mismatch');
+      if (!['page', 'agent', 'render'].includes(trustedRole)) reject(403, 'invalid-role');
+      let id = input.authorizationId;
+      if (!id) { id = randomUUID(); refs.set(id, { token, principal: guest, role: trustedRole }); }
+      return { ...guest, authorizationId: id, role: trustedRole };
     }
     const principal = await accountClient.verify(token);
     await synchronize();
@@ -460,7 +488,10 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
 
       const previous = replay(state, key, digest); if (previous) return { result: previous.result, event: null };
       if (!p.members[actor.accountId]?.joinedAt) {
-        p.members[actor.accountId] = { access: p.members[actor.accountId]?.access ?? 'rw', joinedAt: now(), accountNameAtJoin: actor.accountName };
+        // 游客进别人的项目一律只读(2026-10-23 用户定),落账时就记成 'r',名单上看到的和实际能做的一致;
+        // 真正拦写的是 `permission`,这里只是让记录说实话
+        const access = isGuestId(actor.accountId) && !isCreator ? 'r' : (p.members[actor.accountId]?.access ?? 'rw');
+        p.members[actor.accountId] = { access, joinedAt: now(), accountNameAtJoin: actor.accountName };
         p.accessRevision = ++state.revision;
       }
       if (p.secondaryPassword) {

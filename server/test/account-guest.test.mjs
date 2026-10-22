@@ -8,9 +8,10 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import {
   GUEST_ID_RE, GUEST_LIMITS,
-  checkGuestAsset, guestCreatePolicy, guestExpired, guestPrincipal, isGuestId,
+  checkGuestAsset, guestExpired, guestPrincipal, guestProjectLimitReached, isGuestId,
   looksLikeGuestToken, newGuestId, readGuestToken, signGuestToken,
 } from '../account/guest.mjs';
+import { checkCreateProject } from '../account/authority.mjs';
 
 const key = randomBytes(32);
 const other = randomBytes(32);
@@ -84,21 +85,20 @@ test('主体摆成和账号一样的形状，事件序号恒为 0', () => {
   assert.equal(isGuestId(newGuestId()), true);
 });
 
-test('建项目：游客只能建一个，账号不受这一条影响，原来的判断接着问', () => {
+test('建项目：游客只能建一个，账号不受这一条影响', () => {
   const guest = newGuestId(), account = 'acc_' + 'a'.repeat(24);
-  const policy = guestCreatePolicy();
-  assert.equal(policy({ accountId: guest, ownedCount: 0 }), true);
-  assert.deepEqual(policy({ accountId: guest, ownedCount: GUEST_LIMITS.projects }), { code: 'guest-project-limit' });
-  assert.equal(policy({ accountId: account, ownedCount: 99 }), true, '账号不该被游客那一条挡住');
+  assert.equal(guestProjectLimitReached({ accountId: guest, ownedCount: 0 }), false);
+  assert.equal(guestProjectLimitReached({ accountId: guest, ownedCount: GUEST_LIMITS.projects }), true);
+  assert.equal(guestProjectLimitReached({ accountId: account, ownedCount: 99 }), false, '账号不该被游客那一条挡住');
 
-  const asked = [];
-  const chained = guestCreatePolicy(args => { asked.push(args.accountId); return args.accountId === account ? true : { code: 'nope' }; });
-  assert.equal(chained({ accountId: account, ownedCount: 0 }), true);
-  assert.deepEqual(chained({ accountId: guest, ownedCount: 0 }), { code: 'nope' }, '游客没到上限时该落到原来的判断');
-  assert.deepEqual(asked, [account, guest]);
-  // 到了上限就不必再问原来的判断了
-  assert.deepEqual(chained({ accountId: guest, ownedCount: GUEST_LIMITS.projects }), { code: 'guest-project-limit' });
-  assert.deepEqual(asked, [account, guest]);
+  // 这一条不走可配的 createPolicy:空策略下照样拦得住
+  assert.throws(() => checkCreateProject({}, { accountId: guest, ownedCount: GUEST_LIMITS.projects, requestId: 'r' }),
+    e => e.code === 'guest-project-limit' && e.status === 403);
+  assert.doesNotThrow(() => checkCreateProject({}, { accountId: guest, ownedCount: 0, requestId: 'r' }));
+  assert.doesNotThrow(() => checkCreateProject({}, { accountId: account, ownedCount: 99, requestId: 'r' }));
+  // 游客没到上限时,部署方配的判断照样说了算
+  assert.throws(() => checkCreateProject({ canCreate: () => ({ code: 'nope' }) }, { accountId: guest, ownedCount: 0, requestId: 'r' }),
+    e => e.code === 'nope');
 });
 
 test('传素材：三条封顶，每条 100 MB 封顶，账号不受限', () => {

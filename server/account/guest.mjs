@@ -116,17 +116,12 @@ export function guestPrincipal({ guestId, issuedAt, expiresAt }) {
 }
 
 /**
- * 「谁能建、能建几个」里游客那一条，挂到 `createAccountAuthority` 的 `createPolicy.canCreate` 上
- * （口子的说明见 `authority.mjs` 的 `checkCreateProject`）。账号那一侧原样放行，由 `maxProjectsPerAccount` 管。
- *
- * @param {(args: object) => unknown} [next] 账号那一侧原来的判断，有就接着问它
+ * 游客自己建的项目到上限了没有。由 `authority.mjs` 的 `checkCreateProject` 直接问，
+ * 不走部署方可配的 `createPolicy`：这一条是游客身份自带的，不该因为某次部署忘了配就没了。
+ * 账号一律回 false，它的数量由 `maxProjectsPerAccount` 管。
  */
-export function guestCreatePolicy(next) {
-  return args => {
-    if (isGuestId(args?.accountId) && (args?.ownedCount ?? 0) >= GUEST_LIMITS.projects) return { code: 'guest-project-limit' };
-    return typeof next === 'function' ? next(args) : true;
-  };
-}
+export const guestProjectLimitReached = ({ accountId, ownedCount }) =>
+  isGuestId(accountId) && (ownedCount ?? 0) >= GUEST_LIMITS.projects;
 
 /**
  * 这条素材收不收：游客只能传 `GUEST_LIMITS.assets` 条，每条不超过 `assetBytes`。
