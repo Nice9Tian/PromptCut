@@ -56,3 +56,56 @@ summary 12 项过 4
 
 截图：`out/save-state-shots/1-saving.png`（保存中：罩子与「正在保存项目… 正在写入文件…」），`out/save-state-shots/2-after-save.png`（保存后）。
 
+## 块二：等本机写完（提交 2bba5190）
+
+**做法**：新文件 `src/editor/io/localWrites.ts` 的 `waitForLocalWrites`，`saveFlow` 在上锁之后、序列化之前调它；总时限 `LOCAL_WRITES_TIMEOUT_MS = 10 秒`（沿用原来等文档服务确认的 10 秒，现在是几样合起来的总时限）。等的时候「正在保存」那层列出正在等哪几样。
+
+「写完」的口径：**已经开始、还没落地的本机写入都落地了**，不是等将来会写项目的任务全跑完。转写、声音生成这类要跑几分钟、最后一次性写回的任务，写回之前项目里没有它的半截东西，保存不等它；它写回之后项目重新变脏，下次保存带上。（这一条是我对语义的理解，见文末「要改的语义」。）
+
+| 机制文档列的一样 | 「算完了」的判据 | 超时（总时限 10 秒）的行为 |
+|---|---|---|
+| 待提交操作 | 文档服务确认了本页面发出的全部修改、恢复日志落盘（原有的 `whenSaved`）。没接文档服务时本地修改同步落进 store，没有在路上的 | 不写文件，提示沿用原来那句「还有修改没等到文档服务确认……这次没有保存」 |
+| 素材入库/上传 | 当前项目里没有「这台设备正在导入」的素材：`pending: true` 且这台设备手里有它的文件（`getMediaFile`）。别的设备正在传的素材也是 pending，但不是本机写入，不等 | 不写文件，提示「还有本机的写入没完成：正在导入的素材（N 个）。原来的文件没有改动，等它们完成后再保存。」 |
+| 本机 Agent | 没有 Agent 让页面执行的工具正在跑（`userEditing.ts` 新加的 `agentToolRunning()`，mcpExecutor 和云端 Agent 都用 `beginAgentTool/endAgentTool` 包着工具执行） | 同上，「Agent 正在执行的修改」 |
+| 后台写入 | 最近 300 毫秒没有本页面自己的修改落地（`onLocalCommit`）。前台这时已被拦住，还在落地的只能是后台任务、Agent、上锁前开始的输入收尾；等它们停下来，不必一个个去认（卡片配音、自动成片、镜头/主体识别各自的任务表都是私有的，不在我的文件范围里） | 同上，「后台任务正在写入项目」 |
+| 渲染 | 预渲染快照随文件存：写盘前向渲染这边要一次已完成的快照（`proc.ts` 新的 `collectFrameSnapshots`，时限 2.5 秒，原有） | **这一样不按「不写文件」办**：快照是可以丢的缓存（原代码注释「Missing/corrupt caches must never prevent saving the project」），项目内容完整，所以照存，但不再静默——标 `snapshotsSkipped`，顶部提示「预渲染快照这次没来得及收进文件……重新打开后会重新预渲染」。要改成「不写文件」只动 `saveFlow.ts` 一处，请定 |
+
+另外两处：
+
+- 等文档服务确认放在最后一步；确认期间又有本页面的修改落地，就再来一轮。
+- **序列化之后项目又被本机改了**（写盘那几秒 Agent 或后台任务落了一笔）：文件照存（内容是保存开始那一刻的），但**不标「已保存」**，顶部提示「之后的修改还没保存」。改前会把这种情况标成已保存（块一的真页面红跑里就出现了：文件 3 条序列、项目 2 条、dirty=false）。
+
+**改前红、改后绿**
+
+node 单测 `src/editor/io/localWrites.test.mjs`，改前（`saveFlow.ts` 用 694ad620 的版本，即块一做完、块二没做）：
+
+```
+✖ 本机 Agent 的工具还在跑:保存等它写完再序列化,文件里有它最后那一笔
+✖ 这台设备正在导入的素材:等它传完;别的设备在传的(本机没有文件)不等
+✖ 后台任务连着写:等它停下来(一段时间没有新的落地)再序列化
+✖ Agent 一直没写完:到时限不写文件,说清楚在等 Agent;之后恢复编辑
+✖ 素材一直没导完:到时限不写文件,提示里有件数
+✔ 待文档服务确认的修改等不到:不写文件,沿用原来的说法      ← 原有行为
+✖ 序列化之后项目又被本机改了(写盘期间 Agent 落了一笔):文件照存,但不标「已保存」,并告诉用户
+✔ 缺省的探测:Agent 工具在跑时 agentToolProbe 记 1;本机正在导入的素材才算  ← 新模块自身的单测
+ℹ tests 8 / pass 2 / fail 6
+```
+
+改后 `ℹ tests 8 / pass 8 / fail 0`。
+
+`src/editor/io/procWrite.test.mjs`（预渲染快照，`frameClient` 用 `mock.module` 换掉），改前（`proc.ts`、`saveFlow.ts` 用 694ad620 的版本）：`✔ 快照收到了` / `✖ 快照等到时限没收到…（AssertionError: 结果里标出这次没带快照）`，`pass 1 / fail 1`；改后 `pass 2 / fail 0`。
+
+真页面探针 `--phases timeout`：先正常存一版当「上次有效保存」，再让一个 Agent 工具调用开始且不结束（调编辑器自己那份 `userEditing.ts` 实例的 `beginAgentTool`），点保存。改前（`TopBar.tsx`、`saveFlow.ts`、`proc.ts` 换回 694ad620）：
+
+```
+timeout.waiting-shown          ✖ 没有等待
+timeout.blocked-while-waiting  ✖ 保存时 Ctrl+Z 撤掉了刚加的序列
+timeout.notice                 ✖ 没有提示
+timeout.no-write               ✖ createWritable 又调了一次，文件被改写（Agent 工具还在跑）
+summary 8 项过 4
+```
+
+改后 `summary 8 项过 8`：等待层显示「先等本机这些写入完成：· Agent 正在执行的修改」；等的时候 Ctrl+Z 改不动；约 12 秒后（10 秒时限 + 前面的等待）顶部提示「这次没有保存 / 还有本机的写入没完成：Agent 正在执行的修改。原来的文件没有改动，等它们完成后再保存。」；`createWritable` 没再调用、原文件逐字节不变、项目仍是未保存；之后 Ctrl+Z 能用。
+
+截图：`out/save-state-shots/3-waiting.png`（等 Agent），`out/save-state-shots/4-timeout.png`（超时提示）。
+
