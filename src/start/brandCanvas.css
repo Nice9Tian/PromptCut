@@ -37,3 +37,46 @@
   /* 去掉左右两块之间那条竖线(用户 2026-10-23 定):画面本来就是渐隐过去的,再画一条线把它切断 */
   border-right: 0;
 }
+
+/*
+ * ── 手机版(竖屏)的登录 ─────────────────────────────────
+ * 用户 2026-10-23:「手机版用毛玻璃 + 背景色加深，来衬托出登录账号页面。」
+ *
+ * 手机版是另一套页面(`src/mobile/MobileStart.tsx`),不走桌面那个 `OnlineLogin`。
+ * 这里只在**没登录**时铺一层整屏的渐变,登录表单浮在毛玻璃卡片上;登录之后这一层不渲染。
+ */
+.ps-m-login-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* 压暗:上浅下深,让下半屏的表单区更沉,文字压得住 */
+.ps-m-login-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.18) 0%, rgba(0, 0, 0, 0.42) 45%, rgba(0, 0, 0, 0.62) 100%);
+}
+
+/* 顶栏和正文要压在渐变之上,否则会被盖住 */
+.editor[data-pcm="home"] > .topbar,
+.editor[data-pcm="home"] > .home-body {
+  position: relative;
+  z-index: 1;
+}
+
+/* 登录卡片:毛玻璃 */
+.ps-m-login-card {
+  padding: 18px 16px 20px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 16px;
+  background: rgba(12, 11, 16, 0.5);
+  backdrop-filter: blur(20px) saturate(1.25);
+  -webkit-backdrop-filter: blur(20px) saturate(1.25);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.45);
+}
+
+/* 卡片里第一个小标题贴着上沿,不要再撑出一截空白 */
+.ps-m-login-card > .sec:first-child { margin-top: 0; }
