@@ -12,6 +12,17 @@ const accountOK = id => typeof id === 'string' && /^acc_[a-f0-9]{24}$/.test(id);
 const deviceOf = p => typeof p?.deviceId === 'string' && p.deviceId ? p.deviceId
   : p?.role === 'agent' && p.service === 'agent' && typeof p.runId === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(p.runId) ? `run:${p.runId}` : null;
 const nameOf = name => typeof name === 'string' && name.length > 0 && name.length <= 200 && !/[\u0000-\u001f]/.test(name) ? name : null;
+const joinRequestIdOK = id => typeof id === 'string' && /^jr_[a-f0-9]{24}$/.test(id);
+/**
+ * 创建者看的申请列表(2026-10-22 用户定,`workflow/project.md`「多用户协作」:申请列表在成员浮层里,每条有「通过」「拒绝」)。
+ * 只列挂着的,按申请时间从早到晚;每条只有账号号、申请时的账号名、申请号、申请时间(不带登录号、设备、邮箱之类)。
+ * 已是成员、已被禁入的账号不列(账本里不该有这种记录,这里再挡一次)。
+ */
+const pendingRequestsOf = project => Object.entries(project.joinRequests ?? {})
+  .filter(([accountId, r]) => accountOK(accountId) && r?.state === 'pending' && joinRequestIdOK(r.id) && Number.isSafeInteger(r.createdAt) &&
+    !project.members[accountId] && !project.bans[accountId])
+  .sort((x, y) => x[1].createdAt - y[1].createdAt)
+  .map(([accountId, r]) => ({ accountId, joinRequestId: r.id, accountName: nameOf(r.accountName), createdAt: r.createdAt }));
 
 /** Fresh authorization followed by a synchronous, whitelist-only projection.
  * getConnections must expose the real doc service registry, never public claims.
@@ -57,6 +68,6 @@ export function createProjectMembers({ ledger, authority, getConnections }) {
       self: { accountId: principal.accountId, creator, access: principal.access }, creatorAccountId: project.creatorAccountId,
       allowLinkJoin: project.allowLinkJoin, members, devices,
       ...(creator ? { bans: Object.entries(project.bans).map(([accountId, ban]) => ({ accountId,
-        accountName: nameOf(ban.accountNameAtJoin), reason: 'kick' })) } : {}) };
+        accountName: nameOf(ban.accountNameAtJoin), reason: 'kick' })), requests: pendingRequestsOf(project) } : {}) };
   };
 }
