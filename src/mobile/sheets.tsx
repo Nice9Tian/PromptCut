@@ -97,7 +97,7 @@ export function AssetsSheet(props: { tab: AssetTab; onTab: (t: AssetTab) => void
         </>
       ) : (
         <>
-          <button type="button" className="dropzone" disabled={busy} onClick={() => input.current?.click()}>＋ 从相册 / 文件导入</button>
+          <button type="button" className="dropzone" data-pcm="import-dropzone" disabled={busy || importOffline} onClick={() => { if (!importOffline) input.current?.click(); }}>{importOffline ? `＋ 从相册 / 文件导入（${IMPORT_OFFLINE_TEXT}）` : "＋ 从相册 / 文件导入"}</button>
           <div className="hint">{props.tab === "audio" ? "点一下加到播放头位置。" : "点一下接到主要内容末尾。"}</div>
           {list.length === 0 ? <div className="hint" data-pcm="asset-empty">这个项目里还没有{ASSET_TABS.find((t) => t.id === props.tab)!.label}素材。</div> : (
             <div className="grid">

@@ -1169,6 +1169,8 @@ function transferOffline(link: SyncLink) {
     transferringBatch = false;
   }
   if (things.length) patch({ mergeOpen: true });
+  // 在线页面的恢复阶段:离线修改没有提交,转进了待合并表,不能说「离线时的修改已全部提交」
+  if (ONLINE) { recoveryState = { phase: null, wasOffline: false, hadUnsent: false }; patch({ recovery: null }); }
   void table.add(things).then((durable) => {
     if (!durable && table.pendingOps) pushToast("离线修改已转进「冲突合并」，但这台设备暂时存不下来；连上文档服务前请不要关闭页面。", "warn", 10_000);
   });
