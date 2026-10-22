@@ -16,6 +16,17 @@ export function MobileStart({ onEnterEditor }: { onEnterEditor: () => void }) {
   const { account, busy, error, setError, lists, listError, perform, request } = ap;
   const [name, setName] = useState(""), [password, setPassword] = useState(""), [remember, setRemember] = useState(false);
   const [sheet, setSheet] = useState<"new" | "join" | null>(null);
+  /**
+   * 以游客身份进来了(用户 2026-10-23:「手机版游客键也点了就进，和桌面一样」)。
+   *
+   * 只是**跳过登录这一屏**,和桌面 `OnlineLogin.tsx` 那颗走 `onDone()` 是一回事。
+   * 随机分配 ID 和头像、以及游客能不能建项目,归「游客身份随机分配」那个会话;
+   * 账号层(`src/account/useAccountProjects.ts`)现在还没有游客接口,所以进来之后
+   * 「新建项目」「加入别人的项目」仍然要账号,点了会报错 —— 接口出来之后这里接上就通了。
+   */
+  const [guest, setGuest] = useState(false);
+  /** 真登录上了就不再是游客 */
+  const asGuest = guest && !account;
   const [projectName, setProjectName] = useState("未命名");
   const [secondary, setSecondary] = useState(""), [askSecondary, setAskSecondary] = useState(false);
   /** 凭链接加入(表单提交、申请被通过后自动再试都走这里);被账号名单挡住时不弹错误,由面板里申请那一块说明(同桌面 `AccountProjects.tsx`) */
@@ -35,20 +46,22 @@ export function MobileStart({ onEnterEditor }: { onEnterEditor: () => void }) {
   return (
     <div className="editor" data-pcm="home">
       {/*
-        没登录时整屏铺和桌面登录页同一张渐变(竖屏,用户 2026-10-23 定):背后是 WebGL 那一层,
-        上面压一道暗化,登录块再浮在一张毛玻璃卡片上 —— 这样表单被衬托出来,不会糊在画面里。
-        登录之后这一层就不渲染了,项目列表该是什么样还是什么样。
+        登录这一屏的背景:官网首页那层光的渲染器版(`BrandGlow`,用户 2026-10-23 定,
+        换掉了原来那块流动的极光)。表单直接落在它上面,不做实体方框 —— 同桌面窄屏。
+        进去之后(登录或游客)这一层就不渲染了,项目列表该是什么样还是什么样。
       */}
-      {/* 背景：官网首页那层光的渲染器版（用户 2026-10-23 定，换掉了原来那块流动的极光） */}
-      {!account && <div className="ps-m-login-bg" aria-hidden="true"><BrandGlow /></div>}
+      {!account && !asGuest && <div className="ps-m-login-bg" aria-hidden="true"><BrandGlow /></div>}
       <div className="topbar">
         <div className="logo"><LogoMark size={18} /><span>Prompt<b>Cut</b></span></div>
         {account && <span className="chip accent" data-pcm="account-chip"><i className="dot" /> {account.name}</span>}
+        {asGuest && <span className="chip" data-pcm="guest-chip">游客</span>}
         {account && <button type="button" className="icon-btn" title="退出登录" aria-label="退出登录" disabled={busy} onClick={() => void perform(ap.logout)}><Icon name="back" /></button>}
+        {/* 游客没有「退出登录」可退,但得有一条回登录页的路,否则进来就出不去了 */}
+        {asGuest && <button type="button" className="icon-btn" title="退出游客身份" aria-label="退出游客身份" data-pcm="guest-leave" onClick={() => { setError(""); setGuest(false); }}><Icon name="back" /></button>}
       </div>
       <div className="home-body">
         {error && <div className="err" role="alert" data-pcm="home-error">{error}</div>}
-        {!account ? (
+        {!account && !asGuest ? (
           <form data-pcm="login" className="ps-m-login-form" onSubmit={(e) => { e.preventDefault(); void perform(async () => { await ap.login(name, password, remember); setPassword(""); }); }}>
             <div className="ps-m-login-head">
               <h2 className="sec">登录账号</h2>
@@ -83,19 +96,15 @@ export function MobileStart({ onEnterEditor }: { onEnterEditor: () => void }) {
               用 Google 继续
             </button>
             {/*
-              游客身份的入口（用户 2026-10-23 要求两个登录页都摆上）。和桌面
-              `src/start/OnlineLogin.tsx` 里那颗是同一件事：随机分配 ID 和头像那套逻辑归
-              「游客身份随机分配」那个会话，这里只摆入口。
-
-              **桌面那颗点了会直接进开始页，这颗不接** —— 桌面那一页整体是界面桩（登录都不发请求），
-              手机版这一页的登录是真会发请求的，给一颗点了真能进去的假入口会让人以为账号已经建好了。
-              账号层出了游客接口（`src/account/useAccountProjects.ts` 现在没有）就接上。
+              游客身份的入口（用户 2026-10-23 要求两个登录页都摆上，并且「点了就进，和桌面一样」）。
+              和桌面 `src/start/OnlineLogin.tsx` 里那颗是同一件事：点了跳过登录这一屏。
+              随机分配 ID 和头像那套逻辑归「游客身份随机分配」那个会话，这里只管入口。
             */}
             <button
               type="button"
               className="ps-m-oauth-btn"
               data-pcm="login-guest"
-              title="待办：游客身份（随机 ID 和头像）还没接，见这里的注释"
+              onClick={() => { setError(""); setGuest(true); }}
             >
               <span className="ps-m-oauth-mark" aria-hidden="true">
                 <svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor">
@@ -107,6 +116,11 @@ export function MobileStart({ onEnterEditor }: { onEnterEditor: () => void }) {
           </form>
         ) : (
           <>
+            {/*
+              游客进来之后的说明。账号层还没有游客接口，所以下面两颗照样要账号，点了会报错；
+              先把话说在前面，免得看着像坏了。「游客身份随机分配」那个会话接上之后删掉这一行。
+            */}
+            {asGuest && <div className="hint" data-pcm="guest-note">游客身份还没接账号服务：现在可以先逛，新建和加入项目仍要登录。</div>}
             <div className="quick">
               <button type="button" className="main" data-pcm="home-new" onClick={() => { setError(""); setSheet("new"); }}>
                 <span className="big"><Icon name="plus" /></span><b>新建项目</b><small>云端项目，Agent 开工</small>
