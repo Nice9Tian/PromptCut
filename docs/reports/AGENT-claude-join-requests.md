@@ -23,7 +23,7 @@
 | `src/account/client.ts` | `joinRequestStatus` / `sendJoinRequest`（都走 `/hosted/shared/account/join`）；`memberAdmin` 支持 `set-entry`、`approve-join`、`reject-join`（请求体按白名单拼、本地先核形状、回包逐项核）；成员投影里 `requests` 的严格核对（只收创建者的、一个账号一条、不能同时是成员或已禁入）；新 code 的人话（见「五」）；常量 `JOIN_REQUEST_POLL_MS`。 |
 | `src/account/joinRequestText.ts`（新） | 各处共用的话（语义原文几句逐字）、`joinRequestNotice`（被挡住那一块说什么、给不给按钮）、`reopenNotice`（重开文件那条提示）、`retryAtText` / `requestedAtText`、`autoJoinKey`（何时自动再走一次加入）。 |
 | `src/account/AccountEntryOption.tsx`（新） | 「任何知道链接的人都可加入」勾选。改之前重读成员投影拿当前访问版本号；中间有人进来回 409 时再读一次再改（只重来一次）。勾着／取消各一句说明。 |
-| `src/editor/sync/CollabSection.tsx`（主会话授权） | 只加一处：在「作废并重新生成项目链接」「项目二级密码」两个按钮（以及按了「项目二级密码」展开的那一段）下面挂 `AccountEntryOption`，只在创建者那一段、只对账号项目。外加一行 import。 |
+| `src/editor/sync/CollabSection.tsx`（主会话授权） | 两处：① 在「作废并重新生成项目链接」「项目二级密码」两个按钮（以及按了「项目二级密码」展开的那一段）下面挂 `AccountEntryOption`，只在创建者那一段、只对账号项目，外加一行 import；② 「放在」那一行账号云端项目只写「云端」（〔裁〕，见「九」第 2 条）。 |
 | `src/account/useAccountProjects.ts` | `join` 被名单挡住时回 `not-listed` 并读自己那一条申请；`sendRequest`（没收到回包再点沿用原请求号）；等创建者时每 10 秒问一次（页面看不见时不问，回前台马上问）；`clearRequest`。 |
 | `src/account/AccountProjects.tsx` | 桌面与在线的开始页：被挡住时那一块（「你不在这个项目的成员名单中。」+「发送申请」→「已发送，等创建者通过」/「创建者没有通过你的申请」，次数用完说几点之后能再申请）；被通过或项目改回知道链接就能进时自动再走一次加入（设了二级密码的接着问密码）。 |
 | `src/account/AccountMembersPanel.tsx` | 成员按钮上的数字角标（创建者有挂着的申请时）；成员浮层顶上「申请加入（N）」列表，每条「通过」「拒绝」；没收到回包再点沿用原请求号。 |
@@ -128,8 +128,9 @@
 | `bad-request-id`、`invalid-authority-claim` | 400 | 页面正常用不会碰到 | 「请求不完整，请刷新后重试。」 |
 | `invalid-project` | 400 | 项目号形状不对 | 「请输入有效的云端项目链接。」 |
 | `invalid-role` | 403 | 非页面身份 | 「没有访问这个项目的权限。」 |
+| `invalid-device` | 400 | 设备号形状不对（页面正常用不会碰到，设备号恒为 ASCII） | 「这台设备的身份信息不对，请重新打开软件后再试。」 |
 
-`no-project`、`relocating`、`invalid-project`、`invalid-role`、`bad-request-id`、`invalid-authority-claim`、`request-mismatch`、`invalid-member` 这几条原来没有对照，落到「请求失败（code）」兜底；这次一并补了人话，影响到所有用 `accountErrorText` 的地方（只是把兜底换成人话）。
+`no-project`、`relocating`、`invalid-project`、`invalid-role`、`invalid-device`、`bad-request-id`、`invalid-authority-claim`、`request-mismatch`、`invalid-member` 这几条原来没有对照，落到「请求失败（code）」兜底；这次一并补了人话，影响到所有用 `accountErrorText` 的地方（只是把兜底换成人话）。
 
 ## 六、三级数字
 
@@ -160,4 +161,103 @@
 
 主会话给的段是 5940～5949。编辑器 5940 占 5940～5942（舞台 +1、+2），夹具七个固定端口 5943～5949（入口 5949），都在段内。夹具还有一个云端 Agent 的入口端口，探针用不到它，段里也放不下第 11 个，所以给 0、由系统挑一个空闲的临时端口（Windows 的临时端口在 49152 以上，不会落在任何人分到的段里）。没碰 5190～5192、5203、5210～5212、5870～5939。
 
-（以下各节在验证完成后补齐。）
+## 九、〔裁〕清单（三级，待用户合入前审）
+
+| # | 改了什么 | 修改前 | 修改后 | 理由 |
+|---|---|---|---|---|
+| 1 | 申请次数的上限按时间窗数 | 同一账号对同一项目一共 3 次（终身）；同一账号跨项目同时挂着 20 条 | 同一账号对同一项目滚动 24 小时 3 次；同一账号跨项目滚动 24 小时 20 次 | 主会话 2026-10-22：「不提供输入账号名加人」，终身额度会让被误拒几次的人永远进不来，创建者也无法补救；「同时挂着 20 条」在没人理的项目里同样会把申请人卡死 |
+| 2 | 项目设置「多用户协作」里「放在」那一行：账号云端项目只写「云端」（`src/editor/sync/CollabSection.tsx`，主会话授权的第二处） | 「云端 · 自由进入」（账号项目恒为这句） | 「云端」 | 主会话 2026-10-22：这不是新增功能，是现有文案在新功能下暴露的错。「自由进入／限定进入」本是本地项目的说法（本地自报身份和进入方式不变），云端项目的进入方式只有「知道链接且登录了就能进」和「只放账号名单」两种。`syncManager` 进账号项目时把 `mode` 写死成 `'free'`，那一行就永远写「自由进入」，取消勾选后与紧下面没勾的「任何知道链接的人都可加入」直接矛盾。显示错的东西比最小改动更要紧；只写「云端」、不把进入方式也写进那一行，进入方式只由勾选说明，免得两处日后又不一致。本地项目那一行照旧。端到端探针核了取消勾选、再勾回去两种状态（`desktop-2-entry-list.png`、`desktop-2b-entry-rechecked.png`） |
+
+## 十、验证
+
+全在本 worktree 上跑；跑 `npm test` 前按任务书设了 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT`、`PROMPTCUT_PASSWORD_ORDER_MODULE`（本机值，没写进任何文件）。
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 类型检查 | `npx tsc -b --force` | 退出码 0，零错误（最后一次：@@TSC@@） |
+| 新的服务端测试 | `node --test server/test/account-join-requests.test.mjs` | `tests 14 / pass 14 / fail 0` |
+| 新的页面侧测试 | `node --test src/account/joinRequest.test.mjs src/account/reopenJoinRequest.test.mjs` | JRC `tests 6 / pass 6`；RJR `tests 4 / pass 4` |
+| 相关旧测试（改动后先跑的一遍） | 服务端 `account-member-*`、`account-hosted-option`、`account-projects-*`、`account-create-policy`、`accept-018-auth-*`、`accept-018-conv-*`、`account-move`；页面 `src/account/*.test.mjs`、`src/editor/sync/accountMove.test.mjs`、`src/mobile/*.test.mjs` | 服务端 `tests 93 / pass 93 / fail 0`；页面 `tests 136 / pass 136 / fail 0` |
+| 全量测试 | `npm test` | @@NPM@@ |
+| 构建 | `npm run build` | @@BUILD@@ |
+| 在线构建（探针用） | `npx vite build --mode online` | 退出码 0 |
+| 端到端（桌面、在线、手机） | `node scripts/probes/account-join-request-probe.mjs --out out/join-requests/final2` | @@PROBE@@ |
+
+端到端探针用本机隔离的托管组合（`server/test/fixtures/cloud-queue-user-path.mjs`：真的账号后端、文档服务、独立的素材服务进程、TLS 入口），没碰节点。三处：
+
+- **桌面**：本工作区起的开发服务器（桌面那一份）；页面里的外壳账号桥由探针照外壳接口代答，同样只放行那五条路由、失败时同样只带回 `status` 与 `code`。不是真的外壳进程（见「十二」）。
+- **在线**：`dist-online/` 由夹具的入口在 `/editor/` 下发，与 `/api/account`、`/hosted` 同源（与生产的摆法一样），页面凭网站登录（cookie）走，没有替身。
+- **手机**：同一份在线构建，`?layout=mobile`、390×844 视口、触屏、手机 UA。
+- 在线页面进了云端项目会弹「使用云端 Agent 前请先了解」，与本任务无关：探针截图前点的是**「拒绝」**（不同意、不发任何对话）。截图里看不到这个弹窗，不代表那几个项目同意过这份告知。
+- 网站每个 IP 一小时只许注册 5 个账号（`RATES.registerPerIp`），夹具已注册 2 个，探针只再注册 3 个，三处轮着用（在线那一遍的申请人是桌面那一遍的丙、丁，申请的是另一个项目；手机那一遍是 K 和乙）。
+
+### 设备名带中文（主会话追问）
+
+探针早先几遍里「乙凭链接进项目」回 400 `invalid-device`：被拒的是**设备号**（`deviceId`，内部标识），不是设备名。那是探针自己拼的设备号 `probe-乙` 带了中文。文档服务 `/join`、`/session` 只核设备号（`server/docservice/modules/account-projects.mjs` 第 58 行，`/^[A-Za-z0-9_.:-]{1,128}$/`）；产品里的设备号由 `server/auth/device.mjs` 生成（`pc-` + 22 位 base64url），恒为 ASCII，所以设备号限 ASCII 合理，改探针是对的，不是绕过。
+
+设备名（`deviceName`，给人看的）不经 `/join`、`/session`，只在编辑器登录时交给账号服务（VisuHive `account/credentials.mjs` 第 100 行只限长度不超过 128，不限字符；本仓库 `server/auth/protocol.mjs` 的 `isDeviceName` 也收中文）。实测：探针把桌面编辑器的设备名设成中文 `申请加入探针的电脑`、设备号保持 ASCII，创建者、两个申请人、被踢的人都用它登录：@@DEVNAME@@。云端项目里的用户名是账号名，不取设备名；「创建者用户名取设备名」是本地项目勾上「多用户协作」时的缺省，本地项目这次没动、没测。另给 `invalid-device` 补了人话（页面正常用不会碰到）。
+
+### 看过的截图（`out/join-requests/final2/`，逐张看过；`final/` 是设备名改中文之前那一遍，内容相同）
+
+| 截图 | 内容 |
+|---|---|
+| `desktop-1-entry-checked.png` | 桌面创建者的项目设置：「任何知道链接的人都可加入」在「作废并重新生成项目链接」「项目二级密码」下面，缺省勾着，下面一句「知道项目链接的人登录网站账号后就能加入。」；「放在」只写「云端」 |
+| `desktop-2-entry-list.png` | 取消勾选后：「只允许账号名单（现在的 3 位成员）。新人要发申请，由你在顶栏「成员」里通过。」；「放在」仍是「云端」 |
+| `desktop-2b-entry-rechecked.png` | 再勾回去：勾着，「放在」仍是「云端」，两边不打架 |
+| `desktop-3-blocked.png` | 申请人凭链接加入被挡住：「你不在这个项目的成员名单中。」+「发送申请」，不另弹错误条 |
+| `desktop-4-sent.png` | 点了以后：「已发送，等创建者通过」 |
+| `desktop-5-badge.png` | 创建者顶栏「成员」按钮上的数字角标 2 |
+| `desktop-6-requests.png` | 成员浮层顶上「申请加入（2）」，每条账号名、账号号、申请时间、「通过」「拒绝」 |
+| `desktop-7-approved-creator.png` | 通过丙之后：申请剩 1 条、角标 1，丙出现在成员里，气泡「已通过 … 的申请。」 |
+| `desktop-8-approved-password.png` | 丙那边自动再走一次加入：「创建者已通过你的申请。」；项目设了二级密码，出现密码框和「该项目设置了项目二级密码，请输入二级密码。」 |
+| `desktop-9-approved-entered.png` | 丙输了二级密码，进了项目（成员 2 人） |
+| `desktop-10-rejected.png` | 丁被拒：「创建者没有通过你的申请」+「发送申请」 |
+| `desktop-11-banned.png` | 被踢的 K 再加入：「你已被禁止加入这个项目。」，没有「发送申请」 |
+| `online-1-entry-checked.png`、`online-2-entry-list.png` | 在线：同样的勾选与取消（现在的 1 位成员），「放在」只写「云端」 |
+| `online-3-blocked.png`、`online-4-sent.png` | 在线申请人：被挡住 +「发送申请」→「已发送，等创建者通过」 |
+| `online-5-badge.png`、`online-6-requests.png` | 在线创建者：角标 2、浮层里的申请列表 |
+| `online-7-after-decisions.png` | 通过一个、拒绝一个之后：申请列表空了 |
+| `online-8-approved-entered.png` | 被通过的人自己进来了（没设二级密码，不用输） |
+| `online-9-rejected.png` | 被拒的人：「创建者没有通过你的申请」+「发送申请」 |
+| `mobile-1-blocked.png`、`mobile-2-sent.png` | 手机「加入别人的项目」面板：被挡住那句 +「发送申请」→「已发送，等创建者通过」 |
+| `mobile-3-badge.png` | 手机创建者：预览右上角成员按钮上的数字角标 2（照页签角标的样子） |
+| `mobile-4-requests.png` | 手机成员面板：「申请加入（2）」，每条「通过」「拒绝」，下面「项目成员」 |
+| `mobile-5-after-decisions.png` | 处理完以后面板里只剩成员 |
+| `mobile-6-approved-entered.png` | 被通过的人在手机上自己进来了（2 人） |
+| `mobile-7-rejected.png` | 被拒的人：「创建者没有通过你的申请」+「发送申请」 |
+
+证据：`out/join-requests/final2/evidence.json`（每项核对、截图清单、外壳替身实际用到的路由 `bridgeRoutes`、勾选与两个按钮的先后 `order`、设备名登录结果 `loginDeviceNames`），过程日志 `out/join-requests/final2.err`。`out/` 不入库。
+
+探针跑过的几遍（都在 `out/join-requests/` 下）：`run1`、`run2` 桌面那一遍没进项目——夹具自带的项目内容只有 `{ tracks: [] }`，编辑器一打开就报 `Cannot read properties of undefined (reading 'toFixed')`、整页空白（`run2/debug-fail-0.png`），改成在开始页新建云端项目；`run3`、`run4` 只剩「乙先凭链接进来」一项不过（探针拼的设备号带中文，见上）；`final`、`final2` 全过。
+
+## 十一、不在原清单里改过的文件
+
+| 文件 | 为什么 |
+|---|---|
+| `server/docservice/modules/account-projects.mjs` | 申请要走现有的 `/join`、`/admin`（见「二」），路由分发在这里。主会话已认可 |
+| `src/editor/sync/CollabSection.tsx` | 主会话授权两处：挂勾选（语义要它在那两个按钮下面）；「放在」那一行（〔裁〕2） |
+| `src/editor/sync/recoveryAssociation.ts` | 主会话授权：重开文件那条提示补「发送申请」 |
+| `src/mobile/MobileStart.tsx`、`useMembers.ts`、`sheets.tsx`、`MobileEditor.tsx`、`mobile.css` | 主会话授权：手机也做 |
+| `scripts/probes/account-join-request-probe.mjs` | 验收要的界面证据（三处走一遍并截图） |
+
+没动：`server/account/agent-read-control.mjs`、`server/agent-service/**`、`server/agent/**`、`src/online/**`、低内存档与三道闸门相关的文件、`src/editor/sync/syncManager.ts`、`docs/semantics/**`、`docs/plan/**`。
+
+## 十二、没做成的、没测到的
+
+- **真的桌面外壳没跑。** 桌面那一遍用外壳账号桥的替身（同样的五条白名单、同样的失败形状）；`account_vault.rs` 本身由 JRC-2 读源码守门。「0.2.8 外壳能用」来自源码比对（「二」），没有装真外壳实测。
+- **重开文件那条提示的「发送申请」没进端到端探针**，只有 RJR-1～4 单测（按钮的请求号重用、在等与次数用完时不给按钮、被踢与问不到时照旧）。
+- **真实网络验证没跑**：没往节点部署，按 `verification.md` 不是合入前提。
+- **两轮审查**（Argon 交叉审核、Opus 对抗性安全专审）由主会话安排，不在本分支里做。
+
+## 十三、发现的问题（不在本任务范围，没改）
+
+1. `server/account/authority.mjs` 的 `verify`：每次凭登录令牌的调用（页面的 `/session`、`/members`、`/join` 都是）都往 `refs` 里加一项、从不清理，而且每次都把整张表扫一遍。文档服务长跑时内存与 CPU 会慢慢涨。这次申请人等创建者时每 10 秒问一次，会让它涨得快一点（与成员列表每 3～15 秒一次同一量级）。建议另开一项按到期或数量清理。
+2. 夹具 `cloud-queue-user-path.mjs` 自带的项目内容是 `{ tracks: [] }`，编辑器打开会崩（见「十」）。拿它做界面验收的探针要自己新建项目。
+3. 刚凭链接进来的那一次 `/join`，紧接着发会话偶尔回 503 `asset-unavailable`（发会话要等素材服务追上全局访问事件，刚落账的加入本身就是一条新事件）。页面用户一般重试就过去；脚本要同请求号重试。
+4. 重开另存的文件时，项目设了二级密码而这个账号还没输过，`/session` 回 403 `secondary-password-required`，`recoveryAssociation.ts` 原有分支把所有 403 都说成「这个账号不是这个云端项目的成员」（改过二级密码后的老成员同样碰到）。见「七」第 7 条。
+
+## 十四、结论
+
+- 语义第 26、27、44 行的各条都做了，桌面、在线、手机三处走通；安全六问每问有服务端测试；名单快照规则写清并有交错测试；申请全走外壳已放行的五条路由，0.2.8 外壳不用换。
+- 合入前要做的：主会话安排的两轮审查；用户审「七」里的语义缺口与新增文字、「九」里的两条〔裁〕、「六」里的三级数字。
+- 分支 `claude/join-requests` 上的提交见 `git log e27d36b4..claude/join-requests`；没有推送、没有合并。

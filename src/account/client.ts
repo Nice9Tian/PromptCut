@@ -75,7 +75,8 @@ export function accountErrorText(status: number, code: string): string {
     'invalid-member': '成员信息不完整，请刷新后重试。', 'request-mismatch': '这次操作和之前的记录对不上，请刷新后重试。',
     // 页面正常用不会碰到(请求号、项目号由页面自己生成或核过;身份字段页面不带),兜底也要是人话,不只显示代号
     'bad-request-id': '请求不完整，请刷新后重试。', 'invalid-authority-claim': '请求不完整，请刷新后重试。',
-    'invalid-project': '请输入有效的云端项目链接。', 'invalid-role': '没有访问这个项目的权限。' };
+    'invalid-project': '请输入有效的云端项目链接。', 'invalid-role': '没有访问这个项目的权限。',
+    'invalid-device': '这台设备的身份信息不对，请重新打开软件后再试。' };
   return messages[code] || (status === 401 ? '登录已失效，请重新登录。' : status === 503 ? '云端服务暂时不可用，请稍后重试。' : status === 403 ? '没有访问这个项目的权限。' : status === 0 ? '连接云端失败，请检查网络后重试。' : `请求失败（${code}）。`);
 }
 /** 在线页面一次账号请求最多等多久(桌面版走外壳的账号桥,那边自己有 20 秒的时限) */

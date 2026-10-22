@@ -42,6 +42,11 @@ const ONLY = arg('--only', 'desktop,online,mobile').split(',');
 const KEEP = argv.includes('--keep-temp');
 const EDITOR_PORT = Number(arg('--editor-port', '5940'));
 const FIXTURE_PORTS = arg('--fixture-ports', '5943,5944,5945,5946,5947,5948,5949').split(',').map(Number);
+/**
+ * 桌面编辑器的设备名(`PROMPTCUT_DEVICE_NAME`,给人看的,登录时随编辑器登录交给账号服务)。缺省用中文:中文用户的设备名(主机名)很可能带中文,
+ * 要实测带中文的设备名照样能登录、发申请、被通过后进项目。设备号(`PROMPTCUT_DEVICE_ID`,内部标识,只许 ASCII)另给
+ */
+const DEVICE_NAME = arg('--device-name', '申请加入探针的电脑');
 // 外壳写死的放行清单(与 account_vault.rs 逐字一致;`src/account/joinRequest.test.mjs` 的 JRC-2 另有守门)
 const SHELL_ROUTES = ['/hosted/shared/account/create', '/hosted/shared/account/join', '/hosted/shared/account/session', '/hosted/shared/account/admin', '/hosted/shared/account/members'];
 fs.mkdirSync(OUT, { recursive: true });
@@ -182,6 +187,8 @@ function nativeBridge(state) {
       if (operation === 'configuration') return { ok: true, origin: ORIGIN };
       if (operation === 'login') {
         const v = out(await edge('/api/account/editor/login', { body: args }));
+        // 记下这次登录交出去的设备名与结果(核对带中文的设备名照样登得上)
+        state.loginDeviceName = args.deviceName; state.loginOk = !!v.ok;
         if (v.ok) { state.recovery = v.recoveryToken; state.deviceId = args.deviceId; state.token = v.accessToken; }
         return v;
       }
@@ -234,7 +241,7 @@ async function startEditor(port) {
   for (const d of [overrides, viteCache]) fs.mkdirSync(d, { recursive: true });
   const proc = start('editor', [viteBin(), '--port', String(port), '--strictPort', '--host', '127.0.0.1'], reopenEditorEnv(dataDir, {
     PROMPTCUT_VITE_CACHE_DIR: viteCache, PROMPTCUT_CARD_OVERRIDES: overrides,
-    PROMPTCUT_DEVICE_ID: `join-${RUN}`.padEnd(16, '0'), PROMPTCUT_DEVICE_NAME: 'join-request-probe',
+    PROMPTCUT_DEVICE_ID: `join-${RUN}`.padEnd(16, '0'), PROMPTCUT_DEVICE_NAME: DEVICE_NAME,
     PROMPTCUT_AUTO_RENDER_NODE: '0', PROMPTCUT_PUSH: '0', PROMPTCUT_LAN_HOST: '0', PROMPTCUT_NODE_PROFILE: 'user', PROMPTCUT_SHARED_CONFIG: '', PROMPTCUT_QUEUE_NODE: '0',
     NODE_EXTRA_CA_CERTS: fixture.caFile, PROMPTCUT_ACCOUNT_CLOUD_ORIGIN: ORIGIN,
   }));
@@ -478,6 +485,10 @@ async function scenarioDesktop(accounts) {
   await shot(pageK, 'desktop-11-banned');
   out.bridgeRoutes = [...new Set(res.bridgePaths)].sort();
   check(out.bridgeRoutes.every(p => SHELL_ROUTES.includes(p) || p === '/api/account/cloud-agent-consent'), '桌面-账号桥只用到外壳放行的路由', out.bridgeRoutes);
+  // 设备名带中文:创建者、两个申请人、被踢的人都是用这个设备名登录的;登录、发申请、被通过后进项目都照常
+  out.deviceName = DEVICE_NAME;
+  out.loginDeviceNames = [stateA, stateC, stateD, stateK].map(s => ({ name: s.loginDeviceName, ok: s.loginOk }));
+  check(out.loginDeviceNames.every(l => l.name === DEVICE_NAME && l.ok === true), `桌面-设备名「${DEVICE_NAME}」照样登录、申请、进项目`, out.loginDeviceNames);
   for (const page of [pageA, pageC, pageD, pageK]) await page.browserContext().close().catch(() => undefined);
   return out;
 }
