@@ -98,6 +98,7 @@
  * - 票据由文档服务签发;核对用同一进程里的凭证存储(`server/auth/asset-tickets.mjs`),缺省按
  *   `<root>/out/docservice/auth` 取进程内单例。**集群令牌不再用于素材服务**(C5 的「非本机写入凭集群令牌」退役)。
  * - 带查询串票据的响应加 `Cache-Control: no-store` 与 `Referrer-Policy: no-referrer`。
+ * - 账号云模式(`projectAccess`)下,凭 `Authorization` 头且 URL 不含 `t` 查询参数读已完整入库的 `GET` / `HEAD` `media/<hash>`(含 Range 206)成功时,回 `Cache-Control: private, max-age=31536000, immutable` 与 `Vary: Authorization`;未入库、出错、带 `?t=` 或其它路由照旧 `no-store`。
  * - 票据原文不进日志、不进回包;本模块不记访问日志。
  *
  * ## 磁盘满(SP,`docs/plan/shared-project-contract.md` 第 1 节)
@@ -128,6 +129,7 @@ export const ASSET_MAX_SIZE = 64 * 1024 * 1024 * 1024;
 export const ASSET_ALLOW_METHODS = "GET, HEAD, PUT, POST, OPTIONS";
 export const ASSET_ALLOW_HEADERS = "Content-Type, Range, X-Media-Size, X-Media-Ext, X-Media-Type, Authorization";
 export const ASSET_EXPOSE_HEADERS = "Content-Range, Accept-Ranges, Content-Length, Content-Type";
+export const ASSET_MEDIA_CACHE_CONTROL = "private, max-age=31536000, immutable";
 
 /** 分片数:小于一片的素材也算 1 片 */
 export function chunkCount(size: number, chunkSize = ASSET_CHUNK_SIZE): number {
@@ -372,7 +374,7 @@ async function handleComplete(res: ServerResponse, store: AssetBlobStore, hash: 
  * 按哈希取回。响应头与 vite-plugin-media 的 serveFile 一样:200 / 206 / 416,
  * Content-Type、Content-Length、Accept-Ranges、Last-Modified(数据层给不出修改时间就不发)、Content-Range。
  */
-async function serveBlob(req: IncomingMessage, res: ServerResponse, store: AssetBlobStore, hash: string) {
+async function serveBlob(req: IncomingMessage, res: ServerResponse, store: AssetBlobStore, hash: string, longCache = false) {
   const stat = await store.stat(hash);
   if (!stat) return sendJson(res, 404, { ok: false, error: "not-found" });
   const range = req.headers.range ? parseRange(req.headers.range, stat.size) : null;
@@ -402,6 +404,10 @@ async function serveBlob(req: IncomingMessage, res: ServerResponse, store: Asset
   if (!head && !stream) return sendJson(res, 404, { ok: false, error: "not-found" });
   await assetContextOf(req)?.lease.assert();
   if (res.destroyed) { stream?.destroy(); return; }
+  if (longCache) {
+    headers["Cache-Control"] = ASSET_MEDIA_CACHE_CONTROL;
+    headers["Vary"] = "Authorization";
+  }
   res.writeHead(range ? 206 : 200, headers);
   if (!stream) return res.end();
   stream.on("error", () => res.destroy());
@@ -446,6 +452,13 @@ function queryTicketOf(req: IncomingMessage): string | null {
   if (i < 0) return null;
   const t = new URLSearchParams(url.slice(i + 1)).get("t");
   return t ? t : null;
+}
+
+/** URL 查询串里有没有 `t` 参数(含空值 `?t=`) */
+function hasQueryTicketParam(req: IncomingMessage): boolean {
+  const url = String(req.url || "");
+  const i = url.indexOf("?");
+  return i >= 0 && new URLSearchParams(url.slice(i + 1)).has("t");
 }
 
 /** 放行时带上这次写入是谁的票据(服务身份的票据有 `service`,`projectId` 是票据限定的项目;容量记账用) */
@@ -743,7 +756,8 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
         // 带 x-promptcut-pull 的是别的素材服务替它的页面来拉的:不再往下拉,防两台互指成环
         if (!opts.projectStores && ns === "px" && pullArtifact && !req.headers["x-promptcut-pull"] && !(await store.stat(hash))) await pullArtifactInto(store, hash, pullArtifact);
         if (ns === "px") touchPx(hash);
-        return await serveBlob(req, res, store, hash);
+        const longCache = Boolean(opts.projectAccess && ns === "media" && bearerOf(req) !== null && !hasQueryTicketParam(req));
+        return await serveBlob(req, res, store, hash, longCache);
       }
       if (tail === "chunks") {
         if (method !== "GET") return sendJson(res, 405, { ok: false, error: "method" });
