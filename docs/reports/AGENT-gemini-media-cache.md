@@ -192,3 +192,84 @@
 - **残余风险（供主会话与用户决策，本分支不作修改）**：
   - **(a) 原地切换项目时的过渡期定时器**：`syncManager` 原地切换项目时会先断开旧项目的素材连接，促使 `pushMediaPolicy` 先下发一份不带 `cardExec` 的策略，使舞台执行闸门关闭（`src/online/isolation/execGate.ts` 的 `noteMediaPolicy`：`parentAllows = policy?.cardExec === true && !hasTicket`）；随后在新项目路径号生效前，旧舞台文档即被整页重载而不会拿到新项目的 `sid`。但旧项目卡片此前已在该舞台文档里启动的代码（如定时器）在文档重载完成前仍会短暂继续运行；该现象早于本分支存在，且与素材缓存无关。
   - **(b) 舞台卡片参数携带 `/media-s/<sid>/media/<hash>` 地址**：`src/render/mediaTier.ts` 的 `resolveCardParams` 会将 `/media-s/<sid>/media/<hash>` 地址传入舞台卡片的 `params`。若项目 A 的某张卡片把自己的 `params` 写进舞台源的持久化存储（如 `localStorage` / `IndexedDB`），就会把项目 A 的 `sid` 暴露给同舞台源上其它项目的卡片；在本分支之前，该暴露受限于 15 分钟 cookie 寿命与 `no-store`，而在开启长期缓存后，已缓存的素材字节在浏览器保留缓存期间可持续被读取。建议在卡片编写指南中明确禁止将素材 URL 持久化到存储，或在后续改动中不再向卡片代码直接提供含 `sid` 的地址。
+
+## 审查（Opus 高思考档，2026-10-23）
+
+审查范围：`git diff 5e8363ba..HEAD` 的全部代码改动（`server/asset-service.ts`、`server/test/asset-media-cache-headers.test.mjs`、`src/online/stageIsolation.ts` 及其测试、`src/online/stagePolicy.mjs`、`src/editor/Preview.tsx`、`scripts/probes/media-cache-probe.mjs`），对照 `product/asset-service.md` 的「不能跨项目读」「凭票据读写」「浏览器可以长期缓存素材」、`mechanism/asset-service.md` 的「缓存头」、`mechanism/platforms.md` 的「素材票据」与「路径号按账号加项目固定」、`product/platforms.md` 里「用户卡只在隔离环境里执行，拿不到项目凭证与票据」。下文的「路径号」就是舞台读素材的地址 `/media-s/<路径号>/media/<哈希>` 里那一段（代码里叫 sid）。
+
+### 发现
+
+| # | 严重度 | 位置 | 发现 | 处理 |
+|---|---|---|---|---|
+| 1 | 高 | `src/online/isolation/harden.ts`（原先没有这一节）、`server/hosted/deploy/nginx-snippet-promptcut-stage-headers.conf` | 舞台源上的卡片代码可以随便读写 `localStorage`、`sessionStorage`、IndexedDB、Cache Storage、源私有文件系统（OPFS）、存储桶和旧的 `webkitRequestFileSystem`：加固只把 cookie 改成只读，内容安全策略不管存储。卡片参数里带着 `/media-s/<路径号>/media/<哈希>`（`resolveCardParams`），项目 A 的卡片只要把参数存下来，以后在同一舞台源上运行的项目 B 的卡片就能读到 A 的路径号和哈希。本分支之前路径号每个页面会话一换、cookie 15 分钟、响应 `no-store`，拿到也很快没用；现在路径号跨会话不变、素材字节在浏览器缓存里留一年，B 的卡片可以不经任何服务端核对、一直读到 A 已缓存的素材，A 打开后 15 分钟内还能凭 cookie 读 A 的任何已知哈希。实测见下「验证」：修之前「卡片」写的带路径号地址重启浏览器后还在真实 `localStorage`、`sessionStorage`、IndexedDB、Cache Storage、OPFS、存储桶里。 | 已修，`4ce9b225`、`6e9d7afb` |
+| 2 | 中 | `src/editor/Preview.tsx` 原 478 行附近（`pushMediaPolicy` 里的 `setScope`）；`src/editor/sync/syncManager.ts` 1531、1624 行（只读） | 页面原地换项目时，`enterAccountProject` 先 `bind`（编辑器里的项目已经是 B），过一会儿才 `connectSharedAssets`（素材连接换成 B）。原实现只在 `pushMediaPolicy` 里、`await remoteAssetTicket()` 之后才 `setScope`，作用域又优先取素材连接的项目号（这一段里还是 A），所以这段时间里本页仍判「可执行」，B 的卡片包（`onBundles` → `pushCardBundles`）会发进拿着 A 路径号的旧舞台文档并执行；B 的代码能从 ResourceTiming、DOM、卡片参数里看到 A 的路径号与哈希，正是语义「一个舞台文档只用一个路径号……免得新项目的卡片在旧文档里看到上一个项目的路径号」要防的事。本分支之前同样存在（那时两个项目共用一个路径号，更糟），但本分支的整页重载只在素材连接换过来之后才触发，没有真正兑现这条语义。 | 已修，`843d05a3` |
+| 3 | 低 | `server/test/asset-media-cache-headers.test.mjs` | 没有用例核「局域网、本机项目的旧模式（没有 `projectAccess`）读 media 不回长期缓存头」：把 `opts.projectAccess &&` 去掉测试照样全绿，而 `764e0105` 的语义写了「旧模式不变」。 | 已补用例 (f)，`55cfe67c` |
+| 4 | 提示 | `src/online/stageIsolation.ts:289`、`309` | `everAllowed` 只写不读（基线 `5e8363ba` 里就这样）。「点过头之后任何舞台都不再收到票据」仍然成立：`plan()` 的每个分支都回 `ticket: null`；`Preview.tsx` 里走旧办法 `?t=` 的那一支本来就不点头执行；舞台侧 `execGate.noteMediaPolicy` 在闸门开过之后一律不收票据。没改，建议以后删掉这个死变量或真正用上。 | 未改 |
+| 5 | 提示 | `server/asset-service.ts:759` | `bearerOf(req) !== null` 在账号模式下是冗余条件（账号模式下没有 `Authorization` 头时只能凭 `?t=` 进来，而带 `t` 的已被 `hasQueryTicketParam` 排除），留着当纵深防御，无害。 | 未改 |
+
+其余逐项核对、没有问题的：
+
+- **长期缓存头的条件**（`server/asset-service.ts:759`、`377-415`）：只在 `projectAccess`（账号模式）、`ns === "media"`、请求头带 Bearer、地址里没有 `t` 参数（含空 `?t=`）时设；只在 `serveBlob` 真要写 200/206 时、`store.stat` 非空（项目库只对收齐的内容给 stat，用例 (e) 覆盖未收尾单片与只传末片）、读流已打开、`lease.assert()` 通过之后才加；404、416、401、403、400 都走 `sendJson` 或在加头之前返回，保持 `no-store`。`admit()` 先 `setHeader("Cache-Control","no-store")`，`writeHead` 传的同名头优先，所以成功时被长期缓存头覆盖、其它情况保留 `no-store`（用例 (a)(b)(c)(e) 实测）。托管运行时 `resolvePrincipal`（`server/hosted/asset-runtime.mjs:70-78`，只读）在有 `Authorization` 头时只认头里的票据、同时带不一致的 `t` 直接 401、带 Cookie 一律 400，与本分支的条件一致。
+- **Range/206**：206 同样带长期缓存头（语义已写「含分段读的 206」），浏览器按分段缓存；416 不带。传输中途读流出错时连接被断，浏览器不会把不完整的回应当完整的缓存。
+- **路径号存储**（`stageIsolation.ts:98-201`）：键 `pc.stageSid.v1:<encodeURIComponent(账号)>:<encodeURIComponent(项目)>`，`encodeURIComponent` 会转义冒号，键不会歧义；读回的值必须匹配 `^[0-9a-f]{32}$` 且不与本页其它作用域重复，否则换新并写回；`localStorage` 取不到、`getItem`/`setItem` 抛错都退回本页内存；缺账号或项目号时不碰存储；模块导入时不碰存储（`pageStageIsolation` 懒建）。存储在编辑器页的源上，舞台读不到。
+- **原地换项目的整页重载**（`Preview.tsx:497-505`）：与已有的三处整页重载（看守重载、卡片代码过期重载、卸载）同一写法：摘下并 dispose RPC 客户端、清 `rpcRef`/`hostCapsRef`、`frame.src = frame.src`，新文档握手时 `handshake(id)` 清掉 `docSid` 后重推策略。路径号只在素材作用域变化时变，不会来回振荡导致反复重载。
+- **单向规矩**：`breach` 之后永不点头、点过头之后不给票据，用例 (f) 与 OCS-S-09、OCS-S-10 覆盖，`843d05a3` 没有动这两处判断。
+- **票据与路径号不进地址、日志、Referer**：票据只在 `_grant` 的 `Authorization` 头里，舞台源 `Referrer-Policy: no-referrer`；路径号会出现在 nginx 访问日志的路径里（服务端运维才看得到，单凭路径号在服务端读不到东西，要 cookie）；编辑器页诊断口 `cardExec.sid` 在编辑器源上，卡片代码够不着。
+
+### 三个安全问题的回答
+
+**问题 1：通过浏览器缓存跨项目读（实现报告的残余风险 b）。**
+
+- 卡片代码能不能读写舞台源上的持久存储：**修之前能，全都能**。`harden.ts` 只把 `document.cookie` 改成只读、锁了 `CookieStore.set/delete`；`stageGuard.ts` 只装加固和自检；舞台的内容安全策略（`nginx-snippet-promptcut-stage-headers.conf`）不管存储；卡片在 `loader.ts` 里用 `new Function` 和运行时同一个全局对象执行。无头 Chrome 152 实测：装上原来的加固之后，「卡片」照样把带路径号的地址写进 `localStorage`、`sessionStorage`、IndexedDB、Cache Storage、OPFS、存储桶，同一标签页舞台重载后、重启浏览器后都还在（见「验证」里的反向对照）。
+- 能不能看到别的文档的地址：不同文档的 ResourceTiming、DOM 互相看不到；同一个舞台文档里能看到（这就是发现 2）。舞台 iframe 的 `sandbox` 没开 `allow-popups`，开不出同源窗口；加固拦了子框架。
+- 舞台运行时自己存不存地址或路径号：不存。舞台文档里写持久存储的只有 `render/playability.ts`（键是 `pc.playable.<浏览器主版本>:<哈希>`，值 `"0"`/`"1"`）、`skins/useSkin.ts`（皮肤常量）、`store/actions/playback.ts`（音量数字），与实现报告「舞台侧存储核查」一致。转译缓存（IndexedDB）只在编辑器页用。
+- **修法（`4ce9b225`）**：`harden.ts` 新增 `denyPersistentStorage(scope)`，舞台加固第 6b 步调用；声音线程入口 `soundWorker.ts` 在载入任何卡片代码之前也调用。
+  - `localStorage`、`sessionStorage` 换成只在本文档内存里的一份（卡片和运行时照常能用、不报错，文档一换就没了）；方法和 `length` 锁死，列不出、读不到、删不掉真实存储里原有的键。唯一写进真实 `localStorage` 的是取档结论：键必须是 `pc.playable.<数字>:<64 位小写十六进制>`，值必须是 `"0"` 或 `"1"`，所以取档的跨会话缓存不受影响。
+  - `indexedDB`、`caches`、`webkitRequestFileSystem*`、`webkitResolveLocalFileSystem*URL`、`openDatabase*` 沿原型链整条改成 `undefined`，不可配置、改不回来（Worker 里这些入口在原型上，同样处理）。
+  - `StorageManager.prototype.getDirectory`（OPFS）、`StorageBucketManager.prototype.open`（存储桶）一律拒绝。
+  - 缓存收益不受影响：浏览器的 HTTP 缓存不是脚本能列举的存储，探针会话 2 照样 0 次回源、`transferSize=0`。
+- **余留风险（如实写明，本分支不再处理）**：
+  1. 卡片代码自己 `new Worker(blob:)` 起的线程里仍有 IndexedDB、Cache Storage、OPFS。要靠它存东西得是刻意的代码；而刻意作恶的卡片在项目 A 里运行时本来就能直接把 A 的素材发到外网（出口不限，2026-10-08 用户定），用不着缓存；正常卡片不会为了存参数专门起 Worker。要堵有两条路：包一层 `Worker` 构造函数只放行运行时自己建的地址（会挡掉用 Worker 的卡片）；或把声音线程改成托管的脚本文件、把舞台策略的 `worker-src` 收紧到 `'self'`（要改 `stagePolicy.mjs` 与 nginx 片段，超出本次可改范围）。
+  2. 同源的实时通道（`BroadcastChannel`、`SharedWorker`）只在两个文档同时开着、而且两边都配合时才通；`storage` 事件现在只会因取档结论触发，内容只有哈希、没有路径号。
+  3. 舞台 iframe 的 `window.name` 在同一个 iframe 整页重载后保留，同样只有刻意写进去才有内容。
+  4. 卡片编写指南第 2.4 节已经禁止 remotion 式的卡用 `localStorage` 与全局对象，本次没有改指南（没有新的作者规则；在线舞台上存储只活在本文档，是平台行为，建议写进机制语义，见下）。
+
+**问题 2：`Vary: Authorization`（实现方在语义之外加的，语义已在 `764e0105` 补上）。**
+
+保留。走 cookie 的舞台请求从浏览器出去时不带 `Authorization`（nginx 在上游才加），浏览器存下的条目记的是「请求里没有 `Authorization`」，下次同样没有，照样命中：探针会话 2 素材服务收到 0 次请求、`transferSize=0`，有实测。坏处没有找到：只会让「带不同 `Authorization` 的请求」各存一份；`private` 已经挡住共享缓存，`Vary` 是第二道（万一哪层代理不守 `private`，也不会把凭甲票据拿到的回应给凭乙票据或不带票据的请求）。
+
+**问题 3：其它会削弱「不能跨项目读」「凭票据读写」的地方。**
+
+- 到达服务端的请求：没有发现。跨项目凭哈希读回 404 + `no-store`（用例 (a)、探针「project B」）；撤销、过期、未知票据回 401/403 + `no-store`（用例 (b)）；托管运行时拒绝带 Cookie 的请求（用例 (d)）。长期缓存只影响浏览器本地，服务端每次回源照旧核票据与项目归属。
+- 票据或路径号泄进地址、日志、Referer、舞台源存储：票据只在请求头里；路径号不进舞台源存储（问题 1 的修法把卡片这一侧也堵上了）；编辑器页仍有 12 处用 `?t=` 读素材（实现报告第 5 步列的），是本分支之前就有的做法，回 `no-store` + `no-referrer`，本分支没改。
+- 发现 2（原地换项目）是本问题下找到并修掉的一处。**修法（`843d05a3`）**：`StageSidScope` 加 `codeProjectId`（此刻打开的项目）；它和素材作用域的项目号都给了又不同时，会话判 `pending`、本页不点头，并通知订阅方（`Preview` 据此重发策略，舞台闸门关上）。`Preview.tsx` 新增 `stageSidScope()`，`pushMediaPolicy` 和 `pushCardBundles` 都用它，`pushCardBundles` 先 `setScope` 再看 `cardExecAvailable()`，于是素材连接没换过来的这一段发出去的是空表，B 的代码进不了旧文档；素材连接换成 B 后路径号变、旧文档整页重载，新文档里才执行 B 的卡。路径号仍只跟素材连接的项目走（cookie 里是那个项目的票据），不会出现「B 的路径号底下存着 A 的素材」。
+
+### 修了什么（提交）
+
+- `4ce9b225`：`src/online/isolation/harden.ts`（`denyPersistentStorage`、`STAGE_STORAGE_PASSTHROUGH_KEY`，加固第 6b 步，`HardenReport.storageDenied`）、`src/online/cardRuntime/soundWorker.ts`、`src/online/isolation/isolation.test.mjs`（OCS-H-09、OCS-H-10）。
+- `843d05a3`：`src/online/stageIsolation.ts`（`codeProjectId`、`scopeMismatch`）、`src/editor/Preview.tsx`（`stageSidScope()`、`pushCardBundles` 先重算作用域）、`src/online/stageIsolation.test.mjs`（用例 (g)）。
+- `55cfe67c`：`server/test/asset-media-cache-headers.test.mjs` 用例 (f)（旧模式不回长期缓存头）。
+- `6e9d7afb`：`scripts/probes/media-cache-probe.mjs` 第 5 项（舞台源持久存储：真实加固、真实 Chrome，同标签页重载与重启浏览器各核一遍）。
+
+### 验证
+
+- `npx tsc -b --force`：退出码 0，无输出（改完后、全量测试之后各跑一次）。
+- `server/asset-service.ts` 单独类型检查（`npx tsc --noEmit --strict --skipLibCheck --target es2022 --module esnext --moduleResolution bundler --allowImportingTsExtensions --types node server/asset-service.ts`）：HEAD 与基线 `5e8363ba` 都是 18 条 `TS7016`（未声明类型的 `.mjs` 导入），去掉行列号后逐行相同，没有新增。本次审查没有改这个文件。
+- 定向测试（`node scripts/test-suite.mjs`）：引用到改动文件的 14 个测试文件（`c10-ui-gates`、`legacy-preview-target`、`stage-policy-nginx`、`measureGate`、`onlineCardsL`、`stageSwapBaseline`、`cardRuntime`、`onlineCardsG`、`soundThread`、`modeImportGuard`、`stageIsolation`、`stagePolicy`、`isolation`、`c10-cost-plan`）→ `ℹ tests 111` / `ℹ pass 111` / `ℹ fail 0`；`asset-media-cache-headers.test.mjs` → `ℹ tests 7` / `ℹ pass 7` / `ℹ fail 0`。
+- 变异核对（改坏、跑、`git checkout` 还原）：`lockAlongChain` 不沿原型链 → OCS-H-10 红；取档键放行不验值 → OCS-H-09 红；判定里去掉 `scopeMismatch` → (g) 红；长期缓存条件去掉 `opts.projectAccess` → 头测试 (f) 红；加固里不调 `denyPersistentStorage` → 探针 8 项 FAIL（见下）。
+- 探针 `node scripts/probes/media-cache-probe.mjs`：退出码 0，28 项 PASS，末行 `media-cache-probe: PASS`。原有 14 项照旧通过（会话 2 路径号相同、素材服务 0 次回源、`transferSize=0`；`?t=` 4 次都回源且 `no-store`；项目 B 路径号不同、经 B 的路径号读 A 的哈希回源 404）。新增 14 项：加固收走了 `localStorage`、`sessionStorage`、`indexedDB`、`caches`、`webkitRequestFileSystem`、`webkitResolveLocalFileSystemURL`、`StorageManager.getDirectory`、`StorageBucketManager.open`，存储相关错误 0；卡片在本文档内照常读写 `localStorage`/`sessionStorage`；`indexedDB`、`caches` 为 `undefined`，OPFS 与存储桶拒绝；`window.localStorage` 不可配置、没有访问器；同标签页重载后与重启浏览器后，真实 `localStorage`、`sessionStorage`、IndexedDB、Cache Storage、OPFS、存储桶里都没有卡片写的东西，对照键都在，取档结论 `pc.playable.999:<哈希>="1"` 留存。
+  - 反向对照：临时让加固不调 `denyPersistentStorage` 再跑，`media-cache-probe: FAIL (8 failed)`，真实存储里出现 `pc-probe-leak`（`localStorage`、`sessionStorage`、IndexedDB、Cache Storage、OPFS、存储桶各一份）；随即还原，工作区干净。
+  - 跑完 6420～6429 上没有监听。
+- 全量 `npm test`（单独一条命令，设 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT=C:\Users\admin\Documents\VisuHive`、`PROMPTCUT_PASSWORD_ORDER_MODULE=C:\Users\admin\Documents\VisuHive\account\password-order.mjs`）：退出码 0，`ℹ tests 7688` / `ℹ pass 7673` / `ℹ fail 0` / `ℹ cancelled 0` / `ℹ skipped 15`，`✓ npm test 最终结果：零失败`，用时约 195 秒，没有文件级崩溃重跑。比实现方那次多 4 条，正好是本次新增的 OCS-H-09、OCS-H-10、(g) 和头测试 (f)。
+- 测试在 worktree 里留下的 `node_modules/`（只有 `.vite`、`.vite-temp`）和 `data/`：确认没有 junction 或其它重解析点后删掉；主仓库的 `node_modules` 完好。
+
+### 没做的及原因
+
+- 卡片自建 Worker 里的持久存储、`window.name`、同源实时通道：见问题 1 的余留风险，都要刻意的代码才会用到；堵起来要么挡掉正常卡片，要么要改 `stagePolicy.mjs` 与 nginx（不在本次可改清单里）。
+- 原地换项目的修法只有单元测试和源码接线核对，没有端到端探针：要真实的托管组合（文档服务、账号、两个项目）在同一页面里换项目，超出本次范围。建议后续在在线浏览器的验收探针里补一条「项目 A 换到项目 B 期间，舞台没收到过 B 的卡片包，直到旧舞台文档重载」。
+- 没有改 `server/card-authoring-guide.md`：没有新的作者规则。
+
+### 对语义的更正建议（本次没有改 `docs/semantics/`，交主会话定）
+
+- `mechanism/platforms.md`「路径号按账号加项目固定」里的「舞台一侧不得把路径号存进舞台源的任何存储」只约束了运行时，建议补一句机制（三级，按本次实现）：「卡片代码在跨源舞台上用的 `localStorage`、`sessionStorage` 只活在本文档内存里，IndexedDB、Cache Storage、源私有文件系统、存储桶不给用；舞台源上写进真实存储的只有取档的『能不能放』结论（键只有浏览器主版本与内容哈希）。」若主会话认为这会让卡片作者看到不同（在线卡片的本地存储不再跨会话保留），按二级办；卡片编写指南第 2.4 节本来就不许用 `localStorage`。
+- 同一条「一个舞台文档只用一个路径号」后面建议补半句：「页面原地换项目、素材连接还没换过来的那一段，本页不执行用户卡」。
