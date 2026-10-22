@@ -6,6 +6,7 @@
 import React, { useEffect, useRef } from "react";
 import { actions } from "../../store/project";
 import { getCard } from "../../kernel/registry";
+import { useReadOnly } from "../readOnly";
 
 interface Props {
   x: number;
@@ -17,6 +18,8 @@ interface Props {
 
 export function PreviewContextMenu({ x, y, clipId, cardId, onClose }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
+  // 这个项目只给了只读权限(游客):删除是写;「引用到 AI」要往只读的输入框里放东西,也置灰
+  const ro = useReadOnly();
 
   useEffect(() => {
     const handleDown = (e: MouseEvent) => {
@@ -35,6 +38,7 @@ export function PreviewContextMenu({ x, y, clipId, cardId, onClose }: Props) {
 
   const handleQuote = (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (ro.locked) return;
     const card = getCard(cardId);
     const label = card?.name || cardId;
     window.dispatchEvent(
@@ -47,6 +51,7 @@ export function PreviewContextMenu({ x, y, clipId, cardId, onClose }: Props) {
 
   const handleDelete = (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (ro.locked) return;
     actions.removeClip(clipId);
     onClose();
   };
@@ -72,7 +77,9 @@ export function PreviewContextMenu({ x, y, clipId, cardId, onClose }: Props) {
     >
       <div
         className="pc-menu-item"
-        style={{ padding: "6px 12px", cursor: "pointer" }}
+        style={{ padding: "6px 12px", cursor: ro.locked ? "not-allowed" : "pointer", opacity: ro.locked ? 0.5 : 1 }}
+        aria-disabled={ro.locked || undefined}
+        title={ro.locked ? ro.why : undefined}
         onClick={handleQuote}
         onMouseEnter={(e) => (e.currentTarget.style.background = "var(--ui-float, #3a3a3a)")}
         onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
@@ -81,7 +88,9 @@ export function PreviewContextMenu({ x, y, clipId, cardId, onClose }: Props) {
       </div>
       <div
         className="pc-menu-item"
-        style={{ padding: "6px 12px", cursor: "pointer", color: "var(--ui-warn, #ff4d4f)" }}
+        style={{ padding: "6px 12px", cursor: ro.locked ? "not-allowed" : "pointer", color: "var(--ui-warn, #ff4d4f)", opacity: ro.locked ? 0.5 : 1 }}
+        aria-disabled={ro.locked || undefined}
+        title={ro.locked ? ro.why : undefined}
         onClick={handleDelete}
         onMouseEnter={(e) => (e.currentTarget.style.background = "var(--ui-float, #3a3a3a)")}
         onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}

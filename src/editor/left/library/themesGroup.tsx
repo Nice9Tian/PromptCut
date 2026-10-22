@@ -1,6 +1,7 @@
 import { useStore, actions } from "../../../store/project";
 import { themes, type Theme } from "../../../themes";
 import type { GroupData, GroupItem } from "./groups";
+import { useReadOnly } from "../../readOnly";
 
 /** 色块卡的高宽比:上面一排色块,下面名字和一句描述 */
 const TILE_ASPECT = 0.75;
@@ -38,6 +39,8 @@ function ThemeBody({ th, current }: { th: Theme; current: boolean }) {
  * 当前主题有强调色选中轮廓。
  */
 export function useThemesGroup(q: string): GroupData {
+  // 这个项目只给了只读权限(游客):换全局主题是写
+  const ro = useReadOnly();
   const currentThemeId = useStore((s) => s.project.themeId);
   const hits = themes.filter(
     (th) => !q || th.name.toLowerCase().includes(q) || th.description.toLowerCase().includes(q) || th.id.toLowerCase().includes(q),
@@ -54,7 +57,8 @@ export function useThemesGroup(q: string): GroupData {
           data-pc-theme={th.id}
           className={`pc-lib-theme${current ? " is-on" : ""}`}
           aria-pressed={current}
-          title={th.description}
+          disabled={ro.locked}
+          title={ro.title(th.description)}
           onClick={() => actions.setProjectMeta({ themeId: th.id })}
         >
           <ThemeSwatch th={th} />

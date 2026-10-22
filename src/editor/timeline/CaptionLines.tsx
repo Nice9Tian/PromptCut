@@ -6,6 +6,7 @@ import { useUserEditing } from "../userEditing";
 import { ContextMenu } from "./ContextMenu";
 import { captionsOf, captionBounds, MIN_CAPTION_DUR, type CaptionLine } from "../../kernel/captions";
 import type { TrackClip } from "../../kernel/project";
+import { useReadOnly } from "../readOnly";
 
 /**
  * 字幕卡内部的一条条字幕。
@@ -24,6 +25,7 @@ export function CaptionLines({ clip, height }: { clip: TrackClip; height: number
   const dur = clip.end - clip.start;
   const [menu, setMenu] = useState<{ x: number; y: number; index: number } | null>(null);
   const [editing, setEditing] = useState<number | null>(null);
+  const ro = useReadOnly();
 
   // 行太矮(小号行高)就只画色块不写字:塞不下的字只会糊成一团
   const showText = height >= 40;
@@ -55,7 +57,7 @@ export function CaptionLines({ clip, height }: { clip: TrackClip; height: number
           x={menu.x}
           y={menu.y}
           onClose={() => setMenu(null)}
-          items={[
+          items={ro.locked ? [{ label: ro.why, disabled: true, action: () => {} }] : [
             { label: "改文字", action: () => setEditing(menu.index) },
             {
               label: "在这里加一条",
@@ -131,12 +133,16 @@ function CaptionBlock({
   const start = drag ? drag.start : line.start;
   const end = drag ? drag.end : line.end;
 
+  // 这个项目只给了只读权限(游客):点一下照样跳过去看,但不能拖、拽边、双击改字
+  const ro = useReadOnly();
+
   const bodyRef = useDrag(
     () => {
       movedRef.current = false;
       actions.select([clipId]);
     },
     (_e, delta) => {
+      if (ro.locked) return;
       const dt = delta.x / pxPerSec;
       if (Math.abs(delta.x) > 2) movedRef.current = true;
       const { min, max } = captionBounds(lines, index, dur);
@@ -147,6 +153,11 @@ function CaptionBlock({
     () => {
       const prev = dragRef.current;
       setBoth(null);
+      if (ro.locked) {
+        // 只读:只有「点一下 = 把播放头挪过去」
+        actions.seek(clipStart + line.start + 0.01);
+        return;
+      }
       if (movedRef.current) {
         // 真拖过:只给 start,长度不变(editCaption 把「只给起点」理解成整条平移)
         if (prev) actions.editCaption(clipId, index, { start: prev.start });
@@ -168,12 +179,14 @@ function CaptionBlock({
   const commitTrim = () => {
     const prev = dragRef.current;
     setBoth(null);
+    if (ro.locked) return;
     if (prev) actions.editCaption(clipId, index, { start: prev.start, end: prev.end });
   };
 
   const leftRef = useDrag(
     () => { movedRef.current = true; },
     (_e, delta) => {
+      if (ro.locked) return;
       const dt = delta.x / pxPerSec;
       const { min } = captionBounds(lines, index, dur);
       const s = Math.max(min, Math.min(line.start + dt, line.end - MIN_CAPTION_DUR));
@@ -185,6 +198,7 @@ function CaptionBlock({
   const rightRef = useDrag(
     () => { movedRef.current = true; },
     (_e, delta) => {
+      if (ro.locked) return;
       const dt = delta.x / pxPerSec;
       const { max } = captionBounds(lines, index, dur);
       const e2 = Math.min(max, Math.max(line.end + dt, line.start + MIN_CAPTION_DUR));
@@ -231,7 +245,7 @@ function CaptionBlock({
       data-pc-caption-line={index}
       className="pc-cap-line absolute pointer-events-auto"
       style={geom}
-      title={`${line.start.toFixed(2)}–${line.end.toFixed(2)}s · ${line.zh || line.en}（双击改字，右键更多）`}
+      title={`${line.start.toFixed(2)}–${line.end.toFixed(2)}s · ${line.zh || line.en}${ro.locked ? `（${ro.why}）` : "（双击改字，右键更多）"}`}
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();

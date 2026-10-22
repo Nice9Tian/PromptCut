@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { actions, getState, useStore } from "../../store/project";
 import { listCuts } from "../../kernel/cuts";
 import { closeTab, openTab, openTabs, saveTabs, setTabs, useCutTabsVersion } from "./cutTabsState";
+import { memberReadOnlyNow } from "../readOnlyCore";
+import { useReadOnly } from "../readOnly";
 import "./cut-tabs.css";
 
 /** 胶片:圆角方块里一格画面,两侧各三个齿孔 */
@@ -20,6 +22,8 @@ export function IconFilm({ size = 12 }: { size?: number }) {
  * 标签留着,直到用户点它的「×」。
  */
 export function openCutInTimeline(cutId: string): void {
+  // 哪条剪辑是激活的(`activeCutId`)是项目里的字段:切换是个写。只读项目(游客)里不切,免得白被服务端拒
+  if (memberReadOnlyNow()) return;
   const p = getState().project;
   const ids = (p.cuts ?? []).map((c) => c.id);
   if (!ids.includes(cutId)) return;
@@ -46,6 +50,7 @@ export function CutTabBar() {
   const projectId = project.id ?? "";
   const tabs = openTabs(projectId, ids, active);
   const [editing, setEditing] = useState<string | null>(null);
+  const ro = useReadOnly();
 
   // 和项目对齐后的结果写回本地存储(激活的补进来、删掉的拿掉)
   const key = tabs.join("|");
@@ -56,6 +61,8 @@ export function CutTabBar() {
 
   const byId = new Map(cuts.map((c) => [c.id, c]));
   const close = (id: string) => {
+    // 只读:关激活的那个标签要顺带切到相邻的剪辑(一个写),不给;关别的标签只是界面上收起来,照常
+    if (ro.locked && id === active) return;
     const r = closeTab(tabs, id, active);
     if (!r) return;
     setTabs(projectId, r.tabs);
@@ -68,12 +75,12 @@ export function CutTabBar() {
         const c = byId.get(id);
         if (!c) return null;
         return (
-          <Tab key={id} id={id} name={c.name} active={c.active} canClose={tabs.length > 1}
+          <Tab key={id} id={id} name={c.name} active={c.active} canClose={tabs.length > 1} locked={ro.locked} why={ro.why}
             editing={editing === id} onEdit={() => setEditing(id)} onDone={() => setEditing(null)}
             onClose={() => close(id)} />
         );
       })}
-      <button type="button" className="pc-tl-cut-add" data-pc="cut-add" title="新建剪辑并打开" aria-label="新建剪辑"
+      <button type="button" className="pc-tl-cut-add" data-pc="cut-add" title={ro.title("新建剪辑并打开")} aria-label="新建剪辑" disabled={ro.locked}
         onClick={() => {
           const cut = actions.addCut(undefined, { switchTo: false });
           openCutInTimeline(cut.id);
@@ -86,8 +93,10 @@ export function CutTabBar() {
   );
 }
 
-function Tab({ id, name, active, canClose, editing, onEdit, onDone, onClose }: {
+function Tab({ id, name, active, canClose, locked, why, editing, onEdit, onDone, onClose }: {
   id: string; name: string; active: boolean; canClose: boolean;
+  /** 只读项目:切换(改激活的剪辑)、改名都不给;why 是置灰说明 */
+  locked: boolean; why: string;
   editing: boolean; onEdit: () => void; onDone: () => void; onClose: () => void;
 }) {
   const [draft, setDraft] = useState(name);
@@ -110,11 +119,12 @@ function Tab({ id, name, active, canClose, editing, onEdit, onDone, onClose }: {
         tabIndex={0}
         aria-selected={active}
         className="pc-tl-cut-main"
-        title={editing ? undefined : `${name}\n单击切换,双击改名`}
-        onClick={() => { if (!editing && !active) actions.switchCut(id); }}
-        onDoubleClick={onEdit}
+        title={editing ? undefined : locked ? `${name}\n${why}` : `${name}\n单击切换,双击改名`}
+        aria-disabled={locked && !active ? true : undefined}
+        onClick={() => { if (!locked && !editing && !active) actions.switchCut(id); }}
+        onDoubleClick={() => { if (!locked) onEdit(); }}
         onKeyDown={(e) => {
-          if (!editing && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); if (!active) actions.switchCut(id); }
+          if (!locked && !editing && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); if (!active) actions.switchCut(id); }
         }}
       >
         <span className="pc-tl-cut-glyph"><IconFilm /></span>
@@ -128,7 +138,8 @@ function Tab({ id, name, active, canClose, editing, onEdit, onDone, onClose }: {
         )}
       </div>
       {canClose ? (
-        <button type="button" className="pc-tl-cut-x" data-pc="cut-tab-close" title="关闭这个标签(不删剪辑)" aria-label={`关闭 ${name} 的标签`}
+        <button type="button" className="pc-tl-cut-x" data-pc="cut-tab-close" title={locked && active ? why : "关闭这个标签(不删剪辑)"} aria-label={`关闭 ${name} 的标签`}
+          disabled={locked && active}
           onClick={(e) => { e.stopPropagation(); onClose(); }}>
           ×
         </button>

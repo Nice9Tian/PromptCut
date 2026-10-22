@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { memberReadOnlyNow } from "./readOnlyCore";
 
 /**
  * 左栏 → 时间轴的拖放载荷。
@@ -34,6 +35,8 @@ function emit() {
 }
 
 export function setDragPayload(p: DragPayload) {
+  // 只读项目(游客)里拖出来的东西落不下去:不记载荷,时间轴就不会摆出落点预览和「新建序列」的落区
+  if (memberReadOnlyNow()) return;
   payload = p;
   emit();
   // dragend 不一定落在源元素上(拖出窗口、拖到别的应用都可能丢),这里兜底清一次。

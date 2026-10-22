@@ -26,6 +26,8 @@ export function ThumbStrip(props: {
   onScrub: (t: number) => void;
   onAddMedia: () => void;
   onAddTransition: (a: TrackClip, b: TrackClip) => void;
+  /** 只读项目(游客):长按拖动换顺序不接,点选、滚动、看都照常 */
+  locked?: boolean;
 }) {
   const { project, clips, selected } = props;
   const sc = useRef<HTMLDivElement>(null);
@@ -87,7 +89,7 @@ export function ThumbStrip(props: {
     let mode: "pending" | "scroll" | "reorder" = "pending";
     let timer = 0;
     dragging.current = true;
-    if (isBlock && id && selected === id) {
+    if (!props.locked && isBlock && id && selected === id) {
       timer = window.setTimeout(() => { if (mode === "pending") { mode = "reorder"; target!.classList.add("lift"); } }, LIFT_MS);
     }
     const mv = (ev: PointerEvent) => {

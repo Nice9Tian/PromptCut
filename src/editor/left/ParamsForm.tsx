@@ -8,6 +8,7 @@ import { ASSET_TARGET } from "../../cards/catalogAssets";
 import type { TrackClip } from "../../kernel/project";
 import { SpeakerPicker } from "./SpeakerPicker";
 import { NumberField } from "../fields/NumberField";
+import { useReadOnly } from "../readOnly";
 import { GESTURE_COMMIT_INTERVAL_MS, GESTURE_WINDOW_MS, commitMerged, createLatestThrottle, newGestureKey } from "../fields/mergedEdit";
 
 function isSpeakerVideoControl(ctrl: Control): boolean {
@@ -35,6 +36,8 @@ function CardRunNote({ cardId }: { cardId: string | undefined }) {
  */
 export function ParamsForm({ clip, cardDef }: { clip: TrackClip; cardDef: ParamsCardView | undefined }) {
   const [pickerCtrlKey, setPickerCtrlKey] = useState<string | null>(null);
+  // 只读项目(游客):外面有只读围栏把原生控件置灰;这里管围栏管不到的「按住标签左右拖」改数字
+  const ro = useReadOnly();
 
   const empty = paramsEmptyText(cardDef);
   if (empty !== null || !cardDef) {
@@ -52,6 +55,7 @@ export function ParamsForm({ clip, cardDef }: { clip: TrackClip; cardDef: Params
   const merged: Record<string, any> = { ...cardDef.defaults, ...clip.params };
 
   const handlePointerDownNumber = (e: React.PointerEvent, key: string, current: number, step: number = 1, min?: number, max?: number) => {
+    if (ro.locked) return;
     const el = e.currentTarget as HTMLDivElement;
     el.setPointerCapture(e.pointerId);
 
@@ -108,8 +112,8 @@ export function ParamsForm({ clip, cardDef }: { clip: TrackClip; cardDef: Params
             {ctrl.type === "number" ? (
               <div
                 data-pc-drag={ctrl.key}
-                className="w-20 shrink-0 text-[11px] pc-left-muted truncate cursor-ew-resize select-none"
-                title={`${ctrl.label} (左右拖动可以微调)`}
+                className={`w-20 shrink-0 text-[11px] pc-left-muted truncate select-none${ro.locked ? "" : " cursor-ew-resize"}`}
+                title={ro.locked ? `${ctrl.label}\n${ro.why}` : `${ctrl.label} (左右拖动可以微调)`}
                 onPointerDown={(e) => handlePointerDownNumber(e, ctrl.key, Number(val) || 0, ctrl.step, ctrl.min, ctrl.max)}
               >
                 {ctrl.label}
