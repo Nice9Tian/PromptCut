@@ -26,6 +26,12 @@ export function MobileStart({ onEnterEditor }: { onEnterEditor: () => void }) {
   // 申请被创建者通过、或项目改回「知道链接就能进」:打开「加入」面板,自动再走一次加入(设了二级密码的接着问密码)
   const autoJoin = autoJoinKey(request);
   useEffect(() => { if (autoJoin) { setSheet("join"); void submitJoin(undefined); } }, [autoJoin]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 从项目直达地址自动进项目时要先输二级密码:和从列表点进去一样打开「加入」面板问密码(同桌面 `AccountProjects.tsx`)
+  useEffect(() => {
+    if (!ap.directSecondary) return;
+    setSheet("join"); setAskSecondary(true); setSecondary(""); setError(JOIN_REQUEST_TEXT.secondaryRequired);
+    ap.clearDirectSecondary();
+  }, [ap.directSecondary]); // eslint-disable-line react-hooks/exhaustive-deps
   const notice = request && account ? joinRequestNotice(request) : null;
   const rows = lists ? [...lists.owned.map((p) => ({ ...p, mine: true })), ...lists.joined.map((p) => ({ ...p, mine: false }))] : [];
 

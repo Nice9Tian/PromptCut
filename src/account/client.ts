@@ -1,4 +1,5 @@
 /** Account credentials live in RAM. Only the native vault owns desktop recovery. */
+import { PROJECT_ID_RE, projectPath, readProjectAddress, sharePath } from './projectAddress.ts';
 export interface Account { id: string; name: string; email?: string | null }
 export interface EditorLogin { account: Account; loginId: string; accessToken: string; accessExpiresAt: number }
 export interface ProjectSession {
@@ -87,22 +88,31 @@ export function accountErrorText(status: number, code: string): string {
 export const REQUEST_TIMEOUT_MS = 20_000;
 type Native = (operation: string, args?: Record<string, unknown>) => Promise<unknown>;
 export interface AccountClientOptions { online: boolean; origin: string; device: { deviceId: string; deviceName: string }; fetch?: typeof fetch; native?: Native; now?: () => number }
+/** 链接里的项目号:直达地址、分享链接、旧的 `?project=` 都认(`projectAddress.ts`);也可以直接输项目号 */
 export function projectIdFromLink(text: string, origin: string): string {
   const value = text.trim();
   let id = value;
   if (/^https?:/i.test(value)) {
     const url = new URL(value);
     if (url.origin !== new URL(origin).origin || url.username || url.password) throw new AccountFailure(400, 'wrong-project-origin', '这不是当前云端服务的项目链接。');
-    id = url.searchParams.get('project') || '';
+    id = readProjectAddress(url)?.projectId ?? '';
   }
-  if (!/^(?:sp_[a-z2-7]{26}|[A-Za-z0-9_-]{8,64})$/.test(id)) throw new AccountFailure(400, 'invalid-project', '请输入有效的云端项目链接。');
+  if (!PROJECT_ID_RE.test(id)) throw new AccountFailure(400, 'invalid-project', '请输入有效的云端项目链接。');
   return id;
 }
+/** 链接里的链接令牌:分享链接的路径、旧的 `?token=` / `?linkToken=`;没有回 undefined */
+export function linkTokenFromLink(text: string): string | undefined {
+  const value = text.trim();
+  if (!/^https?:/i.test(value)) return undefined;
+  try {
+    const address = readProjectAddress(new URL(value));
+    return address?.kind === 'share' ? address.token : undefined;
+  } catch { return undefined; }
+}
+/** 生成的项目链接一律用不带版本的新形式:有链接令牌是分享链接 `/editor/s/<项目号>/<令牌>`,没有是直达地址 `/editor/p/<项目号>` */
 export function projectLink(origin: string, projectId: string, linkToken?: string): string {
-  const u = new URL('/editor', new URL(origin).origin);
-  u.searchParams.set('project', projectId);
-  if (linkToken) u.searchParams.set('token', linkToken);
-  return u.toString();
+  const base = new URL(origin).origin;
+  return new URL(linkToken ? sharePath(projectId, linkToken) : projectPath(projectId), base).toString();
 }
 export function createAccountClient(options: AccountClientOptions) {
   const fetcher = options.fetch ?? fetch, now = options.now ?? Date.now;

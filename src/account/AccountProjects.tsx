@@ -30,6 +30,12 @@ export function AccountProjects({ online, onEnterEditor }: { online: boolean; on
   // 申请被创建者通过、或项目改回「知道链接就能进」:自动再走一次加入(项目设了二级密码的接着问一次密码)
   const autoJoin = autoJoinKey(request);
   useEffect(() => { if (autoJoin) void submitJoin(undefined); }, [autoJoin]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 从项目直达地址自动进项目时要先输二级密码:和从列表点进去一样弹出输入框(链接已由 open 填好)
+  useEffect(() => {
+    if (!ap.directSecondary) return;
+    setAskSecondaryPassword(true); setSecondaryPassword(''); setError(JOIN_REQUEST_TEXT.secondaryRequired);
+    ap.clearDirectSecondary();
+  }, [ap.directSecondary]); // eslint-disable-line react-hooks/exhaustive-deps
   const notice = request && account ? joinRequestNotice(request) : null;
   return <section className="sp-section sp-account" data-pc="account-projects">
     <div className="sp-section-head"><h2 className="sp-section-title">云端项目</h2>

@@ -262,7 +262,7 @@ async function copyState(page) {
       buttonDisabled:Boolean(button?.disabled), buttonFocused:document.activeElement === button, documentFocused:document.hasFocus(),
       clipboardApi:typeof navigator.clipboard?.writeText === 'function', permission,
       enteredToast:toast.includes('已进入云端项目'), copiedToast:toast.includes('项目链接已复制。'),
-      fallbackToast:toast.includes('项目链接：https://visuhive.com/editor?project=') };
+      fallbackToast:/项目链接：https:\/\/visuhive\.com\/editor(?:\?project=|\/[ps]\/)/.test(toast) };
   }).catch(() => ({ state:'copy-diagnostic-unavailable' }));
 }
 async function websiteList(account, kind, projectId, name, label) {
@@ -473,7 +473,8 @@ async function enterNewProject(page, name, label) {
   result.copy ??= []; const diagnostic = { label, before:await copyState(page) }; result.copy.push(diagnostic);
   try {
     await page.click('[data-pc="cloud-project-copy"]');
-    await page.waitForFunction(() => document.querySelector('[data-pc="sync-toasts"]')?.textContent?.includes('项目链接：https://visuhive.com/editor?project='));
+    // 2026-10-23 起生成的链接是 `/editor/p/…`、`/editor/s/…`;正式站换代之前还是 `?project=`,两种都认
+    await page.waitForFunction(() => /项目链接：https:\/\/visuhive\.com\/editor(?:\?project=|\/[ps]\/)/.test(document.querySelector('[data-pc="sync-toasts"]')?.textContent ?? ''));
   } finally { diagnostic.after = await copyState(page); }
   const visibleText = await page.$eval('[data-pc="sync-toasts"]', el => el.textContent);
   const project = projectFromVisibleLink(visibleText);
