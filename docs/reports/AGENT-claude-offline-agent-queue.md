@@ -23,12 +23,19 @@
 - `src/editor/right/chat/UserBubble.tsx`：排着的气泡下面写「等网络恢复后发出」（`data-pc="cloud-send-state" data-state="queued"`）；发送失败且 `resendable` 的带「重新发送」按钮（`data-pc="cloud-resend"`），点了发窗口事件 `pc-cloud-resend`（MessageRow 是 memo 的，不多传会变的函数）。气泡就画在这里，没有别的地方能加。
 - `src/editor/right/chat/chat.css`：「重新发送」按钮的样式（`.ai-message-resend`）。
 
-没动：`src/mobile/**`（手机页 `AgentChat.tsx` 用同一个 `useCloudChat`，但没开 `outbox`，行为不变，见「没做成的」）、`src/editor/sync/**`、任何 `docs/semantics/**`、`docs/plan/**`。
+第二轮（主会话 2026-10-22 授权改 `src/mobile/AgentChat.tsx`，先合了 main `44d1a234`，无冲突，没碰 `src/mobile/sheets.tsx`）——手机版接上：
+
+- `src/mobile/AgentChat.tsx`：开 `outbox`；点发送时断网或对话里已有排着的 → 直接排；读告知断网 → 排（不弹告知框）；发送时 `queueOnNetwork`；接「重新发送」事件；有消息后读对话列表那次在断网时静默。
+- `src/mobile/agentParts.tsx`（同目录，手机气泡画在这里）：排着的气泡写「等网络恢复后发出」（`data-pcm="send-queued"`），发送失败且可重发的带「重新发送」（`data-pcm="resend"`）。
+- `src/mobile/mobile.css`：「重新发送」按钮样式。
+- 「重新发送」的窗口事件名挪到 `outbox.ts` 的 `OUTBOX_RESEND_EVENT`，桌面 `UserBubble.tsx` 的 `CLOUD_RESEND_EVENT` 改成引用它（值不变）。
+
+没动：`src/editor/sync/**`、任何 `docs/semantics/**`、`docs/plan/**`。
 
 ## 四条各自的证据
 
 单测：`node --test src/ai/cloud/outbox.test.mjs` → 18 过 0 失败；`node --test src/ai/cloud/*.test.mjs` → 182 过 0 失败。
-探针：`node scripts/probes/cloud-offline-queue-probe.mjs --port 5900` → `ok: true`，14 项全过，页面报错 0（结果 `out/offline-queue/result.json`）。
+探针：`node scripts/probes/cloud-offline-queue-probe.mjs --port 5900` → `ok: true`，19 项全过（含手机版 5 项），页面报错 0（结果 `out/offline-queue/result.json`）。
 
 | 条 | 单测（`outbox.test.mjs`） | 探针（真面板） |
 |---|---|---|
@@ -38,6 +45,7 @@
 | 4 「发送失败」带「重新发送」，点了按当前状态重走 | 「重新发送:核对以点的这一刻看到的为准(这时最近一条已是别人那条)→ 发出;挪到清单末尾」（之后又有人发 → 照样不发） | `4-resent-after-other`（第三条排在「另一台设备发的」之后到达服务端）；截图 `04-resent.png` |
 | 多条排队的顺序 | 「同一个对话里排了多条:按排队顺序发出」「前一条还连不上,后面的不越过它;别的对话不受影响」 | `2-auto-sent-in-order`（第一条、第二条按序到达） |
 | 跨刷新 | 「排着的消息跨页面刷新还在…」 | `5-held-while-service-unavailable`、`5-restored-after-reload`、`5-sent-once`；截图 `05-after-reload.png` |
+| 手机版（真的 `AgentChat`，375×812 触屏） | 同一套逻辑（`useCloudChat`） | `6-mobile-queued`、`6-mobile-server-received-nothing`、`6-mobile-failed-with-resend`（期间「电脑上发的」，两条都标发送失败带重新发送）、`6-mobile-not-sent`、`6-mobile-resend-only-that-one`（点第一条的重新发送只发出第一条）；截图 `mobile-01-queued.png`、`mobile-02-failed.png`、`mobile-03-resent.png` |
 
 看过的图（都看过）：
 
@@ -45,6 +53,8 @@
 - `out/offline-queue/03-failed.png`：第三条排在「另一台设备发的」之后，红边，写「发送失败：断网期间这个对话里有了新消息，这条没有发出。」，下面「重新发送」按钮。
 - `out/offline-queue/04-resent.png`：点了重新发送，第三条变成正常的已发消息。
 - `out/offline-queue/05-after-reload.png`：刷新后排着的那条还在，仍写「等网络恢复后发出」。
+- `out/offline-queue/mobile-01-queued.png`：手机版，断网时发的两条，气泡下写「等网络恢复后发出」。
+- `out/offline-queue/mobile-02-failed.png`：手机版，两条都标红字「发送失败：断网期间这个对话里有了新消息，这条没有发出。」，各带「重新发送」小按钮，排在「电脑上发的」之后。
 
 ## 三级的数字与〔裁〕
 
@@ -64,24 +74,25 @@
 
 1. `docs/semantics/mechanism/agent.md`（或 `mechanism/` 里管云端对话的那一本）补一段「断网待发」的机制，内容取上表裁1～裁9（数字：退避 2 秒起翻倍封顶 30 秒、清单上限 100、键名 `pc.cloudOutbox:<账号>:<项目>:<页签>`、核对接口 `GET /agent/v1/conversations/<id>` 的 `meta.messages`）。
 2. `mechanism/agent.md`「出错时的话对照表」：
-   - 「云端：发消息被拒」一节的「网络」那一行（`连不上云端 Agent 服务,请检查网络。`）：桌面版与在线页面的云端对话面板里，点发送时断网**不再**出这句，改为排着；手机页（`src/mobile/AgentChat.tsx`，没开断网待发）仍是这句。
+   - 「云端：发消息被拒」一节的「网络」那一行（`连不上云端 Agent 服务,请检查网络。`）：桌面、在线页面和手机版的云端对话里，点发送时断网都**不再**出这句，改为排着。
    - 新增一小节（形状照「发消息被拒」那张表）：
 
      | 出错种类 | 怎么认出来 | 气泡里的话（原文） | 产生的代码位置 | 排查从哪看 |
      |---|---|---|---|---|
-     | 断网时发的（排着） | 浏览器断网，或发送时 `network` / 和文档服务的连接断着 | 气泡下一行：等网络恢复后发出（不是出错，灰字） | `src/ai/cloud/outbox.ts:55`；画在 `src/editor/right/chat/UserBubble.tsx:102` | 浏览器本地存储 `pc.cloudOutbox:<账号>:<项目>:<页签>` |
-     | 断网期间对话里有了新消息，不发 | 发出前现问服务端，最近一条用户消息和排队时看到的不一样 | 发送失败：断网期间这个对话里有了新消息，这条没有发出。（带「重新发送」） | `outbox.ts:57`（判定 `outboxVerdict`，:219）；试发 `src/ai/cloud/useCloud.ts:600` | 服务端对话记录的消息清单（`GET /agent/v1/conversations/<id>`） |
-     | 排着的那条后来因别的原因没发出去 | 试发时回非断网一类的错（没权限、对话被删、满额、告知没确认等） | 发送失败：<cloudErrorText 的话>（带「重新发送」） | `outbox.ts:59`；`useCloud.ts:600` | 同「发消息被拒」那张表按 `code` 查 |
+     | 断网时发的（排着） | 浏览器断网，或发送时 `network` / 和文档服务的连接断着 | 气泡下一行：等网络恢复后发出（不是出错，灰字） | `src/ai/cloud/outbox.ts:61`；画在 `src/editor/right/chat/UserBubble.tsx:99`、手机 `src/mobile/agentParts.tsx:46` | 浏览器本地存储 `pc.cloudOutbox:<账号>:<项目>:<页签>` |
+     | 断网期间对话里有了新消息，不发 | 发出前现问服务端，最近一条用户消息和排队时看到的不一样 | 发送失败：断网期间这个对话里有了新消息，这条没有发出。（带「重新发送」） | `outbox.ts:63`（判定 `outboxVerdict`，:225）；试发 `src/ai/cloud/useCloud.ts:600` | 服务端对话记录的消息清单（`GET /agent/v1/conversations/<id>`） |
+     | 排着的那条后来因别的原因没发出去 | 试发时回非断网一类的错（没权限、对话被删、满额、告知没确认等） | 发送失败：<cloudErrorText 的话>（带「重新发送」） | `outbox.ts:65`；`useCloud.ts:600` | 同「发消息被拒」那张表按 `code` 查 |
 
-   - 通则里「发消息被拒的话挂在用户自己那条气泡下面（`src/editor/right/chat/UserBubble.tsx:95`）」行号变了：现在是 `:103`（`data-pc="cloud-send-failed"`）；「重新发送」按钮在 `:105`（`data-pc="cloud-resend"`）。`session.ts:573`、`:572` 等行号也因本分支改动后移，主会话改表时按合入后的代码对一下。
-3. 一级文字（用户看得到的句子，按规矩应由用户定；这次是会话拟的，**请用户过目**）：
+   - 行号（按本分支最终提交核过）：通则里「发消息被拒的话挂在用户自己那条气泡下面（`UserBubble.tsx:95`）」现在是 `src/editor/right/chat/UserBubble.tsx:100`（`data-pc="cloud-send-failed"`），「重新发送」按钮 `:102`（`data-pc="cloud-resend"`），「等网络恢复后发出」`:99`；手机版对应 `src/mobile/agentParts.tsx:47`（`data-pcm="send-failed"`）、`:49`（`data-pcm="resend"`）、`:46`（`data-pcm="send-queued"`）。「发消息被拒」一节说的「由 `session.ts:573` 拼成『没有发出去：<话>』」现在是 `src/ai/cloud/session.ts:642`；「网络」那一行的 `session.ts:572` 现在是 `:640`。
+3. 一级文字（会话拟的；主会话 2026-10-22 定：在用户已定的框架内先用，记为「文案待用户过目」）：
    - 「发送失败：断网期间这个对话里有了新消息，这条没有发出。」
    - 「发送失败：<原因>」（排着的那条因别的原因没发出去）
    - 「等网络恢复后发出」「重新发送」是语义原文。
 
 ## 没做成的及原因
 
-- **手机页没接**：`src/mobile/AgentChat.tsx`（不许动）用同一个 `useCloudChat`，但没开 `outbox`；它点发送时断网仍照旧标「没有发出去：连不上云端 Agent 服务…」。接法：`useCloudChat({ ..., outbox: true })`，发送时 `chat.send(text, undefined, staged, null, { queueOnNetwork: true })`，并让它的气泡认 `sendState: "queued"` 和 `resendable`（`src/mobile/agentParts.tsx:36～45`），「重新发送」调 `chat.outbox.resend(id)`。语义写的是「云端对话」，手机页也算，建议做手机页的 Agent 接上。
+- 手机页：第一轮因文件边界没接，第二轮已接上（见上）。
+- 以下两条主会话已同意按原有行为记待办、这一版不动：
 - **断网时刷新、页面在断网状态下重新打开**：页面本身打不开（这不是本任务能管的）；刷新后联网但对话列表还没读回来之前，输入框照旧是「正在确认对话权限，确认前暂不能发送。」，排着的消息照样显示、照样会在恢复后发出。
 - **断网时已有正文会被清空**：账号模式断流时会清掉对话正文、连上后重放（原有行为，`session.ts` 的 `clearAccountReadState`），所以断网期间对话区只剩本地气泡（截图 01 可见）。不在本任务范围，未改。
 - 真实网络环境验收没跑：只改了页面这一侧，服务端接口没改，按 `verification.md` 本地验证即可。
