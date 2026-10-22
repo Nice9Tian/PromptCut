@@ -6,6 +6,7 @@ import { AccountFailure, createAccountClient, linkTokenFromLink, projectIdFromLi
 import { desktopAccountBridge, isDesktopShellTooOld } from './desktopVault';
 import { createRequestIds } from './requestIds';
 import { enterOrAskPassword } from './entryFlow';
+import { JOIN_REQUEST_TEXT } from './joinRequestText';
 import { projectPath, readProjectAddress, type ProjectAddress } from '../online/projectAddress';
 
 /** 编辑器页的根路径:在线构建是 `/editor/`,桌面是 `/` */
@@ -92,7 +93,13 @@ export function useAccountProjects({ online, onEnterEditor }: { online: boolean;
     if (!projectId || !client.current) return;
     direct.current = null;
     const label = current?.owned.concat(current.joined).find(p => p.projectId === projectId)?.name || '云端项目';
-    if (await open(projectId, label) === 'secondary-required') setDirectSecondary(projectId);
+    try {
+      if (await open(projectId, label) === 'secondary-required') setDirectSecondary(projectId);
+    } catch (e) {
+      // 还不是成员:不当错误,说一句让用户自己点加入(链接已填好;加入是用户的动作,不自动加。只许名单的项目点了走「发送申请」)
+      if (e instanceof AccountFailure && e.code === 'not-listed') { setError(JOIN_REQUEST_TEXT.directNotMember); return; }
+      throw e;
+    }
   }
   /**
    * 从「我的项目」列表点进去。项目设了二级密码而这个账号还没输过当前这一版(刚被通过的申请人、改过密码之后的老成员):

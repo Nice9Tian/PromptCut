@@ -12,7 +12,7 @@
  *   3 没登录的人打开分享链接 `/editor/s/<项目号>/<令牌>`:「凭链接加入」已填好这条链接;登录、点加入后进项目,
  *     地址换成直达地址,令牌不在地址栏里;
  *   4 同一个浏览器(已登录)另开直达地址:直接进项目;
- *   5 不是成员的人登录后打开直达地址:留在开始页、不进编辑器,并说明原因;
+ *   5 不是成员的人登录后打开直达地址:留在开始页、不进编辑器,说明「你还不是这个项目的成员，点「加入并打开项目」加入。」,链接框已填好;
  *   6 旧形式 `/editor/?project=<号>&token=<令牌>` 照常:链接框填好,换成新形式的分享链接;
  *   7 项目设了二级密码:成员打开直达地址时弹出二级密码框(和从列表点进去一样),输对后进项目,地址是直达地址;
  *   8 手机版(`?layout=mobile`):已登录的成员打开直达地址,直接进手机版编辑器。
@@ -314,7 +314,8 @@ async function scenario(A, B, C) {
   out.nonMemberError = await waitFor(() => textOf(pageC, '[data-pc="account-error"]'), 60_000, '丙看到进不去的原因');
   await sleep(1500);
   check(!(await inEditor(pageC)) && await onStartPage(pageC), '5-不是成员的人留在开始页、不进编辑器');
-  check(!!out.nonMemberError, '5-并说明原因', out.nonMemberError);
+  check(out.nonMemberError === '你还不是这个项目的成员，点「加入并打开项目」加入。', '5-并说明怎么办(点加入),不当错误报「不在名单中」', out.nonMemberError);
+  check((await P(pageC, () => document.querySelector('[data-pc="cloud-project-link"]').value)) === `${ORIGIN}${direct}`, '5-链接框已填好直达地址');
   await shot(pageC, '5-not-member');
 
   // 6 旧形式链接照常
