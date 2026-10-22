@@ -200,23 +200,28 @@ function paramsFor(cardId, rawText, getCard) {
  * 取时间轴上第一条用到这份素材的片段做映射;5～15 秒一组(满 15 秒必断;满 5 秒后遇句末标点、停顿 0.6 秒以上或再加一段会超 15 秒就断);
  * 太短的尾巴并进上一组;每组按关键词选一张卡(选不出的不放),最多 `maxCards` 张;整条文字稿一张 caption-track。
  * @param {{ transcript: { segments: Array<{start:number,end:number,text:string}> }, mediaId: string,
- *   tracks?: Array<{ clips?: Array<{ mediaId?: string, start: number, end: number, mediaOffset?: number }> }>,
+ *   tracks?: Array<{ clips?: Array<{ mediaId?: string, start: number, end: number, mediaOffset?: number, speed?: number }> }>,
  *   maxCards?: number, getCard: (id: string) => ({ controls: Array<{ key: string }> } | undefined) }} input
  */
 export function planAutoWorkflowEdits({ transcript, mediaId, tracks = [], maxCards = WORKFLOW_DEFAULTS.defaultMaxCards, getCard }) {
   let clipStart = 0;
   let mediaOffset = 0;
   let clipEnd = Infinity;
+  let speed;
   for (const track of tracks) {
     const clip = (track?.clips ?? []).find((c) => c.mediaId === mediaId);
     if (clip) {
       clipStart = clip.start;
       mediaOffset = clip.mediaOffset ?? 0;
       clipEnd = clip.end;
+      speed = clip.speed;
       break;
     }
   }
-  const toTl = (s) => clipStart + (s - mediaOffset);
+  // 素材秒 → 时间轴秒,含片段速度。与 `src/kernel/clipTime.mjs` 的 timelineTimeAt 同一个式子(Agent 服务进程这一侧不 import src/,
+  // 照抄;不是有限正数的速度按 1,缺省 1 时 ÷ 1 逐位不变),与桌面版 autoWorkflow.ts 相同
+  const rate = typeof speed === 'number' && Number.isFinite(speed) && speed > 0 ? speed : 1;
+  const toTl = (s) => clipStart + (s - mediaOffset) / rate;
   const mappedSegments = [];
   for (const seg of transcript.segments) {
     const tlStart = toTl(seg.start);
@@ -310,7 +315,7 @@ export function planAutoWorkflowEdits({ transcript, mediaId, tracks = [], maxCar
  *   没有就是 null:这台节点没接上这个能力,对应阶段标「用不了」
  * @param {object} d.project 项目一侧的窄接口(G 包接到文档服务的版本预期与操作栅栏):
  *   `getMedia(context, mediaId)` -> 素材记录(要有 `id, name, kind, transcript, shots, subjects`)或 null(与三个感知包用的是同一个);
- *   `getTimeline(context)` -> `{ projectRev, tracks: [{ clips: [{ mediaId, start, end, mediaOffset }] }] }`;
+ *   `getTimeline(context)` -> `{ projectRev, tracks: [{ clips: [{ mediaId, start, end, mediaOffset, speed? }] }] }`;
  *   `applyEdits(context, { jobId, mediaId, commitKey, expectedProjectRev, fenceRevision, cards, caption })`
  *     -> `{ projectRev, clips: Array<{ clipId, start, end } | null>(与 cards 同序,放不下的是 null), captionClipId: string | null, alreadyApplied?: true }`;
  *     在一次 mutate 里做完(整份全进或全不进);版本对不上抛带 `code: 'project-changed'` 的错;`commitKey` 相同且这些片段还在项目里就回 `alreadyApplied`,不重复放;

@@ -31,6 +31,15 @@ import {
 import { encodePcmChannels, HOSTED_AUDIO_JS_AUTH_HEADER } from '../../hosted-render/audio-js.mjs';
 import { signLookRequest } from '../../hosted-render/look.mjs';
 
+/**
+ * 片段速度(`TrackClip.speed`),不是有限正数时按 1。与 `src/kernel/clipTime.mjs` 的 clipSpeed 同一条规则
+ * (Agent 服务进程这一侧不 import src/,照抄)。
+ */
+function speedOf(clip) {
+  const s = clip?.speed;
+  return typeof s === 'number' && Number.isFinite(s) && s > 0 ? s : 1;
+}
+
 export const AUDIO_JS_TOOL_NAMES = Object.freeze(['measure_audio_js']);
 
 export const AUDIO_JS_DEFAULTS = Object.freeze({
@@ -352,7 +361,8 @@ export function createAudioJsTools({
         scope: 'clip',
         media,
         offset: Number(clip.mediaOffset) || 0,
-        duration: Math.max(0, (Number(clip.end) || 0) - (Number(clip.start) || 0)),
+        // 变速段:量的是这一段用到的那截素材(时间轴时长 × 片段速度;与 src/kernel/clipTime.mjs 的 mediaSpanOf 同一个式子)
+        duration: Math.max(0, (Number(clip.end) || 0) - (Number(clip.start) || 0)) * speedOf(clip),
         meta: { clipId: clip.id, mediaId: media.id },
       };
     }
@@ -364,6 +374,8 @@ export function createAudioJsTools({
         if (track?.hidden || track?.muted || track?.sourceOnly) continue;
         for (const clip of track?.clips ?? []) {
           if (!clip || !clip.mediaId || clip.cardId || clip.muted) continue;
+          // 〔裁〕变速的素材段第一版不出原声(src/kernel/clipTime.mjs 的 speedMutesSource),时间轴混音里没有它
+          if (speedOf(clip) !== 1) continue;
           const vol = clip.volume === undefined ? 1 : Number(clip.volume);
           if (!(vol > 0)) continue;
           const dur = (Number(clip.end) || 0) - (Number(clip.start) || 0);

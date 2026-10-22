@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { actions, useStore } from "../../store/project";
 import type { MediaAsset, Project, TranscriptSegment } from "../../kernel/project";
+import { timelineTimeAt } from "../../kernel/clipTime.mjs";
 import { TranscribePanel } from "./TranscribePanel";
 import { onlinePage, onlineUnsupported } from "../../online/pageFlag";
 
@@ -320,7 +321,7 @@ function timelineTimeOf(p: Project, mediaId: string, mediaSec: number): number |
   for (const tr of p.tracks) {
     for (const c of tr.clips) {
       if (c.mediaId !== mediaId) continue;
-      const tl = c.start + (mediaSec - (c.mediaOffset ?? 0));
+      const tl = timelineTimeAt(c, mediaSec); // 含片段速度(kernel/clipTime.mjs)
       if (tl >= c.start - 1e-6 && tl < c.end) return tl;
     }
   }

@@ -11,6 +11,7 @@ import { createFilterTools } from "../editor/right/filterTools";
 import { createAudioFxTools } from "../editor/right/audioFxTools";
 import { createPixelMapTools } from "./tools/pixelMapTools";
 import { audioPlanOf, soundingAt } from "../kernel/audioPlan.mjs";
+import { mediaSpanOf } from "../kernel/clipTime.mjs";
 import { worldOf, rectForSafeSide, frameBox, type Size } from "../kernel/layout";
 import { backRole, backStage, syncProject } from "../editor/stageBridge";
 import { runBackJob } from "../editor/stageJobs";
@@ -199,7 +200,8 @@ function audioTargetOf(args: { clipId?: string; mediaId?: string; scope?: string
     const hit = findClip(p, String(args.clipId || ""));
     if (!hit) throw new Error(`当前剪辑里没有片段 ${args.clipId || "(没给 clipId)"}`);
     if (!hit.clip.mediaId || hit.clip.cardId) throw new Error("卡片没有声音;要测的是视频 / 声音片段");
-    return { scope, plan: null, body: { scope, media: mediaOf(hit.clip.mediaId), offset: hit.clip.mediaOffset ?? 0, duration: hit.clip.end - hit.clip.start } as Record<string, unknown> };
+    // 变速段量的是它用到的那截素材(时间轴时长 × 片段速度,kernel/clipTime.mjs;缺省 1 逐位不变)
+    return { scope, plan: null, body: { scope, media: mediaOf(hit.clip.mediaId), offset: hit.clip.mediaOffset ?? 0, duration: mediaSpanOf(hit.clip) } as Record<string, unknown> };
   }
   if (scope === "media") {
     return { scope, plan: null, body: { scope, media: mediaOf(String(args.mediaId || "")) } as Record<string, unknown> };

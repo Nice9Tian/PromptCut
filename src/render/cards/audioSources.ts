@@ -35,6 +35,7 @@
 import type { CardDef } from "../../kernel/types";
 import type { MediaAsset, Project, TrackClip } from "../../kernel/project";
 import type { CardNode } from "../../kernel/cardGraph.mjs";
+import { clipSpeed } from "../../kernel/clipTime.mjs";
 import { onlinePage } from "../../online/pageFlag";
 import { ONLINE_CARD_AUDIO_BLOCKED, onlineCardAudioRunnable } from "../../online/soundPolicy";
 
@@ -167,6 +168,8 @@ export async function blockOf(ctx: AudioSourceContext, ref: AudioSourceRef, star
   if (ref.clipId !== undefined) {
     const clip = clipOf(ctx.project, ref.clipId);
     if (!clip) fail(`audio input clip ${ref.clipId} is missing`);
+    // 〔裁〕变速的素材段第一版不出原声(kernel/clipTime.mjs),也不能当声音输入:和 rate ≠ 1 的边同一个报法
+    if (clipSpeed(clip) !== 1) fail("变速的素材段第一版不出原声,不能当音频素材效果卡的声音输入");
     const media = mediaOf(ctx, clip!);
     // 服务端没有 offset 参数:clip.mediaOffset + 边.offset 折算一次,折进 start
     const position = start + edge + Math.round((clip!.mediaOffset ?? 0) * ctx.sampleRate);
@@ -177,6 +180,7 @@ export async function blockOf(ctx: AudioSourceContext, ref: AudioSourceRef, star
   if (node!.adapter === "media") {
     // projectCardGraph 已经合成过的素材节点:offset 就在节点上(cardGraph.mjs:121-122)
     const media = node!.media as MediaAsset | undefined;
+    if (node!.rate !== undefined && Number(node!.rate) !== 1) fail("变速的素材段第一版不出原声,不能当音频素材效果卡的声音输入");
     if (!media?.hash) fail(`素材节点 ${node!.id} 没有内容哈希,重新导入一次素材`);
     const position = start + edge + Math.round((Number(node!.offset) || 0) * ctx.sampleRate);
     return mediaBlock(media!.hash!.toLowerCase(), position, count, ctx.sampleRate);

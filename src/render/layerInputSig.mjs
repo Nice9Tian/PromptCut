@@ -8,7 +8,7 @@
  * 渲染节点写层表时按它认下的那一版项目(`entry.project`)算,页面按自己手里的项目算;同一份项目数据两边算出同一个签名。
  *
  * 进签名(与共享快照键 `server/card-identity.mjs` 的 `cardSnapshotIdentity` 里「项目数据那一半」对齐):
- *   - 片段:`cardId`、`params`、`parts`、`emphasis`、`mediaId`、`mediaOffset`、`filter`、`pixelMap`,
+ *   - 片段:`cardId`、`params`、`parts`、`emphasis`、`mediaId`、`mediaOffset`、速度 `speed`(不是 1 时)、`filter`、`pixelMap`,
  *     框的宽高(`frame.w` / `frame.h`)、时长(`end - start`)、采样相位(`start` 落在帧格里的小数部分);
  *   - 片段引用的库条目:`project.filters` / `project.pixelMaps` 里那一条,素材的 `hash`(没有就 id);
  *   - 素材效果卡(`nodeId`):`project.cardNodes` 里这个节点和它沿 `inputs` 能走到的节点;输入指向别的片段(`@clip/<id>/…`)时
@@ -28,6 +28,7 @@
  */
 import { cardJson } from "../kernel/cardGraph.mjs";
 import { hashString } from "./changedClips.mjs";
+import { speedKeyPart } from "../kernel/clipTime.mjs";
 
 /** 签名算法的版本;改了进签名的内容就加一 */
 export const LAYER_INPUT_SIG_VERSION = 1;
@@ -86,6 +87,8 @@ export function clipInputs(project, clipId) {
     return {
       cardId: clip.cardId, params: clip.params, parts: clip.parts, emphasis: clip.emphasis,
       mediaId: clip.mediaId, mediaOffset: clip.mediaOffset,
+      // 片段速度:只在不是 1 时才进(`kernel/clipTime.mjs` 的 speedKeyPart),缺省 1 的签名逐字不变
+      ...speedKeyPart(clip),
       media: clip.mediaId === undefined ? undefined : mediaEntry ? (mediaEntry.hash ?? mediaEntry.id) : null,
       filter: clip.filter, filterDef: clip.filter ? libraryEntry(project?.filters, clip.filter) : undefined,
       pixelMap: clip.pixelMap, pixelMapDef: clip.pixelMap ? libraryEntry(project?.pixelMaps, clip.pixelMap) : undefined,

@@ -3,7 +3,7 @@
  *
  * 逐帧截图那条链路只产出画面,声音必须在最后用 ffmpeg 拼回去:
  * 项目里每一段有声音的素材(配乐、以及视频自带的声音)按它在时间轴上的位置延迟、
- * 按 mediaOffset 取片段、按 fadeIn/fadeOut 做淡入淡出,再混成一条轨。
+ * 按 mediaOffset 取片段、按 fadeIn/fadeOut 做淡入淡出,再混成一条轨。变速的素材段不出原声(kernel/clipTime.mjs)。
  *
  * 单独成文件是为了可测:buildAudioPlan / buildFfmpegArgs 都是纯函数,不碰磁盘。
  */
@@ -12,6 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { audioPlanOf } from "../../src/kernel/audioPlan.mjs";
+import { speedMutesSource } from "../../src/kernel/clipTime.mjs";
 import { audioProjectOf } from "../../src/kernel/cutAudio.mjs";
 import { audioFxOfClip } from "../../src/kernel/audioFx.mjs";
 
@@ -75,7 +76,8 @@ export function buildAudioPlan(source, outDir, exists = fs.existsSync, sourceOf 
   for (const track of project.tracks ?? []) {
     if (track.hidden || track.muted) continue;
     for (const clip of track.clips ?? []) {
-      if (clip.audioMuted || clip.cardAudio || !isCardAudioNode(project, clip.nodeId)) continue;
+      // 变速的素材段不出原声(〔裁〕,和 audioPlanOf 同一条):接在它上面的音频素材效果卡也不出
+      if (clip.audioMuted || clip.cardAudio || speedMutesSource(clip) || !isCardAudioNode(project, clip.nodeId)) continue;
       // Generated blocks are sample-addressed; do not quantize their timeline placement to
       // the legacy 3 ms audio-plan precision before converting duration to frames.
       const dur = clip.end - clip.start;

@@ -2,6 +2,7 @@ import type { Clip, Timeline } from "./types";
 import type { SoundEffectRecipe } from "./soundEffects";
 import { cutSegmentRender, CUT_SEGMENT_CARD, type CutRenderProject, type TimelineCutClip } from "./cutSegments.ts";
 import { envelopeAt } from "./cutAudio.mjs";
+import { speedMutesSource } from "./clipTime.mjs";
 
 /** 可重生成的音效配方。reuseKey 是合成输入身份,不是 WAV 内容哈希。 */
 export interface SoundEffectLink {
@@ -251,6 +252,12 @@ export interface TrackClip extends Clip {
   mediaId?: string;
   /** 视频段从素材的第几秒开始播(默认 0) */
   mediaOffset?: number;
+  /**
+   * 视频段的播放速度(缺省 1;0.5 慢放、2 快放,范围见 kernel/clipTime.mjs)。素材时刻 = mediaOffset + (t − start) × speed,
+   * 各处一律调 `clipTime.mjs` 换算。等于 1 时**不写这个字段**(改回 1 就删掉),身份键才逐字不变。
+   * 〔裁〕第一版变速段的原声不出(`speedMutesSource`),界面写明。只给视频素材段设。
+   */
+  speed?: number;
   audioMuted?: boolean;
   /** 独立声音音量，0~1；缺省为原声 1。 */
   audioVolume?: number;
@@ -575,7 +582,8 @@ export function audioClipsAt(
     for (const c of tr.clips) {
       if (!c.mediaId || t < c.start || t >= c.end) continue;
       const media = p.media.find((m) => m.id === c.mediaId);
-      if (!media || media.kind !== "audio" || tr.muted || c.audioMuted) continue;
+      // 变速段原声不出(〔裁〕第一版,kernel/clipTime.mjs);和导出混音 audioPlanOf 同一条
+      if (!media || media.kind !== "audio" || tr.muted || c.audioMuted || speedMutesSource(c)) continue;
       out.push({ clip: c, media, volume: opacityAt(c, t) * (c.audioVolume ?? 1) });
     }
   }

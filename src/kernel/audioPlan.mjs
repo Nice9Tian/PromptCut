@@ -5,12 +5,13 @@
  *   - 导出混音(server/bakery/mux-audio.mjs 的 buildAudioPlan → ffmpeg;server/bakery/audio-mix.mjs 的 Chrome 离线渲染)
  *   - 测响度(measure_audio 的 timeline 档,浏览器把这份清单发给服务端)
  *   - 预览不用它(预览按时刻查 audioClipsAt / videoLayersAt),但规则一致:隐藏 / 静音的序列不出声,
- *     片段 audioMuted 不出声,图片没声音,音量 = opacity × audioVolume,淡入淡出线性。
+ *     片段 audioMuted 不出声,变速的素材段不出原声(`speedMutesSource`),图片没声音,音量 = opacity × audioVolume,淡入淡出线性。
  */
 
 import { audioFxOfClip } from "./audioFx.mjs";
 import { clipHasEmbeddedAudio, resolveCardAudioRendition } from "./cardAudioRendition.mjs";
 import { audioProjectOf, envelopeAt } from "./cutAudio.mjs";
+import { speedMutesSource } from "./clipTime.mjs";
 
 const r3 = (n) => +Number(n).toFixed(3);
 
@@ -28,6 +29,9 @@ export function audioPlanOf(source) {
     if (tr.hidden || tr.muted) continue;
     for (const c of tr.clips || []) {
       if (c.audioMuted) continue;
+      // 〔裁〕第一版变速段的原声不出(kernel/clipTime.mjs 文件头):浏览器离线混音与 ffmpeg 做不出一样的变速声音,
+      // 只有「不出」两边一致。挂在它上面的音频效果、卡片声音同样不出(声音来源就是这段原声)。
+      if (speedMutesSource(c)) continue;
       const embedded = clipHasEmbeddedAudio(project, c);
       const rendition = embedded ? resolveCardAudioRendition(project, c) : null;
       const m = rendition?.media ?? (project.media || []).find((x) => x.id === c.mediaId);

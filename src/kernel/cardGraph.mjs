@@ -1,4 +1,5 @@
 import { cardCapabilities, COMPOSITING_VALUES } from './frameMode.mjs';
+import { clipSpeed } from './clipTime.mjs';
 
 export const CARD_RUNTIME_ABI = 1;
 export const CARD_KINDS = ['animation', 'filter', 'transition', 'emphasis', 'audio'];
@@ -128,8 +129,11 @@ export function projectCardGraph(project, getLegacyCard = () => undefined) {
       const graphDef = clip.cardId ? graphCard(clip.cardId) : undefined;
       if (clip.mediaId) {
         const source = media.get(clip.mediaId);
+        // 变速段:节点带上倍率 `rate`(取帧时刻 = 片段内时间 × rate + offset,`render/cards/GraphCard.tsx`)。
+        // 它进节点的身份,接这段素材的素材效果卡、转场的键跟着变;缺省 1 不写,键逐字不变(kernel/clipTime.mjs)
+        const speed = clipSpeed(clip);
         baseId = add({ id: `@clip/${clip.id}/source`, adapter: 'media', media: source, clipId: clip.id,
-          offset: clip.mediaOffset ?? 0, inputs: {}, capabilities: { need_prerendering: false, compositing: 'independent' } });
+          offset: clip.mediaOffset ?? 0, ...(speed !== 1 ? { rate: speed } : null), inputs: {}, capabilities: { need_prerendering: false, compositing: 'independent' } });
       } else if (clip.cardId && !graphDef) {
         // 图卡片段**不合成 chrome 基节点**:它的输出就是它自己那个 'card' 节点
         const def = getLegacyCard(clip.cardId);

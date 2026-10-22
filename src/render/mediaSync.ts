@@ -61,6 +61,11 @@ export interface SyncInput {
   ended?: boolean;
   /** 播放头换算到这条素材上的时刻 */
   target: number;
+  /**
+   * 基准播放速率:片段速度(`TrackClip.speed`,缺省 1)。对齐时按它放,纠偏的 ±10% 乘在它上面,暂停时也停在它上面
+   * (下次起播不带着别的速率)。偏差、门槛照旧按素材秒算。
+   */
+  baseRate?: number;
   /** 时间轴在播放中 */
   playing: boolean;
   /** 手正按着播放头拖(见 timeline/useScrub.ts 的 isScrubbing);只影响暂停时 seek 的疏密 */
@@ -100,6 +105,8 @@ const NOTHING: SyncPlan = { seekTo: null, rate: null, play: false, pause: false,
 export function planSync(input: SyncInput): SyncPlan {
   const { elTime, seeking, paused, target, playing, scrubbing, now, lastSeekAt } = input;
   if (!Number.isFinite(target) || target < 0 || !Number.isFinite(elTime)) return NOTHING;
+  // 片段速度;缺省(或不合法)是 1,下面每一处 `base` 就是原来写死的 1
+  const base = typeof input.baseRate === "number" && Number.isFinite(input.baseRate) && input.baseRate > 0 ? input.baseRate : 1;
 
   // seek 还没落定时什么都别做。这一条是断开自持循环的关键:seeking 期间 currentTime
   // 读出来的是目标值不是真实进度,拿它算偏差只会得出「还差很多」,于是再发一次 seek,
@@ -107,8 +114,8 @@ export function planSync(input: SyncInput): SyncPlan {
   if (seeking) return playing && paused ? { ...NOTHING, play: true } : NOTHING;
 
   if (!playing) {
-    // 暂停:速度先还原,免得下次起播带着上次的微调
-    const rate = 1;
+    // 暂停:速度先还原(到片段速度),免得下次起播带着上次的微调
+    const rate = base;
     const needSeek = Math.abs(elTime - target) > PAUSED_SEEK_SEC;
     const wait = scrubbing ? SCRUB_SEEK_MIN_MS - (now - lastSeekAt) : 0;
     if (needSeek && wait > 0) return { seekTo: null, rate, play: false, pause: !paused, retryInMs: wait };
@@ -125,19 +132,19 @@ export function planSync(input: SyncInput): SyncPlan {
    * 只有播放头真的回到了前面(超过硬 seek 的门槛)才 seek 回去接着放,seek 之后元素不再是「放完了」。
    */
   if (input.ended) {
-    if (drift >= -HARD_SEEK_SEC) return { ...NOTHING, rate: 1 };
-    if (now - lastSeekAt < SEEK_COOLDOWN_MS) return { ...NOTHING, rate: 1 };
-    return { seekTo: target, rate: 1, play: true, pause: false, retryInMs: null };
+    if (drift >= -HARD_SEEK_SEC) return { ...NOTHING, rate: base };
+    if (now - lastSeekAt < SEEK_COOLDOWN_MS) return { ...NOTHING, rate: base };
+    return { seekTo: target, rate: base, play: true, pause: false, retryInMs: null };
   }
 
   if (off > HARD_SEEK_SEC) {
     // 真脱节了。但冷却没过就先忍着 —— 上一次 seek 的解码可能还在路上,
     // 这时候再发一次只会把它推翻重来,这正是原来那个循环的形状。
-    if (now - lastSeekAt < SEEK_COOLDOWN_MS) return { ...NOTHING, rate: 1, play: paused };
-    return { seekTo: target, rate: 1, play: paused, pause: false, retryInMs: null };
+    if (now - lastSeekAt < SEEK_COOLDOWN_MS) return { ...NOTHING, rate: base, play: paused };
+    return { seekTo: target, rate: base, play: paused, pause: false, retryInMs: null };
   }
 
-  if (off <= IN_SYNC_SEC) return { seekTo: null, rate: 1, play: paused, pause: false, retryInMs: null };
+  if (off <= IN_SYNC_SEC) return { seekTo: null, rate: base, play: paused, pause: false, retryInMs: null };
 
   /*
    * 中等偏差:变速追。
@@ -147,7 +154,7 @@ export function planSync(input: SyncInput): SyncPlan {
    * 正好落在硬 seek 的触发区里,每次都要付一次中段 seek 的代价。
    */
   const skew = (drift / HARD_SEEK_SEC) * MAX_RATE_SKEW;
-  const rate = 1 + Math.max(-MAX_RATE_SKEW, Math.min(MAX_RATE_SKEW, skew));
+  const rate = base * (1 + Math.max(-MAX_RATE_SKEW, Math.min(MAX_RATE_SKEW, skew)));
   return { seekTo: null, rate, play: paused, pause: false, retryInMs: null };
 }
 
@@ -184,6 +191,8 @@ export interface SlotClip {
   end: number;
   /** 素材内起点(mediaOffset) */
   offset: number;
+  /** 片段速度(`TrackClip.speed`);缺省 1。这一段占用的素材区间是 offset ~ offset + (end − start) × speed */
+  speed?: number;
 }
 
 export interface SlotState {
@@ -273,8 +282,9 @@ export function tierAligned(mediaTime: number, reference: number, fps: number): 
 }
 
 /** 把前台已经交出的帧外推到预热帧的预计显示时刻，再比较两档。 */
-export function frontTimeAtDisplay(front: { mediaTime: number; expectedDisplayTime: number }, warmExpectedDisplayTime: number): number {
-  return front.mediaTime + (warmExpectedDisplayTime - front.expectedDisplayTime) / 1000;
+export function frontTimeAtDisplay(front: { mediaTime: number; expectedDisplayTime: number }, warmExpectedDisplayTime: number, rate = 1): number {
+  // 素材时间按片段速度走:墙钟过去 Δ 秒,素材走 Δ × rate 秒(rate 缺省 1 时和原来逐位相同)
+  return front.mediaTime + (warmExpectedDisplayTime - front.expectedDisplayTime) / 1000 * rate;
 }
 
 export function planSlots(input: SlotsInput): SlotsPlan {

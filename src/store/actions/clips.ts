@@ -5,6 +5,7 @@ import { cloneCardClipInstance } from "../../kernel/cardAuthoring.mjs";
 import type { PartInstance } from "../../kernel/types";
 import { fadeOwner, groupOf, timingLock, transitionsOf, transitionsOfClip } from "../../kernel/transitions";
 import { cutDuration } from "../../kernel/cutSegments";
+import { clipSpeed, mediaOffsetAfter, mediaSpanOf, normalizeSpeed, withSpeed } from "../../kernel/clipTime.mjs";
 
 import {
   state, set,
@@ -183,7 +184,8 @@ export const clips = {
     if (!clip) return; // 目标位置放不下整段:拒绝移动,不压扁
     // A trim advances the existing source clock; translation (both boundaries) keeps the source offset.
     if ((clip.soundEffect || clip.cardId === "mu-typing" || clipHasEmbeddedAudio(p, clip, getCard)) && Math.abs((clip.end - hit.clip.end) - (clip.start - hit.clip.start)) > 1e-9) {
-      clip = { ...clip, mediaOffset: Math.max(0, (hit.clip.mediaOffset ?? 0) + clip.start - hit.clip.start) };
+      // 变速段按倍率推进源时钟(kernel/clipTime.mjs);缺省 1 保留原来的写法
+      clip = { ...clip, mediaOffset: Math.max(0, clipSpeed(hit.clip) === 1 ? (hit.clip.mediaOffset ?? 0) + clip.start - hit.clip.start : mediaOffsetAfter(hit.clip, clip.start - hit.clip.start)) };
     }
     const placed = clip;
     let next = updateTrack(p, hit.track.id, (t) => ({ ...t, clips: t.clips.filter((c) => c.id !== clipId) }));
@@ -214,6 +216,42 @@ export const clips = {
       clips: t.clips.map((c) => (c.id === clipId ? { ...c, ...clean } : c)),
     })));
     return { ok: true, ...(blocked.length ? { blocked } : {}) };
+  },
+  /**
+   * 改视频段的播放速度(`TrackClip.speed`,kernel/clipTime.mjs)。一次调用一步撤销。
+   *
+   * - 保住入点(起点、`mediaOffset` 不动),用到的那截素材不变,终点按新速度重算:素材 4 秒、2 倍速 → 2 秒;
+   * - 后面紧挨着别的片段、拉长放不下时,截到下一段的起点(`capped`);
+   * - 改回 1 删掉 `speed` 字段,不留 `speed: 1`(身份键才逐字回到原样);
+   * - 只给视频素材段;挂着转场的拒绝(转场把相邻段的时长锁住,同 moveClip);序列锁着的拒绝。
+   * 〔裁〕第一版变速段的原声不出,界面写明(手机版「速度」面板、桌面编辑分区、时间轴的静音标记)。
+   */
+  setClipSpeed(clipId: string, speed: number): { ok: true; capped?: boolean } | { ok: false; error: string } {
+    const p = state.project;
+    const hit = findClip(p, clipId);
+    if (!hit) return { ok: false, error: "找不到这个片段" };
+    const media = hit.clip.mediaId && !hit.clip.cardId && !hit.clip.cutId ? p.media.find((m) => m.id === hit.clip.mediaId) : undefined;
+    if (!media || media.kind !== "video") return { ok: false, error: "只有视频段能改速度" };
+    if (hit.track.locked) return { ok: false, error: "请先解锁序列" };
+    const next = normalizeSpeed(speed);
+    if (next === null) return { ok: false, error: "速度要是正数" };
+    if (next === clipSpeed(hit.clip)) return { ok: true };
+    if (timingLock(p, clipId)) return { ok: false, error: "这一段挂着转场，改速度会改时长；先删掉转场" };
+    const start = hit.clip.start;
+    let end = start + mediaSpanOf(hit.clip) / next;
+    // 同一条序列里排在它后面的第一段(它自己的声音伴随段跟着它走,不算挡路)
+    const blocker = hit.track.clips
+      .filter((c) => c.id !== clipId && c.soundEffect?.sourceClipId !== clipId && c.start >= hit.clip.end - 1e-9)
+      .reduce((min, c) => Math.min(min, c.start), Infinity);
+    let capped = false;
+    if (end > blocker + 1e-9) { end = blocker; capped = true; }
+    if (end - start < 0.1) return { ok: false, error: "后面没有空位，放不下这个速度" };
+    const placed: TrackClip = { ...withSpeed(hit.clip, next), end };
+    const updated = updateTrack(p, hit.track.id, (t) => ({ ...t, clips: sortClips(t.clips.map((c) => (c.id === clipId ? placed : c))) }));
+    const linked = moveSoundCompanions(updated, hit.clip, placed);
+    if (!linked) return { ok: false, error: "这一段的声音伴随段放不下，没有改速度" };
+    setProject(linked);
+    return { ok: true, ...(capped ? { capped: true } : {}) };
   },
   removeClip(clipId: string) {
     const p = state.project;
@@ -251,7 +289,8 @@ export const clips = {
     if (timingLock(p, clipId)) return null;
     if (hit.track.locked || p.tracks.some(track => track.locked && track.clips.some(c => c.soundEffect?.sourceClipId === clipId))) return null;
     const left: TrackClip = { ...hit.clip, end: t };
-    let right: TrackClip = { ...hit.clip, id: newId("c"), start: t, mediaOffset: (hit.clip.mediaOffset ?? 0) + (t - hit.clip.start), ...(hit.clip.parts ? { parts: JSON.parse(JSON.stringify(hit.clip.parts)) } : {}) };
+    // 后半段的素材起点按片段速度推进(kernel/clipTime.mjs;缺省 1 与原来的 off + (t − start) 逐位相同),速度原样带着
+    let right: TrackClip = { ...hit.clip, id: newId("c"), start: t, mediaOffset: mediaOffsetAfter(hit.clip, t - hit.clip.start), ...(hit.clip.parts ? { parts: JSON.parse(JSON.stringify(hit.clip.parts)) } : {}) };
     // 剪辑段:后半段从被引用剪辑的「前半段的偏移 + 前半段的长度」开始(不用 mediaOffset)
     if (hit.clip.cutId) {
       const { mediaOffset: _m, ...rest } = right;

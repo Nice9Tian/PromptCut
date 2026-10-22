@@ -2,6 +2,7 @@ import { findClip, findSoundAsset, newId, soundAssetFrom, type MediaAsset, type 
 import { stripAudioFxFromCuts, withoutAudioFx } from "../../kernel/cuts";
 import type { AudioFxDef, ClipAudioFx } from "../../kernel/audioFx.mjs";
 import { getCard } from "../../kernel/registry";
+import { isSpeedChanged } from "../../kernel/clipTime.mjs";
 import { clipHasAudio, clipHasEmbeddedAudio } from "../../kernel/cardAudioRendition.mjs";
 
 import { state, setProject, updateTrack } from "../core";
@@ -71,6 +72,8 @@ export const audio = {
       const src = p.media.find(m => m.id === hit.clip.mediaId);
       if (!src || src.kind !== "video") return { ok: false, code: "NOT_VIDEO_MEDIA", clipId, error: "只能分离普通视频素材的音频。未修改任何片段。" };
       if (hit.clip.audioMuted) return { ok: false, code: "ALREADY_MUTED", clipId, error: "此视频已静音或已分离音频。未修改任何片段。" };
+      // 〔裁〕变速段第一版不出原声(kernel/clipTime.mjs):分出来的声音没法跟着变速,先改回 1×
+      if (isSpeedChanged(hit.clip)) return { ok: false, code: "SPEED_CHANGED", clipId, error: "变速的视频段不出原声，不能分离音轨；先把速度改回 1×。未修改任何片段。" };
       hits.push({ ...hit, src });
     }
     const media = [...p.media], generated = new Map<string, Track[]>();
@@ -119,6 +122,7 @@ export const audio = {
     if (!hit) return { ok: false, error: `找不到片段 ${clipId}` };
     if (clipHasEmbeddedAudio(state.project, hit.clip, getCard)) return { ok: false, error: "动效卡片的内嵌声音不能分离或转换为声音；可以单独静音该卡片" };
     if (!hit.clip.mediaId) return { ok: false, error: "这段是卡片,不是素材,没有声音可转" };
+    if (isSpeedChanged(hit.clip)) return { ok: false, error: "变速的视频段不出原声，不能转换为声音；先把速度改回 1×" };
     const r = audio.audioFromVideo(hit.clip.mediaId);
     if (!r.ok) return r;
     if (r.media.id === hit.clip.mediaId) return { ok: true, mediaId: r.media.id, created: false, already: true };

@@ -29,6 +29,7 @@
  */
 
 import { ffmpegChain, ffmpegStages, ffmpegStaticChain, filterOfClip, isAnimated, resolveOps, sendcmdScript } from "../src/kernel/filters.mjs";
+import { clipSpeed, mediaTimeAt } from "../src/kernel/clipTime.mjs";
 
 /** 和 ExportView / flattenOverlay 一个口径:从下到上所有画面素材段(视频 + 图片),不管时间 */
 export function composeLayers(project) {
@@ -328,6 +329,8 @@ export function buildComposeArgs(opts) {
      * 挪到段首 t0。反过来先挪的话,导出一段(--frames)时淡入的起点会是负数,fade 不收负的 st。
      */
     let shift;
+    /** 变速的视频段:素材时间戳除以它(= 片段速度);其余为 1,setpts 的写法不变 */
+    let ptsScale = 1;
     // 只要画面:素材自带的声音 / 字幕 / 数据流在解复用时就丢掉(声音由 mux-audio 另外混)
     args.push(...R, "-an", "-sn", "-dn");
     if (isMissing) {
@@ -343,16 +346,19 @@ export function buildComposeArgs(opts) {
     } else {
       // 视频:-ss 放在 -i 前面快速定位;往前多留 0.5 秒,保证「≤ 目标时刻的最后一帧」也被解出来
       // (精确 seek 会丢掉 -ss 之前的帧,Chrome 在 a 帧显示的恰恰可能是它)。
-      // -ss S 之后素材时刻 m 的时间戳是 m − S,落到时间轴上是 clip.start + (m − off)。
-      const mt = off + (ta - clip.start);
+      // -ss S 之后素材时刻 m 的时间戳是 m − S,落到时间轴上是 clip.start + (m − off) / speed(kernel/clipTime.mjs)。
+      // 变速段:读的素材长度乘倍率,时间戳先除以倍率再平移;缺省 1 时下面每个式子和原来逐位相同
+      const speed = clipSpeed(clip);
+      const mt = mediaTimeAt(clip, ta);
       const ss = Math.max(0, mt - 0.5);
-      const len = (b - a + 1) / fps + (mt - ss) + 0.5;
+      const len = (b - a + 1) / fps * speed + (mt - ss) + 0.5;
       if (layer.decoder) args.push("-c:v", layer.decoder);
       args.push("-ss", f3(ss), "-t", f3(len), "-i", layer.src);
-      shift = clip.start - off + ss;
+      shift = speed === 1 ? clip.start - off + ss : clip.start + (ss - off) / speed;
+      if (speed !== 1) ptsScale = speed;
     }
     const chain = [
-      `setpts=PTS+${f3(shift)}/TB`,
+      ptsScale === 1 ? `setpts=PTS+${f3(shift)}/TB` : `setpts=PTS/${f3(ptsScale)}+${f3(shift)}/TB`,
       `fps=${fps}:round=up`,
       `trim=start_pts=${a}:end_pts=${b + 1}`,
     ];

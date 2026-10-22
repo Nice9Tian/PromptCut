@@ -8,7 +8,8 @@ export function speedMutesSource(clip: { speed?: number; mediaId?: string } | nu
 export function mediaTimeAt(clip: Pick<ClipTimeLike, "start" | "mediaOffset" | "speed">, t: number): number;
 export function timelineTimeAt(clip: Pick<ClipTimeLike, "start" | "mediaOffset" | "speed">, mediaSec: number): number;
 export function mediaOffsetAfter(clip: Pick<ClipTimeLike, "mediaOffset" | "speed">, dt: number): number;
-export function mediaSpanOf(clip: Pick<ClipTimeLike, "start" | "end" | "speed">, dur?: number): number;
+export function mediaSpanOf(clip: { start: number; end: number; speed?: number }): number;
+export function mediaSpanOf(clip: { speed?: number }, dur: number): number;
 export function timelineSpanOf(clip: { speed?: number }, mediaDur: number): number;
 export function normalizeSpeed(value: unknown): number | null;
 export function withSpeed<T extends { speed?: number }>(clip: T, speed: number): T;
