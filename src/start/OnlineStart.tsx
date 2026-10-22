@@ -1,19 +1,25 @@
 /**
  * 在线浏览器(电脑身份)的首屏:没登录是登录页,登录了是开始页。
  *
- * 开始页的形状:左边一栏是全部项目(按文件夹收拢),右边从上到下是「说一句话建项目」的输入框和
- * 最近项目那一排缩略图。手机身份走的是另一套界面(`src/mobile/MobileStart.tsx`),这一页只管电脑。
+ * 开始页的形状:左边一栏是全部项目(分组 → 项目 / 分组 Agent → 项目 Agent 三级),右边从上到下是
+ * 「说一句话建项目」的输入框和最近项目那一排缩略图。手机身份走的是另一套界面
+ * (`src/mobile/MobileStart.tsx`),这一页只管电脑。
  *
- * **这一版只跑界面**:项目是 `mockProjects.ts` 里的假数据,点新建、点项目、发消息都只在页面上给一行
- * 「待办」,不碰账号服务、文档服务,也不进编辑器。每一处要接什么,写在各自文件的文件头里。
+ * 树的状态(顺序、置顶、归档、改过的名字)拿在这儿,改法是 `treeState.ts` 里的纯函数;侧栏只管什么
+ * 时候调。侧栏宽度也在这儿,拖的时候每帧更新、松手才写进本机(`sideWidth.ts`)。
+ *
+ * **这一版只跑界面**:项目是 `mockProjects.ts` 里的假数据,点新建、点项目、发消息、改名、删除都只改
+ * 页面上这份假数据,不碰账号服务、文档服务,也不进编辑器。每一处要接什么,写在各自文件的文件头里。
  */
 import { useMemo, useState } from "react";
 import type { JSX } from "react";
 import { OnlineLogin } from "./OnlineLogin";
 import { ProjectRail } from "./ProjectRail";
-import { ProjectSidebar, scopeKeyOf, type Scope } from "./ProjectSidebar";
+import { ProjectSidebar, scopeKeyOf, type Scope, type TreeOps } from "./ProjectSidebar";
 import { PromptBox } from "./PromptBox";
-import { MOCK_AGENT_CHATS, MOCK_GROUPS, MOCK_PROJECTS } from "./mockProjects";
+import { clampSideWidth, readSideWidth, writeSideWidth } from "./sideWidth";
+import { removeById, rename, reorder, setArchived, togglePin, visible } from "./treeState";
+import { MOCK_AGENT_CHATS, MOCK_GROUPS, MOCK_PROJECTS, type MockAgentChat, type MockGroup, type MockProject } from "./mockProjects";
 import "./start.css";
 
 /** 界面预览用的地址参数:`?ui=home` 直接看开始页,`?ui=login` 看登录页。不给用户,只给开发和验收 */
@@ -25,6 +31,10 @@ function initialView(): "login" | "home" {
   }
 }
 
+/** 同级的键:和 `ProjectSidebar` 里判能不能拖到一起用的是同一套 */
+const projectSib = (p: MockProject) => `project:${p.groupId ?? "loose"}`;
+const chatSib = (c: MockAgentChat) => (c.on === "project" ? `chat:p:${c.projectId}` : `chat:g:${c.groupId}`);
+
 export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
   // props.onEnterEditor 这一版没用:进编辑器要先有项目,那是业务层的事。签名保持和桌面开始页一致,
   // 免得 `src/StartPage.tsx` 那个三元分支还要分两种 props。
@@ -35,22 +45,58 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
   const [notice, setNotice] = useState("");
   // `?ui=home` 是直接看开始页的预览入口,这一路没走登录,账号给个占位名,免得侧栏底下显示「未登录」
   const [account, setAccount] = useState<string | null>(() => (initialView() === "home" ? "预览账号" : null));
+  const [sideWidth, setSideWidth] = useState(readSideWidth);
 
-  // 假数据按最后改动从新到旧;右边那排只给最近的,所以顺序要稳
-  const projects = useMemo(
-    () => [...MOCK_PROJECTS].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
-    [],
+  const [groups, setGroups] = useState<MockGroup[]>(MOCK_GROUPS);
+  // 假数据按最后改动从新到旧;之后的顺序由用户拖出来,所以只在开头排这一次
+  const [projects, setProjects] = useState<MockProject[]>(() =>
+    [...MOCK_PROJECTS].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
   );
+  const [chats, setChats] = useState<MockAgentChat[]>(MOCK_AGENT_CHATS);
+
+  const nameOf = (id: string) => projects.find((p) => p.id === id)?.name ?? id;
+
+  const ops: TreeOps = {
+    rename: (kind, id, name) => {
+      if (kind === "group") setGroups((a) => rename(a, id, name));
+      else if (kind === "project") setProjects((a) => rename(a, id, name));
+      else setChats((a) => rename(a, id, name));
+    },
+    pin: (kind, id) => {
+      if (kind === "group") setGroups((a) => togglePin(a, id));
+      else if (kind === "project") setProjects((a) => togglePin(a, id));
+      else setChats((a) => togglePin(a, id));
+      setNotice("置顶只在自己同级里生效：分组里的项目置顶，只在那个分组里顶上去。");
+    },
+    archive: (kind, id) => {
+      if (kind === "group") setGroups((a) => setArchived(a, id, true));
+      else if (kind === "project") setProjects((a) => setArchived(a, id, true));
+      else setChats((a) => setArchived(a, id, true));
+      setNotice("已归档，从树里收起来了。待办：真做的时候要有「已归档」那一处能看回来、能取消归档。");
+    },
+    remove: (kind, id) => {
+      if (kind === "group") setGroups((a) => removeById(a, id));
+      else if (kind === "project") setProjects((a) => removeById(a, id));
+      else setChats((a) => removeById(a, id));
+      setNotice("已从这份假数据里删掉（刷新页面就回来）。待办：真删云端项目不可撤销，必须先弹确认。");
+    },
+    reorder: (kind, dragId, overId, place) => {
+      if (kind === "group") setGroups((a) => reorder(a, () => "group", dragId, overId, place));
+      else if (kind === "project") setProjects((a) => reorder(a, projectSib, dragId, overId, place));
+      else setChats((a) => reorder(a, chatSib, dragId, overId, place));
+    },
+  };
 
   const shown = useMemo(() => {
-    if (scope.kind === "group") return projects.filter((p) => p.groupId === scope.id);
-    if (scope.kind === "loose") return projects.filter((p) => p.groupId === null);
-    return projects;
+    const live = visible(projects);
+    if (scope.kind === "group") return live.filter((p) => p.groupId === scope.id);
+    if (scope.kind === "loose") return live.filter((p) => p.groupId === null);
+    return live;
   }, [projects, scope]);
 
   const railTitle =
     scope.kind === "group"
-      ? (MOCK_GROUPS.find((g) => g.id === scope.id)?.name ?? "分组")
+      ? (groups.find((g) => g.id === scope.id)?.name ?? "分组")
       : scope.kind === "loose"
         ? "没放进分组"
         : "最近项目";
@@ -69,15 +115,29 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
   return (
     <div className="ps" data-pc="start-online">
       <ProjectSidebar
-        groups={MOCK_GROUPS}
+        groups={groups}
         projects={projects}
-        chats={MOCK_AGENT_CHATS}
+        chats={chats}
         scope={scope}
         onScope={setScope}
         accountName={account}
-        onOpenChat={(chat) => setNotice(`待办：打开 Agent 对话「${chat.title}」要接云端 Agent 服务（对话按账号归属，分共有和私有，见 product/agent.md）。`)}
+        ops={ops}
+        width={sideWidth}
+        onWidth={setSideWidth}
+        onWidthCommit={(px) => {
+          setSideWidth(px);
+          writeSideWidth(px);
+        }}
+        onWidthNudge={(delta) =>
+          setSideWidth((w) => {
+            const next = clampSideWidth(w + delta);
+            writeSideWidth(next);
+            return next;
+          })
+        }
         onCreate={() => setNotice("待办：新建项目要接云端文档服务（在线浏览器里一律是放云端的多用户协作项目）。")}
-        onOpen={(id) => setNotice(`待办：打开项目「${projects.find((p) => p.id === id)?.name ?? id}」要接云端文档服务，再进编辑器。`)}
+        onOpen={(id) => setNotice(`待办：打开项目「${nameOf(id)}」要接云端文档服务，再进编辑器。`)}
+        onOpenChat={(chat) => setNotice(`待办：打开 Agent 对话「${chat.name}」要接云端 Agent 服务（对话按账号归属，分共有和私有，见 product/agent.md）。`)}
         onSignOut={() => {
           setAccount(null);
           setView("login");
@@ -112,7 +172,7 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
             }
           />
           <p className="ps-prompt-note" role="status" data-pc="start-notice">
-            {notice || "界面预览阶段：下面的项目是假数据，点哪里都只会在这一行给一句「待办」。"}
+            {notice || "界面预览阶段：项目是假数据。行上右键可以重命名、置顶、归档、删除，按住能拖着排序，侧栏右边那条缝能拖宽窄。"}
           </p>
 
           <ProjectRail
@@ -120,7 +180,7 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
             projects={shown}
             resetKey={scopeKeyOf(scope)}
             onCreate={() => setNotice("待办：新建项目要接云端文档服务（在线浏览器里一律是放云端的多用户协作项目）。")}
-            onOpen={(id) => setNotice(`待办：打开项目「${projects.find((p) => p.id === id)?.name ?? id}」要接云端文档服务，再进编辑器。`)}
+            onOpen={(id) => setNotice(`待办：打开项目「${nameOf(id)}」要接云端文档服务，再进编辑器。`)}
           />
         </div>
       </main>

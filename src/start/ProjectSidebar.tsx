@@ -7,25 +7,39 @@
  *     └ 分组 Agent(跨这个分组里几个项目的对话)
  *
  * 三种东西各有自己的前置图标:分组是叠起来的方块,项目是取景框,Agent 是一颗星芒并染上 Agent 专属色
- * (`--ui-agent`,和编辑器 rail 上的 Agent 头像同一个色,见 `src/skins/agentColor.ts`)。每一层用一条竖导线
- * 和缩进表示从属,不画逐行的拐角 —— 拐角要分「最后一个」和「中间的」,行一多就容易错位。
+ * (`--ui-agent`,和编辑器 rail 上的 Agent 头像同一个色)。层级用缩进和一条竖导线表示,不画逐行的拐角 ——
+ * 拐角要分「最后一个」和「中间的」,行一多就容易错位。
+ *
+ * 每一行都能右键(重命名 / 置顶 / 归档 / 删除,见 `RowMenu.tsx`)、都能拖着排序。**置顶和排序都只在
+ * 自己同级里生效**:分组里的项目 A 置顶,只在那个分组里顶上去(规则与纯函数在 `treeState.ts`)。
+ * 右边那条缝能拖,改侧栏宽度,记在本机(`sideWidth.ts`)。
  *
  * 点分组把右边那排筛成这个分组里的项目;点项目、点 Agent 现在只给一行「待办」。
  * 搜索只筛这一栏(右边那排跟着当前分组走,不跟搜索走),免得一边打字一边整页都在跳。
- *
- * 待办(业务层):分组、分组 Agent 语义里都还没有,项目 Agent 对应现有的云端 Agent 对话但要按共有/私有
- * 过滤 —— 各自要接什么写在 `mockProjects.ts` 的文件头。
  */
-import { useState } from "react";
-import type { JSX } from "react";
+import { useRef, useState } from "react";
+import type { JSX, PointerEvent as ReactPointerEvent } from "react";
 import { Logo } from "../ui/Logo";
 import { hueOf } from "./hue";
+import { RowMenu, type MenuAt } from "./RowMenu";
+import { SIDE_WIDTH, clampSideWidth } from "./sideWidth";
+import type { TreeKind } from "./treeKind";
+import { ordered, visible, type Place } from "./treeState";
 import type { MockAgentChat, MockGroup, MockProject } from "./mockProjects";
 
 /** 右边那排现在显示哪一堆 */
 export type Scope = { kind: "all" } | { kind: "group"; id: string } | { kind: "loose" };
 
 export const scopeKeyOf = (s: Scope): string => (s.kind === "group" ? `group:${s.id}` : s.kind);
+
+/** 侧栏对外要的一组改动。全由 `OnlineStart` 拿着状态去做,这一栏只管什么时候调 */
+export interface TreeOps {
+  rename: (kind: TreeKind, id: string, name: string) => void;
+  pin: (kind: TreeKind, id: string) => void;
+  archive: (kind: TreeKind, id: string) => void;
+  remove: (kind: TreeKind, id: string) => void;
+  reorder: (kind: TreeKind, dragId: string, overId: string, place: Place) => void;
+}
 
 /** 分组:两片叠起来的方块 */
 function GroupIcon(): JSX.Element {
@@ -69,6 +83,34 @@ function AllIcon(): JSX.Element {
   );
 }
 
+/** 置顶的那个小图钉 */
+function PinIcon(): JSX.Element {
+  return (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M14.2 2.3 21.7 9.8l-1.8 1.8-1.5-.5-3.6 3.6.4 3.3-1.7 1.7-4-4-4.6 4.6-1.1-1.1 4.6-4.6-4-4 1.7-1.7 3.3.4 3.6-3.6-.5-1.5z" />
+    </svg>
+  );
+}
+
+/** 一行要的全部东西。三种行共用这一个渲染器,否则右键、拖动、重命名要抄三遍 */
+interface RowSpec {
+  kind: TreeKind;
+  id: string;
+  name: string;
+  pinned: boolean;
+  /** 同级的键:只有键相同的两行之间才允许拖动排序 */
+  sib: string;
+  icon: JSX.Element;
+  /** 有下一层时给箭头;`undefined` 是叶子(位置仍然留着,好对齐) */
+  expanded?: boolean;
+  count?: number;
+  current?: boolean;
+  className?: string;
+  pc: string;
+  label: string;
+  onClick: () => void;
+}
+
 export function ProjectSidebar(props: {
   groups: MockGroup[];
   projects: MockProject[];
@@ -80,70 +122,210 @@ export function ProjectSidebar(props: {
   onOpenChat: (chat: MockAgentChat) => void;
   accountName: string | null;
   onSignOut: () => void;
+  ops: TreeOps;
+  width: number;
+  onWidth: (px: number) => void;
+  onWidthCommit: (px: number) => void;
+  /**
+   * 在当前宽度上加减。方向键必须走这一条,不能自己算 `width + step` ——
+   * 按住方向键时连发的几下都在同一帧里,每一下读到的 `width` 都还是旧的,算出来是同一个数,宽度就卡住不动了。
+   */
+  onWidthNudge: (delta: number) => void;
 }): JSX.Element {
   const [open, setOpen] = useState<Record<string, boolean>>({ "g-brand": true });
   const [query, setQuery] = useState("");
+  const [menu, setMenu] = useState<MenuAt | null>(null);
+  const [renaming, setRenaming] = useState<{ kind: TreeKind; id: string; name: string } | null>(null);
+  /** 正在拖的那一行;dragover 时读它判同级(dataTransfer 在 dragover 里读不到内容) */
+  const drag = useRef<{ kind: TreeKind; id: string; sib: string } | null>(null);
+  const [dropAt, setDropAt] = useState<{ id: string; place: Place } | null>(null);
 
   const q = query.trim().toLowerCase();
   const hit = (text: string) => !q || text.toLowerCase().includes(q);
-  const chatsOfProject = (id: string) => props.chats.filter((c) => c.on === "project" && c.projectId === id);
-  const chatsOfGroup = (id: string) => props.chats.filter((c) => c.on === "group" && c.groupId === id);
-  /** 项目自己名字命中,或它底下哪条 Agent 对话命中,都算这个项目要显示 */
-  const projectShows = (p: MockProject) => hit(p.name) || chatsOfProject(p.id).some((c) => hit(c.title));
+
+  // 归档的不进树;显示顺序由 ordered 定(置顶的在自己这一段的最前面)
+  const groups = ordered(visible(props.groups));
+  const allProjects = visible(props.projects);
+  const allChats = visible(props.chats);
+
+  const chatsOfProject = (id: string) =>
+    ordered(allChats.filter((c) => c.on === "project" && c.projectId === id));
+  const chatsOfGroup = (id: string) =>
+    ordered(allChats.filter((c) => c.on === "group" && c.groupId === id));
+  /** 项目自己名字命中,或它底下哪条对话命中,都算要显示 */
+  const projectShows = (p: MockProject) => hit(p.name) || chatsOfProject(p.id).some((c) => hit(c.name));
   const projectsOf = (groupId: string | null) =>
-    props.projects.filter((p) => p.groupId === groupId && projectShows(p));
+    ordered(allProjects.filter((p) => p.groupId === groupId && projectShows(p)));
+
+  /** 同级的键:分组一级,同一分组里的项目一级,挂在同一个项目(或分组)上的对话各一级 */
+  const chatSib = (c: MockAgentChat) => (c.on === "project" ? `chat:p:${c.projectId}` : `chat:g:${c.groupId}`);
+  const projectSib = (p: MockProject) => `project:${p.groupId ?? "loose"}`;
 
   const current = props.scope;
   const isAt = (s: Scope) =>
     s.kind === current.kind && (s.kind !== "group" || (current.kind === "group" && s.id === current.id));
 
-  const chatRow = (chat: MockAgentChat) => (
-    <button
-      key={chat.id}
-      type="button"
-      className="ps-row is-agent"
-      data-pc="start-side-agent"
-      data-agent={chat.id}
-      aria-label={`Agent 对话 ${chat.title}`}
-      title={chat.title}
-      onClick={() => props.onOpenChat(chat)}
-    >
-      <span className="ps-row-icon is-agent"><AgentIcon /></span>
-      <span className="ps-row-name">{chat.title}</span>
-    </button>
-  );
+  /** 一行。右键、拖动、重命名都在这儿,三种行只是传进来的 spec 不同 */
+  const row = (spec: RowSpec): JSX.Element => {
+    const isRenaming = renaming?.kind === spec.kind && renaming.id === spec.id;
+    const dropping = dropAt?.id === spec.id ? dropAt.place : null;
+    const common = {
+      "data-pc": spec.pc,
+      "data-dragging": drag.current?.id === spec.id || undefined,
+      "data-drop": dropping ?? undefined,
+    };
+
+    if (isRenaming) {
+      // 改名时那一行换成输入框。<input> 不能放在 <button> 里,所以整行换成 div
+      return (
+        <div key={spec.id} className={`ps-row is-renaming${spec.className ? ` ${spec.className}` : ""}`} {...common}>
+          <span className="ps-row-caret" data-empty={spec.expanded === undefined} aria-hidden="true">›</span>
+          <span className={`ps-row-icon${spec.kind === "chat" ? " is-agent" : ""}`}>{spec.icon}</span>
+          <input
+            className="ps-rename"
+            data-pc="start-rename-input"
+            autoFocus
+            defaultValue={spec.name}
+            aria-label={`重命名${spec.name}`}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                props.ops.rename(spec.kind, spec.id, e.currentTarget.value);
+                setRenaming(null);
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                setRenaming(null);
+              }
+            }}
+            // 点到别处就当改完了(和改名框里按回车一致);按 Esc 走上面那一支,不会走到这里
+            onBlur={(e) => {
+              props.ops.rename(spec.kind, spec.id, e.currentTarget.value);
+              setRenaming(null);
+            }}
+          />
+        </div>
+      );
+    }
+
+    return (
+      <button
+        key={spec.id}
+        type="button"
+        className={`ps-row${spec.className ? ` ${spec.className}` : ""}`}
+        {...common}
+        data-group={spec.kind === "group" ? spec.id : undefined}
+        data-project={spec.kind === "project" ? spec.id : undefined}
+        data-agent={spec.kind === "chat" ? spec.id : undefined}
+        aria-label={spec.label}
+        aria-expanded={spec.expanded}
+        aria-current={spec.current}
+        title={spec.name}
+        draggable
+        onClick={spec.onClick}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setRenaming(null);
+          setMenu({ id: spec.id, kind: spec.kind, name: spec.name, pinned: spec.pinned, x: e.clientX, y: e.clientY });
+        }}
+        onDragStart={(e) => {
+          drag.current = { kind: spec.kind, id: spec.id, sib: spec.sib };
+          e.dataTransfer.effectAllowed = "move";
+          // 有的浏览器不带数据就不开始拖
+          e.dataTransfer.setData("text/plain", spec.id);
+        }}
+        onDragEnd={() => {
+          drag.current = null;
+          setDropAt(null);
+        }}
+        onDragOver={(e) => {
+          const d = drag.current;
+          // 只许同级之间排序:别的一律不接(不 preventDefault 就是不允许放)
+          if (!d || d.id === spec.id || d.kind !== spec.kind || d.sib !== spec.sib) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          const box = e.currentTarget.getBoundingClientRect();
+          setDropAt({ id: spec.id, place: e.clientY < box.top + box.height / 2 ? "before" : "after" });
+        }}
+        onDragLeave={() => setDropAt((at) => (at?.id === spec.id ? null : at))}
+        onDrop={(e) => {
+          const d = drag.current;
+          if (!d || !dropAt) return;
+          e.preventDefault();
+          props.ops.reorder(spec.kind, d.id, spec.id, dropAt.place);
+          drag.current = null;
+          setDropAt(null);
+        }}
+      >
+        <span className="ps-row-caret" data-empty={spec.expanded === undefined} data-open={spec.expanded} aria-hidden="true">›</span>
+        <span className={`ps-row-icon${spec.kind === "chat" ? " is-agent" : ""}`}>{spec.icon}</span>
+        <span className="ps-row-name">{spec.name}</span>
+        {spec.pinned && <span className="ps-row-pin" title="已置顶"><PinIcon /></span>}
+        {spec.count !== undefined && <span className="ps-row-count">{spec.count}</span>}
+      </button>
+    );
+  };
+
+  const chatRow = (chat: MockAgentChat) =>
+    row({
+      kind: "chat",
+      id: chat.id,
+      name: chat.name,
+      pinned: !!chat.pinned,
+      sib: chatSib(chat),
+      icon: <AgentIcon />,
+      className: "is-agent",
+      pc: "start-side-agent",
+      label: `Agent 对话 ${chat.name}${chat.pinned ? "（已置顶）" : ""}`,
+      onClick: () => props.onOpenChat(chat),
+    });
 
   /** 一个项目,连同它底下的项目 Agent */
   const projectBlock = (p: MockProject) => {
     const chats = chatsOfProject(p.id);
     // 搜索时自动展开命中的那一支:不然搜到了却看不见在哪
-    const expanded = q ? chats.some((c) => hit(c.title)) : !!open[p.id];
+    const expanded = q ? chats.some((c) => hit(c.name)) : !!open[p.id];
     return (
       <div key={p.id}>
-        <button
-          type="button"
-          className="ps-row"
-          data-pc="start-side-project"
-          data-project={p.id}
-          aria-label={`项目 ${p.name}${chats.length ? `，${chats.length} 个 Agent 对话` : ""}`}
-          aria-expanded={chats.length ? expanded : undefined}
-          title={p.name}
-          onClick={() => {
+        {row({
+          kind: "project",
+          id: p.id,
+          name: p.name,
+          pinned: !!p.pinned,
+          sib: projectSib(p),
+          icon: <ProjectIcon />,
+          expanded: chats.length ? expanded : undefined,
+          pc: "start-side-project",
+          label: `项目 ${p.name}${chats.length ? `，${chats.length} 个 Agent 对话` : ""}${p.pinned ? "，已置顶" : ""}`,
+          onClick: () => {
             props.onOpen(p.id);
             if (chats.length) setOpen((o) => ({ ...o, [p.id]: !o[p.id] }));
-          }}
-        >
-          <span className="ps-row-caret" data-open={expanded} data-empty={chats.length === 0} aria-hidden="true">›</span>
-          <span className="ps-row-icon"><ProjectIcon /></span>
-          <span className="ps-row-name">{p.name}</span>
-        </button>
+          },
+        })}
         {expanded && chats.length > 0 && <div className="ps-sub">{chats.map(chatRow)}</div>}
       </div>
     );
   };
 
+  /** 拖右边那条缝改宽度 */
+  const onGrip = (e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const grip = e.currentTarget;
+    const startX = e.clientX;
+    const startW = props.width;
+    grip.setPointerCapture(e.pointerId);
+    const move = (ev: PointerEvent) => props.onWidth(clampSideWidth(startW + (ev.clientX - startX)));
+    const up = (ev: PointerEvent) => {
+      props.onWidthCommit(clampSideWidth(startW + (ev.clientX - startX)));
+      grip.releasePointerCapture(e.pointerId);
+      grip.removeEventListener("pointermove", move);
+      grip.removeEventListener("pointerup", up);
+    };
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("pointerup", up);
+  };
+
   return (
-    <aside className="ps-side" data-pc="start-side">
+    <aside className="ps-side" data-pc="start-side" style={{ flexBasis: `${props.width}px` }}>
       <div className="ps-side-head">
         {/* Logo 自带字标,这里不要再写一遍产品名 */}
         <Logo size={20} />
@@ -174,42 +356,42 @@ export function ProjectSidebar(props: {
             type="button"
             className="ps-row"
             data-pc="start-scope-all"
-            aria-label={`全部项目，共 ${props.projects.length} 个`}
+            aria-label={`全部项目，共 ${allProjects.length} 个`}
             aria-current={isAt({ kind: "all" })}
             onClick={() => props.onScope({ kind: "all" })}
           >
+            <span className="ps-row-caret" data-empty aria-hidden="true">›</span>
             <span className="ps-row-icon"><AllIcon /></span>
             <span className="ps-row-name">全部项目</span>
-            <span className="ps-row-count">{props.projects.length}</span>
+            <span className="ps-row-count">{allProjects.length}</span>
           </button>
         </div>
 
         <div className="ps-side-group">
           <div className="ps-side-label">分组</div>
-          {props.groups.map((g) => {
+          {groups.map((g) => {
             const rows = projectsOf(g.id);
-            const groupChats = chatsOfGroup(g.id).filter((c) => hit(c.title));
+            const groupChats = chatsOfGroup(g.id).filter((c) => hit(c.name));
             const expanded = q ? rows.length > 0 || groupChats.length > 0 : !!open[g.id];
             return (
               <div key={g.id}>
-                <button
-                  type="button"
-                  className="ps-row"
-                  data-pc="start-scope-group"
-                  data-group={g.id}
-                  aria-label={`分组 ${g.name}，${rows.length} 个项目`}
-                  aria-expanded={expanded}
-                  aria-current={isAt({ kind: "group", id: g.id })}
-                  onClick={() => {
+                {row({
+                  kind: "group",
+                  id: g.id,
+                  name: g.name,
+                  pinned: !!g.pinned,
+                  sib: "group",
+                  icon: <GroupIcon />,
+                  expanded,
+                  count: rows.length,
+                  current: isAt({ kind: "group", id: g.id }),
+                  pc: "start-scope-group",
+                  label: `分组 ${g.name}，${rows.length} 个项目${g.pinned ? "，已置顶" : ""}`,
+                  onClick: () => {
                     props.onScope({ kind: "group", id: g.id });
                     setOpen((o) => ({ ...o, [g.id]: !o[g.id] }));
-                  }}
-                >
-                  <span className="ps-row-caret" data-open={expanded} aria-hidden="true">›</span>
-                  <span className="ps-row-icon"><GroupIcon /></span>
-                  <span className="ps-row-name">{g.name}</span>
-                  <span className="ps-row-count">{rows.length}</span>
-                </button>
+                  },
+                })}
                 {expanded && (
                   <div className="ps-sub">
                     {rows.map(projectBlock)}
@@ -220,6 +402,7 @@ export function ProjectSidebar(props: {
             );
           })}
           <button type="button" className="ps-row" data-pc="start-new-group" aria-label="新建分组" title="待办：分组还没有业务层">
+            <span className="ps-row-caret" data-empty aria-hidden="true">›</span>
             <span className="ps-row-icon" aria-hidden="true">＋</span>
             <span className="ps-row-name ps-muted">新建分组</span>
           </button>
@@ -235,6 +418,7 @@ export function ProjectSidebar(props: {
             aria-current={isAt({ kind: "loose" })}
             onClick={() => props.onScope({ kind: "loose" })}
           >
+            <span className="ps-row-caret" data-empty aria-hidden="true">›</span>
             <span className="ps-row-icon"><AllIcon /></span>
             <span className="ps-row-name">没放进分组</span>
             <span className="ps-row-count">{projectsOf(null).length}</span>
@@ -259,6 +443,38 @@ export function ProjectSidebar(props: {
           退出
         </button>
       </div>
+
+      {/* 右边那条缝:拖着改宽度,双击回到默认;方向键也能调(只能用鼠标就把键盘用户关在门外了) */}
+      <div
+        className="ps-side-grip"
+        data-pc="start-side-grip"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="侧栏宽度"
+        aria-valuemin={SIDE_WIDTH.min}
+        aria-valuemax={SIDE_WIDTH.max}
+        aria-valuenow={props.width}
+        tabIndex={0}
+        onPointerDown={onGrip}
+        onDoubleClick={() => props.onWidthCommit(SIDE_WIDTH.def)}
+        onKeyDown={(e) => {
+          const step = e.shiftKey ? 32 : 8;
+          if (e.key === "ArrowLeft") { e.preventDefault(); props.onWidthNudge(-step); }
+          if (e.key === "ArrowRight") { e.preventDefault(); props.onWidthNudge(step); }
+          if (e.key === "Home") { e.preventDefault(); props.onWidthCommit(SIDE_WIDTH.def); }
+        }}
+      />
+
+      {menu && (
+        <RowMenu
+          at={menu}
+          onClose={() => setMenu(null)}
+          onRename={() => setRenaming({ kind: menu.kind, id: menu.id, name: menu.name })}
+          onPin={() => props.ops.pin(menu.kind, menu.id)}
+          onArchive={() => props.ops.archive(menu.kind, menu.id)}
+          onDelete={() => props.ops.remove(menu.kind, menu.id)}
+        />
+      )}
     </aside>
   );
 }

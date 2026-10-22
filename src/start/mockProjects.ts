@@ -14,12 +14,23 @@
  * - 缩略图现在是按 id 哈希出来的色块,真图要等预渲染给首帧快照(`product/rendering.md`)。
  */
 
-export interface MockGroup {
+/**
+ * 三种东西都能右键(重命名、置顶、归档、删除)、都能拖着排序,所以都带这两个标记。
+ * 规则在 `treeState.ts`:置顶和排序都只在自己同级里生效。
+ */
+export interface TreeFlags {
+  /** 在自己同级里排最前面 */
+  pinned?: boolean;
+  /** 归档了就不在树里显示 */
+  archived?: boolean;
+}
+
+export interface MockGroup extends TreeFlags {
   id: string;
   name: string;
 }
 
-export interface MockProject {
+export interface MockProject extends TreeFlags {
   id: string;
   name: string;
   /** 时长(秒),缩略图右下角的小标 */
@@ -34,8 +45,8 @@ export interface MockProject {
 
 /** Agent 对话:挂在项目下的是「项目 Agent」,挂在分组下的是「分组 Agent」 */
 export type MockAgentChat =
-  | { id: string; title: string; on: "project"; projectId: string }
-  | { id: string; title: string; on: "group"; groupId: string };
+  | ({ id: string; name: string; on: "project"; projectId: string } & TreeFlags)
+  | ({ id: string; name: string; on: "group"; groupId: string } & TreeFlags);
 
 export const MOCK_GROUPS: MockGroup[] = [
   { id: "g-brand", name: "品牌短片" },
@@ -62,14 +73,14 @@ export const MOCK_PROJECTS: MockProject[] = [
 ];
 
 export const MOCK_AGENT_CHATS: MockAgentChat[] = [
-  { id: "a-01", title: "配色和字幕", on: "project", projectId: "p-01" },
-  { id: "a-02", title: "改结尾那三秒", on: "project", projectId: "p-01" },
-  { id: "a-03", title: "分镜梳理", on: "project", projectId: "p-02" },
-  { id: "a-04", title: "讲稿改口语", on: "project", projectId: "p-04" },
-  { id: "a-05", title: "挑一段 B-roll", on: "project", projectId: "p-07" },
-  { id: "a-06", title: "加倒计时音效", on: "project", projectId: "p-06" },
-  { id: "a-07", title: "批量换片尾", on: "group", groupId: "g-brand" },
-  { id: "a-08", title: "统一字幕样式", on: "group", groupId: "g-course" },
+  { id: "a-01", name: "配色和字幕", on: "project", projectId: "p-01" },
+  { id: "a-02", name: "改结尾那三秒", on: "project", projectId: "p-01" },
+  { id: "a-03", name: "分镜梳理", on: "project", projectId: "p-02" },
+  { id: "a-04", name: "讲稿改口语", on: "project", projectId: "p-04" },
+  { id: "a-05", name: "挑一段 B-roll", on: "project", projectId: "p-07" },
+  { id: "a-06", name: "加倒计时音效", on: "project", projectId: "p-06" },
+  { id: "a-07", name: "批量换片尾", on: "group", groupId: "g-brand" },
+  { id: "a-08", name: "统一字幕样式", on: "group", groupId: "g-course" },
 ];
 
 /** 时长写成 mm:ss;超过一小时写 h:mm:ss。0 秒的是还没剪过的空项目 */
