@@ -321,7 +321,7 @@ MAIN-UNSAFE complete=true oldInstance=closed oldHandle=deleted oldStillSubscribe
 | `9001befb` | 锁号绑在锁文件本身 |
 | `c8a11f0c` | 报告正文 |
 | `76ca9a72` | 专审四处必改（机器摘要、报锁先后、旧文档服务 404、锁文件守门）与对应测试 |
-| 下一提交 | H07 集成测试自己按规格算机器摘要（修前也能跑） |
-| 本提交 | 报告第二轮 |
+| `d9468b33` | H07 集成测试自己按规格算机器摘要（修前也能跑） |
+| `3ed22e13` 及本提交 | 报告第二轮（中间 `63ff3a67`、`b5a22989` 是审查者的报告） |
 
 日志在 `out/h07/`（不入库）：`red-before.log`、`green-1.log`～`green-3.log`、`unit-1.log`、`lock-1.log`、`existing-1.log`、`tsc-1.log`、`tsc-2.log`、`build-1.log`、`test-full-1.log`、`test-full-2.log`。
