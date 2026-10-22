@@ -1,5 +1,5 @@
 /**
- * 只有一个舞台时界限搜索的页面驱动(`costSearch.ts`,原 `lowMemorySearch.ts`):用例 LS-01～LS-07。舞台与文档服务连接都是假的。
+ * 只有一个舞台时界限搜索的页面驱动(`costSearch.ts`,原 `lowMemorySearch.ts`):用例 LS-01～LS-08。舞台与文档服务连接都是假的。
  *
  *   LS-01 取记录 → 在唯一那个舞台里测(临时切 back、只走计时趟、一次一个缩水项目)→ 切回 front、整份重灌、restore 一次
  *   LS-02 测量期间 costSearchMeasuring() 为真(父页据此不投快照、不拨时间),测完为假;遮罩状态带进度
@@ -8,6 +8,7 @@
  *   LS-05 取不到记录抛错(调用方稍后再试),舞台一下都不碰;项目重灌打断的那一张重来
  *   LS-06 测每张卡之前、之后各叫一次 beforeMeasure / afterMeasure(即时渲染闸门留崩溃记录);真测出来的写进文档服务(publish),本地复用命中的不写
  *   LS-07 搜完之后加了新卡:没有记录的补测那一张(measureNewCards),有记录的按已有的界限判、不测
+ *   LS-08 两个舞台的界限搜索测完以后给判重的卡产稀疏版那一段:holdCostSearchMask 立起遮罩、带进度,releaseCostSearchMask 撤下
  *
  * 跑:npm test -- src/editor/costSearch.test.mjs
  */
@@ -246,3 +247,16 @@ test("LS-07 搜完之后加了新卡:没有记录的补测那一张,有记录的
   assert.deepEqual(again.log, []);
 });
 
+test("LS-08 测完以后产稀疏版那一段遮罩照旧挡着:立起带进度,撤下回空", () => {
+  const seen = [];
+  const off = L.onCostSearch((st) => seen.push({ ...st }));
+  L.holdCostSearchMask("punch-pill", 1, 3);
+  assert.deepEqual({ ...L.costSearchState() }, { measuring: true, done: 1, estimate: 3, card: "punch-pill" });
+  L.releaseCostSearchMask();
+  assert.equal(L.costSearchState().measuring, false);
+  assert.equal(L.costSearchState().card, null);
+  const n = seen.length;
+  L.releaseCostSearchMask();
+  assert.equal(seen.length, n, "没立着时撤下不再通知");
+  off();
+});

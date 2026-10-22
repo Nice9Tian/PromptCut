@@ -62,6 +62,16 @@ function setState(patch: Partial<CostSearchState>) {
 export function costSearchState(): CostSearchState {
   return state;
 }
+/**
+ * 两个舞台的界限搜索测完以后,给测过的重卡产稀疏版(`mechanism/rendering.md`「测量」:在线页面紧接着这张卡的第一趟产)的那一段,
+ * 加载遮罩照旧挡着:`holdCostSearchMask` 立起(显示正在产哪张卡),`releaseCostSearchMask` 撤下。
+ */
+export function holdCostSearchMask(card: string | null, done = 0, estimate = 0): void {
+  setState({ measuring: true, card, done, estimate });
+}
+export function releaseCostSearchMask(): void {
+  if (state.measuring) setState({ measuring: false, card: null });
+}
 export function onCostSearch(cb: (s: CostSearchState) => void): () => void {
   listeners.add(cb);
   return () => { listeners.delete(cb); };

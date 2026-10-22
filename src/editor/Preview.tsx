@@ -37,7 +37,6 @@ import { ONLINE } from "../online/mode";
 import { lowestTier, phoneIdentity, setBenchmark, subscribeTier, tierGlRoute, tierState } from "../online/onlineTier";
 import { stageGate } from "../online/stageGate";
 import { MEDIA_MARK_MS, decodeLimit, originalLoadSignature, subscribeDecodeLimit } from "../online/mediaGate";
-import { rebuildStagesWithRoute } from "../online/onlineTier";
 import { TierBubble } from "./TierBubble";
 import { GateViewer, gateViewerWanted } from "./GateViewer";
 import { setMediaTierPolicy, type MediaTierPolicy } from "../render/mediaTier";
@@ -55,7 +54,7 @@ import { createIsolatedSoundLink, type IsolatedSoundLink } from "./io/isolatedSo
 import { holdMeasureForCardSources, measureGateDiag, measureGateOpen, releaseMeasureGate, setMeasureGateLink } from "./measureGate";
 import { setCoverageSource } from "./onlineCoverage";
 import { currentCosts, currentPlan, judgedPlan, lightCostAt, onPlanUpdated, planSearch, planSearchLight, searchJudged, sendPlanTo, setPlanDeadMs, setPlanForcedHeavy, setPlanLowest, setPlanSearch, setPlanSearchLight } from "./planDispatch";
-import { benchmarkVerdict, costSearchMeasuring, costSearchState, measureNewCards, reclassify, runBenchmark, runCostSearch, type BenchmarkOutcome, type CostSearchOutcome } from "./costSearch";
+import { benchmarkVerdict, costSearchMeasuring, costSearchState, holdCostSearchMask, measureNewCards, reclassify, releaseCostSearchMask, runBenchmark, runCostSearch, type BenchmarkOutcome, type CostSearchOutcome } from "./costSearch";
 import { runBackJob } from "./stageJobs";
 import { CostSearchGate } from "./CostSearchGate";
 import { SHARED_COST_RELAY_MS, SharedCostRelay, listSharedCosts, publishSharedCosts, toSharedInput, type SharedCostInput } from "./sharedCosts";
@@ -85,7 +84,7 @@ import { createPlanPublisher, type PlanPublisher } from "../online/planPublisher
 import { CODE_VERSION } from "../online/buildInfo";
 import { backWorkDiag, startBackWorkGate } from "./backWorkGate";
 import { backStage } from "./stageBridge";
-import { onCostRecords, onProbeProgress, probeFrameDiag, probeProgress, probeRunDiag, probeSettledFor, setCostBackend, setProbeMeasureHooks } from "./probeRunner";
+import { holdProbe, onCostRecords, onProbeProgress, probeFrameDiag, probeProgress, probeRunDiag, probeSettledFor, releaseProbe, runCardMeasuredHook, setCostBackend, setProbeMeasureHooks } from "./probeRunner";
 import { browserNodeReady, keepConfirmedProject, startBrowserNodeHost, subscribeBrowserNodeReady } from "./browserNodeHost";
 import type { SettleResult } from "../render/settleFrame";
 
@@ -553,10 +552,12 @@ export function Preview(props: { variant?: "mobile" } = {}) {
    * 只有一个舞台时轻重按共享成本记录加界限搜索判(下面那个 effect);最低一档播放时不做任何即时渲染(显示用的表全部判重)。
    * 判定的表决定清单计划发哪些片段、导出时谁本机渲(语义 `product/platforms.md`「在线浏览器」的「轻重判定」与「最低一档」)。
    */
+  /** 两个舞台、项目里有别的机器测好的记录:打开时按界限搜索判(在后台舞台里只测几张),常驻探针补测完再改按成本记录(下面那个 effect) */
+  const [dualSearch, setDualSearch] = useState(false);
   useEffect(() => {
-    setPlanSearch(single);
+    setPlanSearch(single || dualSearch);
     return () => setPlanSearch(false);
-  }, [single]);
+  }, [single, dualSearch]);
   useEffect(() => {
     setPlanLowest(lowest);
     return () => setPlanLowest(false);
@@ -1002,8 +1003,6 @@ export function Preview(props: { variant?: "mobile" } = {}) {
    * 基准卡要等它,不然在后台舞台还没起来时测、测不出来(语义「即时渲染闸门」:舞台闸门走完之后先测基准卡)。
    */
   const [gateDriven, setGateDriven] = useState(false);
-  /** 试第三级时两个舞台按各一套渲染器重建了几次(只为让 React 按新的 `stageSrc` 换 iframe 地址) */
-  const [, setStageRebuilds] = useState(0);
   const benchmarkRunRef = useRef(false);
   const [benchmarkInfo, setBenchmarkInfo] = useState<BenchmarkOutcome | null>(null);
   useEffect(() => {
@@ -1034,7 +1033,7 @@ export function Preview(props: { variant?: "mobile" } = {}) {
   /*
    * 舞台闸门(语义 `product/platforms.md`「在线浏览器」;做法 `mechanism/platforms.md`「舞台闸门的步骤」第 2～5 条):
    * 可见舞台握上手、载入项目 → 记「可见舞台就绪」;要试第二级就记「开始试后台舞台」再挂 B,两个舞台都握上手并载入项目后记「双舞台已载入」;
-   * 要试第三级就记「开始试每个舞台各一套渲染器」,两个舞台按路线 1 重建(重新载入),都握上手、载入项目后记下;走完之后这次使用期间
+   * 要试第三级就记「开始试每个舞台各一套渲染器」,两台原地换到路线 1(`setGlRoute`,不重建舞台),回包后记下;走完之后这次使用期间
    * 停在到达的那一级。护栏内、崩过、安卓不到 8 GB 的(`fixed`)不试,只把舞台按那一级挂好。每一步的记录写在崩溃记录里(`stageGate.ts`)。
    * 握手容错(握不上、握上又断就退回单舞台)只管当次、不留崩溃记录(下面另一个 effect)。
    */
@@ -1073,27 +1072,10 @@ export function Preview(props: { variant?: "mobile" } = {}) {
         g.reached(2);
         if (tierState().target < 3) { g.done(); return; }
         await mark("try-separate");
-        /*
-         * 两个舞台按各一套渲染器**重建**(整页重新载入,地址带 `gl=perDocument`),不原地换路线〔裁〕:原地换(RPC `setGlRoute`)之后
-         * 有状态的 canvas 卡(粒子等)在新的渲染器里从头起,同一帧两次活渲对不上;`below-online-e2e-probe` 实测毛玻璃卡那一块与精确活渲平均差
-         * 11～12(上限 7),一开始就按各一套起的舞台是 5.4。重建期间崩了,下次载入停在第二级(崩溃记录这时是「开始试每个舞台各一套渲染器」)。
-         */
-        rebuildStagesWithRoute("perDocument");
-        for (const id of STAGE_IDS) {
-          const client = rpcRef.current[id];
-          if (client) {
-            releaseStageClient(client);
-            client.dispose();
-            rpcRef.current[id] = null;
-            hostCapsRef.current[id] = null;
-          }
-        }
-        // 地址交给 React 换(`stageSrc` 现在拼 `gl=perDocument`):手动再设一次 `src` 会让 iframe 载入两遍,第一遍握上的客户端随即作废
-        setStageRebuilds((n) => n + 1);
-        await Promise.all([whenStageReady("front"), whenStageReady("back")]);
+        const front = frontStage();
+        const results = await Promise.all([front, back].map((c) => c?.setGlRoute("perDocument").catch(() => null) ?? Promise.resolve(null)));
         if (!dualRef.current) return;
-        await syncProject("front", getState().project);
-        await syncProject("back", getState().project);
+        if (results.some((r) => !r)) { g.done(); return; } // 换不过去(舞台在换):这次停在第二级
         await mark("separate-ready");
         g.reached(3);
         // 共用的那一个 Worker 不再有人用:放掉(第三级每个舞台各一套)
@@ -1101,7 +1083,6 @@ export function Preview(props: { variant?: "mobile" } = {}) {
         sharedGlRef.current = null;
         g.done();
       } catch (e) {
-        console.warn("[preview] 舞台闸门驱动出错", e);
         setGateDiag(String((e as Error)?.message ?? e).slice(0, 200));
         stageGate()?.done();
       } finally {
@@ -1649,11 +1630,91 @@ export function Preview(props: { variant?: "mobile" } = {}) {
   useEffect(() => { onlineSourceRef.current?.setProject(project.id || null); }, [project.id]);
 
   /*
-   * 两个舞台的页面不用界限搜索〔裁〕:打开项目时常驻探针照旧在加载遮罩下把每张卡测完(`probeRunner.ts`;没有记录、有别的设备的记录都一样)。
-   * 试过「有记录时先按界限搜索只测几张、常驻探针随后在后台补测」:补测的那段时间里暂停,有状态的卡(里程表这类)停在不精确的一帧
-   * (追到精确再互换要这台设备每张卡的记录,补测完之前没有;`below-online-e2e-probe` 的 G、H 实测),所以两个舞台照旧全测。
-   * 界限搜索只给只有一个舞台的页面用(下面那个 effect)。
+   * 两个舞台时的轻重判定(即时渲染闸门;语义 `product/platforms.md`「轻重判定」:项目里已经有别的机器测好的耗时时,按它排序、用二分法只测几张来划线):
+   * 打开项目时常驻探针先等着(`holdProbe`)。基准卡测完、卡片源码同步完、连上共享项目后读本项目的成本记录:
+   * - 一条都对不上项目里的卡:常驻探针照旧在遮罩下逐张实测(`releaseProbe({ blocking: true })`);
+   * - 有记录:界限搜索在后台舞台里只测几张(遮罩下,`borrow: false`,排进后台舞台的单飞队列),划好线就按它判轻重;测过的卡里判重的,
+   *   遮罩照旧挡着、紧接着给它产稀疏版(和常驻探针同一个口子 `runCardMeasuredHook`;`mechanism/rendering.md`「测量」),没测的(按记录划线
+   *   判重的)归闲时产;常驻探针随后在后台把其余的卡补测完(不挡界面,K3/K5 要的记录由它补齐),补测完分派表改按成本记录判。
+   * 读不到记录(没连上、被拒)隔一拍再试,40 拍之后照旧让常驻探针逐张测。
    */
+  const dualSearchRef = useRef<"idle" | "deciding" | "searched" | "probe">("idle");
+  useEffect(() => {
+    if (!online || !dual || lowest) return;
+    if (dualSearchRef.current !== "idle") return;
+    dualSearchRef.current = "deciding";
+    holdProbe();
+    let disposed = false;
+    let waited = 0;
+    const release = (blocking: boolean, next: "searched" | "probe") => { dualSearchRef.current = next; releaseProbe({ blocking }); };
+    const tick = async () => {
+      if (disposed || dualSearchRef.current !== "deciding") return;
+      if (++waited > 40 && waited < 1000) { waited = 1000; release(true, "probe"); return; }
+      const t = tierState();
+      if (t.gate !== "done" || t.benchmark === "pending" || !measureGateOpen()) return;
+      if (t.lowest) { release(true, "probe"); return; }
+      const shared = currentSharedLink();
+      const projectId = currentDocProjectId();
+      if (!shared || !hasDocLink() || !projectId || !((shared.ds?.rev ?? 0) > 0) || !backStage()) return;
+      dualSearchRef.current = "searched"; // 这一拍在做,别的拍不进来
+      const project = getState().project;
+      const identity = clipIdentityOf(project);
+      let listed: Awaited<ReturnType<typeof listSharedCosts>>;
+      try { listed = await listSharedCosts({ request: docRequest, projectId, environment: pageEnvironment() }); }
+      catch { dualSearchRef.current = "deciding"; return; }
+      const keys = new Set(Object.values(identity.identityKeys));
+      if (!listed.records.some((r) => keys.has(r.identityKey))) { release(true, "probe"); return; }
+      const crashed = crashedCards();
+      const unsupported = (clip: { id?: string; cardId?: string }) => needsLocalPc(clip.cardId, clip.cardId ? getCard(clip.cardId) : undefined)
+        || (!!clip.id && crashed.has(identity.identityKeys[clip.id] ?? ""));
+      setSearchCostStore(l2SearchCostStore());
+      setDualSearch(true);
+      try {
+        const outcome = await runBackJob("measure", (ctx) => runCostSearch({
+          request: docRequest, projectId, project, environment: pageEnvironment(), identityKeys: identity.identityKeys, capabilities: identity.capabilities, unsupported,
+          stage: () => ctx.stage, borrow: false, pushProject: (p) => pushProject("back", p, { reset: true }), currentProject: () => getState().project, restore: () => {},
+          store: searchCostStore, mode: import.meta.env.DEV ? "dev" : "build",
+          beforeMeasure: searchMeasureHooks.before, afterMeasure: searchMeasureHooks.after,
+          publish: (records) => publishSharedCosts({ request: docRequest, projectId, environment: pageEnvironment(), records }),
+        }));
+        if (disposed) return;
+        const latest = getState().project;
+        setPlanSearchLight(latest === project ? outcome.light : reclassify(outcome, latest, clipIdentityOf(latest).identityKeys, unsupported));
+        // 测过的卡:判重的紧接着产稀疏版(遮罩照旧挡着;判不判重、产不产、等多久由接的一方定,和常驻探针那一轮同一套)
+        const measured = [...outcome.result.measured.entries()].filter(([, v]) => !v.cached && !v.failed).map(([k]) => k);
+        const sparse: string[] = [];
+        try {
+          for (const [i, key] of measured.entries()) {
+            if (disposed || getState().project !== project) break;
+            const clipIds = Object.keys(identity.identityKeys).filter((id) => identity.identityKeys[id] === key);
+            const cardId = project.tracks.flatMap((t) => t.clips).find((c) => c.id === clipIds[0])?.cardId ?? null;
+            if (!clipIds.length || !cardId) continue;
+            holdCostSearchMask(cardId, i, measured.length);
+            sparse.push(cardId);
+            await runCardMeasuredHook({ project, clipIds, cardId, identityKey: key, stale: () => disposed || getState().project !== project });
+          }
+        } finally {
+          releaseCostSearchMask();
+        }
+        (window as unknown as Record<string, unknown>).__pcDualSearch = () => ({ keys: outcome.keys, light: [...outcome.light].sort(), measurements: outcome.result.measurements, records: outcome.records.length, boundary: outcome.result.boundary, sparseAfter: sparse });
+        release(false, "searched");
+      } catch {
+        setDualSearch(false);
+        release(true, "probe");
+      }
+    };
+    const timer = window.setInterval(() => { void tick(); }, 1000);
+    void tick();
+    return () => { disposed = true; window.clearInterval(timer); if (dualSearchRef.current === "deciding") release(true, "probe"); };
+  }, [online, dual, lowest]);
+  /* 常驻探针在后台把其余的卡补测完了:分派表改按成本记录判(两个舞台的界限搜索只管打开的那一下) */
+  useEffect(() => {
+    if (!dualSearch) return;
+    const check = () => { if (!probeProgress().running && probeSettledFor(getState().project)) setDualSearch(false); };
+    const off = onProbeProgress(check);
+    check();
+    return off;
+  }, [dualSearch]);
 
   /*
    * 只有一个舞台时的轻重判定(即时渲染闸门):共享成本记录加界限搜索(`costSearch.ts`;语义 `mechanism/rendering.md`「界限搜索与成本记录」)。
