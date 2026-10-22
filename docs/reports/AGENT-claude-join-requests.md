@@ -176,14 +176,14 @@
 
 | 项 | 命令 | 结果 |
 |---|---|---|
-| 类型检查 | `npx tsc -b --force` | 退出码 0，零错误（最后一次：提交 2e5d9c64 上，`out/join-requests/tsc-final.txt`） |
+| 类型检查 | `npx tsc -b --force` | **终版提交 e20c8212 上退出码 0，零错误**（`out/join-requests/tsc-final2.txt`）；之前每一块提交后也都跑过、都是 0 |
 | 新的服务端测试 | `node --test server/test/account-join-requests.test.mjs` | `tests 15 / pass 15 / fail 0`（JR-15 是安全专审 F1 之后加的） |
 | 新的页面侧测试 | `node --test src/account/joinRequest.test.mjs src/account/reopenJoinRequest.test.mjs` | JRC `tests 7 / pass 7`（JRC-7 是 F2 之后加的）；RJR `tests 4 / pass 4` |
 | 相关旧测试（改动后先跑的一遍） | 服务端 `account-member-*`、`account-hosted-option`、`account-projects-*`、`account-create-policy`、`accept-018-auth-*`、`accept-018-conv-*`、`account-move`；页面 `src/account/*.test.mjs`、`src/editor/sync/accountMove.test.mjs`、`src/mobile/*.test.mjs` | 服务端 `tests 93 / pass 93 / fail 0`；页面 `tests 136 / pass 136 / fail 0` |
-| 全量测试 | `npm test` | 提交 2e5d9c64 上跑了两遍。第一遍（`out/join-requests/npm-test-final.txt`）：`tests 7596 / pass 7580 / fail 0 / cancelled 1 / skipped 15`，被取消的一条是 `server/test/asset-project-workers.test.mjs` 的「真实ffmpeg项目worker独立转码/登记；编码后失权的迟到产物清理不发布」，20 秒超时（真的 ffmpeg 转码，机器上另有两个任务在跑）；**单跑那个文件**（`node scripts/test-suite.mjs server/test/asset-project-workers.test.mjs`）`tests 11 / pass 11 / fail 0`，那一条 292 毫秒过（`out/join-requests/rerun-asset-project-workers.txt`），与本分支的改动无关。第二遍全量（`out/join-requests/npm-test-final2.txt`）：**`tests 7596 / pass 7581 / fail 0 / cancelled 0 / skipped 15`，「npm test 最终结果：零失败」，退出码 0**，日志里有 `ℹ tests 7596` 汇总行。更早在提交 27879989 上也全量跑过一遍，同样 7596 / 7581 / 0 / 0 / 15（`out/join-requests/npm-test.txt`） |
-| 构建 | `npm run build` | 提交 2e5d9c64 上退出码 0（`out/join-requests/build-final.txt`，`tsc -b && vite build`） |
+| 全量测试 | `npm test` | **终版提交 e20c8212 上：`tests 7598 / pass 7583 / fail 0 / cancelled 0 / skipped 15`，「npm test 最终结果：零失败」，退出码 0**，日志 8546 行、有 `ℹ tests 7598` 汇总行（`out/join-requests/npm-test-final3.txt`；比安全专审前多的 2 条是 JR-15、JRC-7）。安全专审之前在 2e5d9c64 上跑过两遍：一遍 7580 过、1 条被取消（`server/test/asset-project-workers.test.mjs` 的真 ffmpeg 转码 20 秒超时，机器忙；**单跑那个文件 11/11 过、那一条 292 毫秒**，`out/join-requests/rerun-asset-project-workers.txt`，与本分支无关），另一遍 7596 / 7581 / 0 / 0 / 15 零失败（`npm-test-final2.txt`） |
+| 构建 | `npm run build` | **终版提交 e20c8212 上退出码 0**（`out/join-requests/build-final2.txt`，`tsc -b && vite build`） |
 | 在线构建（探针用） | `npx vite build --mode online` | 退出码 0 |
-| 端到端（桌面、在线、手机） | `node scripts/probes/account-join-request-probe.mjs --out out/join-requests/final2` | 退出码 0，34 项核对全过、0 失败，28 张截图（桌面 12、在线 9、手机 7） |
+| 端到端（改二级密码、桌面、在线、手机） | `node scripts/probes/account-join-request-probe.mjs --only password,desktop,online,mobile --out out/join-requests/final3` | **终版代码上退出码 0，37 项核对全过、0 失败，30 张截图**（改二级密码 2、桌面 12、在线 9、手机 7）。安全专审前的 `final2`（34 项、28 张）同样全过 |
 
 端到端探针用本机隔离的托管组合（`server/test/fixtures/cloud-queue-user-path.mjs`：真的账号后端、文档服务、独立的素材服务进程、TLS 入口），没碰节点。三处：
 
@@ -199,7 +199,7 @@
 
 设备名（`deviceName`，给人看的）不经 `/join`、`/session`，只在编辑器登录时交给账号服务（VisuHive `account/credentials.mjs` 第 100 行只限长度不超过 128，不限字符；本仓库 `server/auth/protocol.mjs` 的 `isDeviceName` 也收中文）。实测：探针把桌面编辑器的设备名设成中文 `申请加入探针的电脑`、设备号保持 ASCII，创建者、两个申请人、被踢的人都用它登录：四个账号都登录成功（`evidence.json` 的 `loginDeviceNames` 四条都是设备名「申请加入探针的电脑」、`ok: true`），之后发申请、被通过后输二级密码进项目、被拒、被踢各步照常，核对项「桌面-设备名「申请加入探针的电脑」照样登录、申请、进项目」通过——带中文的设备名没有挡住云端项目的加入。云端项目里的用户名是账号名，不取设备名；「创建者用户名取设备名」是本地项目勾上「多用户协作」时的缺省，本地项目这次没动、没测。另给 `invalid-device` 补了人话（页面正常用不会碰到）。
 
-### 看过的截图（`out/join-requests/final2/`，逐张看过；`final/` 是设备名改中文之前那一遍，内容相同）
+### 看过的截图（`out/join-requests/final2/` 逐张看过；终版那一遍 `out/join-requests/final3/` 同名截图内容相同，另多 `password-1-member-before.png`、`password-2-member-after.png` 两张，见「十四」F1；`final/` 是设备名改中文之前那一遍）
 
 | 截图 | 内容 |
 |---|---|
