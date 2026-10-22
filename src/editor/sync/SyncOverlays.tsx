@@ -16,12 +16,11 @@ import {
   replayOffline,
   setOfflineOpen,
   useSync,
-  browserJournalSaved,
   type UndoNoticeView,
 } from "./syncManager";
 import { clipOfEntity, entityLabel, writerLabel } from "./labels";
 import { ONLINE } from "../../online/mode";
-import { OFFLINE_UNSENT_TEXT, offlineUnsent, unsentAtRisk } from "./onlineStatus";
+import { offlineUnsent, offlineUnsentText, unsentAtRisk } from "./onlineStatus";
 import { foldLine, NOTICE_FOLD_AT, undoNoticeTitle } from "../undoNotice";
 import { ConflictMergeDialog } from "./ConflictMerge";
 import "./sync.css";
@@ -215,17 +214,16 @@ function BlockingDialog() {
 }
 
 /**
- * 在线页面离线且有未提交的改动(C10 契约第 10 节,表 A「常驻提示」):顶栏下方常驻一行提示。
- * 离线修改落盘到浏览器本地缓存(2026-10-22 用户定);还没存下来的那一小会儿关页面,挂浏览器原生的离开确认(`beforeunload`)。
+ * 在线页面离线且有未提交的改动(C10 契约第 10 节,表 A「常驻提示」):顶栏下方常驻一行提示,按改动存没存下来说两种话
+ * (〔裁:2026-10-22 主会话〕)。只在改动只在这个页面里时挂浏览器原生的离开确认(`beforeunload`)。
  */
 function OfflineUnsentNotice() {
+  const store = useSync((v) => v.offlineStore);
   const on = useSync((v) => offlineUnsent(v.status, v.unconfirmed));
-  const atRisk = useSync((v) => unsentAtRisk(v.status, v.unconfirmed));
+  const atRisk = useSync((v) => unsentAtRisk(v.status, v.unconfirmed, v.offlineStore));
   useEffect(() => {
     if (!atRisk) return;
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      // 离线修改已落盘到浏览器本地缓存:关页面不丢,不拦
-      if (browserJournalSaved()) return;
       e.preventDefault();
       e.returnValue = ""; // 旧浏览器要设它才弹原生的离开确认
     };
@@ -234,8 +232,8 @@ function OfflineUnsentNotice() {
   }, [atRisk]);
   if (!on) return null;
   return createPortal(
-    <div className="pc-offline-unsent" role="status" data-pc="offline-unsent">
-      {OFFLINE_UNSENT_TEXT}
+    <div className="pc-offline-unsent" role="status" data-pc="offline-unsent" data-store={store}>
+      {offlineUnsentText(store)}
     </div>,
     document.body,
   );

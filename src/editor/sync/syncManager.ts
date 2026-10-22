@@ -59,7 +59,7 @@ import { hostedWsUrlOf } from "../../online/invite";
 import { AccountFailure, accountConnectionProtocols, projectLink } from "../../account/client";
 import { createOnlineBackups, type OnlineBackups } from "./onlineBackups";
 import { ACCOUNT_MOVE_TEXT, createAttemptStore } from "./accountMove";
-import { nextRecovery, RECOVERED_SHOW_MS } from "./onlineStatus";
+import { nextRecovery, RECOVERED_SHOW_MS, type OfflineStore } from "./onlineStatus";
 import { applyMerge, selectionList, staleSelections, type Box, type MergeThing, type Selection } from "./mergeItems";
 import { MergeTable } from "./mergeTable";
 import { offlineThings } from "./offlineTransfer";
@@ -193,6 +193,11 @@ export interface SyncView {
   merge: { things: MergeThing[]; version: number; blocked: string | null };
   /** 「冲突合并」窗口开着(重连转进新的离线批次时自动打开;导航栏的「冲突合并」按钮也打开它) */
   mergeOpen: boolean;
+  /**
+   * 离线改动现在存在哪(离线常驻提示与离开确认用,`onlineStatus.ts`):`saved` = 已存在本机(账号云端项目落盘到浏览器本地缓存、
+   * 桌面版的本机恢复文件);`page` = 只在这个页面里(在线页面里旧办法的口令房间,或浏览器本地缓存这次没写成)。
+   */
+  offlineStore: OfflineStore;
 }
 
 let view: SyncView = {
@@ -219,6 +224,7 @@ let view: SyncView = {
   rev: null,
   merge: { things: [], version: 0, blocked: null },
   mergeOpen: false,
+  offlineStore: ONLINE ? "page" : "saved",
 };
 const viewListeners = new Set<() => void>();
 
@@ -651,6 +657,8 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
   bindMergeTable(docProjectId, mergeUser);
   // 账号云端项目(在线浏览器与桌面版都是):断网期间的修改落盘到浏览器本地缓存(旧办法的协作房间在桌面版另有本机恢复文件)
   if (mergeUser && account) offs.push(watchBrowserJournal(link, docProjectId, mergeUser));
+  // 离线改动存在哪:账号项目落盘到浏览器本地缓存、桌面版有本机恢复文件 → 本机;在线页面的口令房间不落盘 → 只在本页
+  patch({ offlineStore: account || !ONLINE ? "saved" : "page" });
   // 云端 Agent 的身份跟着共享项目的连接走:接上就绪,回本机空间撤掉(界面据此重取一次 info 与对话列表)
   setCloudIdentity(kind === "shared" && !account ? cloudIdentityOf(link) : null);
   setCloudConsentSource(kind === "shared" && accountClient ? { client: accountClient, accountId: accountClient.account?.id ?? "" } : null);
@@ -1249,7 +1257,9 @@ function watchBrowserJournal(link: SyncLink, projectId: string, user: string): (
     const job = ds.unconfirmed > 0 && ds.status !== "paused" ? kv.put(key, ds.recoveryJournal()) : ds.status === "online" && ds.unconfirmed === 0 ? kv.delete(key) : null;
     if (!job) return;
     journalSaved = false;
-    job.then(() => { journalSaved = true; }, () => { journalSaved = false; });
+    // 写成了才算「已存在本机」;写不成(配额、隐私模式)如实改说「只在这个页面里」
+    job.then(() => { journalSaved = true; if (cur?.link === link) patch({ offlineStore: "saved" }); },
+      () => { journalSaved = false; if (cur?.link === link) patch({ offlineStore: "page" }); });
   };
   const schedule = () => { if (!timer) timer = setTimeout(write, BROWSER_JOURNAL_MS); };
   const offs = [link.ds.on("project", schedule), link.ds.on("status", schedule)];

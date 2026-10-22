@@ -26,11 +26,22 @@ export const ONLINE_STATUS_TEXT = {
 export type OnlineStatusKind = keyof typeof ONLINE_STATUS_TEXT;
 
 /**
- * 离线且有未提交的改动时的常驻提示(表 A,文案受 `server/test/c10-ui-gates.test.mjs` 的 C10-UI-01 锁定)。
- * 注意:2026-10-22 起账号云端项目的离线改动落盘到浏览器本地缓存,「关闭页面将丢失」已不准确;改字待主会话定
- * (见 `docs/reports/AGENT-claude-conflict-merge.md` 第六节),这里先保持原文。
+ * 离线且有未提交的改动时的常驻提示(表 A)。〔裁:2026-10-22 主会话,conflict-merge 报告第六节第 7 条〕按改动到底存没存下来分两句:
+ * - 存下来了(账号云端项目:落盘到浏览器本地缓存;桌面版:本机恢复文件);
+ * - 没存下来(在线页面里旧办法的口令房间:不落盘,只在本页内存里)。
+ * 原文「当前离线，有未提交的修改。关闭页面将丢失这些操作。」作废:对账号项目是一句假警告。
  */
-export const OFFLINE_UNSENT_TEXT = "当前离线，有未提交的修改。关闭页面将丢失这些操作。";
+export const OFFLINE_UNSENT_TEXT = {
+  saved: "当前离线。你的改动已存在本机，连上网络后会合并回项目。",
+  page: "当前离线。你的改动只在这个页面里，关掉页面就会丢失。",
+} as const;
+
+/** 离线改动现在存在哪:本机(浏览器本地缓存、本机恢复文件)还是只在这个页面里 */
+export type OfflineStore = keyof typeof OFFLINE_UNSENT_TEXT;
+
+export function offlineUnsentText(store: OfflineStore): string {
+  return OFFLINE_UNSENT_TEXT[store];
+}
 
 /** 离线类措辞持续这么久才显示(不闪) */
 export const OFFLINE_SHOW_DELAY_MS = 1500;
@@ -62,9 +73,12 @@ export function offlineUnsent(status: SyncStatus, unconfirmed: number): boolean 
   return status === "offline" && unconfirmed > 0;
 }
 
-/** 该不该挂浏览器原生的离开确认:离线或暂停(离线批次等用户决定)时手里有没提交的修改,关页面就丢 */
-export function unsentAtRisk(status: SyncStatus, unconfirmed: number): boolean {
-  return (status === "offline" || status === "paused") && unconfirmed > 0;
+/**
+ * 该不该挂浏览器原生的离开确认:离线或暂停(离线批次等用户决定)时手里有没提交的修改,而且改动只在这个页面里(关页面就丢)。
+ * 改动已存在本机(`store: "saved"`)时不拦。
+ */
+export function unsentAtRisk(status: SyncStatus, unconfirmed: number, store: OfflineStore = "page"): boolean {
+  return store === "page" && (status === "offline" || status === "paused") && unconfirmed > 0;
 }
 
 /**
