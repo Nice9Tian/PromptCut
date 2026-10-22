@@ -458,13 +458,28 @@
   background: linear-gradient(to top, rgba(0, 0, 0, 0.66), transparent);
 }
 .ps-ext-scrub { flex: 1 1 auto; min-width: 0; accent-color: var(--accent); }
+/* 栏拖窄了也不许折行(用户 2026-10-23):这一格不收缩、不换行,让进度条去让宽度 */
 .ps-ext-time {
+  flex: 0 0 auto;
   font-size: 11px;
   color: #fff;
   font-variant-numeric: tabular-nums;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  white-space: nowrap;
 }
-.ps-ext-todo { margin: 0; font-size: 11px; line-height: 1.7; color: var(--ink-faint); }
+/*
+ * 段落底下那行小字:栏窄的时候只占一行,放不下就省略号(全文挂在 title 上)——
+ * 用户 2026-10-23:右侧缩小以后不要变成多行,这一行小字也算。
+ */
+.ps-ext-todo {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--ink-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* 改动那一段:一行一次操作 */
 .ps-ext-rows { display: flex; flex-direction: column; gap: 4px; }
@@ -684,12 +699,11 @@
 
 /*
  * ── 详细编辑 ─────────────────────────────────────
- * 占满聊天区(输入框在这一行之外,照旧留在下面)。上面舞台加一排传输控件,下面时间轴。
+ * 占对话列里消息那一截(输入框在它下面,照旧留着)。上面舞台加一排传输控件,下面时间轴。
  * 形状照软件里的编辑台。展开时有一下过渡,关了动画的人直接就位。
  */
-.ps-chat-row.is-detail { display: block; overflow: hidden; }
 .ps-detail {
-  height: 100%;
+  flex: 1 1 auto;
   min-height: 0;
   box-sizing: border-box;
   display: flex;
@@ -789,17 +803,25 @@
 .ps-detail-zoom { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--ink-muted); }
 .ps-detail-zoom input { width: 110px; accent-color: var(--accent); }
 
-/* 左边一列序列名,右边是能横向滚的轨道 */
+/*
+ * 左边一列序列名,右边是轨道。栏窄了(右边拓展栏开着)轨道会比框宽,所以这一框横向可滚 ——
+ * 否则右边的卡片被切掉就再也够不着了。序列名那一列吸在左边,滚的时候不跟着走。
+ */
 .ps-detail-tracks {
   display: flex;
   border: 1px solid var(--hairline);
   border-radius: 8px;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
   background: var(--bg-panel);
 }
 .ps-detail-names {
+  position: sticky;
+  left: 0;
+  z-index: 2;
   flex: 0 0 92px;
   border-right: 1px solid var(--hairline);
+  background: var(--bg-panel);
 }
 .ps-detail-name {
   display: flex;
@@ -1208,7 +1230,12 @@
   /* 色斑要糊成一片,这一层自己先定个底色,免得模糊边缘透出画布色 */
   background: var(--bg-panel);
 }
-.ps-login-art > *:not(.ps-aurora) { position: relative; z-index: 1; }
+/*
+ * 内容压在背景上面。背景那一层有两种实现:CSS 极光(`.ps-aurora`)和 WebGL 画布(`.ps-brand-canvas`,
+ * 在 `brandCanvas.css` 里),两种都不能被抬上来,否则会盖住标题。**以后再加别的背景实现,记得也加进这个排除里。**
+ * 用 `:where()` 让括号里不计特异性,`brandCanvas.css` 那条保底的覆盖照旧压得过这一条。
+ */
+.ps-login-art > *:not(:where(.ps-aurora, .ps-brand-canvas)) { position: relative; z-index: 1; }
 
 .ps-aurora-blob {
   position: absolute;

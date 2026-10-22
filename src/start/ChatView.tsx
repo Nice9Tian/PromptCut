@@ -75,25 +75,23 @@ export function ChatView(props: {
   return (
     <main className="ps-main ps-chat" data-pc="start-chat" data-chat={props.chat.id}>
 
-      {/*
-        「详细编辑」展开时整块换成编辑视图,占满聊天区;输入框不在这一行里(它在下面的 ps-chat-foot),
-        所以照旧留着 —— 用户就能在编辑视图里右键一张卡、把它引用进输入框。
-      */}
-      {detail ? (
-        <div className="ps-chat-row is-detail">
-          <DetailEdit
-            seed={seed}
-            onClose={() => setDetail(false)}
-            onQuote={(q) => {
-              setText((t) => (t.trim() ? `${t.trimEnd()} ${q} ` : `${q} `));
-              area.current?.focus();
-              setNote(`已把「${q}」放进输入框。`);
-            }}
-          />
-        </div>
-      ) : (
       <div className="ps-chat-row">
         <div className="ps-chat-col">
+      {/*
+        「详细编辑」占的是消息那一截,输入框在它下面不收 —— 用户就能在编辑视图里右键一张卡、
+        把它引用进输入框。输入框和消息同在这一列里,所以宽度跟着对话列走,不会伸到右边拓展栏底下。
+      */}
+      {detail ? (
+        <DetailEdit
+          seed={seed}
+          onClose={() => setDetail(false)}
+          onQuote={(q) => {
+            setText((t) => (t.trim() ? `${t.trimEnd()} ${q} ` : `${q} `));
+            area.current?.focus();
+            setNote(`已把「${q}」放进输入框。`);
+          }}
+        />
+      ) : (
       <div className="ps-chat-scroll">
         <div className="ps-chat-list">
           {messages.map((m) =>
@@ -125,24 +123,9 @@ export function ChatView(props: {
           <div ref={tail} />
         </div>
       </div>
-        </div>
-
-        {props.panel && (
-          <ChatSidePanel
-            chatId={props.chat.id}
-            projectSeed={seed}
-            onNote={setNote}
-            onDetail={() => setDetail(true)}
-            width={props.ext.width}
-            onWidth={props.ext.onWidth}
-            onWidthCommit={props.ext.onWidthCommit}
-            onWidthNudge={props.ext.onWidthNudge}
-          />
-        )}
-      </div>
       )}
 
-      {/* 输入框在这一行之外:所以「详细编辑」展开、消息被挡住时,它照旧在下面 */}
+      {/* 输入框:和消息同在对话列里,所以「详细编辑」展开时它照旧在下面,宽度也不越界 */}
       <div className="ps-chat-foot">
         <div className="ps-chat-box">
           <textarea
@@ -180,6 +163,21 @@ export function ChatView(props: {
         <p className="ps-chat-note" role="status" data-pc="start-chat-note">
           {note || "界面预览阶段：发出去不会真的跑 Agent，也不会改动项目。"}
         </p>
+      </div>
+        </div>
+
+        {props.panel && (
+          <ChatSidePanel
+            chatId={props.chat.id}
+            projectSeed={seed}
+            onNote={setNote}
+            onDetail={() => setDetail(true)}
+            width={props.ext.width}
+            onWidth={props.ext.onWidth}
+            onWidthCommit={props.ext.onWidthCommit}
+            onWidthNudge={props.ext.onWidthNudge}
+          />
+        )}
       </div>
     </main>
   );

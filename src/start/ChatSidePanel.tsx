@@ -212,7 +212,9 @@ export function ChatSidePanel(props: {
               </div>
             </>
           </Frame>
-          <p className="ps-ext-todo">待办：真画面由预渲染或即时渲染给（product/rendering.md），这里现在是占位色块。</p>
+          <p className="ps-ext-todo" title="待办：真画面由预渲染或即时渲染给（product/rendering.md），这里现在是占位色块。">
+            待办：真画面由预渲染给，现在是占位
+          </p>
         </>,
         // 段头右上角那颗:原来这儿是画框里的全屏键,用户 2026-10-23 换成这个
         <button type="button" className="ps-ext-action" data-pc="start-ext-detail" onClick={props.onDetail}>
