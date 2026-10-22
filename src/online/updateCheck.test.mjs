@@ -361,3 +361,36 @@ test("UPD-07 stop() 之后撤掉监听与计时器，不再发请求、不再更
   await h.tick();
   assert.equal(calls, 1);
 });
+
+test("UPD-08 服务端退回本页的版本：已挂出的提示撤下并通知订阅者；之后再换新版本又挂上", async () => {
+  const h = makeHarness({ initialVisibility: "visible" });
+  let serverVersion = "v-200";
+  const ctl = startUpdateCheck({
+    codeVersion: "v-100",
+    visibility: h.visibility,
+    setInterval: h.setInterval,
+    clearInterval: h.clearInterval,
+    fetch: async () => ({ ok: true, text: async () => JSON.stringify({ codeVersion: serverVersion }) }),
+  });
+  let notified = 0;
+  ctl.subscribe(() => {
+    notified++;
+  });
+
+  h.visibility.setVisibility("hidden");
+  h.visibility.setVisibility("visible");
+  await flushMicrotasks();
+  assert.deepEqual(ctl.getState(), { hasUpdate: true, currentVersion: "v-100", latestVersion: "v-200" });
+
+  // 退回（例如回滚了部署）：和本页相同，提示撤下
+  serverVersion = "v-100";
+  await h.tick();
+  assert.deepEqual(ctl.getState(), { hasUpdate: false, currentVersion: "v-100", latestVersion: null });
+  assert.equal(notified, 2);
+
+  serverVersion = "v-300";
+  await h.tick();
+  assert.deepEqual(ctl.getState(), { hasUpdate: true, currentVersion: "v-100", latestVersion: "v-300" });
+  assert.equal(notified, 3);
+  ctl.stop();
+});
