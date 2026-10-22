@@ -1,7 +1,8 @@
 /**
  * 在线卡片实际权限验收：真实 content.put → 转译 → stage RPC → 用户卡/素材效果卡/声音线程。
  * 2026-10-08 P1/P3：外链照常；无 Allowlist/Trusted Types/WebRTC 护栏也执行。
- * 保留 A 父页/凭证/素材/伪造RPC/结构边界，B 插入边界，G 无 Allowlist 仍执行，C 无 header 拒绝，L/S/N/M 配置回退。
+ * 保留 A 父页/凭证/素材/伪造RPC/结构边界，B 插入边界，G 无 Allowlist 仍执行，C 无 header 拒绝，L/S/N 配置回退；
+ * M 模拟手机：原来是「低内存档不执行」的回退，2026-10-22 那一档撤销后改成「精简模式只有一个跨源舞台，照样只在那一个舞台里执行」。
  * 旧 A5/A9/P1 外发为零与 WebRTC 封堵不适用；四类外链由 card-policy-probe.mjs 实际加载验收。
  * node scripts/probes/online-card-security-probe.mjs --dist dist-online --base-port 5900 --doc-port 5903 --asset-port 5904
  */
@@ -26,6 +27,7 @@ import { createContentClient } from '../../server/render-node/content-client.mjs
 import { wsBaseOf } from '../../server/auth/route.mjs';
 import { createAssetClient } from '../../server/asset-store/client.mjs';
 import { stageCspHeader, editorCspHeader } from '../../src/online/stagePolicy.mjs';
+import { androidUaData } from './lib/android-ua.mjs';
 
 const argv = process.argv.slice(2);
 const arg = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : dflt; };
@@ -188,6 +190,7 @@ async function openMember(tag, { saveRtc = false, mobile = false } = {}) {
       userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36',
       viewport: { width: 412, height: 915, deviceScaleFactor: 2, isMobile: true, hasTouch: true, isLandscape: false },
     });
+    await androidUaData(page); // userAgentData 也报安卓手机(在线页面按它判身份与「安卓、内存不到 8 GB」)
     await page.evaluateOnNewDocument(() => { Object.defineProperty(Navigator.prototype, 'deviceMemory', { configurable: true, get: () => 4 }); });
   } else {
     await page.setViewport({ width: 1600, height: 900 });
@@ -229,7 +232,8 @@ async function openMember(tag, { saveRtc = false, mobile = false } = {}) {
     base: `${ORIGINS.editor}/hosted/`, derivationBase: `${DOC_DIRECT}/`, projectId: made.projectId, name: NAME,
     username: `m-${tag.toLowerCase()}`, password: PROJECT_PW, deviceId: `ocs-m-${stamp}-${tag.toLowerCase()}`.padEnd(16, '0'),
   }));
-  await page.goto(`${ORIGINS.editor}/editor`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+  // `?layout=desktop`:模拟手机的那一页身份是手机,缺省进手机版界面;这支探针看的是桌面界面(`?layout=` 只给验收用)
+  await page.goto(`${ORIGINS.editor}/editor?layout=desktop`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
   await page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 60_000 });
   await until(`${tag} 时间轴`, () => page.evaluate(() => !!window.__pcStore), 30_000);
   if (!clipsAdded) {
@@ -244,7 +248,7 @@ async function openMember(tag, { saveRtc = false, mobile = false } = {}) {
   await page.evaluate(() => window.__pcStore.actions.seek(1));
   const stageFrames = () => page.frames().filter((f) => /[?&]stage=1/.test(f.url()) && !f.detached);
   const stageOf = (i) => stageFrames().find((f) => f.url().startsWith(`${ORIGINS.stages[i]}/`)) ?? null;
-  const diag = () => page.evaluate(() => { const d = window.__pcPreviewDiag?.(); return d ? { dual: d.dual, onlineStages: d.onlineStages, cardExec: d.cardExec, lowMemory: d.lowMemory } : null; });
+  const diag = () => page.evaluate(() => { const d = window.__pcPreviewDiag?.(); return d ? { dual: d.dual, onlineStages: d.onlineStages, cardExec: d.cardExec, single: d.single, lowest: d.lowest } : null; });
   const gateOf = (frame) => frame.evaluate(() => ({ gate: window.__pcCardExecGate?.() ?? null, iso: window.__pcStageIsolation?.() ?? null, url: location.origin + location.pathname })).catch(() => null);
   /** 每个文档里夹具写的顶层记号(`__pcBoundaryLoaded`):编辑页面与每个舞台文档各一条 */
   const marks = async () => ({
@@ -571,7 +575,7 @@ try {
     summary.C={page:d?.cardExec};await m.close();
   });
 
-  /* ============================================================ L 旧 nginx / S 关总开关 / N 无舞台源 / M 低内存档 */
+  /* ============================================================ L 旧 nginx / S 关总开关 / N 无舞台源 / M 模拟手机(精简模式) */
   const offScenario = async (label, tag, proxyOptions, memberOptions, expect) => withProxy(proxyOptions, async (proxy) => {
     console.log(`\n== ${label}`);
     const m = await openMember(tag, memberOptions);
@@ -613,8 +617,25 @@ try {
   });
   if (ONLY.includes('L')) await offScenario('L 旧 nginx:没有策略头、没有 /media-s/(新页面先上、nginx 没改)', 'L', { policy: 'legacy' }, {}, { reason: 'not-isolated', dual: true, report: 'meta-only', noTicketLeak: true });
   if (ONLY.includes('S')) await offScenario('S 托管方关掉总开关(运行配置 onlineCardExec: false)', 'S', { policy: 'full', onlineCardExec: false }, {}, { reason: 'switch-off', dual: true, noTicketLeak: true });
-  if (ONLY.includes('N')) await offScenario('N 没有舞台源(读不到运行配置;放本机、没有 nginx 子域的部署)', 'N', { policy: 'legacy', runtimeConfig: false }, {}, { reason: 'single-stage', dual: false, noStage: true });
-  if (ONLY.includes('M')) await offScenario('M 低内存档(仿手机)', 'M', { policy: 'full' }, { mobile: true }, { reason: 'single-stage', dual: false });
+  // N:原因原来报 single-stage,2026-10-22 起没有挂着的舞台时报 no-stage(`stageIsolation.ts`;单舞台照样执行,不再是不执行的原因)
+  if (ONLY.includes('N')) await offScenario('N 没有舞台源(读不到运行配置;放本机、没有 nginx 子域的部署)', 'N', { policy: 'legacy', runtimeConfig: false }, {}, { reason: 'no-stage', dual: false, noStage: true });
+  /* M 模拟手机(安卓、4 GB):舞台闸门停在第一级,只有一个跨源舞台;卡片代码照样只在那一个隔离舞台里执行,编辑页面不执行 */
+  if (ONLY.includes('M')) await withProxy({ policy: 'full' }, async () => {
+    console.log('\n== M 模拟手机(精简模式,只有一个跨源舞台)');
+    const m = await openMember('M', { mobile: true });
+    const d = await settled(m);
+    const frames = m.stageFrames();
+    check('M 模拟手机是跨源单舞台(绝不退回同源),本页执行开关开着', d?.single === true && d?.dual === false && frames.length === 1 && frames.every((f) => ORIGINS.stages.some((o) => f.url().startsWith(`${o}/`))) && d?.cardExec?.enabled === true,
+      { single: d?.single, dual: d?.dual, frames: frames.map((f) => f.url().replace(/\?.*$/, '')), cardExec: d?.cardExec });
+    await knowsCard(m, BOUNDARY_CARDS.user);
+    const ready = await until('M 用户卡载入那一个舞台', () => runStateOf(m, BOUNDARY_CARDS.user).then((r) => r?.per?.A?.state === 'ready' ? r : null), 60_000, 500);
+    const marks = await m.marks();
+    check('M 用户卡在那一个舞台里 ready、执行了,编辑页面没执行', !!ready && marks.editor === null && marks.stages.length === 1 && marks.stages.every((x) => x.loaded?.['user-card'] === true), { ready, marks });
+    check('M 没有页面错误', m.pageErrors.length === 0, m.pageErrors.slice(0, 3));
+    summary.M = { cardExec: d?.cardExec, ready, marks };
+    await m.page.screenshot({ path: path.join(OUT, 'm-editor.png') }).catch(() => {});
+    await m.close();
+  });
 } catch (e) {
   check('探针没有中途出错', false, String(e?.stack ?? e).slice(0, 500));
 } finally {

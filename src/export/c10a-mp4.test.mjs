@@ -1,5 +1,5 @@
 /**
- * C10a 低内存档逐帧导出的 MP4 封装器（`docs/plan/c10a-contract.md` 第 11 节〔裁〕「自写最小封装器」、第 12 节「MP4 封装」）。
+ * C10a 在线页面逐帧导出的 MP4 封装器（`docs/plan/c10a-contract.md` 第 11 节〔裁〕「自写最小封装器」、第 12 节「MP4 封装」）。
  * 跑：node --test src/export/c10a-mp4.test.mjs
  *
  * 编码不在测试范围里（浏览器的 VideoEncoder / AudioEncoder）：样本由 ffmpeg 现场编成 H.264 Annex B 与 AAC ADTS，

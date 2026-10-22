@@ -4,12 +4,14 @@ export const COST_DEVICE_SEPARATOR: string;
 
 export type GlRoute = 'perDocument' | 'shared';
 
-export function resolveGlRoute(glRoute: string | null | undefined, lowMemory: boolean): GlRoute;
+export const COST_DEVICE_COMPACT_FIELD: string;
+
+export function resolveGlRoute(glRoute: string | null | undefined, fallback?: GlRoute): GlRoute;
 
 export interface CostDeviceParts {
   ua: string;
   renderer: string;
-  lowMemory: boolean;
+  compact: boolean;
   offscreenGl: boolean;
   glRoute?: string | null;
   mode: 'dev' | 'build' | string;

@@ -1,7 +1,7 @@
 /**
  * 本页产流(任务书 `docs/plan/render-refactor-task.md`「甲二」:线上没有能切分的节点时,在线页面自己产单卡轨道流,不经过任务队列)的端到端验收。
  *
- *   node scripts/probes/page-stream-probe.mjs [--dist <在线构建目录>] [--base-port 27740] [--out <目录>] [--keep-temp] [--only solo|splitter|desk|mask|slow|lowmem|mobile]
+ *   node scripts/probes/page-stream-probe.mjs [--dist <在线构建目录>] [--base-port 27740] [--out <目录>] [--keep-temp] [--only solo|splitter|desk|mask|slow|lowest|mobile]
  *        端口(整段 +0～+9):+0 编辑器页的源、+1 / +2 两个舞台的源、+3 文档服务、+4 素材服务、+5～+7 桌面编辑器(及它的舞台端口)。都只绑 127.0.0.1。
  *
  * 角色都在本机,页面用**在线构建**(进项目走「刷新后回到项目」那条产品路径,`lib/online-resume-entry.mjs`):
@@ -37,16 +37,24 @@
  *   slow      项目里一张快的重卡、一张人为拖慢的重卡(稀疏版一趟要一分钟):遮罩等稀疏版满 50 秒(墙上时钟,从第一次等稀疏版起算)就撤下、
  *             照样进编辑;没产完的闲时接着产(已推完的分段不重做);稀疏的都齐了以后满密度才开始
  *
- *   lowmem    (只在 `--only lowmem` 时跑)低内存档贴轨道流的稀疏版(手机、平板身份的在线浏览器;用户 2026-10-13 定)。项目里两张一前一后的重卡、
- *             五张同屏的重卡;流由电脑身份的页面甲产(遮罩下稀疏版,闲时补满密度);页面乙用设备设置「显示档:低内存」打开同一个项目:
- *     一  乙是低内存档、只有一个舞台;在线来源照普通档的路取到这几条流
+ *   lowest    (只在 `--only lowest` 时跑)最低一档(低配模式)贴轨道流的稀疏版。项目里两张一前一后的重卡、
+ *             五张同屏的重卡;流由电脑身份的页面甲产(遮罩下稀疏版,闲时补满密度);页面乙带 `?tier=low`(舞台闸门的强制档位,
+ *             `mechanism/platforms.md`「三道闸门」的测试钩子)打开同一个项目。原来这一场叫 `lowmem`,乙用设备设置「显示档:低内存」进
+ *             低内存档;那一档 2026-10-07 撤销、2026-10-22 从代码里去掉,只贴稀疏版、解码器 4 个的做法留给最低一档:
+ *     一  乙是最低一档、只有一个舞台;在线来源照常取到这几条流
  *     二  流还是稀疏版时播放:轨道是「只解分段第一帧」的那一种,画着的都是所在分段的第一帧,一个分段只解一张
  *     三  流补成满密度以后播放:同样只解每段第一帧(清单里这几段的 stride 是 1)
  *     四  播放、暂停时截图,与「分段第一帧的精确活渲」比像素相符、与这一帧自己的精确活渲差得更多;拖动每一步贴的都是所在分段的第一帧、一次寻帧都没有;
  *         停下以后照旧追到精确活渲(参照就是这样截的)
  *     五  五张卡同屏:解码器不超过 4 个,超出的那一层父页标 over、显示占位符
- *     量  播放时每秒解几帧、舞台每拍多少毫秒、JS 堆与解码帧内存的峰值(只记录,写进 `scenes.lowmem.measured`)
+ *     量  播放时每秒解几帧、舞台每拍多少毫秒、JS 堆与解码帧内存的峰值(只记录,写进 `scenes.lowest.measured`)
  *     六  甲下线后乙自己加一张卡:没有流、没有预渲染小尺寸,播放时占位符、停下显示精确画面;乙全程不产流、不当节点
+ *
+ *   mobile    模拟手机(安卓 UA、`deviceMemory` 4、手机视口、CPU 降速):按舞台闸门,安卓、内存不到 8 GB 固定停在第一级(精简模式,
+ *             只有一个舞台;原来这里是「自动判成低内存档」,2026-10-22 改):
+ *     一  只有一个舞台;气泡写「这台设备运行在精简模式：复杂的效果交给云端渲染」(原来核对的是低内存档的进入提示,随那一档撤销)
+ *     a   手机身份的页面为自己产单卡的稀疏版(只产稀疏版、不当队列节点),播放、拖动贴的都是所在分段的第一帧
+ *     b   五张同屏的重卡:贴流的条数受舞台的流预算限制,超出的显示占位符;暂停后追到精确画面
  *
  * 任一断言不成立退出码 1。耗时只记录。不打印令牌、口令。
  * 输出:过程写 stderr;stdout 最后一行一行 JSON `{ ok, fails, scenes: { solo, splitter, desk, mask, slow } }`;截图在 `--out/<场>/`。
@@ -65,6 +73,7 @@ import dnsShim from './lib/localhost-dns.cjs'; // Node 这边也认得 *.localho
 import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
 import { resumeRecord, plantResume } from './lib/online-resume-entry.mjs';
 import { startQueueEditor, viteBin, portFree } from './m8/procs.mjs';
+import { androidUaData } from './lib/android-ua.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
@@ -376,21 +385,22 @@ const editorPxWrites = () => hostedProxy.requests.filter((r) => r.role === 'edit
 let browserA = null, browserB = null, editor = null, chk = null;
 const LAUNCH_ARGS = ['--no-first-run', '--hide-scrollbars', '--autoplay-policy=no-user-gesture-required', '--site-per-process', '--window-position=-32000,-32000'];
 
-async function openMember(browser, { projectId, name, username, password, deviceId, userAgent = null, viewport = null, before = null, lowMemory = false }) {
+async function openMember(browser, { projectId, name, username, password, deviceId, userAgent = null, viewport = null, before = null, single = false, query = '', android = false }) {
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();
   if (before) await before(page);
   page.on('dialog', (d) => void d.accept());
   page.errors = [];
   page.on('pageerror', (e) => page.errors.push(String(e?.message ?? e).slice(0, 240)));
-  if (userAgent) await page.setUserAgent(userAgent);
+  if (android) await androidUaData(page, userAgent ?? undefined);
+  else if (userAgent) await page.setUserAgent(userAgent);
   await page.setViewport(viewport ?? { width: 1600, height: 900, deviceScaleFactor: 1.25 });
   await plantResume(page, await resumeRecord({ base: HOSTED, derivationBase: `${DOC_DIRECT}/`, projectId, name, username, password, deviceId }));
-  await page.goto(EDITOR, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+  await page.goto(`${EDITOR}${query}`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
   const entered = await page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 120_000 }).then(() => true, () => false);
   if (!check(entered, `${username} 进入项目(刷新后回到项目那条路)`)) throw new Error(`${username} 没进去`);
-  // 低内存档只有一个舞台(没有「双舞台握手」):等父页判出低内存档、那一个舞台起来
-  if (lowMemory) await until(`${username} 的页面(低内存档)舞台起来`, async () => (await P(page, () => window.__pcPreviewDiag?.()?.lowMemory === true)) && (await visibleStage(page))?.evaluate(() => !!window.__pcStageDiag?.()), 120_000, 500);
+  // 只有一个舞台(最低一档、精简模式;没有「双舞台握手」):等父页判出单舞台、那一个舞台起来
+  if (single) await until(`${username} 的页面(单舞台)舞台起来`, async () => (await P(page, () => window.__pcPreviewDiag?.()?.single === true)) && (await visibleStage(page))?.evaluate(() => !!window.__pcStageDiag?.()), 120_000, 500);
   else await until(`${username} 的页面双舞台握上手`, async () => P(page, () => { const d = window.__pcPreviewDiag?.(); return d?.dual && d.onlineStages?.handshake === 'ok'; }), 120_000, 500);
   return { ctx, page };
 }
@@ -916,7 +926,7 @@ async function instrument(page) {
         const jobs = {};
         for (const j of ps?.jobs ?? []) { const k = `${j.pass}:${j.state}`; jobs[k] = (jobs[k] ?? 0) + 1; }
         const row = {
-          mask: !!document.querySelector('[data-pc="probe-gate"]'), state: ps?.state ?? null, plan: ps?.planId ? String(ps.planId).slice(0, 8) : null,
+          mask: !!document.querySelector('[data-pc="probe-gate"], [data-pc="cost-search-gate"]'), state: ps?.state ?? null, plan: ps?.planId ? String(ps.planId).slice(0, 8) : null,
           running: ps?.running ? (String(ps.running.id).endsWith(':sparse') ? 'sparse' : 'dense') : null, jobs,
           m: ps ? { calls: ps.measure.calls, results: ps.measure.results, startedAt: ps.measure.startedAt, produced: ps.measure.produced, have: ps.measure.have, elsewhere: ps.measure.elsewhere, left: ps.measure.left } : null,
           segments: d?.streams?.segments ?? null, encoders: d?.streams?.encoders ?? null, claims: d?.counters?.claims ?? null, playing: !!window.__pcStore?.getState?.().playing,
@@ -960,8 +970,13 @@ async function manifestState(P0, row, resultKey) {
     boxed: list.filter((x) => x.box && x.box.w > 0 && x.box.h > 0).length, strides: [...new Set(list.map((x) => x.stride))] };
 }
 /** 准备:一个不当节点的页面(报非 Chromium 内核)把卡加好、关掉。它照常测量,但不产流 */
+/*
+ * 加卡的页面用最低一档(`?tier=low`)开:最低一档不测卡、不写成本记录、不产流。原来这一页是普通的电脑页面,它在后台测完加的卡会把成本记录
+ * 写进文档服务;2026-10-22 起两个舞台的页面打开时看到对得上的记录会先用界限搜索只测几张(`mechanism/rendering.md`「界限搜索与成本记录」),
+ * 那样甲走的就不是这几场要验的「常驻探针在遮罩下逐张测、紧接着产稀疏版」那条路了,而且测不测得完全看加卡的页面那 2.5 秒里测了几张。
+ */
 async function seedCards(P0, cards) {
-  const x = await P0.member(browserB, 'psp-seed', { userAgent: NON_NODE_UA });
+  const x = await P0.member(browserB, 'psp-seed', { userAgent: NON_NODE_UA, query: '?tier=low', single: true });
   const ids = [];
   try {
     for (const c of cards) ids.push(await addCard(x.page, { start: c.start, duration: c.duration }, c.label, c.burnMs ?? 40));
@@ -969,7 +984,7 @@ async function seedCards(P0, cards) {
     const rev = await until('加的卡都被文档服务确认', () => P(x.page, (n) => { const p = window.__pcStore?.getState?.().project; return p && p.tracks.flatMap((t) => t.clips).filter((c) => c.cardId === 'probe-slow-stepped').length === n; }, cards.length), 60_000, 300);
     await delay(2500);
     const d = await nodeDiag(x.page);
-    check(d?.eligibility?.reason === 'not-chromium' && (d?.streams?.frames ?? 0) === 0, '(准备)加卡的页面不当节点、一帧没产', d && { eligibility: d.eligibility, frames: d.streams?.frames, measureSparse: d.measureSparse });
+    check(['not-chromium', 'lowest'].includes(d?.eligibility?.reason) && (d?.streams?.frames ?? 0) === 0, '(准备)加卡的页面不当节点、一帧没产', d && { eligibility: d.eligibility, frames: d.streams?.frames, measureSparse: d.measureSparse });
     return { ids, docId, ok: !!rev };
   } finally { try { await x.ctx.close(); } catch { /* 已关 */ } }
 }
@@ -1211,9 +1226,9 @@ async function sceneSlow(M) {
   }
 }
 
-/* ================================================================== lowmem:低内存档贴轨道流的稀疏版 */
+/* ================================================================== lowest:最低一档贴轨道流的稀疏版(原 lowmem) */
 
-/** 低内存档页面的舞台此刻的样子(流的轨道、解码帧、占位符、JS 堆) */
+/** 单舞台页面的舞台此刻的样子(流的轨道、解码帧、占位符、停下追好的层、JS 堆) */
 async function lowStage(page) {
   const f = await visibleStage(page);
   if (!f) return null;
@@ -1222,7 +1237,7 @@ async function lowStage(page) {
     if (!d) return null;
     const s = d.streams ?? {};
     return {
-      t: d.t ?? null, suppressed: d.suppressed ?? [], lowMemLive: d.lowMemLive ?? [], settling: d.settling ?? [], placeholders: d.placeholders ?? [], snapshots: d.snapshots ?? [],
+      t: d.t ?? null, suppressed: d.suppressed ?? [], settleLive: d.settleLive ?? [], settling: d.settling ?? [], placeholders: d.placeholders ?? [], snapshots: d.snapshots ?? [],
       planes: (d.streamPlanes ?? []).map((p) => p.clipIds.join()), heldBytes: s.heldBytes ?? 0, over: (s.over ?? []).map((o) => o.clipIds.join()), pushedBytes: s.pushed?.bytes ?? 0,
       tracks: (s.tracks ?? []).map((t) => ({ clips: String(t.id).split('#')[0].split(','), key: t.key ?? null, first: t.first === true, lastDrawn: t.lastDrawn, stride: t.stride ?? null,
         decoded: t.decoded, drawn: t.drawn, held: t.held, maxHeld: t.maxHeld, decoder: t.decoder, errors: t.errors, seeks: t.seeks, lastError: t.lastError || null })),
@@ -1255,17 +1270,17 @@ const firstFrameCheck = (who, list, id, clipOrigin, { stride }) => {
   return brief;
 };
 
-async function sceneLowmem(M) {
-  tag = '[lowmem] ';
+async function sceneLowest(M) {
+  tag = '[lowest] ';
   const R = {};
-  out.scenes.lowmem = R;
-  const dir = path.join(OUT, 'lowmem');
+  out.scenes.lowest = R;
+  const dir = path.join(OUT, 'lowest');
   fs.mkdirSync(dir, { recursive: true });
   const t0 = Date.now();
   let ctxA = null, ctxB = null;
   try {
-    const P0 = await newProject(M, 'lowmem', { duration: 11 });
-    // 两张一前一后(比像素用),再加五张同屏叠着(看解码器个数的上限:低内存档 4 个);每张 2 秒 = 4 个分段
+    const P0 = await newProject(M, 'lowest', { duration: 11 });
+    // 两张一前一后(比像素用),再加五张同屏叠着(看解码器个数的上限:最低一档 4 个);每张 2 秒 = 4 个分段
     const SEQ = [{ start: 0.4, duration: 2, label: 'aa' }, { start: 2.6, duration: 2, label: 'bb' }];
     const STACK = Array.from({ length: 5 }, (_, i) => ({ start: 5, duration: 2, label: `s${i}` }));
     const seeded = await seedCards(P0, [...SEQ, ...STACK]);
@@ -1288,30 +1303,28 @@ async function sceneLowmem(M) {
     const keyOf = (id) => rows[id]?.candidates.find((c) => c.envFingerprint === fpA)?.resultKey ?? null;
     const keyA = keyOf(clipA);
     R.prepared = { maskMs: gone.goneAt - gone.shownAt, streams: Object.fromEntries(await Promise.all(seeded.ids.map(async (id) => [id.slice(-6), rows[id] ? await manifestState(P0, rows[id], keyOf(id)) : null]))) };
-    say('lowmem.prepared', R.prepared);
+    say('lowest.prepared', R.prepared);
     check(seeded.ids.every((id) => rows[id] && keyOf(id)), '准备:七条流都在层表里(候选是甲的指纹)');
     check(Object.values(R.prepared.streams).every((x) => x && x.have === 4 && x.sparse === 4), '准备:七条流的稀疏版都在(每条 4 个分段、每段一张)', R.prepared.streams);
 
-    /* ---------------- 一:低内存档的页面乙打开同一个项目 */
-    const b = await P0.member(browserB, 'psp-yi', { lowMemory: true, before: async (page) => {
-      await page.evaluateOnNewDocument(() => { try { localStorage.setItem('pc.device.displayTier', 'low'); } catch { /* 这个文档没有存储 */ } });
-    } });
+    /* ---------------- 一:最低一档的页面乙(`?tier=low`)打开同一个项目 */
+    const b = await P0.member(browserB, 'psp-yi', { single: true, query: '?tier=low' });
     ctxB = b.ctx;
     const pageB = b.page;
     debugProbe = async () => ({ online: (await onlineDiag(pageB))?.streams?.map((x) => [x.clipId.slice(-6), x.ready]), stage: await lowStage(pageB) });
-    await until('乙的测量遮罩不在了', () => P(pageB, () => !document.querySelector('[data-pc="lowmem-gate"]') && !document.querySelector('[data-pc="probe-gate"]')), 300_000, 300);
-    const pd = await P(pageB, () => { const d = window.__pcPreviewDiag?.(); return d ? { lowMemory: d.lowMemory, dual: d.dual, hostCaps: d.hostCaps ?? null } : null; });
+    await until('乙的测量遮罩不在了', () => P(pageB, () => !document.querySelector('[data-pc="cost-search-gate"]') && !document.querySelector('[data-pc="probe-gate"]')), 300_000, 300);
+    const pd = await P(pageB, () => { const d = window.__pcPreviewDiag?.(); return d ? { single: d.single, lowest: d.lowest, tier: d.tier, dual: d.dual, hostCaps: d.hostCaps ?? null } : null; });
     const nodeB0 = await nodeDiag(pageB);
     R.yi = { preview: pd, stages: stageFrames(pageB).length, node: nodeB0 && { ready: nodeB0.ready ?? null, eligibility: nodeB0.eligibility ?? null, frames: nodeB0.streams?.frames ?? null, encoders: nodeB0.streams?.encoders ?? null } };
-    check(pd?.lowMemory === true, '一:乙是低内存档', pd);
-    check(stageFrames(pageB).length === 1, '一:低内存档只有一个舞台', R.yi.stages);
+    check(pd?.lowest === true && pd?.single === true, '一:乙是最低一档(低配模式)', pd);
+    check(stageFrames(pageB).length === 1, '一:最低一档只有一个舞台', R.yi.stages);
     const readyB = await until('乙取到七条流(播放头附近的分段就绪)', async () => {
       await pauseAt(pageB, SEQ[0].start + 0.1);
       const d = await onlineDiag(pageB);
       const x = (d?.streams ?? []).find((z) => z.clipId === clipA);
       return x && x.ready >= 3 && (d.streams ?? []).length === seeded.ids.length ? d : null;
     }, 120_000, 500);
-    check(!!readyB && readyB.streams.every((x) => x.resultKey === keyOf(x.clipId)), '一:乙的在线来源认的就是甲产的那几条流(层表、清单、分段照普通档的路取)', readyB && readyB.streams.map((x) => [x.clipId.slice(-6), x.ready]));
+    check(!!readyB && readyB.streams.every((x) => x.resultKey === keyOf(x.clipId)), '一:乙的在线来源认的就是甲产的那几条流(层表、清单、分段照常取)', readyB && readyB.streams.map((x) => [x.clipId.slice(-6), x.ready]));
     const heavyB = await P(pageB, () => window.__pcPreviewDiag?.().snapshotFeed?.heavy ?? null).catch(() => null);
     check(Array.isArray(heavyB) && heavyB.includes(clipA), '一:这张卡在乙这里判重(贴预渲染结果)', heavyB);
     // 舞台里开每拍的耗时记录(`__pcFallbackTrace`)
@@ -1338,7 +1351,7 @@ async function sceneLowmem(M) {
     /* ---------------- 二:流还是稀疏版时播放 */
     const sparsePlay = await sample(SEQ[0].start + 0.05, SEQ[0].start + 1.9);
     R.sparse = firstFrameCheck('二 稀疏', sparsePlay, clipA, origin, { stride: SEG });
-    say('lowmem.sparse', R.sparse);
+    say('lowest.sparse', R.sparse);
 
     /* ---------------- 三:甲停下,把流补成满密度;乙再播放,仍然只解每段第一帧 */
     await P(pageA, () => { clearInterval(window.__pspKeepPlaying); });
@@ -1347,7 +1360,7 @@ async function sceneLowmem(M) {
     debugProbe = async () => ({ ps: await pageStreams(pageA) });
     const doneA = await until('甲把七条流补成满密度', async () => { const s = await pageStreams(pageA); return s?.state === 'done' && String(s.planId).startsWith('plan:') ? s : null; }, 1_500_000, 500);
     R.dense = { ms: Date.now() - tIdle, done: !!doneA, streams: Object.fromEntries(await Promise.all(seeded.ids.map(async (id) => [id.slice(-6), await manifestState(P0, rows[id], keyOf(id))]))) };
-    say('lowmem.dense', R.dense);
+    say('lowest.dense', R.dense);
     check(Object.values(R.dense.streams).every((x) => x.have === 4 && x.dense === 4), '三:七条流都补成了满密度', R.dense.streams);
     debugProbe = async () => ({ stage: await lowStage(pageB) });
     // 乙换上满密度的清单(清单隔几秒重取一次;看舞台轨道报的密度)
@@ -1368,7 +1381,7 @@ async function sceneLowmem(M) {
     const traceOf = async () => { const o = []; for (const f of stageFrames(pageB)) o.push(...(await f.evaluate(() => (window.__pcFallbackTrace ?? []).map((x) => x.workMs)).catch(() => []))); return o; };
     const beatStats = (list) => ({ beats: list.length, p50: quant(list, 0.5), p95: quant(list, 0.95), max: quant(list, 1), over16: list.filter((x) => x > 16.7).length, over35: list.filter((x) => x >= 35).length });
     const traceSingle = await traceOf();
-    say('lowmem.densePlay', R.densePlay);
+    say('lowest.densePlay', R.densePlay);
 
     /* ---------------- 四:比像素 —— 播放、暂停时贴的都是分段第一帧那一张 */
     const shots = [];
@@ -1380,7 +1393,7 @@ async function sceneLowmem(M) {
         const tb = trackOf(before, clipA);
         const fb = Math.round((before?.t ?? -1) * FPS) - origin;
         if (!tb || typeof tb.lastDrawn !== 'number' || before.placeholders.includes(clipA) || fb < 0 || fb >= 60 || fb % SEG < 7 || fb % SEG > 11 || tb.lastDrawn !== origin + Math.floor(fb / SEG) * SEG || shots.some((x) => x.seg === Math.floor(fb / SEG))) { await delay(15); continue; }
-        const shot = await stageShot(pageB, dir, `lowmem-play-${shots.length}`);
+        const shot = await stageShot(pageB, dir, `lowest-play-${shots.length}`);
         const after = await lowStage(pageB);
         const fa = Math.round((after?.t ?? -1) * FPS) - origin;
         if (!shot || trackOf(after, clipA)?.lastDrawn !== tb.lastDrawn || Math.floor(fa / SEG) !== Math.floor(fb / SEG)) continue;
@@ -1402,9 +1415,9 @@ async function sceneLowmem(M) {
       while (Date.now() - tp < 1500 && !pausedShot) {
         const s = await lowStage(pageB);
         const tr = trackOf(s, clipA);
-        if (s) pauseTrace.push({ round, ms: Date.now() - tp, f: Math.round((s.t ?? 0) * FPS), lastDrawn: tr?.lastDrawn ?? null, sup: s.suppressed.includes(clipA), settling: s.settling.includes(clipA), live: s.lowMemLive.includes(clipA), ph: s.placeholders.includes(clipA) });
+        if (s) pauseTrace.push({ round, ms: Date.now() - tp, f: Math.round((s.t ?? 0) * FPS), lastDrawn: tr?.lastDrawn ?? null, sup: s.suppressed.includes(clipA), settling: s.settling.includes(clipA), live: s.settleLive.includes(clipA), ph: s.placeholders.includes(clipA) });
         if (tr?.lastDrawn === origin + 3 * SEG && streamHeld(s)) {
-          const shot = await stageShot(pageB, dir, 'lowmem-paused');
+          const shot = await stageShot(pageB, dir, 'lowest-paused');
           const s2 = await lowStage(pageB);
           if (shot && streamHeld(s2) && trackOf(s2, clipA)?.lastDrawn === origin + 3 * SEG) pausedShot = { shot, seg: 3, fb: 3 * SEG + 8, fa: 3 * SEG + 8, mode: 'paused' };
         } else await delay(10);
@@ -1412,10 +1425,10 @@ async function sceneLowmem(M) {
     }
     // 停下以后:这一帧追到精确活渲(不再抑制、流平面藏起来)。这张卡是推帧卡,舞台追的时候主线程忙,问一次状态要等几百毫秒,所以截图不一定赶得上
     const tSettle = Date.now();
-    const settled = await until('暂停后这一帧追到精确活渲', async () => { const s = await lowStage(pageB); return s && Math.round((s.t ?? -1) * FPS) === pauseFrame && s.lowMemLive.includes(clipA) && !s.suppressed.includes(clipA) && !s.settling.includes(clipA) ? s : null; }, 12_000, 50);
+    const settled = await until('暂停后这一帧追到精确活渲', async () => { const s = await lowStage(pageB); return s && Math.round((s.t ?? -1) * FPS) === pauseFrame && s.settleLive.includes(clipA) && !s.suppressed.includes(clipA) && !s.settling.includes(clipA) ? s : null; }, 12_000, 50);
     R.pause = { captured: !!pausedShot, samples: pauseTrace.length, settledWithinMs: settled ? Date.now() - tSettle : null, sawStreamHeld: pauseTrace.some((x) => x.f === pauseFrame && x.lastDrawn === origin + 3 * SEG && (x.sup || x.settling) && !x.ph),
       head: pauseTrace.slice(0, 8), picture: pauseTrace.at(-1)?.lastDrawn ?? null };
-    say('lowmem.pause', R.pause);
+    say('lowest.pause', R.pause);
     check(R.pause.sawStreamHeld, '四:暂停后、还没追到精确画面时,这一层贴着流(流平面露着,解的是这一段的第一帧),不是占位符', R.pause);
     check(!!settled, '四:停下以后这一帧追到精确活渲(流平面撤下)', R.pause);
     check(!pauseTrace.some((x) => x.f === pauseFrame && x.ph), '四:暂停后没有闪过占位符', pauseTrace.filter((x) => x.ph).slice(0, 3));
@@ -1441,9 +1454,9 @@ async function sceneLowmem(M) {
           const first = origin + Math.floor(off / SEG) * SEG;
           const hit = await until('拖动中这一层贴着所在分段的第一帧', async () => { const s = await lowStage(pageB); return trackOf(s, clipA)?.lastDrawn === first && s.suppressed.includes(clipA) && !s.placeholders.includes(clipA) && Math.round((s.t ?? -1) * FPS) === origin + off ? s : null; }, 3000, 25);
           if (!hit) break;
-          const shot = await stageShot(pageB, dir, 'lowmem-drag');
+          const shot = await stageShot(pageB, dir, 'lowest-drag');
           const s2 = await lowStage(pageB);
-          if (shot && trackOf(s2, clipA)?.lastDrawn === first && s2.suppressed.includes(clipA) && !s2.lowMemLive.includes(clipA)) dragShot = { shot, seg: Math.floor(off / SEG), fb: off, fa: off, mode: 'drag' };
+          if (shot && trackOf(s2, clipA)?.lastDrawn === first && s2.suppressed.includes(clipA) && !s2.settleLive.includes(clipA)) dragShot = { shot, seg: Math.floor(off / SEG), fb: off, fa: off, mode: 'drag' };
         }
       } finally { await pageB.mouse.up(); }
       check(!!dragShot, '四:拖动中截到流贴着的那一张(这一层抑制着、没有在追精确画面)', R.dragMouse);
@@ -1460,13 +1473,13 @@ async function sceneLowmem(M) {
     }
     R.drag = drag;
     check(drag.every((x) => x.picture === origin + Math.floor(x.off / SEG) * SEG && x.seeks === 0), '四:连着跳时每一步解的都是所在分段的第一帧,一次寻帧都没有', drag);
-    // 停下以后回到精确活渲(低内存档现有的规矩):再拿它当参照
+    // 停下以后回到精确活渲(最低一档停下追一帧,不设时限):再拿它当参照
     R.pixels = [];
     if (check(shots.filter((x) => x.mode === 'play').length >= 1, '四:播放中截到流在画的帧', shots.map((x) => ({ mode: x.mode, seg: x.seg, fb: x.fb })))) {
       for (const [i, x] of shots.entries()) {
         const first = origin + x.seg * SEG, own = origin + x.fa;
-        const liveFirst = await liveShot(pageB, clipA, first / FPS + 1e-4, dir, `lowmem-live-first-${i}`);
-        const liveOwn = await liveShot(pageB, clipA, own / FPS + 1e-4, dir, `lowmem-live-own-${i}`);
+        const liveFirst = await liveShot(pageB, clipA, first / FPS + 1e-4, dir, `lowest-live-first-${i}`);
+        const liveOwn = await liveShot(pageB, clipA, own / FPS + 1e-4, dir, `lowest-live-own-${i}`);
         if (!check(!!liveFirst && !!liveOwn, `四:截到第 ${i} 张(${x.mode})的两张精确活渲参照(停下以后追到精确画面)`)) continue;
         const dFirst = diffOf(x.shot.png, liveFirst.png), dOwn = diffOf(x.shot.png, liveOwn.png);
         R.pixels.push({ mode: x.mode, seg: x.seg, frameAtShot: own, segmentFirstFrame: first, vsSegmentFirst: dFirst, vsOwnFrame: dOwn, orange: orangeOf(x.shot.png) });
@@ -1474,7 +1487,7 @@ async function sceneLowmem(M) {
         check(dOwn.bad >= dFirst.bad * 3 + 0.001, `四:第 ${i} 张与它自己那一帧(晚 ${x.fa % SEG} 帧)的精确活渲差得更多:贴的是分段第一帧`, { first: dFirst, own: dOwn });
       }
     }
-    say('lowmem.pixels', { pixels: R.pixels, drag });
+    say('lowest.pixels', { pixels: R.pixels, drag });
 
     /* ---------------- 五:五张卡同屏 —— 解码器不超过 4 个,超出的那一层显示占位符 */
     for (const f of stageFrames(pageB)) await f.evaluate(() => { window.__pcFallbackTrace = []; }).catch(() => {});
@@ -1484,7 +1497,7 @@ async function sceneLowmem(M) {
     R.stack = { samples: stackPlay.length, maxTracks: Math.max(0, ...stackPlay.map((s) => s.tracks.length)), maxDecoders: Math.max(0, ...stackPlay.map(decodersOf)), over: [...new Set(stackPlay.flatMap((s) => s.over))].map((x) => x.slice(-6)),
       drawingAtOnce: Math.max(0, ...stackPlay.map((s) => s.tracks.filter((t) => typeof t.lastDrawn === 'number').length)), placeholders: [...new Set(late.flatMap((s) => s.placeholders))].map((x) => x.slice(-6)),
       heldBytesMax: Math.max(0, ...stackPlay.map((s) => s.heldBytes)), pushedBytesMax: Math.max(0, ...stackPlay.map((s) => s.pushedBytes)), errors: Math.max(0, ...stackPlay.flatMap((s) => s.tracks.map((t) => t.errors ?? 0))) };
-    say('lowmem.stack', R.stack);
+    say('lowest.stack', R.stack);
     check(stackPlay.length >= 10 && R.stack.maxTracks <= 4 && R.stack.maxDecoders <= 4, '五:同屏五张重卡,解码器(流的轨道)不超过 4 个', R.stack);
     check(R.stack.drawingAtOnce === 4, '五:放行的 4 条都在画', R.stack);
     const overIds = [...new Set(stackPlay.flatMap((s) => s.over))];
@@ -1504,10 +1517,10 @@ async function sceneLowmem(M) {
       beatMs: { single: beatStats(traceSingle), stack: beatStats(traceStack) },
       heapMB: { stageMax: heapStage.length ? +(Math.max(...heapStage) / 1048576).toFixed(1) : null, pageBefore: heapPage0 ? +(heapPage0 / 1048576).toFixed(1) : null, pageAfter: heapPage1 ? +(heapPage1 / 1048576).toFixed(1) : null },
     };
-    say('lowmem.measured', R.measured);
+    say('lowest.measured', R.measured);
     check(R.measured.single.perSecond !== null && R.measured.single.perSecond <= (FPS / SEG) * 1.6, '量:单条流播放时每秒解的帧数约等于每秒的分段数(30 帧的项目是 2)', R.measured.single);
     check(R.measured.stack.perSecond !== null && R.measured.stack.perSecond <= 4 * (FPS / SEG) * 1.6, '量:四条流同屏每秒解的帧数约等于 4 × 2', R.measured.stack);
-    // 这几张卡一帧要算 40 毫秒:哪一拍到了 35 毫秒,就是有重卡的活组件在这一拍里跑了。低内存档播放时重卡不活渲 —— 例外只有跳过来起播的头一拍、
+    // 这几张卡一帧要算 40 毫秒:哪一拍到了 35 毫秒,就是有重卡的活组件在这一拍里跑了。最低一档播放时重卡不活渲 —— 例外只有跳过来起播的头一拍、
     // 卡入场的那一两拍(父页的抑制比舞台的节拍晚到一步;这一条和贴不贴流无关),所以这样的拍只许零星几拍,不许连着出现
     check(traceStack.length >= 20 && R.measured.beatMs.stack.p95 < 16.7 && R.measured.beatMs.single.p95 < 16.7 && R.measured.beatMs.stack.over35 <= 2 && R.measured.beatMs.single.over35 <= 4,
       '量:播放中舞台每拍的耗时第 95 百分位在一帧以内,活渲到重卡的只有起播、卡入场的零星几拍(不等流的第一帧)', R.measured.beatMs);
@@ -1518,26 +1531,26 @@ async function sceneLowmem(M) {
     const writes0 = editorPxWrites().length;
     const lone = await addCard(pageB, { start: 8, duration: 2 }, 'zz', 40);
     await delay(4000);
-    await until('乙的测量遮罩不在了', () => P(pageB, () => !document.querySelector('[data-pc="lowmem-gate"]') && !document.querySelector('[data-pc="probe-gate"]')), 120_000, 300);
+    await until('乙的测量遮罩不在了', () => P(pageB, () => !document.querySelector('[data-pc="cost-search-gate"]') && !document.querySelector('[data-pc="probe-gate"]')), 120_000, 300);
     const lonePlay = await sample(8.1, 9.6);
     const loneLate = lonePlay.filter((s) => (s.t ?? 0) >= 8.9);
     const nodeB1 = await nodeDiag(pageB);
     R.lone = { clip: lone, samples: lonePlay.length, suppressed: loneLate.filter((s) => s.suppressed.includes(lone)).length, tracks: lonePlay.filter((s) => trackOf(s, lone)).length, placeholder: loneLate.filter((s) => s.placeholders.includes(lone)).length, late: loneLate.length,
       snapshots: lonePlay.filter((s) => s.snapshots.includes(lone)).length, node: nodeB1 && { ready: nodeB1.ready ?? null, eligibility: nodeB1.eligibility ?? null, frames: nodeB1.streams?.frames ?? null, encoders: nodeB1.streams?.encoders ?? null, claims: nodeB1.counters?.claims ?? null }, pxWrites: editorPxWrites().length - writes0 };
-    say('lowmem.lone', R.lone);
+    say('lowest.lone', R.lone);
     const producedByYi = (nodeB1?.pageStreams?.counters?.produced ?? 0) >= 1 || (nodeB1?.streams?.encoders ?? 0) >= 1;
     if (producedByYi) {
-      check((nodeB1?.counters?.claims ?? 0) === 0, '六:低内存档的页面只为自己产稀疏流、不当队列节点(claims === 0)', R.lone);
+      check((nodeB1?.counters?.claims ?? 0) === 0, '六:最低一档的页面只为自己产稀疏流、不当队列节点(claims === 0)', R.lone);
     } else {
       check(loneLate.length > 0 && R.lone.suppressed === loneLate.length && R.lone.tracks === 0, '六:没有流的重卡播放时抑制着、没有流的轨道', R.lone);
       check(loneLate.length > 0 && R.lone.placeholder === loneLate.length, '六:没有流、也没有预渲染小尺寸:显示占位符', R.lone);
-      check((nodeB1?.streams?.frames ?? 0) === 0 && (nodeB1?.streams?.encoders ?? 0) === 0 && (nodeB1?.counters?.claims ?? 0) === 0 && R.lone.pxWrites === 0, '六:低内存档的页面不产流、不当节点(没有起编码器、没有认领任务、没有往素材服务写块)', R.lone);
+      check((nodeB1?.streams?.frames ?? 0) === 0 && (nodeB1?.streams?.encoders ?? 0) === 0 && (nodeB1?.counters?.claims ?? 0) === 0 && R.lone.pxWrites === 0, '六:最低一档的页面不产流、不当节点(没有起编码器、没有认领任务、没有往素材服务写块)', R.lone);
     }
     // 停下:这一帧照旧由舞台追到精确活渲
-    const loneLive = await liveShot(pageB, lone, 8.5, dir, 'lowmem-lone-live');
+    const loneLive = await liveShot(pageB, lone, 8.5, dir, 'lowest-lone-live');
     check(!!loneLive && orangeOf(loneLive.png) > 0.02, '六:停下以后这张卡显示精确画面', loneLive && { orange: orangeOf(loneLive.png) });
     R.pageErrors = { yi: pageB.errors.slice(0, 5) };
-    check(pageB.errors.length === 0, '低内存档的页面没有未捕获的错误', R.pageErrors);
+    check(pageB.errors.length === 0, '最低一档的页面没有未捕获的错误', R.pageErrors);
     R.ms = Date.now() - t0;
   } catch (e) {
     fails.push(`${tag}异常:${String(e?.stack ?? e).slice(0, 800)}`);
@@ -1548,7 +1561,7 @@ async function sceneLowmem(M) {
     chk = null;
     try { await ctxA?.close(); } catch { /* 已关 */ }
     try { await ctxB?.close(); } catch { /* 已关 */ }
-    say('scene.done', { scene: 'lowmem', ms: Date.now() - t0, fails: fails.length });
+    say('scene.done', { scene: 'lowest', ms: Date.now() - t0, fails: fails.length });
   }
 }
 
@@ -1614,15 +1627,18 @@ async function sceneMobile(M) {
     const seededSeq = { ids: [clipA], docId: seededSeqDocId };
     R.clips = [clipA, ...stackIds];
 
-    /* ---------------- 模拟手机:打开项目、低内存检测、文案核对、isConfigSupported 与流挂载 ---------------- */
+    /* ---------------- 模拟手机:打开项目、舞台闸门停在第一级(精简模式)、气泡文案、isConfigSupported 与流挂载 ---------------- */
     const MOBILE_UA = 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36';
     const MOBILE_VIEWPORT = { width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 2 };
-    const EXPECTED_TOAST = '已切换低内存模式：复杂卡片在播放、暂停和拖动时使用轨道流，停下后追上当前帧。';
+    const EXPECTED_BUBBLE = '这台设备运行在精简模式：复杂的效果交给云端渲染';
 
     const b = await P0.member(browserB, 'psp-shouji', {
       userAgent: MOBILE_UA,
       viewport: MOBILE_VIEWPORT,
-      lowMemory: true,
+      single: true,
+      android: true,
+      // 身份是手机,缺省进手机版界面;这一场看的是流,用桌面界面(`?layout=` 只给验收用)
+      query: '?layout=desktop',
       before: async (page) => {
         await page.evaluateOnNewDocument(() => {
           try {
@@ -1633,7 +1649,7 @@ async function sceneMobile(M) {
           window.__pspToasts = [];
           const add = (txt) => { if (txt && !window.__pspToasts.includes(txt)) window.__pspToasts.push(txt); };
           const mo = new MutationObserver(() => {
-            document.querySelectorAll('[data-pc="sync-toasts"] .pc-toast, .pc-toast').forEach((el) => {
+            document.querySelectorAll('[data-pc="tier-bubble"]').forEach((el) => {
               add(el.textContent?.trim());
             });
           });
@@ -1656,24 +1672,22 @@ async function sceneMobile(M) {
     const pageB = b.page;
     debugProbe = async () => ({ online: (await onlineDiag(pageB))?.streams?.map((x) => [x.clipId.slice(-6), x.ready]), stage: await lowStage(pageB) });
 
-    await until('模拟手机的测量遮罩不在了', () => P(pageB, () => !document.querySelector('[data-pc="lowmem-gate"]') && !document.querySelector('[data-pc="probe-gate"]')), 300_000, 300);
-    const pd = await P(pageB, () => { const d = window.__pcPreviewDiag?.(); return d ? { lowMemory: d.lowMemory, dual: d.dual, hostCaps: d.hostCaps ?? null } : null; });
+    await until('模拟手机的测量遮罩不在了', () => P(pageB, () => !document.querySelector('[data-pc="cost-search-gate"]') && !document.querySelector('[data-pc="probe-gate"]')), 300_000, 300);
+    const pd = await P(pageB, () => { const d = window.__pcPreviewDiag?.(); return d ? { single: d.single, lowest: d.lowest, tier: d.tier, dual: d.dual, hostCaps: d.hostCaps ?? null } : null; });
     R.mobile = { preview: pd, stages: stageFrames(pageB).length };
-    check(pd?.lowMemory === true, '模拟手机自动判为低内存档', pd);
-    check(stageFrames(pageB).length === 1, '模拟手机低内存档只有一个舞台', R.mobile.stages);
+    check(pd?.single === true && pd?.lowest === false && pd?.tier?.reached === 1, '模拟手机(安卓、内存 4 GB)停在第一级:精简模式', pd);
+    check(pd?.tier?.identity === 'phone', '模拟手机的身份是手机', pd?.tier);
+    check(stageFrames(pageB).length === 1, '模拟手机精简模式只有一个舞台', R.mobile.stages);
 
-    // 核对提示文案
-    const toastSeen = await until('模拟手机看到低内存模式进入提示文案', async () => {
-      const fromDom = await pageB.evaluate(() => {
-        const el = document.querySelector('[data-pc="sync-toasts"]');
-        return el ? el.textContent : null;
-      });
-      if (fromDom && fromDom.includes(EXPECTED_TOAST)) return fromDom;
+    // 核对档位气泡的文案(`product/platforms.md`「名词」)
+    const toastSeen = await until('模拟手机看到档位气泡', async () => {
+      const fromDom = await pageB.evaluate(() => document.querySelector('[data-pc="tier-bubble"]')?.textContent ?? null);
+      if (fromDom && fromDom.includes(EXPECTED_BUBBLE)) return fromDom;
       const captured = await pageB.evaluate(() => window.__pspToasts ?? []);
-      const found = captured.find((t) => t && t.includes(EXPECTED_TOAST));
+      const found = captured.find((t) => t && t.includes(EXPECTED_BUBBLE));
       return found ?? null;
-    }, 30_000, 300);
-    check(!!toastSeen, '进入项目提示文案相符(表 C 新文案)', { toastSeen });
+    }, 60_000, 300);
+    check(!!toastSeen, '档位气泡文案相符(精简模式)', { toastSeen });
 
     // 前置检查: isConfigSupported
     const encSupported = await pageB.evaluate(async () => {
@@ -1843,7 +1857,7 @@ async function sceneMobile(M) {
     const tSettle0 = Date.now();
     const settled = await until('b: 暂停后可见的重卡追上精确画面', async () => {
       const s = await lowStage(pageB);
-      return s && s.lowMemLive.length > 0 ? s : null;
+      return s && s.settleLive.length > 0 ? s : null;
     }, 15_000, 100);
     check(!!settled, 'b: 暂停后可见的重卡追上精确画面(活组件落定)', { settledMs: Date.now() - tSettle0 });
 
@@ -1892,8 +1906,8 @@ try {
   const launch = () => puppeteer.launch({ headless: true, protocolTimeout: 900_000, args: [...PROBE_CHROME_ARGS, ...LAUNCH_ARGS] });
   [browserA, browserB] = await Promise.all([launch(), launch()]);
 
-  // `lowmem` 只在点名时跑(`--only lowmem`):不带 `--only` 跑 solo, splitter, desk, mask, slow, mobile
-  const scenes = { solo: sceneSolo, splitter: sceneSplitter, desk: sceneDesk, mask: sceneMask, slow: sceneSlow, lowmem: sceneLowmem, mobile: sceneMobile };
+  // `lowest` 只在点名时跑(`--only lowest`):不带 `--only` 跑 solo, splitter, desk, mask, slow, mobile
+  const scenes = { solo: sceneSolo, splitter: sceneSplitter, desk: sceneDesk, mask: sceneMask, slow: sceneSlow, lowest: sceneLowest, mobile: sceneMobile };
   for (const name of ONLY ? ONLY.split(',') : ['solo', 'splitter', 'desk', 'mask', 'slow', 'mobile']) {
     if (!scenes[name]) throw new Error(`不认识的场:${name}`);
     await scenes[name](M);
@@ -1903,6 +1917,8 @@ try {
 } catch (e) {
   fails.push(`异常:${String(e?.stack ?? e).slice(0, 800)}`);
 } finally {
+  // 先把结论写进过程日志:收尾(关浏览器、关托管组合)偶尔卡住时,结果也不丢
+  say('result', { ok: fails.length === 0, fails });
   try { await browserA?.close(); } catch { /* 已关 */ }
   try { await browserB?.close(); } catch { /* 已关 */ }
   await stopDesk();

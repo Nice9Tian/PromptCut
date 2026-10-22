@@ -30,7 +30,8 @@ export const PUBLISHER_TYPES = new Set(['task.publish', 'task.unsubscribe', 'car
 
 /**
  * 任务的优先级档（语义 `mechanism/document-service.md`「渲染任务队列」的「优先级」，c10a 契约第 17 节）：
- * `priority` 取 `'normal'`（缺省，本机判重而发布的）或 `'backfill'`（为低内存档预渲染重试）。
+ * `priority` 取 `'normal'`（缺省；在线页面与本机判重而发布的一律是它）或 `'backfill'`（旧页面的预渲染重试；2026-10-07 起没有新的发布方，
+ * 留着只为认部署切换期间的老页面）。
  * 早先的整数 `priority`（锚帧段 50、其余 10，契约 A.4）照旧收，算 `normal` 档里的名次：
  * 没带 `priority` 或带整数的旧客户端一律按 `normal` 处理。
  */

@@ -1,6 +1,7 @@
 /**
- * c10a 契约第 17 节「低内存档的过渡做法」队列一侧的单测(编号 C10A-L17-Q…):
- * 语义 `mechanism/document-service.md`「渲染任务队列」的「优先级」、`mechanism/rendering.md`「低内存档」的预渲染重试。
+ * c10a 契约第 17 节队列一侧的单测(编号 C10A-L17-Q…):语义 `mechanism/document-service.md`「渲染任务队列」的「优先级」。
+ * 2026-10-07 起在线页面发布的任务一律普通优先级,`backfill` 档没有新的发布方;队列与节点照旧认它,只为部署切换期间的老页面,
+ * 这些用例钉住的是这份兼容。
  *
  *   Q1 认领顺序:normal 先于 backfill,同一优先级按发布先后;节点挑候选时 normal 还有就不碰 backfill
  *   Q2 同一个结果键已有任务不另起(预渲染重试计划任务按片段清单定键;重复发布只合并)
@@ -178,7 +179,7 @@ test('C10A-L17-Q5 认领预渲染重试计划任务的节点:清单里的片段�
   const lb = createLoopback();
   const q = createRenderQueue({ now: () => now, send: lb.queueSend, epoch: 'e1' });
   lb.attach(q);
-  // 页面(低内存档的成员)只发布
+  // 页面(发 backfill 档的老页面)只发布
   const page = lb.connect('page', { userId: 'member' });
   const pageMsgs = [];
   page.onMessage((m) => pageMsgs.push(m));

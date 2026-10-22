@@ -69,6 +69,7 @@ import { mergePlanCosts, setPlanCosts } from "./planDispatch";
 import { backStage, pushProject, stageCapabilities, whenStageReady } from "./stageBridge";
 import { MAX_PROJECT_RESENDS, currentBackJob, renderAbortAction, runBackJob } from "./stageJobs";
 import { measureGateOpen, whenMeasureGateOpen } from "./measureGate";
+import { tierGlRoute, tierState } from "../online/onlineTier";
 
 /* ------------------------------------------------------------------ 进度 */
 
@@ -144,6 +145,16 @@ export function setCardMeasuredHook(hook: CardMeasuredHook | null): () => void {
 }
 /** 这一轮遮罩的编号 */
 let maskRound = 0;
+/**
+ * 遮罩下别的测量(两个舞台的界限搜索,`Preview.tsx`)测完一张卡之后也走同一个口子:给判重的卡产稀疏版,等它回。
+ * 遮罩编号与常驻探针的同一个(一轮遮罩只有一个 50 秒的等稀疏版上限)。没人接(桌面版)时什么都不做。
+ */
+export async function runCardMeasuredHook(info: Omit<CardMeasuredInfo, "round">): Promise<void> {
+  const hook = cardMeasuredHook;
+  if (!hook) return;
+  try { await hook({ ...info, round: maskRound }); }
+  catch (err) { console.warn("[probeRunner] 测完一张卡之后的口子出错", err); }
+}
 
 /* ------------------------------------------------------------------ 身份与设备 */
 
@@ -151,7 +162,7 @@ let maskRound = 0;
 const RUN_MODE: "dev" | "build" = import.meta.env.DEV ? "dev" : "build";
 
 /**
- * 本机身份（J4）。`lowMemory` / `offscreenGl` 取**舞台握手报上来的那一份** ——
+ * 本机身份（J4）。`compact` / `offscreenGl` 取**舞台握手报上来的那一份** ——
  * 离线探针拿的也是它，主文档自己再探一遍会是第二份实现、会走偏。
  */
 /*
@@ -168,14 +179,13 @@ function gpuRendererOnce(): string {
 
 function deviceStringOf(tuning: PipelineTuning): string {
   const caps = stageCapabilities("back");
-  const lowMemory = !!caps?.lowMemory;
   return costDeviceString({
     ua: navigator.userAgent,
     renderer: gpuRendererOnce(),
-    lowMemory,
+    compact: !!caps?.compact,
     offscreenGl: !!caps?.offscreenGl,
-    // 生效路线(M2):项目选项优先,否则按低内存档。切了路线等于换机器,旧记录不命中、重探针
-    glRoute: resolveGlRoute(currentProject?.glRoute ?? null, lowMemory),
+    // 生效路线(M2):桌面按项目选项、缺省路线 1;在线页面按舞台闸门(`onlineTier.ts`)。切了路线等于换机器,旧记录不命中、重探针
+    glRoute: effectiveGlRoute(currentProject),
     mode: RUN_MODE,
     tuning,
   });
@@ -253,7 +263,7 @@ function planJobs(project: Project, costs: CardCostRecord[], device: string): Pr
 /* ------------------------------------------------------------------ 端点 */
 
 /**
- * 成本记录存在哪(C10 契约第 3 节):桌面运行环境是编辑器进程的 `GET / PUT /api/data/costs`;在线普通档由 `Preview` 换成
+ * 成本记录存在哪(C10 契约第 3 节):桌面运行环境是编辑器进程的 `GET / PUT /api/data/costs`;在线双舞台由 `Preview` 换成
  * 页面内快照库 L2 的 `costs` 表(`src/online/l2Costs.ts`,`mode=build`,关掉再开不重测)。
  * `forwardFrames`:探针帧要不要转发给预渲染进程(在线页面没有预渲染进程,不转发)。
  */
@@ -533,7 +543,12 @@ function identitySignature(project: Project | null): string | null {
 
 function deviceInputs(project: Project | null): string {
   const caps = stageCapabilities("back");
-  return JSON.stringify([!!caps?.lowMemory, !!caps?.offscreenGl, resolveGlRoute(project?.glRoute ?? null, !!caps?.lowMemory)]);
+  return JSON.stringify([!!caps?.compact, !!caps?.offscreenGl, effectiveGlRoute(project)]);
+}
+
+/** 生效的 canvas 渲染路线:在线页面跟舞台闸门走(`tierGlRoute`),桌面按项目选项、缺省路线 1 */
+function effectiveGlRoute(project: Project | null): "perDocument" | "shared" {
+  return tierState().online ? tierGlRoute() : resolveGlRoute(project?.glRoute ?? null);
 }
 
 function queueProbeRun(project: Project | null, identity: string | null): void {
@@ -569,6 +584,45 @@ export function requeueProbeRun(project: Project | null): void {
   queueProbeRun(project, identity);
 }
 
+/**
+ * 即时渲染闸门的口子(在线页面由 `Preview` 接到 `online/stageGate.ts`):测每张卡之前留崩溃记录、测完收;测崩过的卡(`skip`)不再测,
+ * 直接当重卡(`planDispatch.setPlanForcedHeavy`)。桌面不接。
+ */
+export interface ProbeMeasureHooks {
+  before?(identityKey: string, cardId: string): void;
+  after?(identityKey: string): void;
+  skip?(identityKey: string): boolean;
+}
+let measureHooks: ProbeMeasureHooks = {};
+export function setProbeMeasureHooks(next: ProbeMeasureHooks | null): void {
+  measureHooks = next ?? {};
+}
+
+/**
+ * 在线页面两个舞台、项目里已经有别的机器测好的成本记录时(语义 `product/platforms.md`「轻重判定」:有记录就二分只测几张来划线),
+ * 打开项目先由界限搜索在后台舞台里只测几张(`Preview` 的界限搜索,遮罩下),常驻探针等它定下来:
+ * - `holdProbe()`:先别开工(打开项目时由 `Preview` 叫);
+ * - `releaseProbe({ blocking })`:开工;`blocking: false` = 这一轮不挡界面(界限搜索已经在遮罩下划好了线,探针在后台把其余的卡补测完,
+ *   补齐 K3/K5 要的记录;补测完了分派表改按成本记录判)。没有记录的照旧在遮罩下逐张实测(`blocking: true`)。
+ * 桌面不叫,一直开着。
+ */
+let holdGate: { promise: Promise<void>; release: () => void } | null = null;
+export function holdProbe(): void {
+  if (holdGate) return;
+  let release = () => {};
+  const promise = new Promise<void>((r) => { release = r; });
+  holdGate = { promise, release };
+}
+export function releaseProbe({ blocking = true }: { blocking?: boolean } = {}): void {
+  if (!blocking) firstPassDone = true;
+  const g = holdGate;
+  holdGate = null;
+  g?.release();
+}
+export function probeHeld(): boolean {
+  return holdGate !== null;
+}
+
 async function runLoop(): Promise<void> {
   looping = true;
   try {
@@ -580,6 +634,7 @@ async function runLoop(): Promise<void> {
        * 换了项目 / 连接,门会重新关上,等新项目的卡片源码同步完。桌面这道门一开始就开着。
        */
       await whenMeasureGateOpen();
+      while (holdGate) await holdGate.promise;
       const gen = generation;
       const project = currentProject;
       if (!project) break;
@@ -600,9 +655,16 @@ async function runLoop(): Promise<void> {
         // 门在这一轮里又关上了(换了连接):收摊,下一轮开头等门
         if (gen !== generation || !measureGateOpen()) break;
         setProgress({ card: job.cardId, done });
+        if (measureHooks.skip?.(job.identityKey)) { done++; setProgress({ done }); continue; }
         probedLog.push({ clipId: job.clipId, cardId: job.cardId, identityKey: job.identityKey, at: Date.now() });
         if (probedLog.length > 200) probedLog.splice(0, probedLog.length - 200);
-        const record = await probeCard(job, tuning, device, () => gen !== generation);
+        try { measureHooks.before?.(job.identityKey, job.cardId); } catch { /* 记不下崩溃记录不挡测量 */ }
+        let record: CardCostRecord | null;
+        try {
+          record = await probeCard(job, tuning, device, () => gen !== generation);
+        } finally {
+          try { measureHooks.after?.(job.identityKey); } catch { /* 同上 */ }
+        }
         if (gen !== generation) break;
         if (record) {
           await putCosts([record]);
@@ -678,6 +740,7 @@ export function resetProbeRunner(): void {
   generation = 0;
   settledGeneration = 0;
   firstPassDone = false;
+  holdGate = null;
   maskRound = 0;
   cardMeasuredHook = null;
   progress = IDLE;

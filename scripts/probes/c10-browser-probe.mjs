@@ -1567,7 +1567,7 @@ try {
   const iframeTargets = targetInfos.filter((t) => t.type === 'iframe').map((t) => new URL(t.url).origin);
   check(STAGE_ORIGINS.every((o) => iframeTargets.includes(o)), 'A1:两个舞台各成独立的 iframe 目标(进了独立进程)', iframeTargets);
   const caps = d1?.hostCaps ?? {};
-  check(['A', 'B'].every((id) => caps[id]?.measure === true && caps[id]?.catchUp === true && caps[id]?.prerender === false && caps[id]?.lowMemory === false),
+  check(['A', 'B'].every((id) => caps[id]?.measure === true && caps[id]?.catchUp === true && caps[id]?.prerender === false && caps[id]?.compact === false && caps[id]?.lowest === false),
     'A1:宿主能力表照实报(能测量、能追活渲,prerender 为假)', caps);
   state.pageFp = await P(member, () => {
     const c = document.createElement('canvas').getContext('webgl');

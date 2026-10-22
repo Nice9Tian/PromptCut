@@ -339,7 +339,7 @@ async function runBrowser() {
             const dir = path.join(OUT, `browser-${layout}-${mode}${READY ? '-ready' : ''}${process.argv.includes('--catalog') ? '-catalog' : ''}${r > 1 || head !== 'headless' ? `-r${r}-${head}` : ''}`, clipId);
             fs.mkdirSync(dir, { recursive: true });
             for (const [n, x] of Object.entries(res.got)) if (x) fs.writeFileSync(path.join(dir, `${n}.html`), x.html);
-            const row = { round: r, head, winLoad: wl, version, layout, mode, clipId, oopif: tg, caps: { measure: caps?.measure, lowMemory: caps?.lowMemory }, errors: errors.slice(0, 3), ...res, got: undefined, count: control.count };
+            const row = { round: r, head, winLoad: wl, version, layout, mode, clipId, oopif: tg, caps: { measure: caps?.measure, compact: caps?.compact, lowest: caps?.lowest }, errors: errors.slice(0, 3), ...res, got: undefined, count: control.count };
             rows.push(row);
             writeJson(file, rows);
             log(`${head.padEnd(8)} ${layout.padEnd(9)} ${mode.padEnd(6)} ${clipId.padEnd(15)} ${row.frames}/${control.count} fr ${row.wallMs} ms = ${row.fps} fps cpu ${row.cpu}% | snapshot inline p50 ${row.snapshotMs.inline.p50} raster p50 ${row.snapshotMs.raster.p50} | parent lt ${row.parent.longTasks} ${JSON.stringify(row.parent.ltMs.slice(0, 4))} rAF p95 ${row.parent.raf.p95} max ${row.parent.raf.max} | parent/frame p95 ${row.parent.parentFrameMs.p95} ms gz p50 ${row.parent.gzBytes.p50} html p50 ${row.parent.htmlBytes.p50} | oopif [${tg}] ${errors.length ? 'ERR ' + errors[0] : ''}`);

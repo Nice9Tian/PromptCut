@@ -1,5 +1,5 @@
 /**
- * 在线普通档的两个舞台(C10 契约第 2 节):运行配置解析、开几个舞台、跨源舞台的素材基址、取运行配置的退回。
+ * 在线页面的两个舞台(C10 契约第 2 节):运行配置解析、开几个舞台、跨源舞台的素材基址、取运行配置的退回。
  * 跑:node --test src/online/stageOrigins.test.mjs
  */
 import { test, beforeEach } from "node:test";
@@ -22,16 +22,16 @@ test("C10-SO-01 运行配置:两个不同的合法源才认(数组或 {A,B},对�
   }
 });
 
-test("C10-SO-02 开几个舞台:低内存档、没有舞台源、握手失败、舞台源与编辑器页同源 → 单舞台;其余双舞台", () => {
+test("C10-SO-02 开几个舞台:舞台闸门停在第一级、没有舞台源、握手失败、舞台源与编辑器页同源 → 单舞台;其余双舞台", () => {
   const origins = { A: "https://s1.x.io", B: "https://s2.x.io" };
-  assert.equal(stageLayout({ lowMemory: false, origins, handshake: "pending" }), "dual");
-  assert.equal(stageLayout({ lowMemory: false, origins, handshake: "ok" }), "dual");
-  assert.equal(stageLayout({ lowMemory: false, origins, handshake: "failed" }), "single");
-  assert.equal(stageLayout({ lowMemory: false, origins, handshake: "interim" }), "single");
-  assert.equal(stageLayout({ lowMemory: true, origins, handshake: "ok" }), "single");
-  assert.equal(stageLayout({ lowMemory: false, origins: null, handshake: "ok" }), "single");
-  assert.equal(stageLayout({ lowMemory: false, origins, handshake: "ok", pageOrigin: "https://s1.x.io" }), "single");
-  assert.equal(stageLayout({ lowMemory: false, origins, handshake: "ok", pageOrigin: "https://x.io" }), "dual");
+  assert.equal(stageLayout({ single: false, origins, handshake: "pending" }), "dual");
+  assert.equal(stageLayout({ single: false, origins, handshake: "ok" }), "dual");
+  assert.equal(stageLayout({ single: false, origins, handshake: "failed" }), "single");
+  assert.equal(stageLayout({ single: false, origins, handshake: "interim" }), "single");
+  assert.equal(stageLayout({ single: true, origins, handshake: "ok" }), "single");
+  assert.equal(stageLayout({ single: false, origins: null, handshake: "ok" }), "single");
+  assert.equal(stageLayout({ single: false, origins, handshake: "ok", pageOrigin: "https://s1.x.io" }), "single");
+  assert.equal(stageLayout({ single: false, origins, handshake: "ok", pageOrigin: "https://x.io" }), "dual");
 });
 
 test("C10-SO-03 跨源舞台读自己源上反代的 /media:与编辑器页同源的素材基址换成路径,别的主机原样", () => {

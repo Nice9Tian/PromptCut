@@ -1,11 +1,11 @@
 /**
- * L3:普通档按层表与清单取预渲染原尺寸进 L2(C10 契约第 5 节、第 18 节第 3 条),以及低内存档的 L2 只存小尺寸(第 4 节)。
+ * L3:在线页面按层表与清单取预渲染原尺寸进 L2(C10 契约第 5 节、第 18 节第 3 条),以及最低一档(`small`)的 L2 只存小尺寸(第 4 节)。
  *
- *   L3-1 层表:普通档只认 v 2 且带 contentKey、envFingerprint 的层;低内存档 v 1、v 2 都认;不认得的 v 整张当没有
+ *   L3-1 层表:`original` 只认 v 2 且带 contentKey、envFingerprint 的层;最低一档 v 1、v 2 都认;不认得的 v 整张当没有
  *   L3-2 原尺寸:按清单的 frames 表凭只读票据拉 snap/<hash>,写进 L2 的 snapshots,ranges 写入即就绪;小尺寸请求 0
  *   L3-3 关掉再开(同一个 L2):已在库里的块不再请求,就绪照样出来
  *   L3-4 预取只拉播放头前后 2 秒;层表对不上(v 1)的层按「没有预渲染结果」处理,一个请求都不发
- *   L3-5 低内存档:小尺寸存进 L2(px/<hash>),重开后不再请求;库里没有 snap/
+ *   L3-5 最低一档:小尺寸存进 L2(px/<hash>),重开后不再请求;库里没有 snap/
  * 跑:node --test src/render/c10-l3-source.test.mjs
  */
 import { test } from "node:test";
@@ -59,7 +59,7 @@ async function settle(src) {
   for (let i = 0; i < 6; i++) { await src.tickNow(); await src.idle(); await new Promise((r) => setTimeout(r, 5)); }
 }
 
-test("C10-L3-1 层表:普通档只认 v 2 且两项齐的层;低内存档 v 1、v 2 都认;不认得的 v 整张当没有", () => {
+test("C10-L3-1 层表:`original` 只认 v 2 且两项齐的层;最低一档 v 1、v 2 都认;不认得的 v 整张当没有", () => {
   const v2 = parseLayerMap({ v: 2, kind: "layer-map", projectId: "p", fps: 30, span: 60, layers: [
     { clipId: "a", kind: "html", key: "K", resultKey: "R", firstFrame: 0, count: 10, contentKey: "ck", envFingerprint: FP },
     { clipId: "b", kind: "html", key: "K2", resultKey: "R2", firstFrame: 0, count: 10, contentKey: null, envFingerprint: FP },
@@ -67,11 +67,11 @@ test("C10-L3-1 层表:普通档只认 v 2 且两项齐的层;低内存档 v 1、
   ] });
   assert.equal(v2.v, 2);
   assert.deepEqual(v2.layers.filter((l) => usableLayer(v2, l)).map((l) => l.clipId), ["a"]);
-  assert.deepEqual(v2.layers.filter((l) => usableLayer(v2, l, { lowMemory: true })).map((l) => l.clipId), ["a", "b", "c"]);
+  assert.deepEqual(v2.layers.filter((l) => usableLayer(v2, l, { anyVersion: true })).map((l) => l.clipId), ["a", "b", "c"]);
   const v1 = parseLayerMap({ kind: "layer-map", projectId: "p", fps: 30, span: 60, layers: [{ clipId: "a", kind: "html", key: "K", resultKey: "R", firstFrame: 0, count: 10 }] });
   assert.equal(v1.v, 1);
-  assert.equal(usableLayer(v1, v1.layers[0]), false, "普通档不认 v 1");
-  assert.equal(usableLayer(v1, v1.layers[0], { lowMemory: true }), true);
+  assert.equal(usableLayer(v1, v1.layers[0]), false, "`original` 不认 v 1");
+  assert.equal(usableLayer(v1, v1.layers[0], { anyVersion: true }), true);
   assert.equal(parseLayerMap({ v: 9, kind: "layer-map", layers: [] }), null, "不认得的 v 整张当没有");
   // layerRefOf:对得上回带 contentKey / envFingerprint 的那一层;对不上回 null,不抛
   const body = { v: 2, kind: "layer-map", layers: [{ clipId: "a", kind: "html", key: "K", resultKey: "R", firstFrame: 0, count: 10, contentKey: "ck", envFingerprint: FP }] };
@@ -98,7 +98,7 @@ test("C10-L3-2 原尺寸:撤快照后不自动预取;按需拉取 snap/<hash> �
   src.setProject("p1");
   src.focus(1, 30);
   await settle(src);
-  assert.equal(w.fetches.filter((f) => f.ns === "px").length, 0, "普通档不拉小尺寸");
+  assert.equal(w.fetches.filter((f) => f.ns === "px").length, 0, "`original` 不拉小尺寸");
   assert.equal(w.fetches.filter((f) => f.ns === "snap").length, 0, "撤快照后不自动预取原尺寸快照块");
   // 按需拉取:凭只读票据拉取并写进 L2
   const html = await src.fetchSnapshot("html", "K-a", 5);
@@ -148,7 +148,7 @@ test("C10-L3-3 关掉再开:已在 L2 的块不再请求,就绪照样出来", as
   again.stop();
 });
 
-test("C10-L3-4 撤快照后不自动预取原尺寸;v 1 层表的层普通档不认(一个请求都不发)", async () => {
+test("C10-L3-4 撤快照后不自动预取原尺寸;v 1 层表的层 `original` 不认(一个请求都不发)", async () => {
   const w = world();
   w.layerMap([w.layer("a")]);
   for (let s = 0; s < 600; s += 60) w.manifest("R-a", s, s + 59);
@@ -175,12 +175,12 @@ test("C10-L3-4 撤快照后不自动预取原尺寸;v 1 层表的层普通档不
   src1.stop();
 });
 
-test("C10-L3-5 低内存档:撤快照后不自动预取小尺寸;按需存进 L2(只存 px/),重开后不再请求", async () => {
+test("C10-L3-5 最低一档:撤快照后不自动预取小尺寸;按需存进 L2(只存 px/),重开后不再请求", async () => {
   const w = world();
   w.layerMap([{ clipId: "a", kind: "html", key: "K-a", resultKey: "R-a", firstFrame: 0, count: 120 }], 1);
   w.manifest("R-a", 0, 59);
   const idb = createFakeIndexedDB();
-  const l2 = await openL2({ indexedDB: idb, lowMemory: true });
+  const l2 = await openL2({ indexedDB: idb });
   const src = new OnlineSnapshotSource(w.deps, { tier: "small", store: l2 });
   src.subscribeReady("x", 0, () => {});
   src.setProject("p1");
@@ -197,7 +197,7 @@ test("C10-L3-5 低内存档:撤快照后不自动预取小尺寸;按需存进 L2
   src.stop();
   l2.close();
   const before = w.fetches.length;
-  const again = new OnlineSnapshotSource(w.deps, { tier: "small", store: await openL2({ indexedDB: idb, lowMemory: true }) });
+  const again = new OnlineSnapshotSource(w.deps, { tier: "small", store: await openL2({ indexedDB: idb }) });
   again.subscribeReady("x", 0, () => {});
   again.setProject("p1");
   again.focus(0, 30);

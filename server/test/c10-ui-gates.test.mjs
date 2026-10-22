@@ -5,7 +5,7 @@
  *   C10-UI-01 表 A 的文案（顶栏五种状态、离线常驻提示、置灰悬停的模板）以原文出现在 `src/` 的非测试源文件里；
  *   C10-UI-02 「该模式暂不支持素材输入的音频素材效果卡」「该模式暂不支持自定义卡」不再出现（第 9 节：并入图标；徽标换了文字），
  *             「需要本地 PC 渲染辅助」也不再出现（2026-10-21 用户定：图标与徽标一并撤掉）；
- *   C10-UI-03 本页运行不了的用户卡、素材效果卡（内容库同步来的没载入成功的；素材效果卡；2026-10-21 起低内存档不另挡本页能运行的用户卡）在线时与内置重卡一样：一律按重卡（分派表判轻也一样）、
+ *   C10-UI-03 本页运行不了的用户卡、素材效果卡（内容库同步来的没载入成功的；素材效果卡；2026-10-21 起不按档另挡本页能运行的用户卡）在线时与内置重卡一样：一律按重卡（分派表判轻也一样）、
  *             选帧、报缺口、取字节；暂停态整台「已精确」时它们的快照照挂（停下不追）——2026-09-29 用户改语义，撤销原豁免；
  *   C10-UI-04 桌面（在线开关关着）用户卡、素材效果卡照常选帧，同步表不影响桌面；
  *   C10-RA-01 旧本机 `/api` 清单只减不增；已批准账号入口固定8条字面量，不重复、不接受未知账号路径。
@@ -129,13 +129,11 @@ itUi('C10-UI-03 在线时用户卡、素材效果卡（含同步来的）与内�
     assert.deepEqual(feed.planFeed({ project: project(clips()), t: 1, playing: false }).scrub.sort(), ['g'], '停下它也追精确');
     registry.setCardRunStates([['c10-synced-card', { state: 'missing-module', detail: 'lodash' }]]);
     assert.deepEqual(feed.suppressedAt({ project: project(clips()), t: 1, playing: true }), ['b', 'g', 's', 'u'], '运行不了的照旧一律抑制');
-    // 2026-10-21 用户定「暂停时渲染出精确的帧」:低内存档不另挡本页能运行的用户卡,构建时的用户卡停下照内置卡追精确
-    placeholder.setLocalOnlyLowMemory(true);
-    assert.deepEqual(feed.planFeed({ project: project(clips()), t: 1, playing: false }).scrub.sort(), ['g', 's'], '低内存档:构建时的用户卡停下也追精确');
-    placeholder.setLocalOnlyLowMemory(false);
+    // 2026-10-21 用户定「暂停时渲染出精确的帧」:不按档另挡本页能运行的用户卡(原来按档挡的开关 2026-10-22 删掉),
+    // 只有一个舞台时构建时的用户卡停下照内置卡追精确
+    assert.deepEqual(feed.planFeed({ project: project(clips()), t: 1, playing: false, single: true }).scrub.sort(), ['g', 's'], '单舞台:构建时的用户卡停下也追精确');
   } finally {
     placeholder.setOnlineBrowserMode(false);
-    placeholder.setLocalOnlyLowMemory(false);
     registry.setCardRunStates([]);
   }
 });

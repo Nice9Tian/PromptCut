@@ -1,5 +1,5 @@
 /**
- * 低内存档的界限搜索（`boundarySearch.mjs`；语义 `mechanism/rendering.md`「低内存档」）。用例 BS-C01～BS-C10。
+ * 界限搜索（`boundarySearch.mjs`；语义 `mechanism/rendering.md`「界限搜索与成本记录」）。用例 BS-C01～BS-C11。
  * 跑：node --test src/render/boundarySearch.test.mjs
  */
 import test from 'node:test';
@@ -161,4 +161,31 @@ test('BS-C10 同一张卡在项目里出现多次只判一次；代表耗时相�
   assert.deepEqual(r.order.map((o) => o.key), ['a', 'b', 'c']);
   assert.ok(r.light.has('a') && r.heavy.has('b') && r.heavy.has('c'));
   assert.equal(new Set(calls).size, calls.length, '一张卡最多测一次');
+});
+
+test('BS-C11 没有记录的卡逐张实测（measureUnrecorded，在线页面一律给）：跑得动的判轻、跑不动或测不出的判重，本地复用照样命中', async () => {
+  const store = createMemoryCostStore();
+  const f = fixture(6, (i) => i + 1);
+  const local = { newLight: 5, newHeavy: 40, newFail: null };
+  const measure = async (k) => (k in local ? (local[k] === null ? null : { stepMs: local[k], samples: 16 }) : f.measure(k));
+  const calls = [];
+  const spy = async (k) => { calls.push(k); return measure(k); };
+  const keys = [...f.keys, 'newLight', 'newHeavy', 'newFail'];
+  const r = await boundarySearch({ keys, records: f.records, budgetMs: B, measure: spy, store, envFingerprint: 'fp', measureUnrecorded: true });
+  assert.ok(r.light.has('newLight'), '本机 5 ms:判轻');
+  assert.ok(r.heavy.has('newHeavy'), '本机 40 ms:判重');
+  assert.ok(r.heavy.has('newFail'), '测不出来:按跑不动算');
+  for (const k of ['newLight', 'newHeavy', 'newFail']) assert.ok(calls.includes(k), `${k} 测了`);
+  assert.deepEqual(r.unrecorded, ['newFail', 'newHeavy', 'newLight']);
+  // 一张记录都没有:全部逐张实测
+  const none = await boundarySearch({ keys: ['x', 'y'], records: [], budgetMs: B, measure: async (k) => ({ stepMs: k === 'x' ? 1 : 99, samples: 16 }), measureUnrecorded: true });
+  assert.equal(none.measurements, 2);
+  assert.deepEqual([...none.light], ['x']);
+  assert.deepEqual([...none.heavy], ['y']);
+  // 第二次打开:本地复用命中,不再测
+  const again = [];
+  const r2 = await boundarySearch({ keys, records: f.records, budgetMs: B, measure: async (k) => { again.push(k); return measure(k); }, store, envFingerprint: 'fp', measureUnrecorded: true });
+  assert.ok(!again.includes('newLight') && !again.includes('newHeavy'), '测出来的存下了');
+  assert.ok(again.includes('newFail'), '测不出来的不存,下次再测');
+  assert.ok(r2.light.has('newLight'));
 });

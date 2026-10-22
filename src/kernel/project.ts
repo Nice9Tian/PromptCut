@@ -336,8 +336,9 @@ export interface Project {
   /**
    * canvas 卡的共享 WebGL 渲染器走哪条路线(R9 M2,项目选项)。
    *   - `perDocument`:每个舞台各一个 Worker 和上下文(桌面默认);
-   *   - `shared`:编辑界面只开一个 Worker 和上下文,两个舞台共用(低内存档默认)。
-   * 不填 = 按宿主能力:`lowMemory` 时 `shared`、否则 `perDocument`(生效值见 `render/costDevice.mjs` 的 `resolveGlRoute`)。
+   *   - `shared`:编辑界面只开一个 Worker 和上下文,两个舞台共用。
+   * 不填 = `perDocument`(生效值见 `render/costDevice.mjs` 的 `resolveGlRoute`)。只管桌面版;在线页面的路线由舞台闸门定,不看这一项
+   * (`online/onlineTier.ts` 的 `tierGlRoute`:到达第三级各一套,其余共用)。
    * 导出页在预渲染进程里没有父页,永远走 `perDocument`,不看这一项。
    */
   glRoute?: "perDocument" | "shared";

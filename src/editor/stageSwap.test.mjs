@@ -529,21 +529,21 @@ test("播放态互换跑着时来的 settle,收手时又在播放了就不补(�
   assert.equal(swapInFlight(), false);
 });
 
-/* ---------------------------------------------------------------- c10a 第 8 节:低内存档不追活渲 */
+/* ---------------------------------------------------------------- 只有一个舞台:不经后台舞台追活渲(原 c10a 第 8 节「不追活渲」) */
 
-test("低内存档:暂停态、播放态的补跑与互换一步都不走(不排后台任务、不抑制、不换)", async () => {
-  host.lowMemory = () => true;
+test("只有一个舞台:暂停态、播放态的补跑与互换一步都不走(不排后台任务、不抑制、不换)", async () => {
+  host.singleStage = () => true;
   plan = segments(["h"]);
   withRecord("h", { vtOk: false });
-  assert.equal(swap.swapBlockedByLowMemory(), true);
+  assert.equal(swap.swapBlockedBySingleStage(), true);
   assert.equal(await runSettleSwap(1), false);
   Object.assign(state, { project: project([card("b", 0, 10)]), t: 1, playing: true });
   withRecord("b", REC_B);
   assert.equal(await runPlayingSwap(["b"]), false);
   assert.deepEqual(log, [], "一条 RPC、一个后台任务都没有");
   assert.equal(front.name, "A");
-  host.lowMemory = () => false;
-  assert.equal(swap.swapBlockedByLowMemory(), false, "普通档照旧");
+  host.singleStage = () => false;
+  assert.equal(swap.swapBlockedBySingleStage(), false, "双舞台照旧");
 });
 
 /* ---------------------------------------------------------------- 自然进场与从卡中间开始播放(swap-tuning 任务 C) */

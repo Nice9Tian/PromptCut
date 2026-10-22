@@ -44,7 +44,7 @@ export const TIERS_KNOWN_LOCAL = "@known:local";
 /** 轮询回过、当前连的是远程素材服务(可播性探测按远端超时) */
 export const TIERS_KNOWN_REMOTE = "@known:remote";
 
-type TierMedia = Pick<MediaAsset, "url" | "hash" | "tiers"> & Partial<Pick<MediaAsset, "ext" | "kind">>;
+type TierMedia = Pick<MediaAsset, "url" | "hash" | "tiers"> & Partial<Pick<MediaAsset, "ext" | "kind" | "width" | "height">>;
 type HashList = ReadonlySet<string> | readonly string[];
 
 export interface TierChoice {
@@ -61,14 +61,18 @@ function asSet(list: HashList): ReadonlySet<string> {
 }
 
 /* ------------------------------------------------------------------ *
- * 低内存档与在线浏览器模式(`docs/plan/c10a-contract.md` 第 8 节)
+ * 在线浏览器模式与素材闸门(`docs/plan/c10a-contract.md` 第 8 节;语义 `product/platforms.md`「在线浏览器」的「素材闸门」与「最低一档」)
  * ------------------------------------------------------------------ */
 
 /**
  * 这一侧(主文档或舞台,各自一份)的取档策略。缺省 = 桌面运行环境,和 C6.6 一字不差。
  *
- * - `lowMemory`:低内存档。**素材只拉小尺寸**:有小尺寸就恒给小尺寸(轮询回过、它还没到齐时这一层等待上传方,
- *   不去拉);没有小尺寸的素材这一层显示「等待上传方」角标与占位,**不拉原尺寸**(导出除外,导出不经这里)。
+ * - `smallOnly`:最低一档。**视频素材只拉小尺寸**:有小尺寸就恒给小尺寸(轮询回过、它还没到齐时这一层等待上传方,
+ *   不去拉);没有小尺寸的视频这一层显示「等待上传方」角标与占位,**不拉原尺寸**(导出除外,导出不经这里)。
+ * - `decodeMaxPixels`:素材闸门的解码上限(打开时测一次,这次使用期间不变;`src/online/mediaGate.ts`)。宽 × 高超过它的视频素材
+ *   照 `smallOnly` 办(按素材判,不是整台设备一刀切);没超过的照常。null = 不限(桌面、还没测完)。
+ * - `smallFirst`:素材闸门的网速(看素材实际下载的快慢,随时调整)。慢:两档都在时先给小尺寸显示,在后台探原尺寸(拉它的首帧),
+ *   探出来能放再换原尺寸;快:两档都在时只拉原尺寸(不先挂小尺寸)。只在在线页面给。
  * - `remote`:在线浏览器模式下没有本机编辑器进程代理 `/@media/*`,按哈希寻址的地址换成远程素材服务的
  *   `GET <base>/media/<hash>?t=<只读票据>`(`server/asset-service.ts`「凭票据读写」:查询串只认 `r` 票据)。
  *   `<video>` / `<img>` 带不了 `Authorization` 头,所以票据走查询串。
@@ -76,20 +80,24 @@ function asSet(list: HashList): ReadonlySet<string> {
  * 舞台是另一个文档,它那一份由父页经 RPC `setMediaPolicy` 下发(`stageRpc.ts`)。
  */
 export interface MediaTierPolicy {
-  lowMemory: boolean;
+  smallOnly: boolean;
+  decodeMaxPixels: number | null;
+  smallFirst: boolean;
   /** 在线页面在远程地址就绪前不得请求本机的 /@media 路由 */
   online: boolean;
   remote: { base: string; ticket: string | null } | null;
 }
 // Vite 的在线构建按完整属性名替换常量；Node 单测里 import.meta.env 不存在。
-let policy: MediaTierPolicy = { lowMemory: false, online: typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1", remote: null };
+let policy: MediaTierPolicy = { smallOnly: false, decodeMaxPixels: null, smallFirst: true, online: typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1", remote: null };
 
 export function setMediaTierPolicy(next: Partial<MediaTierPolicy>): void {
   const remote = next.remote === undefined ? policy.remote
     : next.remote && next.remote.base ? { base: next.remote.base.replace(/\/+$/, ""), ticket: next.remote.ticket || null } : null;
   const prev = policy;
-  policy = { lowMemory: next.lowMemory ?? policy.lowMemory, online: next.online ?? policy.online, remote };
-  if (prev.lowMemory === policy.lowMemory && prev.online === policy.online
+  const decode = next.decodeMaxPixels === undefined ? policy.decodeMaxPixels
+    : typeof next.decodeMaxPixels === "number" && Number.isFinite(next.decodeMaxPixels) && next.decodeMaxPixels > 0 ? Math.floor(next.decodeMaxPixels) : null;
+  policy = { smallOnly: next.smallOnly ?? policy.smallOnly, decodeMaxPixels: decode, smallFirst: next.smallFirst ?? policy.smallFirst, online: next.online ?? policy.online, remote };
+  if (prev.smallOnly === policy.smallOnly && prev.decodeMaxPixels === policy.decodeMaxPixels && prev.smallFirst === policy.smallFirst && prev.online === policy.online
     && prev.remote?.base === policy.remote?.base && prev.remote?.ticket === policy.remote?.ticket) {
     policy = prev; // 没变:不换对象、不通知(订阅方按对象身份判断)
     return;
@@ -98,7 +106,7 @@ export function setMediaTierPolicy(next: Partial<MediaTierPolicy>): void {
 }
 
 const policyListeners = new Set<() => void>();
-/** 取档策略变了(在线页面的远程素材服务就绪、换票据、切低内存档)时通知;回退订。编辑界面里的素材预览靠它重画 */
+/** 取档策略变了(在线页面的远程素材服务就绪、换票据、素材闸门的结果变了)时通知;回退订。编辑界面里的素材预览靠它重画 */
 export function subscribeMediaTierPolicy(cb: () => void): () => void {
   policyListeners.add(cb);
   return () => { policyListeners.delete(cb); };
@@ -114,6 +122,19 @@ function noSmallTierByDesign(media: TierMedia): boolean {
   if (media.kind === "audio" || media.kind === "image") return true;
   const ext = String(media.ext || "").replace(/^\./, "");
   return IMAGE_EXT.test(ext);
+}
+
+/**
+ * 这份素材是不是只用小尺寸:最低一档(`smallOnly`),或宽 × 高超过素材闸门的解码上限(`decodeMaxPixels`;没记下宽高的不按它判)。
+ * 图片、音频不在这里管(它们按设计没有小尺寸,见 `chooseTier`)。
+ */
+export function smallOnlyFor(media: Pick<TierMedia, "width" | "height">, p: Pick<MediaTierPolicy, "smallOnly" | "decodeMaxPixels"> = policy): boolean {
+  if (p.smallOnly) return true;
+  const limit = p.decodeMaxPixels;
+  if (limit === null || !(limit > 0)) return false;
+  const w = Number(media.width), h = Number(media.height);
+  if (!(w > 0) || !(h > 0)) return false;
+  return w * h > limit;
 }
 
 /** 按哈希寻址的地址(`/@media/<hash>`)换成远程素材服务的取回地址;别的地址原样 */
@@ -156,7 +177,7 @@ export function resolveCardParams<T extends Record<string, unknown>>(params: T, 
 export function chooseTier(
   media: TierMedia,
   localHashes: HashList = [],
-  opts: { cloudBase?: string; playable?: (hash: string) => boolean | undefined; probe?: boolean; lowMemory?: boolean; online?: boolean; remote?: MediaTierPolicy["remote"] } = {},
+  opts: { cloudBase?: string; playable?: (hash: string) => boolean | undefined; probe?: boolean; smallOnly?: boolean; decodeMaxPixels?: number | null; smallFirst?: boolean; online?: boolean; remote?: MediaTierPolicy["remote"] } = {},
 ): TierChoice {
   const original = originalUrl(media);
   const complete = asSet(localHashes);
@@ -171,11 +192,12 @@ export function chooseTier(
     return { url: remoteMediaUrl(withBase(url, opts.cloudBase), remote), tier: url ? tier : "none", awaiting: awaiting && !!url && !!originalHash };
   };
   /*
-   * 低内存档:素材只拉小尺寸(c10a 第 8 节)。按哈希寻址、而没有小尺寸这一档的素材一律不给地址、等待上传方;
+   * 只用小尺寸(最低一档,或超过素材闸门的解码上限;c10a 第 8 节的做法)。按哈希寻址、而没有小尺寸这一档的视频一律不给地址、等待上传方;
    * 有小尺寸:还没问过素材服务就先给它(先小后大的「小」),问过了而它没到齐就等,不回退到原尺寸。
    * 迁移期没有哈希的老素材不经素材服务,原样给(它们本来就只有一份)。
    */
-  if (opts.lowMemory ?? policy.lowMemory) {
+  const smallOnly = smallOnlyFor(media, { smallOnly: opts.smallOnly ?? policy.smallOnly, decodeMaxPixels: opts.decodeMaxPixels !== undefined ? opts.decodeMaxPixels : policy.decodeMaxPixels });
+  if (smallOnly) {
     if (!originalHash) return pick("original", false);
     /*
      * 图片、音频按 C6.6 设计不生成素材小尺寸(`c66-design.md`「只对视频做」)。照字面「没有小尺寸就等待上传方」
@@ -201,6 +223,8 @@ export function chooseTier(
       void probePlayable(originalHash, remoteMediaUrl(withBase(original, opts.cloudBase), remote), media.ext, media.kind === "audio" ? "audio" : "video",
         { remote: !!opts.cloudBase || !!remote || complete.has(TIERS_KNOWN_REMOTE) });
     }
+    // 素材闸门的网速够快(在线页面的舞台看出来的,`netSpeed.ts`):只拉原尺寸,不先挂小尺寸;可播性照样在后台探,探出来放不了就回小尺寸
+    if (playable === undefined && (opts.smallFirst ?? policy.smallFirst) === false) return pick("original", false);
     return pick("small", false);
   }
   if (hasSmall) return pick("small", false);
@@ -210,7 +234,7 @@ export function chooseTier(
 export function playbackUrl(
   media: TierMedia,
   localHashes: HashList = [],
-  opts: { cloudBase?: string; playable?: (hash: string) => boolean | undefined; probe?: boolean; lowMemory?: boolean; online?: boolean; remote?: MediaTierPolicy["remote"] } = {},
+  opts: { cloudBase?: string; playable?: (hash: string) => boolean | undefined; probe?: boolean; smallOnly?: boolean; decodeMaxPixels?: number | null; smallFirst?: boolean; online?: boolean; remote?: MediaTierPolicy["remote"] } = {},
 ): string {
   return chooseTier(media, localHashes, opts).url;
 }
@@ -221,20 +245,20 @@ export function playbackUrl(
  * - 桌面运行环境(`policy.online` 为假):原样 `media.url`,和以前一字不差。
  * - 在线浏览器模式:没有本机编辑器进程,`/@media/*` 这条路由不存在(c10a 2026-09-27 阿里云演示里手机的两次
  *   `404 /@media/<原尺寸哈希>` 就是素材库缩略的 `<video src>` 与时间轴波形的 `fetch` 拿 `media.url` 发的)。
- *   这里按取档判据换成远程素材服务的地址:低内存档视频只给素材小尺寸(没有就给 "",不拉原尺寸);普通档是
+ *   这里按取档判据换成远程素材服务的地址:只用小尺寸的视频(最低一档、超过解码上限)只给素材小尺寸(没有就给 "",不拉原尺寸);其余是
  *   「先小后大」里的小;远程地址还没就绪时给 ""。调用方拿到 "" 就不挂 src、不发请求。
  *   不探可播性(`probe: false`):预览只是缩略,不值得为它去拉原尺寸的首帧。
  */
 export function previewMediaUrl(media: TierMedia, p: MediaTierPolicy = policy): string {
   if (!p.online) return media.url;
-  return chooseTier(media, [], { probe: false, lowMemory: p.lowMemory, online: true, remote: p.remote }).url;
+  return chooseTier(media, [], { probe: false, smallOnly: p.smallOnly, decodeMaxPixels: p.decodeMaxPixels, online: true, remote: p.remote }).url;
 }
 
 /**
  * 要**原尺寸**的地方(量素材尺寸、打包保存、卡片画进画布)该拿哪个地址(C10 第 10 节 / 交接文件第 4 节末条)。
  * - 桌面运行环境:原样 `media.url`,和以前一字不差。
  * - 在线浏览器模式:远程素材服务上的原尺寸(带只读票据);远程地址还没就绪给 ""(调用方不发请求)。
- *   低内存档平时不拉原尺寸(`product/platforms.md`「面向的平台」),调用方自己决定要不要用它。
+ *   只用小尺寸的素材(最低一档、超过解码上限)平时不拉原尺寸,调用方自己决定要不要用它(`smallOnlyFor`)。
  */
 export function originalMediaUrl(media: Pick<MediaAsset, "url" | "hash">, p: MediaTierPolicy = policy): string {
   if (!p.online) return media.url;

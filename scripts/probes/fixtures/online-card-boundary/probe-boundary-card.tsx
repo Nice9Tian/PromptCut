@@ -6,7 +6,7 @@
  * 参数从片段的 `params.ctx` 来(收集站地址、会话号、素材哈希……;没有就什么都不做)。窗口那一半只在可见的那台舞台
  * (`role: "front"`)里跑一次,结果在那台舞台的 `globalThis.__pcBoundary["user-card"]`;声音那一半的结果从线程里 `postMessage` 出来
  * (探针在舞台里给 `Worker` 包了一层来接)。
- * 模块顶层往 `globalThis` 写一个记号:编辑页面、同源单舞台、低内存档的文档里都不该出现它(契约第 10 节「编辑页面不执行」)。
+ * 模块顶层往 `globalThis` 写一个记号:编辑页面、同源单舞台的文档里都不该出现它(契约第 10 节「编辑页面不执行」)。
  */
 import { useEffect } from "react";
 import { runAll, workerAttempts } from "./probe-boundary-attempts";

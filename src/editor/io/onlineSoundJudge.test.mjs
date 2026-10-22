@@ -8,7 +8,7 @@ const { configureCardAudio, onlineCardAudioSynthesizable, cardAudioNodeOf, reque
 const { createMemorySoundCostStore, soundCostStoreKey } = await import('../../audio/soundCost.ts');
 const { createNotificationRecipe } = await import('../../kernel/soundEffects.ts');
 const { setOnlineUserCardAudioGate, onlineCardAudioRunnable } = await import('../../online/soundPolicy.ts');
-const { configureOnlineSoundJudge, decideClipSound, decideRecipeSound, soundTargetOf, recipeSoundTarget, clipSoundRunnable, requestSoundBackfill, setSoundBackfillHandler, onlineSoundJudgeDebug, ONLINE_SOUND_HEAVY, ONLINE_SOUND_LOW_MEMORY } = await import('./onlineSoundJudge.ts');
+const { configureOnlineSoundJudge, decideClipSound, decideRecipeSound, soundTargetOf, recipeSoundTarget, clipSoundRunnable, requestSoundBackfill, setSoundBackfillHandler, onlineSoundJudgeDebug, ONLINE_SOUND_HEAVY } = await import('./onlineSoundJudge.ts');
 const { generateCardAudio } = await import('./cardAudioGeneration.ts');
 const { startSoundGeneration, waitSoundGeneration } = await import('./soundGeneration.ts');
 
@@ -22,9 +22,9 @@ const defs = new Map([builtin, userCard, audioOnly].map(d => [d.id, d]));
 configureCardAudio({ getCard: id => defs.get(id), sourceVersionOf: () => 'v1' });
 
 const heavyRecord = (soundKey, kind) => ({ soundKey, kind, device: 'test-device', blockMs: 200, blockMaxMs: 220, blockFrames: 4096, sampleRate: 48000, samples: 16, measuredAt: 1 });
-function setup({ online = true, lowMemory = false } = {}) {
+function setup({ online = true } = {}) {
   const store = createMemorySoundCostStore();
-  const restore = configureOnlineSoundJudge({ online: () => online, lowMemory: () => lowMemory, store: () => store, device: () => 'test-device' });
+  const restore = configureOnlineSoundJudge({ online: () => online, store: () => store, device: () => 'test-device' });
   evaluations = 0;
   return { store, restore };
 }
@@ -115,7 +115,7 @@ test('B12 在线判轻:测一次(不出声)、记下、在浏览器里合成;再
   } finally { restore(); }
 });
 
-test('B13 在线判重:不在浏览器里合成;用户卡、低内存档同样不合成,各有说明', async () => {
+test('B13 在线判重:不在浏览器里合成;本页跑不了的用户卡同样不合成,各有说明;不再有按档一律不合成的那一条', async () => {
   const { store, restore } = setup();
   try {
     const b = clipOf('b-av');
@@ -127,14 +127,12 @@ test('B13 在线判重:不在浏览器里合成;用户卡、低内存档同样�
     const blocked = await decideClipSound(u.project, u.clip);
     assert.equal(blocked.synth, false); assert.equal(blocked.reason, 'not-runnable'); assert.equal(evaluations, 0);
   } finally { restore(); }
-  const low = setup({ lowMemory: true });
+  // 原来按档一律不合成(2026-10-07 撤销):判定的结果只有「合成」「判重」「跑不了」三种
+  const again = setup();
   try {
-    const b = clipOf('b-av');
-    const decision = await decideClipSound(b.project, b.clip);
-    assert.equal(decision.synth, false); assert.equal(decision.reason, 'low-memory'); assert.equal(decision.message, ONLINE_SOUND_LOW_MEMORY);
-    assert.equal((await decideRecipeSound(createNotificationRecipe())).reason, 'low-memory');
-    assert.equal(evaluations, 0, '低内存档不测'); assert.equal(low.store.size(), 0);
-  } finally { low.restore(); }
+    const recipe = await decideRecipeSound(createNotificationRecipe());
+    assert.ok(recipe.synth === true || recipe.reason === 'heavy', `只按轻重判:${JSON.stringify(recipe)}`);
+  } finally { again.restore(); }
 });
 
 test('B14 在线「生成声音」与新加音效:判轻照常生成入库,判重拒绝并说明、项目不动', async () => {

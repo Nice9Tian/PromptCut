@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { COST_DEVICE_SEPARATOR, costDeviceString, readGpuRenderer, resolveGlRoute } from './costDevice.mjs';
+import { COST_DEVICE_SEPARATOR, costDeviceString, readGpuRenderer, resolveGlRoute, COST_DEVICE_COMPACT_FIELD } from './costDevice.mjs';
 import { DEFAULT_TUNING, resolveTuning } from './pipelineTuning.mjs';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36';
 const RENDERER = 'ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 Direct3D11 vs_5_0 ps_5_0, D3D11)';
 
-const parts = (over = {}) => ({ ua: UA, renderer: RENDERER, lowMemory: false, offscreenGl: true, mode: 'dev', ...over });
+const parts = (over = {}) => ({ ua: UA, renderer: RENDERER, compact: false, offscreenGl: true, mode: 'dev', ...over });
 
 test('device 串就是 K1 / J4 那八段,顺序和写法钉死', () => {
   assert.equal(
@@ -47,14 +47,15 @@ test('dev 和 build 各占一条记录', () => {
   assert.equal(costDeviceString(parts({ mode: 'preview' })), costDeviceString(parts({ mode: 'dev' })));
 });
 
-test('glRoute 缺省按低内存档推,显式值优先', () => {
-  assert.equal(resolveGlRoute(null, false), 'perDocument');
-  assert.equal(resolveGlRoute(null, true), 'shared');
-  assert.equal(resolveGlRoute('perDocument', true), 'perDocument');
-  assert.equal(resolveGlRoute('shared', false), 'shared');
-  assert.equal(resolveGlRoute('nonsense', true), 'shared');
-  assert.match(costDeviceString(parts({ lowMemory: true })), /lowMemory=true \| offscreenGl=true \| glRoute=shared \|/);
-  assert.match(costDeviceString(parts({ lowMemory: true, glRoute: 'perDocument' })), /glRoute=perDocument \|/);
+test('glRoute 缺省路线 1(或调用方给的缺省),显式值优先;只有一个舞台写在历史字段名下,键与旧记录逐字节相同', () => {
+  assert.equal(resolveGlRoute(null), 'perDocument');
+  assert.equal(resolveGlRoute(null, 'shared'), 'shared', '在线页面把舞台闸门定的路线当缺省传');
+  assert.equal(resolveGlRoute('perDocument', 'shared'), 'perDocument');
+  assert.equal(resolveGlRoute('shared'), 'shared');
+  assert.equal(resolveGlRoute('nonsense'), 'perDocument');
+  assert.equal(COST_DEVICE_COMPACT_FIELD, 'lowMemory', '历史字段名不改:改了每台桌面版升级后都要把卡重测一遍');
+  assert.match(costDeviceString(parts({ compact: true, glRoute: 'shared' })), /lowMemory=true \| offscreenGl=true \| glRoute=shared \|/);
+  assert.match(costDeviceString(parts({ compact: true })), /glRoute=perDocument \|/, '不给路线就是路线 1(不再按只有一个舞台推)');
 });
 
 test('缺字段不抛:空 UA、unknown 显卡、全 false', () => {

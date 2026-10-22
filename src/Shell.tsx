@@ -9,7 +9,9 @@ import { useSkin } from "./skins/useSkin";
 import { peekCapturedInvite } from "./online/invite";
 import { forgetSharedResume, hasSharedResume, resumeShared } from "./editor/sync/syncManager";
 import { newProject } from "./editor/io/proc";
-import { currentDeviceKind, pickLayout } from "./online/deviceKind";
+import { pickLayout } from "./online/deviceKind";
+import { predictIdentity } from "./online/stageGate";
+import { CODE_VERSION } from "./online/buildInfo";
 
 /**
  * 开始页和编辑器之间的门。
@@ -32,9 +34,10 @@ const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.V
 /**
  * 界面跟身份走(`product/platforms.md`「身份」):身份为手机的在线浏览器用手机版界面(`src/mobile/`),其余用桌面界面。
  * 页面载入时判一次,同一个地址;`?layout=mobile|desktop` 只给开发和验收用(`src/online/deviceKind.ts` 的 `pickLayout`)。
+ * iPad 的身份看舞台闸门(`src/online/stageGate.ts` 的 `predictIdentity`:停在第一级的算手机)。
  * 手机版按需载入,桌面界面不下载它。
  */
-const LAYOUT = pickLayout({ online: ONLINE_BUILD, kind: currentDeviceKind().kind, search: typeof location !== "undefined" ? location.search : "" });
+const LAYOUT = pickLayout({ online: ONLINE_BUILD, kind: ONLINE_BUILD ? predictIdentity(CODE_VERSION ?? "dev") : "desktop", search: typeof location !== "undefined" ? location.search : "" });
 const MobileApp = lazy(() => import("./mobile/MobileApp"));
 
 export function Shell(): JSX.Element {
@@ -42,7 +45,7 @@ export function Shell(): JSX.Element {
   // The title bar is outside both routes, so its colors stay synchronized.
   useSkin();
   const [inEditor, setInEditor] = useState(() => {
-    // 在线页面打开就是开始页;只有在线模式的**开发服务**(探针 lowmem-online-probe 用)认 `?editor`,
+    // 在线页面打开就是开始页;只有在线模式的**开发服务**(探针用)认 `?editor`,
     // 在线构建(vite build --mode online)里 DEV 为假,这一支被剪掉
     if (ONLINE_BUILD) return !!import.meta.env.DEV && new URLSearchParams(location.search).has("editor");
     try {

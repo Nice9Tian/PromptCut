@@ -24,7 +24,7 @@ const scope = self as unknown as {
 };
 
 let renderer: GlRenderer | null = null;
-const ensure = (lowMemory: boolean): GlRenderer => (renderer ??= createGlRenderer({ lowMemory, programOf }));
+const ensure = (compact: boolean): GlRenderer => (renderer ??= createGlRenderer({ compact, programOf }));
 
 /** 路线 2:端口 → 它绑的 stageId(同一个 stageId 重连 = 舞台重载了,旧的那份图集先放掉) */
 const ports = new Map<string, MessagePort>();
@@ -32,7 +32,7 @@ const ports = new Map<string, MessagePort>();
 function handle(msg: GlToWorker, reply: Reply, boundStageId: string | null): void {
   switch (msg.type) {
     case "init": {
-      const r = ensure(!!msg.lowMemory);
+      const r = ensure(!!msg.compact);
       reply({ type: "ready", ok: r.ok, error: r.error ?? undefined, renderer: r.renderer, samples: r.samples });
       return;
     }

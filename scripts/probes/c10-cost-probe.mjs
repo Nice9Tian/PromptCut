@@ -1,5 +1,5 @@
 /**
- * C10 其余第 3 节「低内存档的完整规则」的本机探针(分支 `claude/c10-cost`;语义 `mechanism/rendering.md`「低内存档」、
+ * C10 其余第 3 节界限搜索的本机探针(分支 `claude/c10-cost`;语义 `mechanism/rendering.md`「界限搜索与成本记录」、
  * `mechanism/document-service.md`「成本记录」)。做法照 `c10a-demo-probe.mjs`(本机托管组合、nginx 形状的代理、创建者桌面版、手机仿真)。
  *
  *   node scripts/probes/c10-cost-probe.mjs [--dist <在线构建目录>] [--port 5670] [--proxy-port 5673] [--doc-port 5674] [--asset-port 5675]
@@ -10,11 +10,16 @@
  *   2. 创建者桌面版(dev server,临时数据目录,不当渲染节点):新建项目,放 `--cards` 张成本由参数定的卡(`probe-slow`,
  *      `burnMs` 从 0 递增到超过预算),等桌面加载遮罩下测完;项目设置里勾「多用户协作」放云端,取邀请链接;
  *   3. 等桌面版把成本记录转写进文档服务(`SharedCostRelay`),用 Node 侧的成员连接 `cost.list` 核对:本项目每张卡都有记录;
- *   4. 手机成员(Chrome 移动端仿真、`deviceMemory: 4`,判为低内存档)凭邀请链接加入,等界限搜索做完(`window.__pcLowMemSearch()`):
+ *   4. 手机成员(Chrome 移动端仿真、`deviceMemory: 4`:舞台闸门停在第一级,精简模式只有一个舞台)凭邀请链接加入,
+ *      等界限搜索做完(`window.__pcCostSearch()`,原 `__pcLowMemSearch`):
  *      - 取到了本项目的全部记录;测量次数 ≤ ⌈log₂(n + 1)⌉ + 4(约 log₂(n) + 2);
  *      - 判出轻重:实测过的按实测(× 成本倍率 > B 为重),没测的按界限;本机耗时单调时,判轻的卡正好是 `burnMs` 小的那一半;
- *      - 预渲染重试只为判重又缺产物的层发(`window.__pcBackfill()` 的片段清单 ⊆ 判重的片段,不含任何判轻的片段);
- *      - 播放时判轻的卡同样抑制着、不活渲(显示用的表全部判重)。
+ *      - 本页发布的清单计划(`window.__pcPlanPublisher()`,普通优先级)只含判重的片段(没有渲染节点,判重的层都缺);
+ *      - 播放时判轻的卡活渲(不抑制),判重的卡抑制着。
+ *   原来第 4 步是「低内存档」:为弱设备补发预渲染任务(`__pcBackfill()`)、播放时判轻的卡也抑制。那一档与那一类任务
+ *   2026-10-07 撤销、2026-10-22 从代码里去掉;播放时一律不即时渲染的只剩最低一档(`?tier=low`,`stage-gate-probe.mjs` 的 S15)。
+ *   注意:这支探针的手机成员凭邀请链接进(`join-invite-project`),0.7.18 起在线开始页只有账号入口,入口本身已跑不通(与
+ *   `scripts/acceptance/v18-manifest.mjs` 的 STALE_OLD_ENTRY 同一个原因);单舞台界限搜索在 `stage-gate-probe.mjs` 的 S20 与单测里核。
  *   5. 收尾:以创建者身份删掉云端项目,结束自己起的进程,删临时目录。
  *
  * 注意:创建者的 dev server 跑在本工作区上,跑的期间不要改工作区里的文件(见 `c10a-demo-probe.mjs` 文件头)。
@@ -31,6 +36,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { androidUaData } from './lib/android-ua.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
@@ -293,6 +299,7 @@ async function newPage({ mobile = false } = {}) {
       userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36',
       viewport: { width: 412, height: 915, deviceScaleFactor: 2, isMobile: true, hasTouch: true, isLandscape: false },
     });
+    await androidUaData(page); // userAgentData 也报安卓手机(在线页面按它判身份与「安卓、内存不到 8 GB」)
     await page.evaluateOnNewDocument(() => { Object.defineProperty(Navigator.prototype, 'deviceMemory', { configurable: true, get: () => 4 }); });
   }
   page.close$ = () => ctx.close();
@@ -314,7 +321,7 @@ async function stageSample(page) {
         unsupported: !!slot && !slot.hidden && slot.getAttribute('data-pc-placeholder-reason') === 'unsupported', // 2026-09-29 起 unsupported 进显隐调度(不再常驻)
       };
     });
-    return { playing: !!d.beatRunning, wraps, lowMemLive: d.lowMemLive ?? [], role: d.role ?? null, job: d.job ?? null, stageSuppressed: d.suppressed ?? null };
+    return { playing: !!d.beatRunning, wraps, settleLive: d.settleLive ?? [], role: d.role ?? null, job: d.job ?? null, stageSuppressed: d.suppressed ?? null };
   }).catch(() => null);
 }
 
@@ -410,23 +417,23 @@ try {
   out.steps.docservice = { ms: Date.now() - t3, records: listed?.records.length ?? 0, envFingerprints: [...new Set((listed?.records ?? []).map((r) => r.envFingerprint))], relay };
   say('step3.done', out.steps.docservice);
 
-  /* ---------------------------------------------------------------- 4. 手机:低内存档的界限搜索 */
+  /* ---------------------------------------------------------------- 4. 手机:只有一个舞台时的界限搜索 */
   const t4 = Date.now();
   const phone = await newPage({ mobile: true });
   state.phone = phone;
-  await phone.goto(`${EDITOR}#invite=${codeOf(state.link)}`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+  await phone.goto(`${EDITOR}?layout=desktop#invite=${codeOf(state.link)}`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
   await phone.waitForSelector('[data-pc="join-invite-project"]', { visible: true, timeout: 60_000 });
   await typeInto(phone, '[data-pc="join-username"]', '手机成员');
   await phone.click('[data-pc="join-submit"]');
   const joined = await phone.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 90_000 }).then(() => true, () => false);
   if (!check(joined, '手机凭邀请链接进入')) throw new Error('手机没进去');
-  const lowToast = await until('手机判为低内存档', () => P(phone, () => document.body.innerText.includes('当前是低内存档')), 30_000, 300);
-  check(lowToast, '手机判为低内存档(进入提示)');
+  const single = await until('手机停在第一级(精简模式)', () => P(phone, () => { const d = window.__pcPreviewDiag?.(); return d?.single === true && d.lowest === false ? d.tier : null; }), 60_000, 300);
+  check(single, '手机停在第一级(精简模式,只有一个舞台)', single);
   // 遮罩:搜索真要测时出现
   let gateSeen = false;
   const s = await until('手机的界限搜索做完', async () => {
-    if (!gateSeen) gateSeen = await P(phone, () => !!document.querySelector('[data-pc="lowmem-gate"]')).catch(() => false);
-    return P(phone, () => { const d = window.__pcLowMemSearch?.(); return d?.outcome ? d : null; });
+    if (!gateSeen) gateSeen = await P(phone, () => !!document.querySelector('[data-pc="cost-search-gate"]')).catch(() => false);
+    return P(phone, () => { const d = window.__pcCostSearch?.(); return d?.outcome ? d : null; });
   }, 300_000, 250);
   await shot(phone, '4-phone-after-search');
   if (!s) throw new Error('手机的界限搜索没做完');
@@ -448,27 +455,26 @@ try {
   const monotone = firstHeavy < 0 || byBurn.slice(firstHeavy).every((x) => !x.light);
   check(monotone, '判轻的卡是 burnMs 小的那一段、判重的是大的那一段', byBurn);
   check(o.light.length > 0 && o.heavy.length > 0, '既有判轻也有判重', { light: o.light.length, heavy: o.heavy.length });
-  // 预渲染重试:只为判重又缺产物的层(没有渲染节点,判重的层都缺)
+  // 清单计划:只含判重的片段(没有渲染节点,判重的层都缺);判轻的不进
   const heavyClips = new Set(s.judgedHeavyClips);
   const lightClips = state.clips.filter((c) => keyLight.has(desk.keys[c.id])).map((c) => c.id);
-  const bf = await until('手机为判重又缺产物的层发预渲染重试', () => P(phone, () => { const d = window.__pcBackfill?.(); const hit = d?.log?.find((e) => !e.error); return hit ? { id: hit.id, clips: hit.clips, log: d.log.length } : null; }), 30_000, 500);
+  const bf = await until('手机发布清单计划', () => P(phone, () => { const d = window.__pcPlanPublisher?.(); return d?.lastClips?.length ? { clips: d.lastClips, log: (d.log ?? []).length } : null; }), 60_000, 500);
   if (!bf) {
-    // 排障:预渲染重试没发时记下在线来源、预渲染重试发布器、舞台与分派的状态
-    out.steps.backfillDiag = await P(phone, () => {
+    out.steps.planDiag = await P(phone, () => {
       const pick = (f) => { try { return f(); } catch (e) { return String(e); } };
       const pd = pick(() => window.__pcPreviewDiag?.());
       return {
         online: pick(() => window.__pcOnlineSnapshots?.()),
-        backfill: pick(() => window.__pcBackfill?.()),
-        lowmem: pick(() => { const x = window.__pcLowMemSearch?.(); return x && { projectId: x.projectId, running: x.running, state: x.state, light: x.light?.length, judgedHeavyClips: x.judgedHeavyClips?.length }; }),
-        preview: pd && { frontId: pd.frontId, lowMemory: pd.lowMemory, heavy: pd.snapshotFeed?.heavy?.length, suppressed: pd.suppressed, plan: pd.plan && { heavy: pd.plan.prerenderSet?.length } },
+        plan: pick(() => window.__pcPlanPublisher?.()),
+        search: pick(() => { const x = window.__pcCostSearch?.(); return x && { projectId: x.projectId, running: x.running, state: x.state, light: x.light?.length, judgedHeavyClips: x.judgedHeavyClips?.length }; }),
+        preview: pd && { frontId: pd.frontId, single: pd.single, lowest: pd.lowest, heavy: pd.snapshotFeed?.heavy?.length, suppressed: pd.suppressed },
       };
     }).catch((e) => String(e));
   }
-  check(bf && bf.clips.length > 0 && bf.clips.every((id) => heavyClips.has(id)), '预渲染重试的片段清单都是判重的片段', { clips: bf?.clips?.length, heavy: heavyClips.size });
-  check(bf && lightClips.every((id) => !bf.clips.includes(id)), '判轻的卡不发预渲染重试', { light: lightClips.length });
-  check(bf && [...heavyClips].every((id) => bf.clips.includes(id)), '判重又缺产物的层都进了预渲染重试清单', { missing: [...heavyClips].filter((id) => !bf?.clips?.includes(id)).length });
-  // 播放:判轻的卡同样抑制着,不活渲(显示用的表全部判重)
+  check(bf && bf.clips.length > 0 && bf.clips.every((id) => heavyClips.has(id)), '清单计划的片段都是判重的片段', { clips: bf?.clips?.length, heavy: heavyClips.size });
+  check(bf && lightClips.every((id) => !bf.clips.includes(id)), '判轻的卡不进清单计划', { light: lightClips.length });
+  check(bf && [...heavyClips].every((id) => bf.clips.includes(id)), '判重又缺产物的层都进了清单计划', { missing: [...heavyClips].filter((id) => !bf?.clips?.includes(id)).length });
+  // 播放:判轻的卡活渲,判重的抑制着
   await P(phone, () => { const st = window.__pcStore; st.actions.seek(0); st.actions.play(); });
   const samples = [];
   for (let i = 0; i < 5; i++) { await delay(400); samples.push(await stageSample(phone)); }
@@ -476,16 +482,15 @@ try {
   const playing = samples.filter((x) => x?.playing);
   const lightSet = new Set(lightClips);
   check(playing.length >= 2, '手机播放中采到舞台的样子', { samples: samples.length, playing: playing.length });
-  check(playing.every((x) => x.wraps.length > 0 && x.wraps.every((w) => w.suppressed) && x.lowMemLive.length === 0),
-    '手机播放中:判轻的卡也抑制着、不活渲(没有产物就占位)', playing.map((x) => x.wraps.map((w) => `${lightSet.has(w.id) ? 'L' : 'H'}:${w.suppressed ? 'S' : 'live'}${w.placeholder ? '+ph' : ''}`)).slice(0, 2));
-  check(playing.every((x) => x.wraps.every((w) => w.small || w.placeholder || w.unsupported)), '手机播放中:每一层要么贴小尺寸、要么占位(不透明)');
+  check(playing.every((x) => x.wraps.length > 0 && x.wraps.every((w) => (lightSet.has(w.id) ? !w.suppressed : w.suppressed))),
+    '手机播放中:判轻的卡活渲、判重的抑制着', playing.map((x) => x.wraps.map((w) => `${lightSet.has(w.id) ? 'L' : 'H'}:${w.suppressed ? 'S' : 'live'}${w.placeholder ? '+ph' : ''}`)).slice(0, 2));
   const stageSampleOut = playing[0] ? { wraps: playing[0].wraps.length, light: playing[0].wraps.filter((w) => lightSet.has(w.id)).length } : null;
   out.steps.phone = {
     ms: Date.now() - t4, gateSeen, envFingerprint: o.envFingerprint, n, measurements: o.measurements, searchMeasurements: o.searchMeasurements, bound,
     playSample: playing[0] ? { role: playing[0].role, job: playing[0].job, stageSuppressed: playing[0].stageSuppressed } : samples[0] ?? null,
     approxLog2Plus2: Number((Math.log2(n) + 2).toFixed(2)), boundary: o.boundary, threshold: o.threshold, elapsedMs: o.elapsedMs,
     trace: o.trace.map((x) => ({ i: x.index, ms: x.ms === null ? null : Number(x.ms.toFixed(2)), cached: x.cached })),
-    byBurn, backfill: bf ? { clips: bf.clips.length, id: bf.id.slice(0, 48) } : null, playing: playing.length, stageSample: stageSampleOut,
+    byBurn, plan: bf ? { clips: bf.clips.length } : null, playing: playing.length, stageSample: stageSampleOut,
     pageErrors: phone.pageErrors.slice(0, 5),
   };
   say('step4.done', out.steps.phone);

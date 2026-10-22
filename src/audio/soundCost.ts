@@ -53,7 +53,7 @@ export function createMemorySoundCostStore(): SoundCostStore & { size(): number 
   return { getCost: (key) => map.get(key) ?? null, putCost: (key, record) => { map.set(key, record); }, size: () => map.size };
 }
 
-/** `costs` 表里的键。前缀 `sound` 与画面记录(`<identityKey>\n<device>`)、低内存档本地记录(`<identityKey>|<指纹>`)都不相撞 */
+/** `costs` 表里的键。前缀 `sound` 与画面记录(`<identityKey>\n<device>`)、界限搜索的本地记录(`<identityKey>|<指纹>`)都不相撞 */
 export const soundCostStoreKey = (soundKey: string, device: string): string => `sound\n${soundKey}\n${device}`;
 
 /**

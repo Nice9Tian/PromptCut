@@ -10,7 +10,7 @@
  *   MG-07 按连接算:换了连接(换项目、重连、离开再进)门重新关上,新连接第一次同步有结果才开;过时的结果不算;
  *         最多等同样的上限、失败了照常开;没连着不关;桌面从不关
  *   MG-08 `OnlineCardSources`:连接换了,新连接的第一轮再叫一次 `onFirstSettled`,带上新连接
- *   MG-06 接线:常驻探针在后台舞台就绪之后等这道门;低内存档的界限搜索门没开不开工;在线页面开始同步卡片源码时关门、有结果开门
+ *   MG-06 接线:常驻探针在后台舞台就绪之后等这道门;单舞台的界限搜索门没开不开工;在线页面开始同步卡片源码时关门、有结果开门
  *         (`probeRunner.ts` 读 `import.meta.env`,Node 里载不进来,这里按源码核)
  */
 import { srcUrl } from "../testing/registerTs.mjs";
@@ -176,9 +176,15 @@ test("MG-06 接线(按源码核)", () => {
   const firstCosts = loop.indexOf("await getCosts()");
   assert.ok(ready >= 0 && gate > ready && gate < firstCosts, "常驻探针:后台舞台就绪之后、第一次取成本记录之前等门");
   const preview = read("editor/Preview.tsx");
-  const search = preview.slice(preview.indexOf("setLowMemoryCostStore(l2LowMemoryCostStore())"));
-  const tick = search.slice(search.indexOf("const tick = async"), search.indexOf("runLowMemorySearch({"));
-  assert.match(tick, /if \(!measureGateOpen\(\)\) return;/, "低内存档界限搜索:门没开不开工");
+  // 界限搜索有两处:两个舞台有记录时(先出现)、只有一个舞台时(后出现);两处都要等门
+  const dualAt = preview.indexOf("setSearchCostStore(l2SearchCostStore())");
+  const singleAt = preview.lastIndexOf("setSearchCostStore(l2SearchCostStore())");
+  assert.ok(dualAt >= 0 && singleAt > dualAt, "两处界限搜索都在");
+  const single = preview.slice(singleAt);
+  const tick = single.slice(single.indexOf("const tick = async"), single.indexOf("runCostSearch({"));
+  assert.match(tick, /if \(!measureGateOpen\(\)\) return;/, "单舞台界限搜索:门没开不开工");
+  const dualTick = preview.slice(preview.lastIndexOf("const tick = async", dualAt), dualAt);
+  assert.match(dualTick, /!measureGateOpen\(\)\) return;/, "两个舞台的界限搜索:门没开不开工");
   const sources = preview.slice(preview.indexOf("new OnlineCardSources({") - 400, preview.indexOf("new OnlineCardSources({") + 400);
   assert.match(sources, /holdMeasureForCardSources\(\)/, "开始同步卡片源码时关门");
   assert.match(sources, /onFirstSettled: \(ok, link\) => releaseMeasureGate\(ok, link\)/, "每条连接第一次同步有结果就开门");

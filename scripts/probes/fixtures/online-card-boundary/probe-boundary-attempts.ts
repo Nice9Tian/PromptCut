@@ -393,7 +393,7 @@ export function forgedMessages(ctx) {
   const M = ctx.magic, big = "x".repeat(1024 * 1024);
   const xss = "<img src=x onerror=\"parent.__pcXss=1;window.__pcXss=1\"><script>window.__pcXss=1</" + "script><div data-pcboundary-html=\"" + ctx.tag + "\">" + M + "</div>";
   const list = [
-    { type: "pc-stage-ready", hostCapabilities: { prerender: "yes", offscreenGl: 1, lowMemory: { a: 1 }, measure: [], catchUp: null, stageId: "Z", ticket: M } },
+    { type: "pc-stage-ready", hostCapabilities: { prerender: "yes", offscreenGl: 1, compact: { a: 1 }, lowest: "x", measure: [], catchUp: null, stageId: "Z", ticket: M } },
     { type: "pc-stage-ready", hostCapabilities: big },
     { type: "pc-stage-isolation", report: { ok: true, crossOrigin: true, csp: "header", egress: "allowlist", hardened: true, trustedTypes: "enforced", reasons: [], extra: M } },
     { type: "pc-stage-isolation", report: { ok: true } },

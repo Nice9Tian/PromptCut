@@ -193,15 +193,15 @@ window.__kit = (async () => {
   return { ...registry, projectCardGraph, cardCostKey, cardFrameMode, reviewedCard, sourceVersionOf, featuredParticleIds: assets.featuredParticleIds };
 })();
 
-/* 本机身份(J4):UA + WebGL 渲染器 + lowMemory / offscreenGl / glRoute。
+/* 本机身份(J4):UA + WebGL 渲染器 + compact(只有一个舞台;串里的字段名仍叫 lowMemory,见 costDevice.mjs)/ offscreenGl / glRoute。
    一次性的丢弃上下文在**宿主页**里开,不碰舞台自己那个共享 WebGL 上下文。
    读法和拼法都在 src/render/costDevice.mjs,常驻探针 import 的是同一份。 */
 window.__deviceParts = async () => {
   const { readGpuRenderer, resolveGlRoute } = await import('/src/render/costDevice.mjs');
   const caps = window.__caps || {};
-  const lowMemory = !!caps.lowMemory;
-  return { ua: navigator.userAgent, renderer: readGpuRenderer(document), lowMemory,
-    offscreenGl: !!caps.offscreenGl, glRoute: resolveGlRoute(null, lowMemory) };
+  const compact = !!caps.compact;
+  return { ua: navigator.userAgent, renderer: readGpuRenderer(document), compact,
+    offscreenGl: !!caps.offscreenGl, glRoute: resolveGlRoute(caps.glRoute ?? null, compact ? 'shared' : 'perDocument') };
 };
 
 /* 缩水项目:一条轨道一个 clip(形状同 FrameScene.tsx 的 legacyTimeline) */

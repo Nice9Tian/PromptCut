@@ -28,7 +28,7 @@ import { stageEventRole, type HostCapabilities, type StageEvent, type StageRole,
  */
 interface Slot {
   client: StageRpcClient | null;
-  /** 握手时舞台报的宿主能力表(J4)。K1 的 `device` 串要 `lowMemory` / `offscreenGl` */
+  /** 握手时舞台报的宿主能力表(J4)。K1 的 `device` 串要 `compact` / `offscreenGl` */
   caps: HostCapabilities | null;
   /** 这个位置上「有客户端了」的 Promise(whenStageReady);客户端换了就换一个新的 */
   ready: { promise: Promise<StageRpcClient>; resolve: (c: StageRpcClient) => void; settled: boolean };
@@ -159,7 +159,7 @@ export function whenStageReady(role: StageRole): Promise<StageRpcClient> {
 /**
  * 这个位置上的舞台握手时报的宿主能力表(J4)。
  *
- * K1 的 `device` 串要 `lowMemory` / `offscreenGl`,而它们必须和**舞台那一侧**探测到的一致 ——
+ * K1 的 `device` 串要 `compact` / `offscreenGl`,而它们必须和**舞台那一侧**探测到的一致 ——
  * 离线探针拿的就是舞台 `pc-stage-ready` 里的这一份。主文档自己再探一遍是第二份实现,
  * 会悄悄走偏(比如主文档和 iframe 的 `deviceMemory` 上报不同)。
  * 还没握手时回 `null`,调用方按保守值兜底。

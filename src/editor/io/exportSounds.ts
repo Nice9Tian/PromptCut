@@ -12,7 +12,7 @@
  * 不留半截产物:每一段都是「合成 → 入库 → 一次提交」,取消或失败发生在提交之前,项目不动;
  * 取消之前已经完整生成好的那几段留着(它们是完整的声音,下次导出直接用)。
  *
- * 在线页面:这台设备跑不了的(用户卡、素材效果卡)、判重的、低内存档的,不在浏览器里合成(`onlineSoundJudge.ts`);
+ * 在线页面:这台设备跑不了的(用户卡、素材效果卡)、判重的,不在浏览器里合成(`onlineSoundJudge.ts`);
  * 它们没有产物时导出失败并指出片段。
  */
 import type { Project, TrackClip } from "../../kernel/project";
@@ -50,7 +50,7 @@ export interface ExportSoundsDeps {
   generateCard: (clipId: string, options: { signal: AbortSignal; cutId?: string; onProgress: (done: number, total: number) => void }) => Promise<unknown>;
   restoreEffect: (clipId: string, options: { signal: AbortSignal; onProgress: (fraction: number) => void }) => Promise<unknown>;
   decide: (project: Project, clip: TrackClip, signal: AbortSignal) => Promise<SoundDecision>;
-  backfill: (request: { project: Project; clip: TrackClip; reason: "heavy" | "low-memory" | "not-runnable" }) => Promise<boolean>;
+  backfill: (request: { project: Project; clip: TrackClip; reason: "heavy" | "not-runnable" }) => Promise<boolean>;
   embedded: (project: Project, clip: TrackClip) => boolean;
   resolveCard: (project: Project, clip: TrackClip) => { media: { hash?: string } };
 }

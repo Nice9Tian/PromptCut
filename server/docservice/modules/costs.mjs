@@ -1,8 +1,8 @@
 /**
- * 成本记录模块（语义 `docs/semantics/mechanism/document-service.md`「成本记录」、`mechanism/rendering.md`「低内存档」；
+ * 成本记录模块（语义 `docs/semantics/mechanism/document-service.md`「成本记录」、`mechanism/rendering.md`「界限搜索与成本记录」；
  * 契约 `docs/plan/c10-contract.md` 第 3 节，分支 `claude/c10-cost`）。
  *
- * 非低内存档的机器（桌面版、电脑浏览器）测完一张卡，把它的活渲单帧耗时写进这里；低内存档打开项目时读本项目的
+ * 桌面版与所有在线浏览器测完一张卡，把它的活渲单帧耗时写进这里（2026-10-07 用户定）；只有一个舞台的在线页面打开项目时读本项目的
  * 全部记录，按耗时给卡排序、做界限搜索（`src/render/boundarySearch.mjs`）。只放耗时，不放字节。
  *
  * # 键与值
@@ -26,7 +26,7 @@
  *   cost.list { projectId, environment? }
  *     → cost.listing { projectId, records: [{ identityKey, envFingerprint, stepMs, samples, measuredAt, mode }], truncated, envFingerprint? }
  *     回本项目的全部记录（按 identityKey、envFingerprint 排好序）。带了 `environment` 时顺带回它的指纹：
- *     低内存档用它给本机的测量结果做键（「卡片身份 + 本机环境指纹」），不必在页面里另算一遍。
+ *     界限搜索用它给本机的测量结果做键（「卡片身份 + 本机环境指纹」），不必在页面里另算一遍。
  *
  *   出错：`error { reason }`，`reason` 是 `bad-message`（形状不对，整条不落）、`forbidden`（不是这个项目的成员）、
  *   `too-large`（一次写太多，或这个项目的记录已满）、`unsupported`（不认识的类型）。

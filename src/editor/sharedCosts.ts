@@ -1,12 +1,12 @@
 /**
- * 页面侧的共享成本记录(语义 `mechanism/document-service.md`「成本记录」、`mechanism/rendering.md`「低内存档」;
+ * 页面侧的共享成本记录(语义 `mechanism/document-service.md`「成本记录」、`mechanism/rendering.md`「界限搜索与成本记录」;
  * 契约 `docs/plan/c10-contract.md` 第 3 节、第 18 节第 7 条)。经页面已有的文档服务连接(共享项目那一条,
  * `assetTiers.ts` 的 `docRequest`)说话,协议见 `server/docservice/modules/costs.mjs`:
  *
- * - **写**(`publishSharedCosts`):非低内存档的页面测完卡,把活渲单帧耗时写进文档服务。桌面版由本文件的
- *   `SharedCostRelay` 转写(`Preview` 在非低内存档时起它);在线普通档由主会话在集成分支上把 c10-browser 的
- *   「测完写进 L2」订阅口接到 `publishSharedCosts`(或同样起一个 relay)。
- * - **读**(`listSharedCosts`):低内存档打开项目时读本项目的全部记录,做界限搜索(`lowMemorySearch.ts`)。
+ * - **写**(`publishSharedCosts`):桌面版与所有在线浏览器测完卡,都把活渲单帧耗时写进文档服务(2026-10-07 用户定)。
+ *   后台舞台测的(`probeRunner.ts`)由本文件的 `SharedCostRelay` 补传、`Preview` 每测完一张当场转写;只有一个舞台时
+ *   界限搜索测的由 `costSearch.ts` 测完直接写。
+ * - **读**(`listSharedCosts`):只有一个舞台的在线页面打开项目时读本项目的全部记录,做界限搜索(`costSearch.ts`)。
  *
  * 环境只报原始值(`pageEnvironment.mjs`),指纹由文档服务按预渲染结果键同一套规则算,页面不另算。
  * 本文件不引有状态的模块(连接、store 都由调用方注入),Node 单测直接载入。
@@ -69,15 +69,15 @@ export function toSharedInput(record: Partial<CardCostRecord> & { samples?: unkn
 }
 
 /**
- * 这条 K1 记录是不是这台浏览器测的:`device` 串以「本页 UA | 本页 GPU 渲染器」开头(`costDevice.mjs` 的拼法),
- * 且不是低内存档测的。别的机器、离线探针在别的浏览器里测的记录环境对不上,不转写(指纹要按测量环境算)。
+ * 这条 K1 记录是不是这台浏览器测的:`device` 串以「本页 UA | 本页 GPU 渲染器」开头(`costDevice.mjs` 的拼法)。
+ * 别的机器、离线探针在别的浏览器里测的记录环境对不上,不转写(指纹要按测量环境算)。
+ * 单舞台、双舞台测的都转写(2026-10-07 用户定所有在线浏览器测完都写)。
  */
 export function measuredHere(record: Partial<CardCostRecord>, env: PageEnvironment): boolean {
   const device = String(record?.device ?? "");
   if (!device || !env?.userAgent) return false;
   const renderer = env.renderer || "unknown";
-  if (!device.startsWith(`${env.userAgent} | ${renderer} | `)) return false;
-  return /(?:^| \| )lowMemory=false(?: \||$)/.test(device);
+  return device.startsWith(`${env.userAgent} | ${renderer} | `);
 }
 
 /**
@@ -123,7 +123,7 @@ export async function listSharedCosts({ request, projectId, environment, timeout
 }
 
 /**
- * 桌面版(以及任何非低内存档、连着共享项目的页面)把本机测完的成本记录转写进文档服务。
+ * 桌面版与在线浏览器(连着共享项目的页面)把本机测完的成本记录转写进文档服务。
  *
  * - 只在连着共享项目时写(`projectId()` 与 `linkKey()` 都给出值);没连就不写、不报错;
  * - 只转写这台浏览器测的记录(`measuredHere`),只转写当前项目用到的卡(`identityKeys()`);

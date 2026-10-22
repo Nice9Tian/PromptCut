@@ -9,7 +9,7 @@
  * - 片段 → 成本身份:`costIdentity.ts` 的 `clipIdentityOf`(页面的探针与分派表同一份;剪辑段里的卡按摊平视图的虚拟片段给身份);
  * - 每张卡的耗时:同一身份的各条记录(来自不同环境)取中位数(`boundarySearch.mjs` 的 `representativeCosts`,界限搜索的代表耗时);
  * - 分派:`pipelinePlan.mjs` 的 `planPipelines`(预算 B、成本倍率、按位置贪心、推帧卡、3D 视图都在里面),每张重卡每拍的固定成本
- *   取在线普通档的换帧成本(`swapCost.ts` 的 `layerSwapMs`,与 `Preview` 交给 `planDispatch` 的同一个);
+ *   取在线双舞台的换帧成本(`swapCost.ts` 的 `layerSwapMs`,与 `Preview` 交给 `planDispatch` 的同一个);
  * - 这个身份没有记录、但**同一张卡**(同一个卡片 id、同一份源码版本,参数、长度、帧率随意)别的身份有记录时,按那些记录
  *   估:把它们当成这个身份的记录,照上一条取中位数(`mechanism/agent.md`「只发重卡」的〔裁〕)。Agent 改一次参数就换一个身份,
  *   在线成员的页面来不及测完时,用改之前那份(或项目里同一张卡别的片段)的实测,不按「没有记录」一律判重。

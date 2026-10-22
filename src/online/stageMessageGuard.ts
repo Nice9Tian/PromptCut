@@ -110,6 +110,13 @@ export function sanitizeStageEvent(d: unknown, opts: { maxSec?: number } = {}): 
       else if (d.seekMs !== undefined) { const s = num(d.seekMs, 0, L.maxMs); if (s === null) return null; out.seekMs = s; }
       return out;
     }
+    case "net-speed": {
+      const samples = int(d.samples, 0, 1e9);
+      if (samples === null || typeof d.smallFirst !== "boolean") return null;
+      const mbps = d.mbps === null ? null : num(d.mbps, 0, 1e6);
+      if (d.mbps !== null && mbps === null) return null;
+      return { type: "net-speed", mbps, samples, smallFirst: d.smallFirst };
+    }
     case "demote": {
       const clipId = str(d.clipId, L.maxIdLength);
       return clipId === null ? null : { type: "demote", clipId };
@@ -163,7 +170,7 @@ export function sanitizeStageEvent(d: unknown, opts: { maxSec?: number } = {}): 
   }
 }
 
-const RUN_STATES = new Set(["ready", "loading", "unsupported-syntax", "missing-module", "load-error", "gpu", "media", "runtime-error", "not-isolated", "low-memory"]);
+const RUN_STATES = new Set(["ready", "loading", "unsupported-syntax", "missing-module", "load-error", "gpu", "media", "runtime-error", "not-isolated"]);
 const GRAPH_CAPS = new Set(["unknown", "ok", "no-webgl2", "software", "texture", "context-lost"]);
 /** 同步卡的张数上限(与同步表、清单计划的上限同量级) */
 const MAX_CARDS = 500;
@@ -202,7 +209,7 @@ function textMap(v: unknown, max: number): Record<string, string> | null {
 }
 
 /** 进成本记录的那几个数所在的方法:里面的耗时一律钳到 [0, maxMs] */
-const TIMING_METHODS = new Set(["render", "setTime", "bakeFrame", "settleLowMemory"]);
+const TIMING_METHODS = new Set(["render", "setTime", "bakeFrame", "settleLayers"]);
 const TIMING_KEYS = new Set(["elapsedMs", "stepMs", "inlineMs", "rasterMs", "serializeMs", "seekMs", "ms", "pausedMs", "smallMs", "readyMs", "catchUpMs"]);
 
 /**
@@ -252,12 +259,14 @@ export function sanitizeRpcError(error: unknown): string | undefined {
 }
 
 /** 握手里的宿主能力表:只认这几项、各按类型收;不是对象回 null */
-export function sanitizeHostCapabilities(d: unknown): { prerender: boolean; offscreenGl: boolean; lowMemory: boolean; measure: boolean; catchUp: boolean; stageId: string } | null {
+export function sanitizeHostCapabilities(d: unknown): { prerender: boolean; offscreenGl: boolean; compact: boolean; glRoute: "perDocument" | "shared" | null; lowest: boolean; measure: boolean; catchUp: boolean; stageId: string } | null {
   if (!isObj(d)) return null;
   return {
     prerender: d.prerender === true,
     offscreenGl: d.offscreenGl === true,
-    lowMemory: d.lowMemory === true,
+    compact: d.compact === true,
+    glRoute: d.glRoute === "perDocument" || d.glRoute === "shared" ? d.glRoute : null,
+    lowest: d.lowest === true,
     measure: d.measure === true,
     catchUp: d.catchUp === true,
     stageId: d.stageId === "B" ? "B" : "A",

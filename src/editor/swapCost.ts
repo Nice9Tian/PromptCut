@@ -1,5 +1,5 @@
 /**
- * 在线普通档每层的换帧成本(swap-tuning 任务 A):片段 → 卡种(`beatSwap.mjs` 的 `swapKindOf`)→ `SWAP_MS_BY_KIND`,
+ * 在线双舞台每层的换帧成本(swap-tuning 任务 A):片段 → 卡种(`beatSwap.mjs` 的 `swapKindOf`)→ `SWAP_MS_BY_KIND`,
  * 认不出卡种的按缺省 `SWAP_MS`。播放时按拍装箱(`snapshotFeed.ts` 的 `fitBeatSwaps`)与分派时每张重卡的固定成本
  * (`planDispatch.ts` 的 `planPipelines` `deadMs`)用同一个数。
  *

@@ -17,9 +17,9 @@ import type { RectWithBounds, RectsWithBoundsOptions, StageHit } from "./solid";
 import type { ProjectPatch } from "./changedClips.mjs";
 import type { CardCostRecord } from "./cardCostKey.mjs";
 import type { StreamPlaneRequest } from "./streamPlayer";
-import { lowMemoryMode } from "../online/lowMemory.ts";
 import { sanitizeRpcError, sanitizeRpcResult, sanitizeStageEvent } from "../online/stageMessageGuard.ts";
-import type { LowMemorySettleResult } from "./lowMemorySettle";
+import { SETTLE_MAX_MS, SETTLE_RPC_CAP_MS } from "./settleFrame.ts";
+import type { SettleResult } from "./settleFrame";
 import type { CardRunState } from "../kernel/registry.ts";
 
 export type { StreamPlaneRequest };
@@ -33,13 +33,22 @@ export interface HostCapabilities {
   /** Worker 里能拿到 OffscreenCanvas 的 webgl2 */
   offscreenGl: boolean;
   /**
-   * 低内存档(`docs/plan/c10a-contract.md` 第 8 节,判定在 `src/online/lowMemory.ts`):只在在线模式里判,
-   * 桌面运行环境恒为 false。以前的判据「`deviceMemory <= 4` 或 Safari」已换掉。
+   * 只有一个舞台(在线页面舞台闸门停在第一级、最低一档、握手失败退回单舞台;父页在 src 查询串里给 `compact=1`):
+   * canvas 卡的图集按小的上限开、后台角色走路线 1 时不开 Worker。桌面运行环境恒为 false。
    */
-  lowMemory: boolean;
+  compact: boolean;
+  /**
+   * 起手的 canvas 渲染路线(在线页面由父页按舞台闸门在 src 查询串里给 `gl=`;试第三级时父页经 `setGlRoute` 换)。
+   * 桌面运行环境不给,按项目选项(`project.glRoute`)与缺省(路线 1 各一套)。
+   */
+  glRoute: "perDocument" | "shared" | null;
+  /**
+   * 最低一档(在线页面父页给 `lowest=1`):素材起手就只用小尺寸,不等父页的取档策略。桌面运行环境恒为 false。
+   */
+  lowest: boolean;
   /**
    * 这一台舞台有后台舞台做伴(双舞台,父页在 src 查询串里给 `dual=1`):能在后台舞台测量卡片成本(C10 契约第 2 节
-   * 「宿主能力表照实报」;在线普通档开了后台舞台也报 true)。低内存档、单舞台为 false。
+   * 「宿主能力表照实报」;在线页面开了后台舞台也报 true)。单舞台为 false。
    */
   measure: boolean;
   /** 能在后台舞台追到精确活渲再互换(K5 第二路);条件同 `measure` */
@@ -306,9 +315,14 @@ export interface StageRpcApi {
   setLocalHashes(hashes: string[]): Promise<{ ok: true }>;
   /**
    * c10a 第 8 节:舞台这一侧的取档策略(`mediaTier.ts` 的 `setMediaTierPolicy`)。父页握手后发一次,
-   * 票据续签、运行中改判低内存档时再发。缺省(不发)= 桌面运行环境。
+   * 票据续签、素材闸门的结果变了(网速快慢切换、解码上限调低)时再发。缺省(不发)= 桌面运行环境。
    */
   setMediaPolicy(policy: StageMediaPolicy): Promise<{ ok: true }>;
+  /**
+   * 在线页面:换 canvas 卡的 WebGL 渲染路线(舞台闸门试第三级「两个舞台各一套渲染器」时父页发 `perDocument`)。
+   * 舞台原地换(`glHost.setRoute`),不重建舞台。回包时新路线已经生效。桌面运行环境不发(路线跟项目选项走)。
+   */
+  setGlRoute(route: "perDocument" | "shared"): Promise<{ ok: true; route: "perDocument" | "shared"; mode: string }>;
   /**
    * C10 契约第 9 节「识别」:在线页面从内容库卡片源码里认出的用户卡(本机没有它们的代码,「已知但本机不能运行」)。
    * 父页握手后发一次,表变了再发;舞台写进自己的注册表(`registry.setSyncedUserCards`)。只在线页面发,桌面运行环境不发。
@@ -323,12 +337,12 @@ export interface StageRpcApi {
   /** A3c:patch 是相对上次投递的增量,null = 摘掉;reset = 先清空全部再应用 */
   setSnapshots(patch: Record<string, string | null>, opts?: { reset?: boolean }): Promise<{ ok: true; bytes: number }>;
   /**
-   * 低内存档「停下追当前一帧」(c10a 契约第 17 节,`lowMemorySettle.ts`):暂停、点击或拖动松开、播放到头之后
-   * (`setTime` 之后)父页发它。舞台把当前这一帧的所有卡活渲一次(重卡也画),画好的层撤掉兜底、换上活渲;
-   * `timeoutMs`(缺省 5 秒)到了还没画好的层维持占位符。回包在全部画好或到时限之后才回。
+   * 单舞台「停下追当前一帧」(`settleFrame.ts`):只有一个舞台时,暂停、点击或拖动松开、播放到头之后
+   * (`setTime` 之后)父页发它。舞台把当前这一帧的所有卡活渲一次(重卡也画),画好一层撤掉兜底、换上活渲一层;
+   * 不设时限(`timeoutMs` 只给测试与诊断)。回包在全部画好之后才回。
    * 新的 `setTime` / `play` / `setProject` / `setRole` 打断它(回 `ok: false, reason: 'superseded'`)。
    */
-  settleLowMemory(tSec: number, opts?: { timeoutMs?: number }): Promise<LowMemorySettleResult>;
+  settleLayers(tSec: number, opts?: { timeoutMs?: number | null }): Promise<SettleResult>;
   /**
    * 后台活的开始 / 停止(C10 契约第 2 节「后台舞台的摆放与节拍」):后台舞台 `opacity: 0` 原位叠放,舞台里的
    * `requestIdleCallback` 不可靠,由编辑器页判空闲(页面可见、父页 rAF 间隔不持续超过 500 ms、父页自己的 rIC 在回调)
@@ -404,6 +418,10 @@ export type StageEvent =
    * 与「画面那一半在这一台执行不执行」。两台都发(不分角色);父页当不可信输入收(`online/stageMessageGuard.ts`)。
    */
   | { type: "card-states"; states: [string, CardRunState][]; graph: StageGraphCapability; visual: boolean }
+  /**
+   * 素材闸门的网速(在线页面的舞台看素材实际下载的快慢,`render/netSpeed.ts`):先拉小尺寸还是只拉原尺寸变了时报一次,父页记进查看口。
+   */
+  | { type: "net-speed"; mbps: number | null; samples: number; smallFirst: boolean }
   /** 声音线程的状态(形状同 `src/online/cardRuntime/stageSound.ts` 的 `StageSoundState`);`state: null` = 这一台没有声音线程了 */
   | { type: "sound-state"; state: { ready: Record<string, string>; blocked: Record<string, string> } | null };
 
@@ -459,7 +477,7 @@ export interface StageRpcClient extends StageRpcApi {
 
 const METHODS: (keyof StageRpcApi)[] = ["setProject", "setTime", "render", "hitTest", "rectsWithBounds", "size", "setProxy", "setRole", "setPlan",
   "play", "pause", "setSuppressed", "setStreamPlanes", "setScrubbing", "setPlaying", "setMediaT", "setLocalHashes", "setSnapshots", "setMediaPolicy",
-  "setSyncedUserCards", "setViewScale", "settleLowMemory", "setBackWork", "bakeFrame", "bakeCancel", "loadUserCards", "synthCardAudio"];
+  "setSyncedUserCards", "setViewScale", "settleLayers", "setGlRoute", "setBackWork", "bakeFrame", "bakeCancel", "loadUserCards", "synthCardAudio"];
 
 /**
  * 有请求挂着时,每隔这么久看一眼目标窗口还在不在。
@@ -479,10 +497,10 @@ export const CLOSED_POLL_MS = 1000;
  */
 export const STAGE_UPDATE_TIMEOUT_MS = 8000;
 /**
- * 低内存档停下追一帧(`settleLowMemory`)自己带时限,舞台在时限之内一定回包;活着的窗口原地重载会丢回包,
- * 所以父页这边按「它的时限 + 这么多」判超时。
+ * 带时限的调用(`synthCardAudio`、给了时限的 `settleLayers`)舞台在时限之内一定回包;活着的窗口原地重载会丢回包,
+ * 所以父页这边按「它的时限 + 这么多」判超时。不设时限的 `settleLayers` 按 `SETTLE_RPC_CAP_MS` 判。
  */
-export const LOW_MEMORY_SETTLE_RPC_SLACK_MS = 3000;
+export const STAGE_RPC_SLACK_MS = 3000;
 /**
  * M7 生成快照的一帧最长等多久回包:活着的窗口原地重载会丢回包(同 `STAGE_UPDATE_TIMEOUT_MS` 的理由),父页要能放手。
  * 被后台活的门挡住的时间也算在内,所以给得宽;真超时按可重试失败交回。
@@ -496,12 +514,13 @@ export function stageCallTimeoutMs(method: string, args: unknown[]): number | nu
     // 声音线程自己有时限(每秒声音 2 秒墙钟、最少 10 秒,另加载入卡片的 20 秒);活着的窗口原地重载会丢回包,父页按它的时限再宽一点判超时
     const r = args[0] as { count?: unknown; sampleRate?: unknown } | undefined;
     const sec = Number(r?.count) / Math.max(1, Number(r?.sampleRate) || 48_000);
-    return Math.max(10_000, Math.ceil((Number.isFinite(sec) ? sec : 0) * 2000)) + 20_000 + LOW_MEMORY_SETTLE_RPC_SLACK_MS;
+    return Math.max(10_000, Math.ceil((Number.isFinite(sec) ? sec : 0) * 2000)) + 20_000 + STAGE_RPC_SLACK_MS;
   }
-  if (method === "settleLowMemory") {
+  if (method === "settleLayers") {
     const ms = Number((args[1] as { timeoutMs?: unknown } | undefined)?.timeoutMs);
-    return (Number.isFinite(ms) && ms > 0 ? ms : 5000) + LOW_MEMORY_SETTLE_RPC_SLACK_MS;
+    return Number.isFinite(ms) && ms > 0 ? Math.min(ms, SETTLE_MAX_MS) + STAGE_RPC_SLACK_MS : SETTLE_RPC_CAP_MS;
   }
+  if (method === "setGlRoute") return STAGE_UPDATE_TIMEOUT_MS;
   return isShortStageUpdate(method, args) ? STAGE_UPDATE_TIMEOUT_MS : null;
 }
 /** 按时长判的调用(见 STAGE_UPDATE_TIMEOUT_MS) */
@@ -698,29 +717,21 @@ export interface StageCardsMessage {
   stamp: number;
 }
 /**
- * `setMediaPolicy` 的实参:低内存档、在线浏览器模式的远程素材服务(基址与只读票据)。
+ * `setMediaPolicy` 的实参:素材闸门的结果(最低一档只用小尺寸、解码上限、网速慢先小后大)、在线浏览器模式的远程素材服务(基址与只读票据)。
  *
  * 隔离的跨源舞台(契约 `online-card-exec-contract.md` 第 4.1 节):`remote.base` 是舞台自己源上的 `/media-s/<sid>`、`remote.ticket` 恒为 null
  * (票据由编辑器页交给舞台源的服务端换成 HttpOnly cookie,不进舞台的脚本);`cardExec` 为真 = 父页点头,这一台可以执行用户卡与素材效果卡
- * (舞台自己还要核自检与「本文档没见过票据」,`online/isolation/execGate.ts`)。旧办法(同源单舞台、低内存档、没隔离的舞台)照旧带票据、不带 `cardExec`。
+ * (舞台自己还要核自检与「本文档没见过票据」,`online/isolation/execGate.ts`)。旧办法(没隔离的舞台)照旧带票据、不带 `cardExec`。
  */
 export interface StageMediaPolicy {
-  lowMemory: boolean;
+  /** 最低一档:视频素材只用小尺寸 */
+  smallOnly: boolean;
+  /** 素材闸门的解码上限(宽 × 高的像素数);超过的视频素材只用小尺寸。不给 / null = 不限 */
+  decodeMaxPixels?: number | null;
+  /** 素材闸门的网速:慢 —— 先拉小尺寸显示,再拉原尺寸替换 */
+  smallFirst?: boolean;
   remote: { base: string; ticket: string | null } | null;
   cardExec?: boolean;
-}
-
-/**
- * 舞台侧:运行中出事了(c10a 第 8 节「运行中出现 webglcontextlost 或连续 3 次视频解码失败」)。
- * 握手类消息,不是 `StageEvent`;父页据此改判低内存档、提示一次。`decode-ok` 用来清零连续失败的计数。
- */
-export interface StageTroubleMessage {
-  type: "pc-stage-trouble";
-  kind: "webglcontextlost" | "decode-failure" | "decode-ok";
-}
-export function postStageTrouble(kind: StageTroubleMessage["kind"], parentOrigin = "*"): void {
-  const msg: StageTroubleMessage = { type: "pc-stage-trouble", kind };
-  window.parent?.postMessage(msg, parentOrigin);
 }
 
 export function postStageCards(stamp: number, parentOrigin = "*"): void {
@@ -750,17 +761,21 @@ export function detectHostCapabilities({ online = false }: { online?: boolean } 
   // `?glOffscreen=0`:把探测强制为 false(R9 验收「能力退路」;glHost 读同一个开关走主线程)
   if (q.get("glOffscreen") === "0") offscreenGl = false;
   /*
-   * c10a 第 8 节:只在在线模式里判(deviceMemory、粗指针 + 触点 + 屏幕长边,设备设置可覆盖);桌面恒为普通档。
-   * C10:父页在 src 里给了 `lm=0|1` 就照它(跨源舞台读不到编辑器页那个源的设备设置,自己判可能判出另一档)。
+   * 在线页面:父页按舞台闸门在 src 里给起手的路线(`gl=`)、只有一个舞台(`compact=1`)、最低一档(`lowest=1`)。
+   * 跨源舞台读不到编辑器页那个源的页面本地存储(崩溃记录、闸门结果都在那边),照父页给的走;桌面运行环境不看这几项。
    */
-  const lm = q.get("lm");
-  const lowMemory = online && lm === "1" ? true : online && lm === "0" ? false : lowMemoryMode(online);
-  // C10 契约第 2 节:开了后台舞台(父页给 `dual=1`)、又不是低内存档,就照实报能测量、能追活渲
-  const backStage = q.get("dual") === "1" && !lowMemory;
+  const gl = q.get("gl");
+  const glRoute = online && (gl === "perDocument" || gl === "shared") ? gl : null;
+  const compact = online && q.get("compact") === "1";
+  const lowest = online && q.get("lowest") === "1";
+  // C10 契约第 2 节:开了后台舞台(父页给 `dual=1`),就照实报能测量、能追活渲
+  const backStage = q.get("dual") === "1";
   return {
     prerender: q.get("prerender") === "1",
     offscreenGl,
-    lowMemory,
+    compact,
+    glRoute,
+    lowest,
     measure: backStage,
     catchUp: backStage,
     // stageId **只是实例名,和角色无关**(E1):两个 iframe 是 `A` / `B`,谁是 front / back

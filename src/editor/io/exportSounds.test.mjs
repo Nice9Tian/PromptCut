@@ -232,7 +232,7 @@ test('A10 音效合成失败同样指出片段;锁住的序列上的有声卡生
 test('A11 在线页面:判轻的在浏览器里生成;判重、又没有产物的不合成,导出失败并指出片段', async () => {
   const f = service();
   const store = createMemorySoundCostStore();
-  const restore = configureOnlineSoundJudge({ online: () => true, lowMemory: () => false, store: () => store, device: () => 'test-device' });
+  const restore = configureOnlineSoundJudge({ online: () => true, store: () => store, device: () => 'test-device' });
   try {
     sourceVersion = 'v1'; failAudio = null;
     actions.newProject('在线导出');
@@ -251,24 +251,10 @@ test('A11 在线页面:判轻的在浏览器里生成;判重、又没有产物�
   } finally { restore(); f.restore(); }
 });
 
-test('A12 在线低内存档:不合成;声音齐全照常导出,缺了就失败并指出片段', async () => {
-  const f = service();
-  try {
-    sourceVersion = 'v1'; failAudio = null;
-    actions.newProject('低内存导出');
-    const clip = actions.addCardClip(def.id, 0, { duration: .2 });
-    await generateCardAudio(clip.id);
-    const restore = configureOnlineSoundJudge({ online: () => true, lowMemory: () => true, store: () => createMemorySoundCostStore(), device: () => 'test-device' });
-    try {
-      assert.deepEqual(await prepareExportSounds({ signal: signal() }), { total: 0, generated: [] }, '声音已经同步:不用生成');
-      f.stored.clear();
-      const before = evaluations;
-      const error = await prepareExportSounds({ signal: signal() }).then(() => null, (e) => e);
-      assert.ok(error instanceof ExportSoundError); assert.equal(error.clipId, clip.id); assert.match(error.message, /低内存档/);
-      assert.equal(evaluations, before);
-    } finally { restore(); }
-  } finally { f.restore(); }
-});
+/*
+ * A12(在线某一档一律不合成)删了:声音不按身份、不按档区分(2026-10-07 用户定,`product/platforms.md`「卡片声音的平台边界」),
+ * 在线页面只按 A11 的轻重判定合成或交给渲染节点。
+ */
 
 /*
  * 剪辑段(`product/rendering.md`「导出时自动生成声音」递归进剪辑段):被引用剪辑里的有声卡,导出前在它自己那条剪辑里生成,

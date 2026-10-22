@@ -9,7 +9,7 @@
  * 判出来变了就 `back.setBackWork(on)`;后台舞台换了人(K5 互换、iframe 重载)也重发一次。舞台里逐帧 `setTimeout(0)` 推进、
  * 帧与帧之间查这个标志(`StageView.tsx` 的 `backGate`)。
  *
- * 只在在线普通档的双舞台上开(`Preview.tsx`);桌面运行环境照旧,不发这条 RPC。
+ * 只在在线双舞台的双舞台上开(`Preview.tsx`);桌面运行环境照旧,不发这条 RPC。
  */
 import type { StageRpcClient } from "../render/stageRpc";
 

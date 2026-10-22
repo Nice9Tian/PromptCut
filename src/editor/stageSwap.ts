@@ -70,10 +70,10 @@ export interface SwapHost {
   /** A1 的本地素材哈希表 */
   localHashes(): string[];
   /**
-   * 低内存档(`docs/plan/c10a-contract.md` 第 8 节「不追活渲」):暂停后追到活渲的这几条路一律不走,
-   * 停在已有的预渲染小尺寸上。不给 = 普通档。
+   * 只有一个舞台(在线页面舞台闸门第一级、最低一档、握手失败退回):没有后台舞台,暂停后追到活渲再互换的这几条路一律不走,
+   * 停下时由可见舞台逐层追一帧(`settleLayers`)。不给 = 双舞台。
    */
-  lowMemory?(): boolean;
+  singleStage?(): boolean;
 }
 
 /** 诊断:最近几次暂停态第二路的结果(探针看) */
@@ -103,9 +103,9 @@ export function staleExplain(project: Project, t: number): Record<string, unknow
   });
 }
 
-/** 此刻是不是低内存档(宿主说了算;没有宿主 = 普通档) */
-export function swapBlockedByLowMemory(): boolean {
-  try { return host?.lowMemory?.() === true; } catch { return false; }
+/** 此刻是不是只有一个舞台(宿主说了算;没有宿主 = 双舞台) */
+export function swapBlockedBySingleStage(): boolean {
+  try { return host?.singleStage?.() === true; } catch { return false; }
 }
 
 let host: SwapHost | null = null;
@@ -457,8 +457,8 @@ interface BackReady {
  * 排进 `stageJobs` 的 `catchup` 档 —— 探针整体让路，掐出来的 `'project'` 一律丢弃（E0 的例外）。
  */
 async function catchUpBack(project: Project, targetSec: number, preempt?: AbortSignal): Promise<BackReady | null> {
-  // 低内存档不追活渲、也没有后台舞台(c10a 第 8 节):一步都不排
-  if (swapBlockedByLowMemory()) return null;
+  // 只有一个舞台:没有后台舞台可以追,一步都不排
+  if (swapBlockedBySingleStage()) return null;
   trace({ op: "catchup-queued", t: targetSec });
   return await runBackJob("catchup", async (ctx) => {
     const back = ctx.stage;
@@ -552,8 +552,8 @@ export async function runSettleSwap(t: number): Promise<boolean> {
    * 判重的 `vtOk = false` 卡就停在快照上。现在当前这一次完成或中止之后，
    * 按最后那一次的 `t` 再做一遍；中间被盖掉的那些本来就不用做。
    */
-  // 低内存档:暂停后不追到活渲,停在已有的预渲染小尺寸上(c10a 第 8 节)
-  if (swapBlockedByLowMemory()) { trace({ op: "settle", t, out: "lowmem" }); return false; }
+  // 只有一个舞台:暂停后不经后台舞台追到活渲(停下追一帧由可见舞台逐层做)
+  if (swapBlockedBySingleStage()) { trace({ op: "settle", t, out: "single" }); return false; }
   /*
    * **播放态补跑立即让路**(C10-A4 后续):停下时正在跑的若是播放态互换,当场中止它、接过 `running`,
    * 暂停态第二路马上开始,不等它收手。播放态那一次整场景补跑的目标拍是「播放头 + 估时」,停下之后
@@ -621,7 +621,7 @@ export async function runSettleSwap(t: number): Promise<boolean> {
  */
 export async function runPlayingSwap(pendingIds: readonly string[]): Promise<boolean> {
   if (running) return false;
-  if (swapBlockedByLowMemory()) return false;
+  if (swapBlockedBySingleStage()) return false;
   const project = getState().project;
   if (!pendingIds.length) return false;
   /*

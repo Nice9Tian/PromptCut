@@ -16,7 +16,7 @@
  *            服务端一侧现在就能判的项用替身节点真判（替身 = `server/render-node/session.mjs` + `filter.mjs`，
  *            经带 `owner: { kind: 'browser' }` 的 render 票据连文档服务，即页面节点按 D11 要用的同一份节点代码）；
  *            页面当了节点以后，判服务端那一侧（任务状态、锁、清单、`snap/` `px/` 块、层表）。
- *   node     无头 Chromium：B 的普通档页面 b1（节点候选）、低内存档页面 low、退回单舞台的页面 single；
+ *   node     无头 Chromium：B 的电脑页面 b1（双舞台，节点候选）、最低一档的页面 low（`?tier=low`，原来是设备设置「显示档：低内存」进的低内存档，2026-10-22 随那一档撤销改）、没有舞台源的页面 single；
  *            A10 另开 b2。每页用 CDP 抓全部 WebSocket 帧（握手头、收发的业务消息），判据以线上消息为准，页面诊断只作对照。
  *   all      本机替身：协调口（进程内）+ 上面两个角色各一个子进程；stdout 最后一行是汇总。
  *
@@ -1148,7 +1148,7 @@ async function twinChecks(ctx) {
 }
 
 /**
- * 诊断：本项目全部计划任务的去向（主会话 2026-09-28 追问「低内存页的预渲染重试计划为什么一直 open」）。
+ * 诊断：本项目全部计划任务的去向（主会话 2026-09-28 追问「低内存页的预渲染重试计划为什么一直 open」；那一类任务 2026-10-22 已从页面去掉）。
  * 每个计划：清单种类（#clips / #backfill）、档、requires、状态、认领过它的节点；按 pc 节点的描述跑一遍节点侧过滤与挑选；
  * pc 诊断里的认领记录、持有、闲时门槛、最近事件。全文写进 <out>/plan-dump.json，结果行里放摘要。
  */
@@ -1349,10 +1349,10 @@ async function pageServerSide(ctx) {
   const lockKeyZ = [...watcher.bodies.values()].find((t) => t.input?.clipId === z.clip)?.input?.contentKey;
   await sleepUntil((z.at ?? Date.now()) + 33_000);
   // 宿主全开（重启 A 的编辑器、不设只切分）；这时本项目没有 B 的在线纯浏览器节点（b1 已关、b2 还没开），
-  // 改一处（轻卡参数）→ 还开着的页面（single：普通档单舞台，照发清单计划）重发计划 → pc 切分：z 的锁闲置超 30 s、没做完 → 接手
+  // 改一处（轻卡参数）→ 还开着的页面（single：没有舞台源，照发清单计划）重发计划 → pc 切分：z 的锁闲置超 30 s、没做完 → 接手
   await ctx.editor.e.stop();
   ctx.editor = await ctx.startEditor(false);
-  // 「下一次有人发布计划」：再开 b2（B 的另一台设备，普通档，会发清单计划、也当节点）
+  // 「下一次有人发布计划」：再开 b2（B 的另一台设备，电脑、双舞台，会发清单计划、也当节点）
   await kv.signal('a10.open-b2', { at: Date.now() });
   await waitSignal(kv, 'a10.b2-ready');
   // 「下一次有人发布计划」要是新的一版：只开 b2 时版本没变，它发的清单计划与 b1 那一版同 id、已 done，队列只回 task.done，
@@ -1567,8 +1567,8 @@ async function launchBrowser(cfg) {
   });
 }
 
-/** 开一个成员页：预置设备身份（同一 userId 才能由 creator 以同一身份发布本人任务）、可选低内存档 / 退回单舞台，凭项目名与口令进入 */
-async function openMember(browser, cfg, key, { lowMem = false, single = false } = {}) {
+/** 开一个成员页：预置设备身份（同一 userId 才能由 creator 以同一身份发布本人任务）、可选最低一档（`?tier=low`）/ 没有舞台源，凭项目名与口令进入 */
+async function openMember(browser, cfg, key, { lowest = false, single = false } = {}) {
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();
   page.on('dialog', (d) => void d.accept());
@@ -1578,19 +1578,18 @@ async function openMember(browser, cfg, key, { lowMem = false, single = false } 
   page.on('console', (m) => { if (m.type() === 'error' && page.consoleErrors.length < 60) page.consoleErrors.push(m.text().slice(0, 240)); });
   const tap = await tapPage(page, key);
   const u = cfg.users[key];
-  await page.evaluateOnNewDocument((dev, low) => {
+  await page.evaluateOnNewDocument((dev) => {
     if (window.top !== window) return;
     try {
       if (location.pathname.startsWith('/editor')) {
         localStorage.setItem('pc.online.device', JSON.stringify(dev));
-        if (low) localStorage.setItem('pc.device.displayTier', 'low');
       }
     } catch { /* 存不了 */ }
     window.__m7LongTasks = [];
     try {
       new PerformanceObserver((list) => { for (const e of list.getEntries()) window.__m7LongTasks.push({ at: performance.timeOrigin + e.startTime, ms: e.duration }); }).observe({ type: 'longtask', buffered: true });
     } catch { /* 没有 longtask */ }
-  }, { deviceId: u.deviceId, deviceName: `m7ap ${key}` }, lowMem);
+  }, { deviceId: u.deviceId, deviceName: `m7ap ${key}` });
   if (single) {
     await page.setRequestInterception(true);
     page.on('request', (r) => {
@@ -1601,7 +1600,7 @@ async function openMember(browser, cfg, key, { lowMem = false, single = false } 
   }
   // 在线构建的开始页只有账号入口(加入表单不再进在线构建):照「刷新后回到刷新前打开的共享项目」进项目(`lib/online-resume-entry.mjs`),只带派生出的 K
   await plantResume(page, await resumeRecord({ base: `${cfg.site}/hosted/`, projectId: cfg.projectId, name: cfg.projectName, username: u.username, password: cfg.projectPassword, deviceId: u.deviceId }));
-  await page.goto(`${cfg.site}/editor`, { waitUntil: 'domcontentloaded', timeout: 180_000 });
+  await page.goto(`${cfg.site}/editor${lowest ? '?tier=low' : ''}`, { waitUntil: 'domcontentloaded', timeout: 180_000 });
   const joined = await page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 120_000 }).then(() => true, () => false);
   if (!joined) {
     const msg = await page.$eval('[data-pc="join-message"]', (el) => el.textContent).catch(() => null);
@@ -1611,7 +1610,7 @@ async function openMember(browser, cfg, key, { lowMem = false, single = false } 
     say('join-failed', { key, msg, ws: wsDiag, pageErrors: page.pageErrors.slice(-5), console: (page.consoleErrors ?? []).slice(-8) });
     throw new Error(`${key} 没进项目：${msg}；WebSocket：${JSON.stringify(wsDiag).slice(0, 600)}`);
   }
-  // 加载遮罩：出现又撤下（低内存档过渡期不测，可能根本不出现：members 在、2 s 内没有遮罩就算撤下）
+  // 加载遮罩：出现又撤下（最低一档不测，可能根本不出现：members 在、2 s 内没有遮罩就算撤下）
   let seen = false;
   let quietSince = null;
   const lifted = await until(async () => {
@@ -1688,10 +1687,10 @@ async function runNode(book, head) {
     const cfg = await kv.takeConfig(deadline);
     if (!cfg) throw new Error('没等到 creator 的 config');
     browser = await launchBrowser(cfg);
-    // b1：普通档（节点候选）；low：低内存档；single：退回单舞台
+    // b1：电脑、双舞台（节点候选）；low：最低一档；single：没有舞台源
     const b1 = await openMember(browser, cfg, 'b1');
     const pageFp = await pageFingerprint(b1.page);
-    const [low, single] = await Promise.all([openMember(browser, cfg, 'low', { lowMem: true }), openMember(browser, cfg, 'single', { single: true })]);
+    const [low, single] = await Promise.all([openMember(browser, cfg, 'low', { lowest: true }), openMember(browser, cfg, 'single', { single: true })]);
     const d1 = await previewDiag(b1.page);
     await kv.ready({ pageFp, host: os.hostname(), gateLiftAt: b1.gateLiftAt, dual: d1?.dual ?? null });
     say('pages.up', { pageFp, gate: b1.gateSeen, dual: d1?.dual ?? null });
@@ -1748,7 +1747,7 @@ async function runNode(book, head) {
     else if (isNode) book.judge('M7-A1', 'page', a1.b1 === 0 && a1.low === 0 && a1.single === 0, a1);
     else book.pending('M7-A1', 'page', NODE_PENDING, a1);
 
-    // A7：低内存档、退回单舞台的页面整场 render 连接 0 条、node.hello 0 条；对照 = 普通档页面当了节点
+    // A7：最低一档、没有舞台源的页面整场 render 连接 0 条、node.hello 0 条；对照 = 电脑页面当了节点
     const lowDiag = await previewDiag(low.page);
     const singleDiag = await previewDiag(single.page);
     const a7 = {
@@ -1760,7 +1759,7 @@ async function runNode(book, head) {
     book.judge('M7-A7', 'setup-single-stage', a7.single.dual === false, { single: a7.single.dual, low: a7.low.dual });
     if (!a7ok) book.judge('M7-A7', 'no-render-connection', false, a7);
     else if (isNode) book.judge('M7-A7', 'no-render-connection', true, a7);
-    else book.pending('M7-A7', 'no-render-connection', `${NODE_PENDING}：两种页面都是 0 条，但普通档对照也没当节点，判据成立却没有对照`, a7);
+    else book.pending('M7-A7', 'no-render-connection', `${NODE_PENDING}：两种页面都是 0 条，但电脑页面的对照也没当节点，判据成立却没有对照`, a7);
 
     // A11：握手只回显 promptcut.v1；票据不进地址
     const echoes = [b1, low, single].flatMap((p) => [...p.tap.conns.values()].filter((c) => c.status === 101).map((c) => ({ page: p.key, role: c.role, echoed: c.echoed })));
@@ -1921,8 +1920,8 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, playCheck })
     book.judge('M7-A6', 'urgent-stops-at-frame-boundary', !!rel && framesAfter <= 1, { releaseMs: rel ? rel.at - t0 : null, reason: rel?.reason ?? null, cause: releaseCauseOf(rel?.reason), framesAfter });
   }
 
-  /* ---- A9 页面：低内存档页面对浏览器产的层贴小尺寸、不显示占位 */
-  // 先等低内存页三层的产物都到齐（本页节点要把每张卡 5 段都做完），再从头播放、在 1.5 s 处取样：取样的那一帧一定有产物
+  /* ---- A9 页面：最低一档的页面对浏览器产的层贴小尺寸、不显示占位 */
+  // 先等最低一档页面三层的产物都到齐（本页节点要把每张卡 5 段都做完），再从头播放、在 1.5 s 处取样：取样的那一帧一定有产物
   const lowReady = await until(async () => { const o = await onlineDiag(low.page); return heavy.every((c) => (o?.layers?.find((l) => l.clipId === c)?.ready ?? 0) >= FPS * SECONDS) ? o : null; }, 600_000, 2000);
   await P(low.page, () => { const s = window.__pcStore; s.actions.seek(0); s.actions.play(); }).catch(() => {});
   await delay(1500);
@@ -1933,7 +1932,7 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, playCheck })
   })();
   await P(low.page, () => window.__pcStore.actions.pause()).catch(() => {});
   const lowLayers = heavy.map((c) => ({ clip: c, layer: lowOd?.layers?.find((l) => l.clipId === c) ?? null, shown: lowShown?.find((w) => w.id === c) ?? null }));
-  book.judge('M7-A9', 'page-low-memory-shows-small', lowOd?.tier === 'small' && lowLayers.every((x) => x.layer?.envFingerprint === pageFp && (x.layer?.ready ?? 0) > 0 && x.shown && !x.shown.placeholder),
+  book.judge('M7-A9', 'page-lowest-shows-small', lowOd?.tier === 'small' && lowLayers.every((x) => x.layer?.envFingerprint === pageFp && (x.layer?.ready ?? 0) > 0 && x.shown && !x.shown.placeholder),
     { waitedForAllFrames: !!lowReady, tier: lowOd?.tier ?? null, layers: lowLayers.map((x) => ({ clip: x.clip, fp: x.layer?.envFingerprint ?? null, ready: x.layer?.ready ?? null, placeholder: x.shown?.placeholder ?? null })) });
 
   /* ---- A11：render 票据过期（2 分钟）之后重建会话照常 */

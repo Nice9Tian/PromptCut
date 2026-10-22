@@ -63,7 +63,7 @@ const emptySlot = (): Slot => ({ clip: null, full: null, ready: false, token: 0,
  */
 function slotClipOf(clip: TrackClip, media: MediaAsset, localHashes: readonly string[]): SlotClip | null {
   if (isImageMedia(media) || !media.url) return null;
-  // 低内存档没有素材小尺寸的素材不给地址(c10a 第 8 节):不进槽位,这一层只挂「等待上传方」
+  // 只用小尺寸(最低一档、超过解码上限)而没有素材小尺寸的素材不给地址(c10a 第 8 节):不进槽位,这一层只挂「等待上传方」
   const url = playbackUrl(media, localHashes);
   if (!url) return null;
   return { id: clip.id, url, start: clip.start, end: clip.end, offset: clip.mediaOffset ?? 0 };

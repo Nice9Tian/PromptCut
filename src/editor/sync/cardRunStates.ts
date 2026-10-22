@@ -1,14 +1,14 @@
 /**
- * 编辑页面这一侧合出每张同步卡的运行状态(`docs/plan/online-card-exec-contract.md` 第 8 节的十种)。纯函数。
+ * 编辑页面这一侧合出每张同步卡的运行状态(`docs/plan/online-card-exec-contract.md` 第 8 节;原来的第十种运行状态随旧档位撤销,
+ * 2026-10-07 用户定在线浏览器不分身份执行用户卡与素材效果卡)。纯函数。
  *
  * 先后(前面的条件成立就不看后面的):
- *   1. 低内存档 → `low-memory`;
- *   2. 本页不能执行(站点总开关关了、没有隔离环境)→ `not-isolated`;
- *   3. 这张卡的入口转译不成 → 转译给的状态(`unsupported-syntax` / `missing-module` / `load-error`);
- *   4. 舞台报了这张卡的状态 → 用舞台的(`ready`、`load-error`、`gpu`、`media`、`runtime-error`……);
+ *   1. 本页不能执行(站点总开关关了、没有隔离环境)→ `not-isolated`;
+ *   2. 这张卡的入口转译不成 → 转译给的状态(`unsupported-syntax` / `missing-module` / `load-error`);
+ *   3. 舞台报了这张卡的状态 → 用舞台的(`ready`、`load-error`、`gpu`、`media`、`runtime-error`……);
  *      两个舞台都报了且不一样时取不是 `ready` 的那个(一台运行不了就按运行不了处理,两台画面才一致);
- *   5. 转译成了、舞台还没报 → `loading`;
- *   6. 还没轮到转译(源码刚取到)→ `loading`。
+ *   4. 转译成了、舞台还没报 → `loading`;
+ *   5. 还没轮到转译(源码刚取到)→ `loading`。
  * 结果写进 `registry.setCardRunStates`;参数面板、时间轴徽标、轻重判定读那里。
  */
 import type { CardRunState, SyncedUserCard } from "../../kernel/registry.ts";
@@ -18,7 +18,6 @@ import { cyrb53 } from "../../render/cyrb53.mjs";
 export interface EditorRunStateInput {
   /** 同步表(静态解析出来的卡;`source` 是入口文件的键) */
   cards: Iterable<SyncedUserCard>;
-  lowMemory: boolean;
   /** 本页能不能执行(`gate.ts` 的 `cardExecAvailable()`) */
   available: boolean;
   /** 不能执行时的说明(站点关了那一句);没有就不写 */
@@ -27,7 +26,7 @@ export interface EditorRunStateInput {
   bundles: readonly BundleResult[];
   /** 各舞台报来的状态(卡片 id → 状态);没报过的舞台不在里面 */
   stages?: Iterable<ReadonlyMap<string, CardRunState> | null | undefined>;
-  /** 要几台舞台都报了这张卡才下结论(双舞台给 2:两台画面要一致,只有一台载入好时还算 `loading`);缺省 1 */
+  /** 要几台舞台都报了这张卡才下结论(双舞台给 2:两台画面要一致,只有一台载入好时还算 `loading`;单舞台给 1);缺省 1 */
   stageCount?: number;
 }
 
@@ -37,7 +36,6 @@ export function editorRunStates(input: EditorRunStateInput): Map<string, CardRun
   const stages = [...(input.stages ?? [])].filter((m): m is ReadonlyMap<string, CardRunState> => !!m);
   for (const card of input.cards) {
     if (!card || typeof card.id !== "string" || out.has(card.id)) continue;
-    if (input.lowMemory) { out.set(card.id, { state: "low-memory" }); continue; }
     if (!input.available) { out.set(card.id, { state: "not-isolated", ...(input.blockedDetail ? { detail: input.blockedDetail } : {}) }); continue; }
     const bundle = card.source ? byEntry.get(card.source) : undefined;
     if (bundle && !bundle.ok) { out.set(card.id, bundle.state); continue; }
@@ -66,7 +64,6 @@ export function runStateMessage(s: CardRunState | undefined): string | null {
     case "media": return "这台设备解不了这段素材,素材效果卡的画面由渲染节点提供。";
     case "runtime-error": return "这张卡在在线浏览器里运行出错,本次改由渲染节点提供画面。";
     case "not-isolated": return d ? `${d},用户卡与素材效果卡的画面由渲染节点提供。` : "这个页面没有隔离的运行环境,用户卡与素材效果卡的画面由渲染节点提供。";
-    case "low-memory": return "这台设备在低内存档,不运行同步来的用户卡与素材效果卡的代码,画面由渲染节点提供。";
     default: return null;
   }
 }

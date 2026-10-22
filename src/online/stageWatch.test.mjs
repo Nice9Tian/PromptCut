@@ -1,5 +1,5 @@
 /**
- * 在线普通档两个舞台握手之后的看守(C10 契约第 2 节「握手之后又断」〔裁〕):心跳断 → 重载那一台 → 握回来恢复双舞台;
+ * 在线页面两个舞台握手之后的看守(C10 契约第 2 节「握手之后又断」〔裁〕):心跳断 → 重载那一台 → 握回来恢复双舞台;
  * 重载也握不回来 → 走首次握不上手的同一条退回路径(`markStageHandshake("failed")` → `stageLayout` 单舞台);退回后不再重载。
  * 跑:node --test src/online/stageWatch.test.mjs
  */
@@ -11,7 +11,7 @@ import {
 import { markStageHandshake, onlineStageState, resetOnlineStagesForTest, stageLayout, STAGE_HANDSHAKE_TIMEOUT_MS } from "./stageOrigins.ts";
 
 const origins = { A: "https://s1.x.io", B: "https://s2.x.io" };
-const layout = () => stageLayout({ lowMemory: false, origins, handshake: onlineStageState().handshake });
+const layout = () => stageLayout({ single: false, origins, handshake: onlineStageState().handshake });
 
 /** 假时钟:定时器按到点顺序跑;advance 之后让出微任务,心跳的 Promise 回调跟着落地 */
 function fakeClock() {

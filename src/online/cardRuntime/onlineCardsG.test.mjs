@@ -3,7 +3,7 @@
  * 跑:node --experimental-test-module-mocks --test src/online/cardRuntime/onlineCardsG.test.mjs
  *
  *   OCE-G-01 图形能力判定:拿不到 WebGL2、软件渲染、最大纹理小于画幅长边、丢过上下文各判各的;够就是 ok;面板细节
- *   OCE-G-02 素材效果卡在哪份文档里能跑:缺省不能(编辑页面、同源单舞台、桌面仿在线);舞台写了「能跑素材效果卡」之后才能;低内存档一律不能;
+ *   OCE-G-02 素材效果卡在哪份文档里能跑:缺省不能(编辑页面、同源单舞台、桌面仿在线);舞台写了「能跑素材效果卡」之后才能(2026-10-21 起不按档另挡);
  *            出过事的卡(`setLocalCardExec` 的 blocked)在舞台里按运行不了处理;桌面运行环境恒不算
  *   OCE-G-03 出事登记:素材解不了一次就算 `media`;求值错连着两次才算 `runtime-error`,中间成功过清零;渲染错一次就算;换代清掉
  *   OCE-G-04 画面那一半的闸门(页面一侧):隔离就绪且出口由浏览器拦才执行画面;只靠脚本加固时本页仍「能执行」(声音),画面不执行并给出原因
@@ -55,11 +55,10 @@ const dom = (id, extra = {}) => ({ id, name: id, defaults: {}, controls: [], fra
 const graphDef = (id) => dom(id, { Component: undefined, card: () => ({}) });
 const local = (id) => H.unsupportedHere(id, R.getCard(id));
 
-test("OCE-G-02 素材效果卡在哪份文档里能跑:缺省不能;舞台写了之后才能;低内存档不能;出过事的卡按运行不了;桌面恒不算", () => {
+test("OCE-G-02 素材效果卡在哪份文档里能跑:缺省不能;舞台写了之后才能;出过事的卡按运行不了;桌面恒不算", () => {
   R.resetCards(); R.resetRuntimeCardsForTest();
   R.registerCards([dom("builtin")]);
   R.setSyncedUserCards([{ id: "g-synced", name: "同步素材效果卡" }, { id: "u-synced", name: "同步用户卡" }]);
-  H.setLocalOnlyLowMemory(false);
   H.setOnlineBrowserMode(true);
   try {
     // 编辑页面:没有定义,只看运行状态
@@ -79,11 +78,8 @@ test("OCE-G-02 素材效果卡在哪份文档里能跑:缺省不能;舞台写了
     assert.ok(R.cardsRegistryGen() > gen, "变了要让按代数记忆的地方重算");
     assert.equal(R.setLocalCardExec({ graph: true }), false, "没变不通知");
     assert.equal(local("g-synced"), false, "能跑素材效果卡的舞台:素材效果卡能运行");
-    // 2026-10-21 起低内存档不另挡:舞台里载入成功、能跑素材效果卡的照常运行(停下追精确帧)
-    H.setLocalOnlyLowMemory(true);
-    assert.equal(local("g-synced"), false, "低内存档:能运行的照常运行");
+    // 2026-10-21 起不按档另挡:舞台里载入成功、能跑素材效果卡的照常运行(停下追精确帧)
     assert.equal(local("u-synced"), false);
-    H.setLocalOnlyLowMemory(false);
     // 出过事的卡:撤下
     R.setLocalCardExec({ graph: true, blocked: ["g-synced", "u-synced"] });
     assert.equal(local("g-synced"), true);
@@ -99,7 +95,7 @@ test("OCE-G-02 素材效果卡在哪份文档里能跑:缺省不能;舞台写了
     assert.equal(H.needsLocalPc("x", graphDef("x"), () => false), true);
     assert.equal(H.needsLocalPc("x", graphDef("x"), () => false, () => true, () => true), false);
   } finally {
-    H.setOnlineBrowserMode(false); H.setLocalOnlyLowMemory(false); R.resetRuntimeCardsForTest(); R.setSyncedUserCards([]);
+    H.setOnlineBrowserMode(false); R.resetRuntimeCardsForTest(); R.setSyncedUserCards([]);
   }
 });
 
@@ -151,7 +147,7 @@ test("OCE-G-05 舞台无allowlist/Trusted Types仍执行画面，父页/票据/b
 test("OCE-G-06 两台舞台都报了能运行才算;有一台说运行不了就按运行不了;画面不执行时是 not-isolated 并带原因", () => {
   const cards = [{ id: "a", name: "A", source: "src/cards/user/a.tsx" }];
   const bundles = [{ ok: true, entry: "src/cards/user/a.tsx", bundle: { generation: "g1" } }];
-  const run = (stages, extra = {}) => ERS.editorRunStates({ cards, lowMemory: false, available: true, bundles, stages, stageCount: 2, ...extra }).get("a");
+  const run = (stages, extra = {}) => ERS.editorRunStates({ cards, available: true, bundles, stages, stageCount: 2, ...extra }).get("a");
   assert.equal(run([undefined, undefined]).state, "loading");
   assert.equal(run([new Map([["a", { state: "ready" }]]), undefined]).state, "loading", "只有一台载入好:还算载入中");
   assert.equal(run([new Map([["a", { state: "ready" }]]), new Map([["a", { state: "ready" }]])]).state, "ready");
@@ -159,7 +155,7 @@ test("OCE-G-06 两台舞台都报了能运行才算;有一台说运行不了就�
   assert.equal(run([new Map([["a", { state: "gpu", detail: "只有软件渲染" }]]), undefined]).state, "gpu", "有一台说不行就不用等另一台");
   assert.equal(run([new Map([["a", { state: "ready" }]]), new Map([["a", { state: "media" }]])]).state, "media");
   // 缺省(不给 stageCount)与原来相同:一台报了就算
-  assert.equal(ERS.editorRunStates({ cards, lowMemory: false, available: true, bundles, stages: [new Map([["a", { state: "ready" }]])] }).get("a").state, "ready");
+  assert.equal(ERS.editorRunStates({ cards, available: true, bundles, stages: [new Map([["a", { state: "ready" }]])] }).get("a").state, "ready");
   const blocked = run([], { available: false, blockedDetail: "隔离尚未就绪" });
   assert.equal(blocked.state, "not-isolated");
   assert.match(ERS.runStateMessage(blocked), /隔离尚未就绪/);
@@ -169,8 +165,8 @@ test("OCE-G-06 两台舞台都报了能运行才算;有一台说运行不了就�
 
 test("OCE-G-07 舞台 RPC:两个新方法有时限;两种新事件在事件表里、不分角色", () => {
   assert.equal(RPC.stageCallTimeoutMs("loadUserCards", [[]]), RPC.STAGE_UPDATE_TIMEOUT_MS);
-  assert.equal(RPC.stageCallTimeoutMs("synthCardAudio", [{ count: 48_000, sampleRate: 48_000 }]), 10_000 + 20_000 + RPC.LOW_MEMORY_SETTLE_RPC_SLACK_MS);
-  assert.equal(RPC.stageCallTimeoutMs("synthCardAudio", [{ count: 48_000 * 60, sampleRate: 48_000 }]), 120_000 + 20_000 + RPC.LOW_MEMORY_SETTLE_RPC_SLACK_MS);
+  assert.equal(RPC.stageCallTimeoutMs("synthCardAudio", [{ count: 48_000, sampleRate: 48_000 }]), 10_000 + 20_000 + RPC.STAGE_RPC_SLACK_MS);
+  assert.equal(RPC.stageCallTimeoutMs("synthCardAudio", [{ count: 48_000 * 60, sampleRate: 48_000 }]), 120_000 + 20_000 + RPC.STAGE_RPC_SLACK_MS);
   assert.ok(RPC.stageCallTimeoutMs("synthCardAudio", [{}]) > 0, "坏参数也有时限");
   for (const type of ["card-states", "sound-state"]) {
     assert.ok(RPC.STAGE_EVENT_TYPES.has(type), type);
@@ -201,9 +197,11 @@ test("OCE-G-08 接线(按源码核)", () => {
   assert.match(read("online/cardRuntime/soundModules.ts"), /"!\/src\/cards\/\*\*\/index\.ts", "!\/src\/parts\/\*\*\/index\.ts"/);
   // 编辑页面:发包、收状态、接声音、立闸门
   const preview = read("editor/Preview.tsx");
-  assert.match(preview, /c\.loadUserCards\(list, \{ sound: id === "B" \}\)/);
+  assert.match(preview, /c\.loadUserCards\(list, \{ sound: id === soundStageId\(\) \}\)/);
+  assert.match(preview, /function soundStageId\(\): StageId \{\s*return ONLINE && !dualStage\(\) \? "A" : "B";/, "声音线程:双舞台在实例 B,单舞台在 A");
   assert.match(preview, /setCardExecGate\(\{ site: onlineStageState\(\)\.cardExec, isolated: s\.enabled, reason: s\.enabled \? null : s\.reason, visual: true \}\)/);
-  assert.match(preview, /stages: STAGE_IDS\.map\(\(id\) => stageCardStatesRef\.current\[id\]\), stageCount: STAGE_IDS\.length,/);
+  // 挂着的舞台都报了能运行才算能运行:双舞台两台、单舞台(舞台闸门第一级)一台
+  assert.match(preview, /stages: mountedStageIds\(\)\.map\(\(id\) => stageCardStatesRef\.current\[id\]\), stageCount: Math\.max\(1, mountedStageIds\(\)\.length\),/);
   assert.match(preview, /setNodeGraphCapable\(STAGE_IDS\.every\(\(s\) => stageGraphRef\.current\[s\] === "ok"\)\)/);
   assert.match(preview, /createIsolatedSoundLink\(\{/);
   const push = preview.slice(preview.indexOf("const pushCardBundles = useCallback"), preview.indexOf("const pushCardBundlesRef"));

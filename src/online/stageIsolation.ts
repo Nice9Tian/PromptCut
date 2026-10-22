@@ -35,7 +35,7 @@ export type StageMediaMode = "cookie" | "legacy";
 export type CardExecReason =
   | "ok"
   | "switch-off"     // 托管方关了总开关
-  | "single-stage"   // 不是双舞台(同源单舞台、低内存档、握手失败)
+  | "no-stage"       // 还没有挂着的跨源舞台(读不到舞台源、页面卸载)
   | "pending"        // 还在等舞台自检或票据交接
   | "not-isolated"   // 某一台舞台自检没过
   | "grant-failed"   // 票据交接没成
@@ -125,12 +125,15 @@ export interface StageIsolationSession {
   /** 这一台(或任何一台)报加固拦下了事 */
   breach(kind: BreachKind): void;
   /**
-   * 算这一台此刻的取档方式(会等自检结果、发交接请求)。`dual` 为假(同源单舞台)直接回旧办法。
+   * 算这一台此刻的取档方式(会等自检结果、发交接请求)。`active` 为假(这一台不在此刻的布局里)直接回旧办法。
    * `ticket` 为 null(还没连上素材服务)时不交接,回旧办法的空票据。
    */
-  plan(id: StageLetter, ctx: { dual: boolean; stageOrigin: string | null; ticket: string | null }): Promise<StageMediaPlan>;
-  /** 布局变了(双舞台 ↔ 单舞台):重算能不能执行 */
-  setDual(dual: boolean): void;
+  plan(id: StageLetter, ctx: { active: boolean; stageOrigin: string | null; ticket: string | null }): Promise<StageMediaPlan>;
+  /**
+   * 此刻挂着哪几台舞台(双舞台 `["A", "B"]`;只有一个舞台 `["A"]`:舞台闸门第一级、最低一档、握手失败退回;都不挂 `[]`):
+   * 重算能不能执行。所有舞台一律跨源隔离(2026-10-14 用户定),单舞台同样能执行用户卡与素材效果卡,只看挂着的那几台。
+   */
+  setStages(ids: readonly StageLetter[]): void;
   state(): CardExecState;
   subscribe(cb: () => void): () => void;
 }
@@ -162,21 +165,20 @@ export function createStageIsolation(deps: StageIsolationDeps): StageIsolationSe
     A: { report: null, waiters: [], mode: null, granted: null, granting: null, gen: 0 },
     B: { report: null, waiters: [], mode: null, granted: null, granting: null, gen: 0 },
   };
-  const IDS: StageLetter[] = ["A", "B"];
-  let dual = false;
+  let IDS: StageLetter[] = [];
   let breached = false;
   /** 点过头没有(点过之后任何舞台都不再收到票据) */
   let everAllowed = false;
   let grantFailed = false;
   const listeners = new Set<() => void>();
-  let cached: CardExecState = { enabled: false, reason: "single-stage", detail: {}, egress: null };
+  let cached: CardExecState = { enabled: false, reason: "no-stage", detail: {}, egress: null };
 
   const judge = (): CardExecState => {
     const detail: CardExecState["detail"] = {};
     for (const id of IDS) { const r = slots[id].report; if (r && !r.ok) detail[id] = r.reasons; }
     const off = (reason: CardExecReason): CardExecState => ({ enabled: false, reason, detail, egress: null });
     if (!deps.enabled()) return off("switch-off");
-    if (!dual) return off("single-stage");
+    if (!IDS.length) return off("no-stage");
     if (breached) return off("breach");
     if (IDS.some((id) => slots[id].report && !slots[id].report!.ok)) return off("not-isolated");
     if (IDS.some((id) => slots[id].mode === "legacy")) return off(grantFailed ? "grant-failed" : "not-isolated");
@@ -229,9 +231,10 @@ export function createStageIsolation(deps: StageIsolationDeps): StageIsolationSe
       breached = true;
       update();
     },
-    setDual(next) {
-      if (dual === next) return;
-      dual = next;
+    setStages(ids) {
+      const next = (["A", "B"] as StageLetter[]).filter((id) => ids.includes(id));
+      if (next.length === IDS.length && next.every((id, i) => IDS[i] === id)) return;
+      IDS = next;
       update();
     },
     async plan(id, ctx) {
@@ -244,7 +247,7 @@ export function createStageIsolation(deps: StageIsolationDeps): StageIsolationSe
         update();
         return { mode: "cookie", base: mediaSBase(sid), ticket: null, cardExec: false };
       };
-      if (!ctx.dual || !deps.enabled()) return safeFallback();
+      if (!ctx.active || !deps.enabled()) return safeFallback();
       const gen = slot.gen;
       const report = await waitReport(id);
       if (gen !== slot.gen) return safeFallback(); // 等的时候这一台又握手了:这一次作废,新的握手会再来
@@ -287,7 +290,7 @@ export function createStageIsolation(deps: StageIsolationDeps): StageIsolationSe
 let pageSession: StageIsolationSession | null = null;
 let pageEnabled: () => boolean = () => true;
 const pageListeners = new Set<() => void>();
-const OFF: CardExecState = Object.freeze({ enabled: false, reason: "single-stage", detail: {}, egress: null }) as CardExecState;
+const OFF: CardExecState = Object.freeze({ enabled: false, reason: "no-stage", detail: {}, egress: null }) as CardExecState;
 
 /** 本页的隔离会话(懒建;`enabled` 读运行配置里的总开关) */
 export function pageStageIsolation(enabled?: () => boolean): StageIsolationSession {

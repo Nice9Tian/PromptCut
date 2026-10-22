@@ -111,7 +111,7 @@ export default function ExportView() {
   const glHost = useRef<GlHost | null>(null);
   useEffect(() => {
     const worker = new URLSearchParams(location.search).get("glWorker") === "1";
-    const host = createGlHost({ stageId: "export", lowMemory: false, route: "perDocument", mainThread: !worker });
+    const host = createGlHost({ stageId: "export", compact: false, route: "perDocument", mainThread: !worker });
     glHost.current = host;
     return () => { host.dispose(); if (glHost.current === host) glHost.current = null; };
   }, []);

@@ -1,20 +1,20 @@
 /**
- * C10a 能力闸：低内存档下素材只拉小尺寸（`docs/plan/c10a-contract.md` 第 8 节「素材只拉小尺寸」，第 12 节「能力闸」）。
+ * C10a 能力闸：最低一档下素材只拉小尺寸（`docs/plan/c10a-contract.md` 第 8 节「素材只拉小尺寸」，第 12 节「能力闸」）。
  * 跑：node --experimental-test-module-mocks --test src/render/c10a-gates.test.mjs
  *
- * 低内存档怎么告诉 `mediaTier.ts`：假设 K3，`opts.lowMemory === true`（`server/test/c10a-kit.mjs`）。
- * `src/online/lowMemory.ts` 不在时整组 skip。可播性模块换成桩，记下有没有去探原尺寸（探测要拉原尺寸的首帧）。
+ * 最低一档怎么告诉 `mediaTier.ts`：`opts.smallOnly === true`（原假设 K3 的 `opts.lowMemory`，2026-10-22 随低内存档撤销改名）。
+ * `src/online/onlineTier.ts` 不在时整组 skip。可播性模块换成桩，记下有没有去探原尺寸（探测要拉原尺寸的首帧）。
  *
- * 只用视频素材：C6.6 只给视频做素材小尺寸（`c66-design.md` 第 2 节），图片、音频在低内存档怎么办契约没写，
+ * 只用视频素材：C6.6 只给视频做素材小尺寸（`c66-design.md` 第 2 节），图片、音频在最低一档怎么办契约没写，
  * 见报告的更正建议。
  */
 import { srcUrl } from "../testing/registerTs.mjs";
 import { test, mock, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { exists, skipIf, LOW_MEMORY_FILE } from "../../server/test/c10a-kit.mjs";
+import { exists, skipIf, TIER_FILE } from "../../server/test/c10a-kit.mjs";
 
-const missing = !exists(LOW_MEMORY_FILE);
-const skip = skipIf(missing, `${LOW_MEMORY_FILE}（mediaTier 的低内存档分支随它来）`);
+const missing = !exists(TIER_FILE);
+const skip = skipIf(missing, `${TIER_FILE}（mediaTier 的只用小尺寸分支随档位来）`);
 const it = (name, fn) => test(name, { skip }, fn);
 
 const probes = [];
@@ -40,15 +40,15 @@ const SMALL = h("b");
 const video = { id: "v", kind: "video", ext: "mp4", url: `/@media/${ORIG}`, hash: ORIG, tiers: { original: ORIG, small: SMALL } };
 const onlyOriginal = { id: "o", kind: "video", ext: "mp4", url: `/@media/${h("c")}`, hash: h("c"), tiers: { original: h("c") } };
 const REMOTE = "@known:remote";
-const LOW = { lowMemory: true };
+const LOW = { smallOnly: true };
 
-it("C10A-GT-01 低内存档：两档都到齐、原尺寸能放，也给小尺寸；不去探原尺寸", () => {
+it("C10A-GT-01 最低一档：两档都到齐、原尺寸能放，也给小尺寸；不去探原尺寸", () => {
   const all = [REMOTE, ORIG, SMALL];
   assert.equal(T.playbackUrl(video, all, { ...LOW, playable: () => true }), `/@media/${SMALL}`);
   assert.equal(T.playbackUrl(video, all, { ...LOW, playable: () => undefined }), `/@media/${SMALL}`);
   assert.equal(probes.length, 0, "可播性不知道时也不探原尺寸");
   assert.equal(T.chooseTier(video, all, LOW).tier, "small");
-  // 对照：普通档照 C6.6 换回原尺寸
+  // 对照：别的档照 C6.6 换回原尺寸
   assert.equal(T.playbackUrl(video, all, { playable: () => true }), `/@media/${ORIG}`);
 });
 
@@ -57,7 +57,7 @@ it("C10A-GT-01 低内存档：两档都到齐、原尺寸能放，也给小尺�
  * 这一层显示占位与「等待上传方」角标，小尺寸到齐后地址从空变成小尺寸、重新挂上；而不是先挂一个素材服务上还没有的
  * 小尺寸地址（会 404，还会被舞台记成视频解码失败）。不变的是本条要核的：一律不给原尺寸。还没问过素材服务时照旧先给小尺寸。
  */
-it("C10A-GT-02 低内存档：只有原尺寸到齐、小尺寸没到，也不给原尺寸（这一层等上传方，不挂还没到的地址）", () => {
+it("C10A-GT-02 最低一档：只有原尺寸到齐、小尺寸没到，也不给原尺寸（这一层等上传方，不挂还没到的地址）", () => {
   const choice = T.chooseTier(video, [REMOTE, ORIG], LOW);
   assert.notEqual(choice.tier, "original");
   assert.equal(choice.url.includes(ORIG), false, `地址里不能有原尺寸：${choice.url}`);
@@ -68,7 +68,7 @@ it("C10A-GT-02 低内存档：只有原尺寸到齐、小尺寸没到，也不�
   assert.equal(none.awaiting, true, "一档都没到：等待上传方");
 });
 
-it("C10A-GT-03 低内存档：没有小尺寸的视频不拉原尺寸，这一层等待上传方（占位 + 角标）", () => {
+it("C10A-GT-03 最低一档：没有小尺寸的视频不拉原尺寸，这一层等待上传方（占位 + 角标）", () => {
   for (const hashes of [[], [REMOTE], [REMOTE, h("c")]]) {
     const choice = T.chooseTier(onlyOriginal, hashes, LOW);
     assert.notEqual(choice.tier, "original", `hashes=${JSON.stringify(hashes)}`);
@@ -78,7 +78,7 @@ it("C10A-GT-03 低内存档：没有小尺寸的视频不拉原尺寸，这一�
   assert.equal(T.playbackUrl(onlyOriginal, [REMOTE, h("c")], LOW).includes(h("c")), false);
 });
 
-it("C10A-GT-04 低内存档 + 在线素材服务：小尺寸地址拼在素材服务的公网地址上", () => {
+it("C10A-GT-04 最低一档 + 在线素材服务：小尺寸地址拼在素材服务的公网地址上", () => {
   const base = "https://8-219-80-16.sslip.io/media/api/asset";
   const url = T.playbackUrl(video, [REMOTE, ORIG, SMALL], { ...LOW, cloudBase: base, playable: () => true });
   assert.ok(url.startsWith(base), url);

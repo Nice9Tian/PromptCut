@@ -18,7 +18,6 @@ import {
   postStageReady,
   serveStageRpc,
   postStageCards,
-  postStageTrouble,
   type BackJob,
   type BakeFrameReply,
   type PlayReply,
@@ -55,13 +54,14 @@ import { glPlanes } from "./render/gl/planes";
 import { resolveGlRoute } from "./render/costDevice.mjs";
 import { themeStyle } from "./themes";
 import { ONLINE } from "./online/mode";
-import { setMediaTierPolicy } from "./render/mediaTier";
+import { mediaTierPolicy, setMediaTierPolicy } from "./render/mediaTier";
+import { netSpeedState, startNetSpeed } from "./render/netSpeed";
 import { cardExecGate as stageExecGate, cardVisualExecAllowed, noteMediaPolicy, subscribeCardExecGate as subscribeStageExecGate } from "./online/isolation/execGate";
 import type { StageCardRuntime } from "./online/cardRuntime/stageRuntime";
 import type { StageSound } from "./online/cardRuntime/stageSound";
 import type { CardBundle } from "./online/cardRuntime/protocol";
 import { announceStageIsolation } from "./online/isolation/stageGuard";
-import { clampSettleTimeout, runLowMemorySettle, settleKindOf, type DrawOutcome, type LowMemorySettleItem, type LowMemorySettleResult } from "./render/lowMemorySettle";
+import { clampSettleTimeout, runSettle, settleKindOf, type DrawOutcome, type SettleItem, type SettleResult } from "./render/settleFrame";
 import { cardCapabilities, clipFrameMode } from "./kernel/frameMode.mjs";
 import { resolveFrameSize } from "./kernel/frameSize.mjs";
 import { frameWorkStatus, waitForFrameWork } from "./kernel/frameReady";
@@ -240,19 +240,19 @@ export default function StageView() {
      */
     snapshots: new Map<string, string>() as ReadonlyMap<string, string>,
     /**
-     * 实际生效的抑制集合 = 父页发来的(`parentSuppressed`)减去低内存档停下追一帧正在画 / 已画好的(`lowMemLive`)。
+     * 实际生效的抑制集合 = 父页发来的(`parentSuppressed`)减去单舞台停下追一帧正在画 / 已画好的(`settleLive`)。
      * 读抑制的地方(渲染、占位符、钉动画要跳过谁)一律读这一份;两份源头变了由 `applySuppressed` 重算。
      */
     suppressed: new Set<string>() as ReadonlySet<string>,
     /** 父页经 `setSuppressed` 发来的那一份(原样) */
     parentSuppressed: new Set<string>() as ReadonlySet<string>,
     /**
-     * 低内存档停下追当前一帧(c10a 契约第 17 节,`settleLowMemory`):正在画和已经画好的层。它们不再按父页的抑制藏起来;
-     * 下一次 `setTime` / `play` / `setRole` 清空(下一次播放回到只贴小尺寸)。画到时限没画好的从这里拿掉,回到抑制(占位)。
+     * 单舞台停下追当前一帧(`settleLayers`,`render/settleFrame.ts`):正在画和已经画好的层。它们不再按父页的抑制藏起来;
+     * 下一次 `setTime` / `play` / `setRole` 清空(下一次播放回到播放时的样子)。没画好(被打断)的从这里拿掉,回到抑制(兜底)。
      */
-    lowMemLive: new Set<string>() as ReadonlySet<string>,
-    /** 上一次停下追一帧的结果(诊断 `__pcStageDiag().lowMemSettle`) */
-    lowMemSettle: null as LowMemorySettleResult | null,
+    settleLive: new Set<string>() as ReadonlySet<string>,
+    /** 上一次停下追一帧的结果(诊断 `__pcStageDiag().lastSettle`) */
+    lastSettle: null as SettleResult | null,
     streamPlanes: [] as readonly StreamPlaneGroup[],
     /**
      * 父页点名抑制了、挂着流平面、但流还没画出第一帧的卡 → 从什么时候起等的(真实毫秒)。这段时间**不藏它原来的画面**
@@ -409,8 +409,6 @@ export default function StageView() {
     /** 某条流的画面有无变了(异步解出第一帧、留到时限清空);实现在下面,等用到的函数都定义了再接上 */
     let onStreamShowing: () => void = () => {};
     const player = new StreamPlayer({ root: () => rootRef.current, ...(ONLINE ? { source: new PushedStreamSource() } : {}), onShowingChange: () => onStreamShowing(),
-      // 流平面共用的 WebGL 上下文建在一块不在文档里的离屏画布上,它丢了的事件到不了下面 `document` 上的监听:由播放器直接报
-      onContextLost: () => { if (ONLINE) postStageTrouble("webglcontextlost"); },
       // 超出预算的层的位置矩形变了(清单到了、播放头进了下一个分段):占位符的几何是渲染时取的,提交一次让它重取
       onBoxChange: () => onStreamBoxes() });
     let onStreamBoxes: () => void = () => {};
@@ -439,22 +437,24 @@ export default function StageView() {
      * 路线 2 的端口由父页在握手之后、任何 RPC 之前经 `{ type: 'gl-port' }` 交来(下面那个监听)。
      */
     const caps = detectHostCapabilities({ online: ONLINE });
-    // c10a 第 8 节:舞台自己判出来的低内存档先生效;远程素材服务的基址与票据等父页 `setMediaPolicy` 下发
-    setMediaTierPolicy({ lowMemory: caps.lowMemory, online: ONLINE });
+    // 最低一档(父页在 src 里给 `lowest=1`)起手就只用小尺寸;远程素材服务的基址与票据、素材闸门的结果等父页 `setMediaPolicy` 下发
+    setMediaTierPolicy({ smallOnly: caps.lowest, online: ONLINE });
     /*
-     * c10a 第 8 节「运行中出现 webglcontextlost 或连续 3 次视频解码失败,本次会话改按低内存档」:只在在线模式里报。
-     * 两种事件都不冒泡,在 document 上按捕获阶段接;判定与提示在父页(`src/online/lowMemory.ts`)。
-     * OffscreenCanvas 在 Worker 里丢上下文不经这里(glHost 自己有退路),只接主线程画布的。
+     * 主线程画布丢了 WebGL 上下文:素材效果卡的图形能力按「运行中丢过上下文」算不够(`cardRuntime`,契约 4.3)。
+     * 它不再用来判整台设备的性能(原来的「运行中整体降档」2026-10-07 用户定撤销),只在线页面接。
+     * 事件不冒泡,在 document 上按捕获阶段接;OffscreenCanvas 在 Worker 里丢上下文不经这里(glHost 自己有退路)。
      */
-    const onTrouble = (e: Event) => {
-      if (!ONLINE) return;
-      if (e.type === "webglcontextlost") { cardExec.runtime?.noteContextLost(); postStageTrouble("webglcontextlost"); return; }
-      const v = e.target as HTMLVideoElement | null;
-      if (!v || v.tagName !== "VIDEO") return;
-      if (e.type === "error" && v.error?.code === 3 /* MEDIA_ERR_DECODE */) postStageTrouble("decode-failure");
-      else if (e.type === "loadeddata") postStageTrouble("decode-ok");
-    };
-    if (ONLINE) for (const type of ["webglcontextlost", "error", "loadeddata"]) document.addEventListener(type, onTrouble, true);
+    const onContextLost = () => { cardExec.runtime?.noteContextLost(); };
+    if (ONLINE) document.addEventListener("webglcontextlost", onContextLost, true);
+    /*
+     * 素材闸门的网速(`render/netSpeed.ts`):看素材实际下载的快慢,慢就先拉小尺寸、再拉原尺寸替换,快就只拉原尺寸;使用中随时切换。
+     * 素材是这一台舞台自己读的,所以在舞台里看、写进这一台的取档策略;切换时报父页一声(查看口)。只在线页面。
+     */
+    const stopNetSpeed = ONLINE ? startNetSpeed((st) => {
+      setMediaTierPolicy({ smallFirst: st.smallFirst });
+      commitPlanes();
+      postStageEvent({ type: "net-speed", mbps: st.mbps, samples: st.samples, smallFirst: st.smallFirst });
+    }) : () => {};
     /*
      * 在线执行同步来的用户卡与素材效果卡(`docs/plan/online-card-exec-contract.md` 第 2、3、4、8 节)。编辑页面经 `loadUserCards` 发来转译好的包;
      * 这里只在**本文档自己的执行闸门**开着时执行(`online/isolation/execGate.ts`:是跨源舞台入口、自检通过、父页点头、从没见过票据、没出过加固拦下的事):
@@ -517,7 +517,12 @@ export default function StageView() {
       }
     };
     const offCardExecGate = ONLINE ? subscribeStageExecGate(() => { void applyCardBundles(); }) : () => {};
-    const gl = createGlHost({ stageId: caps.stageId, lowMemory: caps.lowMemory, route: resolveGlRoute(null, caps.lowMemory) });
+    /*
+     * 在线页面的路线由父页按舞台闸门定(起手看 src 里的 `gl=`,试第三级时经 `setGlRoute` 换),不看项目选项;
+     * 桌面运行环境照旧按项目选项(`setProject` 里 `resolveGlRoute(project.glRoute)`),缺省路线 1。
+     */
+    let onlineGlRoute: "perDocument" | "shared" = caps.glRoute ?? "perDocument";
+    const gl = createGlHost({ stageId: caps.stageId, compact: caps.compact, route: ONLINE ? onlineGlRoute : resolveGlRoute(null) });
     const onGlPort = (e: MessageEvent) => {
       if (e.source !== window.parent) return;
       const d = e.data as { type?: string; port?: MessagePort | null } | null;
@@ -790,13 +795,13 @@ export default function StageView() {
     };
 
     /**
-     * 实际生效的抑制集合 = 父页发来的,减去低内存档停下追一帧正在画 / 已画好的(`lowMemLive`),
+     * 实际生效的抑制集合 = 父页发来的,减去单舞台停下追一帧正在画 / 已画好的(`settleLive`),
      * 再减去流还没画出第一帧、先不藏的(`streamWaiting`)。
      * 只改 `ref.current`,不提交;调用方随后的那次提交(`commitPlanes` / `flushSync`)一起生效。整份换新(`Stage` 按引用判)。
      */
     const applySuppressed = (): void => {
       const parent = ref.current.parentSuppressed;
-      const live = ref.current.lowMemLive;
+      const live = ref.current.settleLive;
       const waiting = ref.current.streamWaiting;
       ref.current.suppressed = live.size || waiting.size ? new Set([...parent].filter((id) => !live.has(id) && !waiting.has(id))) : parent;
     };
@@ -867,10 +872,10 @@ export default function StageView() {
      *
      * **组流整组一起撤**:组里各卡的外观画在同一条流里,不能只撤一张。先追上的成员留在 `.pc-settling` 的样子里
      * (不可见、有布局盒、时间钉在目标帧),等组里此刻在场的都追上了一起露出来、一起报。
-     * 低内存档停下追一帧画好的层另有 `lowMemLive` 管着,不动父页的那一份。
+     * 单舞台停下追一帧画好的层另有 `settleLive` 管着,不动父页的那一份。
      */
     const releaseSettled = (clipId: string, targetMs: number): string[] => {
-      if (ref.current.lowMemLive.has(clipId) || !ref.current.parentSuppressed.has(clipId)) return [clipId];
+      if (ref.current.settleLive.has(clipId) || !ref.current.parentSuppressed.has(clipId)) return [clipId];
       const plane = planeOf(clipId);
       if (plane && plane.clipIds.length > 1) {
         const held = new Set(ref.current.settledHeld);
@@ -901,14 +906,14 @@ export default function StageView() {
       // 画面有无变了,占位符跟着切:暂停着没有下一拍来刷(帧是异步解出来的)
       refreshPlaceholders();
     };
-    const setLowMemLive = (next: ReadonlySet<string>): void => {
-      ref.current.lowMemLive = next;
+    const setSettleLive = (next: ReadonlySet<string>): void => {
+      ref.current.settleLive = next;
       applySuppressed();
     };
-    /** 下一次跳转 / 播放 / 转后台:停下追一帧画的层全部回到父页的抑制(只贴小尺寸)。回有没有变 */
-    const clearLowMemLive = (): boolean => {
-      if (!ref.current.lowMemLive.size) return false;
-      setLowMemLive(new Set());
+    /** 下一次跳转 / 播放 / 转后台:停下追一帧画的层全部回到父页的抑制(贴预渲染结果)。回有没有变 */
+    const clearSettleLive = (): boolean => {
+      if (!ref.current.settleLive.size) return false;
+      setSettleLive(new Set());
       return true;
     };
 
@@ -965,13 +970,13 @@ export default function StageView() {
       gen: number;
       /** canvas 卡追到了、正在等这一拍的 `done`(R9 M3):等到之前不摘 `.pc-settling` */
       finishing?: boolean;
-      /** 收摊时叫(低内存档停下追一帧用:没追上的层在同一次提交里回到抑制) */
+      /** 收摊时叫(单舞台停下追一帧用:没追上的层在同一次提交里回到抑制) */
       onEnd?: (caughtUp: boolean) => void;
     }
 
     /** 追帧被中止 / 追完:摘 `.pc-settling` */
     const endCatchUp = (task: CatchUpTask, caughtUp: boolean): void => {
-      // 先让调用方改完抑制集合(`lowMemLive`),和摘 `.pc-settling` 同一次提交:没追上的层不会露出一帧旧的活组件
+      // 先让调用方改完抑制集合(`settleLive`),和摘 `.pc-settling` 同一次提交:没追上的层不会露出一帧旧的活组件
       const onEnd = task.onEnd;
       task.onEnd = undefined;
       try { onEnd?.(caughtUp); } catch { /* 收摊回调出错不影响收摊 */ }
@@ -1084,26 +1089,26 @@ export default function StageView() {
     };
 
     /**
-     * 低内存档停下追一帧(c10a 契约第 17 节)的一层:把它从抑制里放出来、在 `.pc-settling` 下不可见地画到 `targetMs`
+     * 单舞台停下追一帧(`render/settleFrame.ts`)的一层:把它从抑制里放出来、在 `.pc-settling` 下不可见地画到 `targetMs`
      * (直接定位的一步到位,推帧卡从入点逐帧推),画好了撤兜底(`endCatchUp(true)`:post `settled`)。
      * 画的时候兜底照常显示(占位符的 T3 管)。
-     * 到 `deadline` 还没画好:这一层回到抑制(贴小尺寸或占位符),直到下一次停下。
+     * 不设时限时 `deadline` 是 `Infinity`;给了时限(测试、诊断)到点还没画好:这一层回到抑制(贴预渲染结果或占位符),直到下一次停下。
      */
-    const drawLowMemory = async (item: LowMemorySettleItem, deadline: number, targetMs: number, fps: number): Promise<DrawOutcome> => {
+    const drawSettleLayer = async (item: SettleItem, deadline: number, targetMs: number, fps: number): Promise<DrawOutcome> => {
       const { clipId } = item;
       const gen = catchUpGen.current;
       let ended: boolean | null = null;
       let timedOut = false;
       const onEnd = (caughtUp: boolean) => {
         ended = caughtUp;
-        // 没画好(到时限 / 被打断)的层回到父页的抑制;画好的留在 lowMemLive 里,直到下一次跳转或播放
-        if (!caughtUp && ref.current.lowMemLive.has(clipId)) {
-          const rest = new Set(ref.current.lowMemLive);
+        // 没画好(到时限 / 被打断)的层回到父页的抑制;画好的留在 settleLive 里,直到下一次跳转或播放
+        if (!caughtUp && ref.current.settleLive.has(clipId)) {
+          const rest = new Set(ref.current.settleLive);
           rest.delete(clipId);
-          setLowMemLive(rest);
+          setSettleLive(rest);
         }
       };
-      setLowMemLive(new Set([...ref.current.lowMemLive, clipId]));
+      setSettleLive(new Set([...ref.current.settleLive, clipId]));
       let task: CatchUpTask | null = null;
       if (item.kind === "catchup") {
         // 推帧卡:重挂载定位配方 + 从入点逐帧推(同 K5 第一路),每 8 步让一次宏任务
@@ -1121,6 +1126,9 @@ export default function StageView() {
         ref.current.catchUps.set(clipId, task);
       }
       task.onEnd = onEnd;
+      // 画的时候兜底照常显示:暂停着没有下一拍来刷占位符,这里刷一次(T3:不可见地追帧、又没有快照或流在画的层显示占位符;
+      // 「停下以后先显示占位……渲好一层替换一层」,`product/platforms.md` 的最低一档)
+      refreshPlaceholders();
       const breathe = () => new Promise<void>((r) => realSetTimeout(r, 0));
       for (;;) {
         if (ended !== null) return ended ? "drawn" : timedOut ? "timeout" : "aborted";
@@ -1768,8 +1776,8 @@ export default function StageView() {
         const nextKey = layoutKeyOf(full);
         ref.current.project = full;
         ref.current.layoutKey = nextKey;
-        // R9:项目选项的路线(生效值;切了就重建 glHost 那一侧的连接,M2 / 约束第 1 条)
-        gl.setRoute(resolveGlRoute(full.glRoute, caps.lowMemory));
+        // R9:项目选项的路线(生效值;切了就重建 glHost 那一侧的连接,M2 / 约束第 1 条)。在线页面的路线跟舞台闸门走,不看项目选项
+        gl.setRoute(ONLINE ? onlineGlRoute : resolveGlRoute(full.glRoute));
         flushSync(() => setProject(full));
         // 画幅可能变了:素材效果卡的图形能力(最大纹理尺寸那一条)按新的长边重判
         if (!prev || prev.width !== full.width || prev.height !== full.height) cardExec.runtime?.refreshGraph();
@@ -1829,8 +1837,8 @@ export default function StageView() {
         abortPending("superseded");
         // 新的 setTime 中止正在进行的第一路追帧(K5:五个 RPC 各递增一次)
         catchUpGen.current++;
-        // 低内存档:上一次停下画好的层回到抑制(拖动、跳转时只贴小尺寸;停下时父页再发 settleLowMemory)
-        clearLowMemLive();
+        // 单舞台:上一次停下画好的层回到抑制(拖动、跳转时贴预渲染结果;停下时父页再发 settleLayers)
+        clearSettleLive();
         abortCatchUps();
         const fps = Math.max(1, p.fps || 30);
 
@@ -2104,7 +2112,7 @@ export default function StageView() {
           ref.current.snapshots = new Map();
           ref.current.suppressed = new Set();
           ref.current.parentSuppressed = new Set();
-          ref.current.lowMemLive = new Set();
+          ref.current.settleLive = new Set();
           setStreamWaiting(new Map());
           ref.current.deferredSettle.clear();
           ref.current.settledHeld = new Set();
@@ -2181,8 +2189,8 @@ export default function StageView() {
         ref.current.beatPaused = false;
         // 按下播放同样中止第一路追帧(K5:五个 RPC 各递增一次)
         catchUpGen.current++;
-        // 低内存档:下一次播放回到只贴小尺寸(c10a 契约第 17 节)
-        const hadLive = clearLowMemLive();
+        // 单舞台:下一次播放回到播放时的样子(最低一档只贴预渲染结果)
+        const hadLive = clearSettleLive();
         abortCatchUps();
         if (hadLive) commitPlanes();
         void runBeatLoop(from);
@@ -2242,22 +2250,24 @@ export default function StageView() {
          * 这一次**新**点名的卡,挂着流平面而流还没画出第一帧:先不藏它原来的画面(`streamWaiting`),等流画出来再藏
          * (起播、跳转、拖动起步都走这里;父页先发流平面、再发抑制)。已经藏着的、流已经有画面的(暂停着先解好了)照常当场藏。
          * 没有流平面的卡(没有流、超出解码器预算、等后台补跑互换的轻卡)不等。
-         * **低内存档不等**:这一档的重卡播放、拖动时一律不活渲(这台设备跑不动才判重;等的那几拍里活组件照跑,每拍都要算它,
-         * 流的解码输出反而排在后面出不来)。流的第一张没到之前这一层先空着,和原来等小尺寸到货时一样(占位符过 120 毫秒才显示)。
+         * **只有一个舞台时不等**(精简模式与最低一档:舞台闸门没到双舞台的设备,和「只贴稀疏版」同一批,原低内存档那一批):
+         * 重卡播放、拖动时一律不活渲(这台设备跑不动;等的那几拍里活组件照跑,每拍都要算它,流的解码输出反而排在后面出不来)。
+         * 流的第一张没到之前这一层先空着(占位符过 120 毫秒才显示)。看舞台能力表的 `compact`(只有一个舞台),最低一档另看取档策略的 `smallOnly`。
          */
         {
           const showing = ref.current.streamPlanes.length ? player.showingClips() : NO_CLIPS;
+          const lowestHere = ONLINE && (caps.compact || mediaTierPolicy().smallOnly);
           const waiting = new Map<string, number>();
           const now = realNow();
           for (const id of ref.current.parentSuppressed) {
             if (showing.has(id) || !planeOf(id)) continue;
             const since = ref.current.streamWaiting.get(id);
             if (since !== undefined) waiting.set(id, since);
-            else if (!caps.lowMemory && !before.has(id) && !ref.current.settling.has(id)) waiting.set(id, now);
+            else if (!lowestHere && !before.has(id) && !ref.current.settling.has(id)) waiting.set(id, now);
           }
           if (waiting.size || ref.current.streamWaiting.size) setStreamWaiting(waiting);
         }
-        // 低内存档停下追一帧正在画 / 画好的层不按父页的抑制藏(c10a 契约第 17 节);下面按生效的那一份判
+        // 单舞台停下追一帧正在画 / 画好的层不按父页的抑制藏;下面按生效的那一份判
         applySuppressed();
         const next = ref.current.suppressed;
         // T4:被抑制、这一刻判轻的卡在等后台补跑互换(占位符的 reason 用;显隐判据不看它)
@@ -2295,16 +2305,16 @@ export default function StageView() {
         return { ok: true as const };
       },
       /**
-       * 低内存档停下追当前一帧(c10a 契约第 17 节;纯的部分在 `render/lowMemorySettle.ts`)。父页在暂停、点击或拖动松开、
+       * 单舞台停下追当前一帧(纯的部分在 `render/settleFrame.ts`)。父页在暂停、点击或拖动松开、
        * 播放到头的那次 `setTime` 之后发。当前这一帧的所有卡(重卡也画)按「直接定位的先、推帧卡要推的帧少的先」一层层活渲,
-       * 画好的层撤兜底、换上活渲;到 `timeoutMs` 还没画好的维持占位符。用户卡、素材效果卡不追:有这一帧的预渲染小尺寸就贴,
-       * 没有才显示 `unsupported` 占位(2026-09-29 用户改语义)。
+       * 画好一层撤一层兜底、换上活渲;不设时限(`timeoutMs` 只给测试与诊断)。本页跑不了的用户卡、素材效果卡不追:有这一帧的
+       * 预渲染结果就贴,没有才显示 `unsupported` 占位(2026-09-29 用户改语义)。
        * 新的 `setTime` / `play` / `setProject` / `setRole` 递增 `catchUpGen`,这一次随之收摊、回 `ok: false`。
        */
-      async settleLowMemory(tSec, opts = {}) {
+      async settleLayers(tSec, opts = {}) {
         const timeoutMs = clampSettleTimeout(opts?.timeoutMs);
         const sec = Math.max(0, Number(tSec) || 0);
-        const empty = (reason: LowMemorySettleResult["reason"]): LowMemorySettleResult =>
+        const empty = (reason: SettleResult["reason"]): SettleResult =>
           ({ ok: false, reason, sec, timeoutMs, ms: 0, drawn: [], timedOut: [], skipped: [] });
         if (ref.current.role !== "front") return empty("role");
         const p = ref.current.project;
@@ -2315,23 +2325,23 @@ export default function StageView() {
         const targetMs = sec * 1000;
         const targetFrame = Math.round(sec * fps);
         const gen = catchUpGen.current;
-        const items: LowMemorySettleItem[] = [];
+        const items: SettleItem[] = [];
         for (const clip of cardClipsAt(sec)) {
           const c = clip as { id: string; start: number; end: number; cardId?: string; parts?: unknown[]; params?: unknown };
           const def = c.cardId ? getCard(c.cardId) : undefined;
-          // 这台设备跑不了的卡(用户卡、素材效果卡)不追:有这一帧的预渲染小尺寸就贴着,没有就是 `unsupported` 占位
+          // 这台设备跑不了的卡(用户卡、素材效果卡)不追:有这一帧的预渲染结果就贴着,没有就是 `unsupported` 占位
           const unsupported = unsupportedHere(c.cardId, def);
           const mountFrame = mountFrameOf(clip, fps);
           const frameMode = def ? clipFrameMode(c as never, def) : undefined;
           const kind = settleKindOf({ unsupported, frameMode, mountFrame, targetFrame });
           items.push({ clipId: c.id, kind, frames: Math.max(0, targetFrame - mountFrame) });
         }
-        const result = await runLowMemorySettle({
+        const result = await runSettle({
           sec, items, timeoutMs, now: realNow,
           aborted: () => gen !== catchUpGen.current,
-          draw: (item, deadline) => drawLowMemory(item, deadline, targetMs, fps),
+          draw: (item, deadline) => drawSettleLayer(item, deadline, targetMs, fps),
         });
-        ref.current.lowMemSettle = result;
+        ref.current.lastSettle = result;
         refreshPlaceholders();
         return result;
       },
@@ -2379,7 +2389,7 @@ export default function StageView() {
         player.setPlanes(ref.current.streamPlanes.map((p, i) => {
           const g = incoming[i];
           const manifest = g.manifest && typeof g.manifest === "object" && g.manifest.bound && g.manifest.segments && g.manifest.inits ? g.manifest : null;
-          // 低内存档:父页带的 `first`(每个分段只解第一帧)只交给播放器,和清单、字节一样不进 React 的 props
+          // 最低一档:父页带的 `first`(每个分段只解第一帧)只交给播放器,和清单、字节一样不进 React 的 props
           const base = g.first === true ? { ...p, first: true as const } : p;
           return manifest ? { ...base, manifest, ...(g.blocks && typeof g.blocks === "object" ? { blocks: g.blocks } : {}) } : base;
         }), fps, over);
@@ -2634,13 +2644,26 @@ export default function StageView() {
         return { ok: true as const };
       },
       async setMediaPolicy(next) {
-        // 低内存档只会从普通改到低(运行中改判),不回头:舞台自己判出来的 true 不被父页的 false 盖掉
+        // 最低一档只进不出:起手的 `lowest=1` 不被父页的 false 盖掉
         // 执行闸门(契约 `online-card-exec-contract.md` 第 3.1 节):带票据的策略让本文档永久不执行用户卡;闸门开过之后再来的票据不收
         const gate = ONLINE ? noteMediaPolicy({ ticket: next?.remote?.ticket ?? null, cardExec: next?.cardExec }) : { acceptTicket: true };
         const remote = next?.remote && !gate.acceptTicket && next.remote.ticket ? { ...next.remote, ticket: null } : next?.remote ?? null;
-        setMediaTierPolicy({ lowMemory: caps.lowMemory || !!next?.lowMemory, remote });
+        const decode = typeof next?.decodeMaxPixels === "number" && Number.isFinite(next.decodeMaxPixels) && next.decodeMaxPixels > 0 ? next.decodeMaxPixels : null;
+        // 网速(`smallFirst`)由这一台自己看(`netSpeed.ts`),父页不给;给了(测试)才照它
+        setMediaTierPolicy({ smallOnly: caps.lowest || next?.smallOnly === true, decodeMaxPixels: decode, smallFirst: typeof next?.smallFirst === "boolean" ? next.smallFirst : netSpeedState().smallFirst, remote });
         commitPlanes();
         return { ok: true as const };
+      },
+      /**
+       * 在线页面换 canvas 卡的渲染路线(舞台闸门试第三级时父页发 `perDocument`;语义 `mechanism/platforms.md`「舞台闸门的步骤」)。
+       * 原地换(`glHost.setRoute` 拆掉旧连接、下一拍按新路线接上),不重建舞台、不重灌项目。桌面运行环境的路线跟项目选项走,这里不收。
+       */
+      async setGlRoute(route) {
+        if (!ONLINE || (route !== "perDocument" && route !== "shared")) return { ok: true as const, route: onlineGlRoute, mode: gl.diag().mode };
+        onlineGlRoute = route;
+        gl.setRoute(route);
+        commitPlanes();
+        return { ok: true as const, route: onlineGlRoute, mode: gl.diag().mode };
       },
       async setLocalHashes(hashes) {
         const next = [...hashes];
@@ -2689,9 +2712,9 @@ export default function StageView() {
       armedFrame: ref.current.beatArmed?.frame ?? null,
       settling: [...ref.current.settling.keys()],
       suppressed: [...ref.current.suppressed],
-      /** 低内存档停下追一帧:正在画 / 画好的层、上一次的结果(c10a 契约第 17 节) */
-      lowMemLive: [...ref.current.lowMemLive],
-      lowMemSettle: ref.current.lowMemSettle,
+      /** 单舞台停下追一帧:正在画 / 画好的层、上一次的结果 */
+      settleLive: [...ref.current.settleLive],
+      lastSettle: ref.current.lastSettle,
       snapshots: [...ref.current.snapshots.keys()],
       awaiting: [...ref.current.awaiting],
       remountGen: [...ref.current.remountGen.entries()],
@@ -2734,7 +2757,8 @@ export default function StageView() {
       cardExec.soundHost?.dispose(); cardExec.soundHost = null;
       player.stop();
       window.removeEventListener("message", onGlPort);
-      if (ONLINE) for (const type of ["webglcontextlost", "error", "loadeddata"]) document.removeEventListener(type, onTrouble, true);
+      if (ONLINE) document.removeEventListener("webglcontextlost", onContextLost, true);
+      stopNetSpeed();
       gl.dispose();
       delete (window as unknown as Record<string, unknown>).__pcGlWorkerDiag;
       window.clearTimeout(ref.current.settle);

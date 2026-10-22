@@ -1,10 +1,9 @@
 /**
- * 在线浏览器模式:一段声音在本页合成、还是用已有产物(`docs/semantics/product/platforms.md`「卡片声音的平台边界」;
+ * 在线浏览器模式:一段声音在本页合成、还是用已有产物(不分身份、不分档,2026-10-07 用户定;原来按档一律不合成的做法同日撤销)(`docs/semantics/product/platforms.md`「卡片声音的平台边界」;
  * 做法 `mechanism/rendering.md`「声音的轻重」)。
  *
  *   - 这台设备跑不了它的代码 → 不合成。内置卡在编辑页面里跑;同步来的用户卡与素材效果卡只在隔离的声音线程里跑(`cardAudio.ts` 的
  *     `cardAudioRoute`):本页没有那条线程、这张卡在线程里载入不成、要读素材的采样、与内置卡串在一起的,都算跑不了,说明里写原因;
- *   - 低内存档 → 不合成(它现有的规则:不活渲、没有成本记录的一律按重;本模块不改它);
  *   - 其余:测一次合成耗时(不出声,`src/audio/soundCost.ts`),判轻才在浏览器里合成,判重用已有产物。
  *
  * 桌面运行环境不走这里的判定:桌面一律能合成(`decideClipSound` 直接回「合成」)。
@@ -24,14 +23,12 @@ import { ONLINE_CARD_AUDIO_BLOCKED } from "../../online/soundPolicy";
 
 export type SoundDecision =
   | { synth: true; verdict?: SoundVerdict }
-  | { synth: false; reason: "not-runnable" | "low-memory" | "heavy"; message: string; verdict?: SoundVerdict };
+  | { synth: false; reason: "not-runnable" | "heavy"; message: string; verdict?: SoundVerdict };
 
-export const ONLINE_SOUND_LOW_MEMORY = "这台设备(低内存档)不合成声音,只用已经同步的声音;请在电脑上的 PromptCut 里生成后同步";
 export const ONLINE_SOUND_HEAVY = "这段声音在这台设备上合成太慢(判重),要用已经生成的声音;请在电脑上的 PromptCut 里生成后同步";
 
 interface Env {
   online: () => boolean;
-  lowMemory: () => boolean;
   store: () => SoundCostStore | Promise<SoundCostStore>;
   device: () => string;
 }
@@ -40,8 +37,7 @@ const memory = createMemorySoundCostStore();
 const RUN_MODE = typeof import.meta.env !== "undefined" && import.meta.env.DEV === false ? "build" : "dev";
 const defaults: Env = {
   online: onlinePage,
-  // 档位与 L2 的成本表由 `onlineSoundBoot.ts` 在页面里接上(那两个模块在 Node 单测里载不进来);不接时按普通档、只记在页面内存
-  lowMemory: () => false,
+  // L2 的成本表由 `onlineSoundBoot.ts` 在页面里接上(在 Node 单测里不接);不接时只记在页面内存
   store: () => memory,
   device: () => soundDeviceString({
     ua: typeof navigator === "undefined" ? "" : navigator.userAgent,
@@ -118,7 +114,6 @@ export function clipSoundBlockedMessage(project: Project, clip: TrackClip): stri
 export async function decideClipSound(project: Project, clip: TrackClip, signal?: AbortSignal): Promise<SoundDecision> {
   if (!env.online()) return { synth: true };
   if (!clipSoundRunnable(project, clip)) return { synth: false, reason: "not-runnable", message: clipSoundBlockedMessage(project, clip) };
-  if (env.lowMemory()) return { synth: false, reason: "low-memory", message: ONLINE_SOUND_LOW_MEMORY };
   const target = soundTargetOf(project, clip);
   if (!target) return { synth: false, reason: "not-runnable", message: ONLINE_CARD_AUDIO_BLOCKED };
   const verdict = await theJudge().judge(target, signal);
@@ -128,13 +123,12 @@ export async function decideClipSound(project: Project, clip: TrackClip, signal?
 /** 一份独立音效配方(还没有片段时:新加提示音、键盘声)此刻要不要在本页合成 */
 export async function decideRecipeSound(recipe: SoundEffectRecipe, signal?: AbortSignal): Promise<SoundDecision> {
   if (!env.online()) return { synth: true };
-  if (env.lowMemory()) return { synth: false, reason: "low-memory", message: ONLINE_SOUND_LOW_MEMORY };
   const verdict = await theJudge().judge(recipeSoundTarget(recipe), signal);
   return verdict.heavy ? { synth: false, reason: "heavy", message: ONLINE_SOUND_HEAVY, verdict } : { synth: true, verdict };
 }
 
 /** 判重、又没有产物的声音交给渲染节点的接口。第一段没有接收方(见报告「没做成的」),不接时回 false,调用方照「没有产物」提示 */
-type SoundBackfill = (request: { project: Project; clip: TrackClip; reason: "heavy" | "low-memory" | "not-runnable" }) => Promise<boolean>;
+type SoundBackfill = (request: { project: Project; clip: TrackClip; reason: "heavy" | "not-runnable" }) => Promise<boolean>;
 let backfill: SoundBackfill | null = null;
 export function setSoundBackfillHandler(handler: SoundBackfill | null): void { backfill = handler; }
 export async function requestSoundBackfill(request: Parameters<SoundBackfill>[0]): Promise<boolean> {

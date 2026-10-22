@@ -688,7 +688,7 @@ test('BL-list 清单计划:依赖下层的卡由切分方按自己的指纹出�
   const tiltedList = splitListOf(tilted, ['glass'], { ownListStreams: true });
   assert.deepEqual(tiltedList.overrides.streams.map(s => [s.kind, s.plane, s.clipIds.join(), 'browserOnly' in s]), [['below', 'stage', 'glass', false]]);
   assert.ok(tiltedList.streams.length > 0 && tiltedList.streams.every(t => t.requires.belowDependent === true && t.requires.envFingerprint === OWN));
-  // 预渲染重试计划(低内存档发的)不切流
+  // 预渲染重试计划(旧页面发的 backfill 档)不切流
   const entry2 = entryOf(p);
   const listed = clipsPlanTaskOf({ projectId: 'below-p', projectRev: 3, clips: ['glass'] });
   const backfill = { ...listed, id: listed.id.replace('#clips:', '#backfill:'), resultKey: listed.resultKey.replace('#clips:', '#backfill:'), priority: 'backfill' };

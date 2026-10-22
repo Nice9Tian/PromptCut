@@ -24,17 +24,9 @@
  *         `shared.admin.ok` 上（与 C6.5 的 `list-bans` 回 `bans` 同一做法）；`invite-status` 也接受包在 `status` 里。
  *       - `expiresAt`、`revokedAt` 是毫秒时间戳（同 auth 契约第 8 节票据的 `exp`）。
  *       - 签发、过期按文档服务注入的时钟（`auth-kit.mjs` 的 `testClock`）算。
- *   K2  低内存档判定（契约第 8 节）：`src/online/lowMemory.ts`（契约第 11 节点名的文件）导出一个判定函数，
- *       名字取 `LOW_MEMORY_DECIDERS` 之一。调用约定：`fn(env)`，`env` 见 `lowMemoryEnv()`；同时把同样的桩装到
- *       `globalThis.navigator` / `screen` / `matchMedia` / `localStorage` 上，所以「从参数读」和「从全局读」两种写法都认。
- *       回布尔，或回 `{ lowMemory: boolean }`。设备设置「显示档」存在 localStorage，值 `'auto' | 'low' | 'normal'`，
- *       测试经 `env.override`（`'low' | 'normal' | undefined`）给，不猜 localStorage 的键名。
- *       `src/online/mode.ts` 按契约第 2 节读 `import.meta.env`，node 里没有，测试用 `mock.module` 换成 `{ ONLINE }`。
- *   K3  能力闸（契约第 8 节）：
- *       - `src/render/mediaTier.ts` 的 `chooseTier` / `playbackUrl` 在 `opts.lowMemory === true` 时恒给小尺寸；
- *         没有小尺寸 → `tier: 'none'`（或 url 为空）、`awaiting: true`，不给原尺寸地址。探测：`src/online/lowMemory.ts` 存在。
- *       - `src/editor/stageSwap.ts` 在低内存档不追活渲：它从 `src/online/lowMemory.ts` 取当前档位，
- *         测试把那个模块整个换成桩，导出 `LOW_MEMORY_STUB_EXPORTS` 里的全部别名（都说「是低内存档」）。
+ *   K2  旧档位的判定（契约第 8 节）：2026-10-07 用户定撤销，2026-10-22（`claude/online-browser`）连同它的用例删掉，见下文「K2 / K3 档位」。
+ *   K3  能力闸（契约第 8 节）：`src/render/mediaTier.ts` 的「只用小尺寸」分支（现名 `opts.smallOnly`，最低一档）与 `src/editor/stageSwap.ts`
+ *       的单舞台闸（现名 `SwapHost.singleStage()`）。探测：`src/online/onlineTier.ts` 存在。
  *   K4  预渲染小尺寸（契约第 9 节）：
  *       - 尺寸规则是一个纯函数 `(width, height) → { width, height }`，在 `SMALL_SIZE_FILES` 之一里，名字取
  *         `SMALL_SIZE_NAMES` 之一；探测：找得到这个函数。
@@ -52,15 +44,14 @@
  *       在 `ONLINE` 时让 `fetch('/api/…')` 抛错（同步抛或 reject 都算），别的地址照常转给原来的 `fetch`；
  *       `ONLINE` 为 false 时不拦。
  *       在线构建的静态检查：产物里以 `/api/` 开头、后面紧跟地址的字面量（`apiLiterals`）为 0；守卫判前缀用的 `"/api/"` 不算。
- *   K7  单舞台（契约第 8.1 节）：仍由 `src/editor/previewMode.ts` 定开几个舞台——`ONLINE` 时 `dualStage()` 恒为 false，
- *       `stageSrc('A')` 是同源地址并带 `preview=stage`（舞台据此渲 live 变体）。探测：`src/online/lowMemory.ts` 存在。
+ *   K7  单舞台（契约第 8.1 节）：仍由 `src/editor/previewMode.ts` 定开几个舞台；2026-10-22 起由舞台闸门的档位定（停在第一级只开跨源 A），
+ *       `stageSrc('A')` 一律跨源、带 `preview=stage`。探测：`src/online/onlineTier.ts` 存在。
  *
  * # 集成对账（`claude/c10a-integ`，2026-09-27；逐条理由见 `docs/archive/agent-reports/AGENT-c10a-integ.md`）
  *
  *   K1  与实现一致，未改。
- *   K2  判定是 `lowMemoryMode(online, { probe, override, session })`（`online` 由调用方传，判定按会话定一次），
- *       设备信息 `probeDevice(env)`；舞台 `detectHostCapabilities({ online })`。见 `pickDecider`、`hostCapabilitiesOf`。
- *   K3  `mediaTier` 的 `opts.lowMemory` 与假设一致；`stageSwap` 的闸在 `SwapHost.lowMemory()`，见 `lowMemorySwapHost`。
+ *   K2  （已删，见上）
+ *   K3  `mediaTier` 的「只用小尺寸」分支与 `stageSwap` 的单舞台闸，见 `singleStageSwapHost`（2026-10-22 改名）。
  *   K4  尺寸规则 `server/bakery/small-bitmap.mjs` 的 `smallSize({ projectWidth, projectHeight })`；清单 `small`、推 `px`
  *       与假设一致；就绪索引不收小尺寸，两档分开记在清单里（导出前核对 `src/export/originals.ts` 只认 `frames`）。
  *   K5  `src/export/mp4Mux.ts` 的 `Mp4Muxer` + `MemorySink`，构造时就要解码配置；见 `muxerAdapter`。
@@ -150,140 +141,22 @@ export function filesContaining(dir, needle) {
   return hits;
 }
 
-// ================================================================== K2 低内存档判定
-
-export const LOW_MEMORY_FILE = 'src/online/lowMemory.ts';
-/** 集成对账后（K2）：实现导出的是这三个。`lowMemoryMode(online, deps)` 是「本次会话是不是低内存档」，只在在线模式里判 */
-export const LOW_MEMORY_EXPORTS = ['lowMemoryMode', 'probeDevice', 'resetLowMemoryForTest'];
+// ================================================================== K2 / K3 档位(旧档位判定 2026-10-07 撤销)
 
 /**
- * 判定用的环境桩。
- * @param {object} o
- * @param {number|undefined} o.deviceMemory  `navigator.deviceMemory`（undefined = 没有这个字段，如 iOS）
- * @param {number} o.maxTouchPoints
- * @param {number} o.width   `screen.width`
- * @param {number} o.height  `screen.height`
- * @param {boolean} o.coarse          `(pointer: coarse)` 是否匹配
- * @param {boolean} [o.anyCoarse]     `(any-pointer: coarse)` 是否匹配（缺省同 coarse）
- * @param {'low'|'normal'|undefined} [o.override]  设备设置「显示档」；undefined = 自动
- * @param {string} [o.userAgent]
+ * 2026-10-22(`claude/online-browser`):旧档位撤销(`docs/semantics/product/platforms.md`「在线浏览器」),原来的 K2 判定
+ * (原来的判定模块与设备设置「显示档」)整个删掉,测它的两份用例文件一并删除。
+ * 这一档管的事拆到三处:只有一个舞台(舞台闸门第一级,`src/online/onlineTier.ts`)、最低一档(取档策略的 `smallOnly`)、身份为手机。
+ * 下面的探测与桩改认 `onlineTier.ts`。
  */
-export function lowMemoryEnv({ deviceMemory, maxTouchPoints = 0, width = 1920, height = 1080, coarse = false, anyCoarse = coarse, override, userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36' }) {
-  const matchMedia = (q) => {
-    const s = String(q).replace(/\s+/g, '');
-    const matches = s.includes('(any-pointer:coarse)') ? anyCoarse : s.includes('(pointer:coarse)') ? coarse : false;
-    return { matches, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, onchange: null };
-  };
-  const navigator = { userAgent, maxTouchPoints, platform: 'x', language: 'zh-CN', hardwareConcurrency: 8 };
-  if (deviceMemory !== undefined) navigator.deviceMemory = deviceMemory;
-  const screen = { width, height, availWidth: width, availHeight: height };
-  return {
-    // 平铺的字段（纯函数写法）
-    deviceMemory, maxTouchPoints, screenWidth: width, screenHeight: height, coarsePointer: coarse || anyCoarse,
-    override: override ?? null, setting: override ?? 'auto', mode: override ?? 'auto',
-    // 仿浏览器的对象（从全局或从参数读的写法）
-    navigator, screen, matchMedia,
-  };
-}
-
-const memStore = () => {
-  const m = new Map();
-  return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k), clear: () => m.clear(), key: (i) => [...m.keys()][i] ?? null, get length() { return m.size; } };
-};
-
-/** 把桩装到全局（K2 的「从全局读」写法） */
-export function installBrowserGlobals(env) {
-  const g = globalThis;
-  const saved = {};
-  for (const k of ['navigator', 'screen', 'matchMedia', 'localStorage', 'window']) saved[k] = Object.getOwnPropertyDescriptor(g, k);
-  const def = (k, v) => Object.defineProperty(g, k, { value: v, configurable: true, writable: true, enumerable: true });
-  def('navigator', env.navigator);
-  def('screen', env.screen);
-  def('matchMedia', env.matchMedia);
-  if (!saved.localStorage?.value) def('localStorage', memStore());
-  if (!saved.window) def('window', g);
-  return () => {
-    for (const [k, d] of Object.entries(saved)) {
-      if (d) Object.defineProperty(g, k, d);
-      else delete g[k];
-    }
-  };
-}
+export const TIER_FILE = 'src/online/onlineTier.ts';
 
 /**
- * 从 `lowMemory.ts` 里取判定（K2，集成对账后）。
- *
- * 实现的形状：`lowMemoryMode(online, { probe, override, session })` 回布尔；`online` 由调用方传进来
- * （实现不 import `mode.ts`，那个模块读 `import.meta.env`，Node 里没有），载入时判一次、同一会话不再改
- * （改设置下次载入生效），所以每次判定前先 `resetLowMemoryForTest()`。设备信息由 `probeDevice(env)`
- * 从仿浏览器的对象（`navigator` / `screen` / `matchMedia`）读；`env.override` 是设备设置「显示档」。
- * `online` 取这个进程里 `src/online/mode.ts` 的 `ONLINE`（用例用 `mock.module` 换成了桩）。
+ * K3(集成对账后,2026-10-22 改名):`stageSwap.ts` 的单舞台闸在 `SwapHost.singleStage()` 上(`Preview.tsx` 按此刻挂着几个舞台给)。
+ * 用例的 `setSwapHost` 经这里补上 `singleStage`。
  */
-export function pickDecider(mod) {
-  const lacking = LOW_MEMORY_EXPORTS.filter((n) => typeof mod[n] !== 'function');
-  if (lacking.length) assert.fail(`${LOW_MEMORY_FILE} 要导出 ${LOW_MEMORY_EXPORTS.join(' / ')}；缺 ${lacking.join(', ')}；实际导出：${Object.keys(mod).join(', ') || '（无）'}`);
-  return async (env) => {
-    const { ONLINE } = await import(new URL('../../src/online/mode.ts', import.meta.url).href);
-    mod.resetLowMemoryForTest();
-    try {
-      return mod.lowMemoryMode(ONLINE, { probe: mod.probeDevice(env), override: env.override ?? 'auto', session: null });
-    } finally {
-      mod.resetLowMemoryForTest();
-    }
-  };
-}
-
-/**
- * 舞台的 `hostCapabilities`（K2，集成对账后）：`detectHostCapabilities({ online })`，`online` 由舞台页
- * （`StageView.tsx`）按 `ONLINE` 传；判定按会话定一次，所以前后各清一次。
- * 调用前由用例把桩装到全局（`installBrowserGlobals`）。
- */
-export async function hostCapabilitiesOf(stageRpc, lowMemoryMod) {
-  const { ONLINE } = await import(new URL('../../src/online/mode.ts', import.meta.url).href);
-  lowMemoryMod.resetLowMemoryForTest();
-  try {
-    return stageRpc.detectHostCapabilities({ online: ONLINE });
-  } finally {
-    lowMemoryMod.resetLowMemoryForTest();
-  }
-}
-
-/** 跑一次判定：同时给参数与全局，回布尔 */
-export async function decideWith(decider, env) {
-  const restore = installBrowserGlobals(env);
-  try {
-    const r = await decider(env);
-    if (typeof r === 'boolean') return r;
-    if (r && typeof r === 'object' && typeof r.lowMemory === 'boolean') return r.lowMemory;
-    assert.fail(`判定函数应回布尔或 { lowMemory }：${JSON.stringify(r)}`);
-  } finally {
-    restore();
-  }
-}
-
-/**
- * K3：`src/online/lowMemory.ts` 换成桩时的导出（集成对账后照实现的导出名，判定都说 `low`）。
- * `stageSwap.ts` 并不从这个模块取档位（见 `lowMemorySwapHost`），桩只是免得被传递载入的模块读到真的判定。
- */
-export function lowMemoryStubExports(low = true) {
-  const f = () => low;
-  return {
-    lowMemoryMode: f, judgeLowMemory: f, downgradedThisSession: () => false,
-    probeDevice: () => ({ deviceMemory: undefined, coarsePointer: false, maxTouchPoints: 0, screenWidth: 0, screenHeight: 0 }),
-    readDisplayTier: () => 'auto', setDisplayTier: () => ({ notice: '' }),
-    onLowMemoryChange: () => () => {}, noteRuntimeTrouble: () => ({ downgradedNow: false, notice: null }), resetLowMemoryForTest: () => {},
-    LOW_MEMORY_DEVICE_GIB: 4, LOW_MEMORY_TOUCH_POINTS: 2, LOW_MEMORY_SCREEN_MAX: 1600, DECODE_FAILURES_TO_DOWNGRADE: 3,
-    DISPLAY_TIER_KEY: 'pc.device.displayTier', SESSION_DOWNGRADE_KEY: 'pc.session.lowMemory',
-    LOW_MEMORY_TEXT: { enter: '', downgraded: '', awaitingUploader: '等待上传方' }, TO_NORMAL_NOTICE: '', NEXT_LOAD_NOTICE: '',
-  };
-}
-
-/**
- * K3（集成对账后）：`stageSwap.ts` 的低内存档闸在 `SwapHost.lowMemory()` 上（`Preview.tsx` 按本次会话的判定给），
- * 不从 `lowMemory.ts` 取。用例的 `setSwapHost` 经这里补上 `lowMemory`。
- */
-export function lowMemorySwapHost(host, low = true) {
-  return { ...host, lowMemory: () => low };
+export function singleStageSwapHost(host, single = true) {
+  return { ...host, singleStage: () => single };
 }
 
 // ================================================================== K4 预渲染小尺寸

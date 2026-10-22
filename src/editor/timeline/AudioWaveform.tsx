@@ -43,7 +43,7 @@ export function loadWave(url: string): Promise<Wave | null> {
 
 export function AudioWaveform({ media, clip, width }: { media: MediaAsset; clip: TrackClip; width: number }) {
   const [wave, setWave] = useState<Wave | null>(null);
-  // 桌面是 media.url;在线浏览器模式经取档判据换成远程素材服务的地址(低内存档只给小尺寸),没就绪时是 "" 不取
+  // 桌面是 media.url;在线浏览器模式经取档判据换成远程素材服务的地址(只用小尺寸的素材只给小尺寸),没就绪时是 "" 不取
   const url = usePreviewMediaUrl(media);
   const urlRef = useRef(url);
   urlRef.current = url;

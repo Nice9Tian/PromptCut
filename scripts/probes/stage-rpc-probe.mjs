@@ -120,7 +120,7 @@ try {
   check(!!fa && !!fb, 'both stage iframes are attached', { a: fa?.url(), b: fb?.url() });
   out.caps = await page.evaluate(() => window.__caps);
   out.capsB = await page.evaluate(() => window.__capsB);
-  check(out.caps && typeof out.caps.prerender === 'boolean' && typeof out.caps.lowMemory === 'boolean' && typeof out.caps.offscreenGl === 'boolean', 'handshake carries hostCapabilities', out.caps);
+  check(out.caps && typeof out.caps.prerender === 'boolean' && typeof out.caps.compact === 'boolean' && typeof out.caps.offscreenGl === 'boolean', 'handshake carries hostCapabilities', out.caps);
   // stageId 只是实例名:两个实例各报自己的 id,而它们此刻的角色都还是缺省的 front
   check(out.caps.stageId === 'A' && out.capsB.stageId === 'B', 'stageId is the instance name (A / B), not a role', { a: out.caps.stageId, b: out.capsB.stageId });
 

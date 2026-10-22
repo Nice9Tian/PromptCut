@@ -19,7 +19,7 @@
  */
 
 import { ONLINE } from "../online/mode";
-import { lowMemoryMode } from "../online/lowMemory";
+import { singleStageTier, tierStart } from "../online/onlineTier";
 import { onlineStageState, stageLayout } from "../online/stageOrigins";
 import { STAGE_ENTRY_FILE } from "../online/isolation/stageGuard";
 
@@ -75,19 +75,19 @@ export function stageOrigins(): Record<StageId, string> | null {
  */
 export function dualStage(): boolean {
   /*
-   * 在线浏览器模式(C10 契约第 2 节):普通档开两个同站跨源的舞台,舞台源来自运行配置;
-   * 低内存档开跨源单舞台 A(不开后台舞台 B);读不到配置或握手失败则不挂载舞台,不再退回同源单舞台(2026-10-14 用户定)。
+   * 在线浏览器模式(C10 契约第 2 节):开两个同站跨源的舞台,舞台源来自运行配置;舞台闸门停在第一级(精简模式、低配模式)
+   * 只开跨源单舞台 A(`online/onlineTier.ts`);握手失败退回跨源单舞台 A;读不到配置则不挂载舞台,不再退回同源单舞台(2026-10-14 用户定)。
    * 舞台端口表在线上一律不看。
    */
   if (ONLINE) {
     const st = onlineStageState();
-    return stageLayout({ lowMemory: lowMemoryMode(true), origins: st.origins, handshake: st.handshake, pageOrigin: typeof location === "undefined" ? undefined : location.origin }) === "dual";
+    return stageLayout({ single: singleStageTier(), origins: st.origins, handshake: st.handshake, pageOrigin: typeof location === "undefined" ? undefined : location.origin }) === "dual";
   }
   return previewMode() === "stage" && stageOrigins() !== null;
 }
 
 /**
- * 在线普通档首次握手的过渡期(`stageHandshake.ts` 的 `interim`)已撤销（2026-10-14 用户定：所有舞台一律跨源隔离，撤掉退回同源单舞台的路）。
+ * 在线双舞台首次握手的过渡期(`stageHandshake.ts` 的 `interim`)已撤销（2026-10-14 用户定：所有舞台一律跨源隔离，撤掉退回同源单舞台的路）。
  * 直接返回 false。
  */
 export function interimStage(): boolean {
@@ -95,9 +95,9 @@ export function interimStage(): boolean {
 }
 
 /**
- * 在线浏览器模式的**单舞台 live 预览**(`docs/plan/c10a-contract.md` 第 8.1 节):同源单舞台 A 按 live 变体渲
+ * 在线浏览器模式的**单舞台 live 预览**(`docs/plan/c10a-contract.md` 第 8.1 节):跨源单舞台 A 按 live 变体渲
  * (素材层画进舞台、六个平面生效,相当于双舞台里 `&preview=stage` 的那一份),A 就是可见舞台,没有 B。
- * 普通档与低内存档都走它;`?preview=legacy` 在在线页面上不认(没有预渲染进程给整帧)。
+ * 双舞台与单舞台(舞台闸门第一级、握手失败的退回)都走它;`?preview=legacy` 在在线页面上不认(没有预渲染进程给整帧)。
  */
 export function singleLiveStage(): boolean {
   return ONLINE;
@@ -133,11 +133,13 @@ export function stageSrc(id: StageId, opts: { dual?: boolean } = {}): string {
   const platform = new URLSearchParams(location.search).get("platform") === "browser" ? "&platform=browser" : "";
   /*
    * `dual=1`:这一台舞台有后台舞台做伴,宿主能力表照实报「能测量、能追活渲」(C10 契约第 2 节)。
-   * 在线页面另带 `lm=0|1`:父页判出来的档。跨源的舞台读不到编辑器页那个源的设备设置(显示档存在页面本地),
-   * 自己判可能判出另一档 —— 舞台照父页的判定走。
+   * 在线页面另带父页按闸门定下的几样(跨源的舞台读不到编辑器页那个源的页面本地存储,崩溃记录与闸门结果都在编辑器页):
+   * `gl=shared|perDocument` 起手的 canvas 渲染路线(试第三级时父页经 RPC `setGlRoute` 换)、`compact=1` 只有一个舞台
+   * (图集按小的上限开)、`lowest=1` 最低一档(素材起手只用小尺寸,不等父页的取档策略到了才改)。
    */
   const dualFlag = dual ? "&dual=1" : "";
-  const tier = ONLINE ? `&lm=${lowMemoryMode(true) ? 1 : 0}` : "";
+  // 只按页面载入时定下的起手样子拼(`tierStart`):试的途中换路线走 RPC `setGlRoute`,基准卡判出最低一档走取档策略,都不改地址(改了 iframe 就重新载入)
+  const tier = ONLINE ? `&gl=${tierStart().route}${dual ? "" : "&compact=1"}${tierStart().lowest ? "&lowest=1" : ""}` : "";
   /*
    * 在线的跨源舞台载单独的舞台入口 `stage.html`(同一份脚本包;契约 `online-card-exec-contract.md` 第 3.3 节):它带舞台的内容安全策略
    * (`<meta>` 兜底),加固与自检按这个路径认它(`isolation/stageGuard.ts`)。桌面运行环境端口未起时的退回地址一个字不变。

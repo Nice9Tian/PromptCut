@@ -15,7 +15,7 @@
  *     u   仓库用户卡 `mu-animated-shiny-text`(有层)
  *     s1  内容库同步来的用户卡 `probe-synced-card`(有层)
  *     s2  同一张同步卡(先没有层,后补)
- *     s3  同一张同步卡(一直没有层;低内存档核预渲染重试用)
+ *     s3  同一张同步卡(一直没有层;模拟手机那一段核清单计划用)
  *     x   未知 id `probe-unknown-card`
  *   4～8 秒(核沙漏在屏幕上的大小;2026-10-21 起跑不了的卡也是沙漏,没有「本地 PC 辅助渲染」图标):
  *     s4、s5  同步卡,两个 320×180 的小框左右挨着(没有层):沙漏各在自己的框里、不相交
@@ -25,7 +25,7 @@
  * select / color 四种控件和 defaults。
  *
  * 断言:
- *   普通档(电脑浏览器,两个跨源舞台):
+ *   电脑浏览器(两个跨源舞台):
  *     - 时间轴标签:s1 →「探针同步卡」,x →「未知卡片」;
  *     - 有层的 s1(故意运行不了的同步卡):层表认到它,舞台不出图标;时间轴没有徽标;
  *       u(仓库用户卡,本页能运行;2026-10-06 新语义)测完判轻:在舞台里活渲(没有快照、没有图标)、不在页面发布的清单计划里;
@@ -38,10 +38,12 @@
  *     - 另一成员(乙)页面一打开就每 100 ms 采样一次,直到最终状态:任何片段任何一次采样都没有图标、没有徽标;
  *       没层的 s2、s3 是沙漏;
  *     - 甲、乙两页的测量(常驻探针)从头到尾没测过同步卡片段,测量门按「卡片源码同步完」开;
- *     - 未知卡片 ouc-x(两边都没有定义)从头到尾没被测过,不在清单计划里;低内存档的预渲染重试清单也没有它;
+ *     - 未知卡片 ouc-x(两边都没有定义)从头到尾没被测过,不在清单计划里(模拟手机那一页的清单计划也没有它);
  *     - 乙在页面里点「首页」、加入另一个带同步卡的项目(丁先摆好片段):测量门按新连接等卡片源码同步完,新项目的同步卡没被测过。
- *   低内存档(仿手机):`__pcBackfill()` 在等的片段含 s3;s3 是沙漏;停下追一帧之后仓库用户卡 u 是活渲的精确帧
- *     (2026-10-21 用户定「暂停时渲染出精确的帧」,低内存档不再挡本页能运行的用户卡),页面上没有「本地 PC 辅助渲染」。
+ *   模拟手机(安卓、内存 4 GB):舞台闸门停在第一级(精简模式,只有一个舞台);本页发布的清单计划(`__pcPlanPublisher()`,普通优先级)
+ *     含 s3、不含 ouc-x;s3 是沙漏;停下追一帧之后仓库用户卡 u 是活渲的精确帧(2026-10-21 用户定「暂停时渲染出精确的帧」),
+ *     页面上没有「本地 PC 辅助渲染」。原来这一段是「低内存档」,看的是为弱设备补发的预渲染任务(`__pcBackfill()`);那一档与那一类任务
+ *     2026-10-07 撤销、2026-10-22 从代码里去掉,改看清单计划。
  * 不打印口令;结果最后一行是一行 JSON(`ok`、`fails`、各项数字),截图在 --out。
  *
  * 环境变量 `PC_CHROME_ARGS`(空格分隔)只把参数原样透传给探针起的 Chrome,排障取证用,例如 `--log-net-log=<文件>` 抓网络日志
@@ -60,6 +62,7 @@ import { startHostedCombo } from '../../server/hosted/combo.mjs';
 import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
 import { resumeRecord, plantResume, switchSharedInPlace } from './lib/online-resume-entry.mjs';
 import { createSharedProject, buildAuthProtocols } from '../../server/auth/client.mjs';
+import { androidUaData } from './lib/android-ua.mjs';
 
 const argv = process.argv.slice(2);
 const arg = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : dflt; };
@@ -76,7 +79,7 @@ fs.mkdirSync(OUT, { recursive: true });
 const fails = [];
 /** 耗时只记录(docs/semantics/guide_files/verification.md「耗时只记录,不当闸门」):u 测完之后还在快照上停了多久只写进 TIMINGS 行,不决定过不过 */
 const timingLog = createTimings('online-user-cards-probe');
-const out = { ok: false, out: OUT, normal: {}, lowmem: {} };
+const out = { ok: false, out: OUT, normal: {}, single: {} };
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ' :: ' + JSON.stringify(extra).slice(0, 600))); return !!cond; };
 const say = (k, v) => console.log(JSON.stringify({ [k]: v }));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -99,7 +102,7 @@ const SYNCED_DEFAULTS = { text: 'synced', size: 48, side: 'left', tint: '#ff8800
 const SYNCED_SOURCE = `/** 探针:内容库同步来的用户卡(本机构建里没有) */
 import type { CardDef, CardProps } from "../../kernel/types";
 interface Params { text: string; size: number; side: string; tint: string }
-// 2026-10-06 新语义:同步来的用户卡在隔离生效的普通档里会被执行。本探针测的是「在线页面运行不了的同步卡」(没有层 → 沙漏、有层 → 贴快照、
+// 2026-10-06 新语义:同步来的用户卡在隔离生效的在线页面里会被执行。本探针测的是「在线页面运行不了的同步卡」(没有层 → 沙漏、有层 → 贴快照、
 // 不测量、进清单计划),所以让这张卡故意运行不了:转译前的预检会拦下 namespace(状态 unsupported-syntax)。同步卡真的运行的断言在 online-card-security-probe 等。
 export namespace ProbeUnsupported { export const marker = 1; }
 const SIDES = [{ value: "left", label: "靠左" }, { value: "right", label: "靠右" }];
@@ -192,6 +195,7 @@ async function newPage(label, { mobile = false } = {}) {
       userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36',
       viewport: { width: 412, height: 915, deviceScaleFactor: 2, isMobile: true, hasTouch: true, isLandscape: false },
     });
+    await androidUaData(page); // userAgentData 也报安卓手机(在线页面按它判身份与「安卓、内存不到 8 GB」)
     await page.evaluateOnNewDocument(() => { Object.defineProperty(Navigator.prototype, 'deviceMemory', { configurable: true, get: () => 4 }); });
   } else {
     await page.setViewport({ width: 1600, height: 900 });
@@ -216,7 +220,8 @@ async function join(page, username, name = NAME, { reload = true, projectId = ma
   });
   if (reload) {
     await plantResume(page, record);
-    await page.goto(`${SITE}/editor`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+    // `?layout=desktop`:模拟手机的那一页身份是手机,缺省进手机版界面;这支探针看的是桌面界面上的选择器(界面跟身份走,`?layout=` 只给验收用)
+    await page.goto(`${SITE}/editor?layout=desktop`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
   } else {
     await switchSharedInPlace(page, record);
   }
@@ -234,7 +239,7 @@ async function stageShot(page, name) {
   return `${name}.png`;
 }
 const store = (page, src, ...a) => page.evaluate((s, a2) => new Function('S', 'args', s)(window.__pcStore, a2), src, a);
-/** 可见舞台那一帧(`?stage=1`,两个舞台里此刻可见的那一个;低内存档只有一个) */
+/** 可见舞台那一帧(`?stage=1`,两个舞台里此刻可见的那一个;只有一个舞台时就是它) */
 async function visibleStage(page) {
   const frames = page.frames().filter((f) => /[?&]stage=1/.test(f.url()));
   for (const f of frames) {
@@ -350,7 +355,7 @@ try {
   const put = await node.ask({ type: 'content.put', kind: 'card-source', key: SYNCED_KEY, body: SYNCED_SOURCE });
   check(put.type === 'content.stored', '创建者写卡片源码(card-source)', put);
 
-  /* ============================================================ 普通档成员:摆片段 */
+  /* ============================================================ 电脑浏览器成员:摆片段 */
   const A = await newPage('甲');
   await join(A, '甲');
   const tiles = [[0, 0], [640, 0], [1280, 0], [0, 360], [640, 360], [1280, 360]];
@@ -392,7 +397,7 @@ try {
   for (const k of ['b', 'u', 's1', 's7']) await writeManifests(node, L[k]);
   await writeLayerMap(node, setup.projectId, setup.fps, [L.b, L.u, L.s1, L.s7]);
 
-  /* ============================================================ 普通档 */
+  /* ============================================================ 电脑浏览器 */
   const n = {};
   n.cardSources = await until('页面从内容库认出同步卡', () => A.evaluate((id) => {
     const d = window.__pcCardSources?.();
@@ -436,7 +441,7 @@ try {
   n.online = await until('层表认到有层的 s1', async () => { const d = await A.evaluate(() => window.__pcOnlineSnapshots?.() ?? null); return d?.layers?.some((l) => l.clipId === ID.s1) ? d : null; }, 45_000)
     ?? await A.evaluate(() => window.__pcOnlineSnapshots?.() ?? null);
   const manifestsOf = (id) => n.online?.layers?.find((l) => l.clipId === id) ?? null;
-  check(n.requests.snapS1 === 0 && n.requests.pxSmall === 0, '普通档(撤除每张卡 HTML 快照后):不请求 snap/ 与小尺寸快照 px/', n.requests);
+  check(n.requests.snapS1 === 0 && n.requests.pxSmall === 0, '电脑浏览器(撤除每张卡 HTML 快照后):不请求 snap/ 与小尺寸快照 px/', n.requests);
   check(!!manifestsOf(ID.s1), '有层的 s1:层表认到这一层', { s1: manifestsOf(ID.s1) });
   // 时间轴:任何片段都没有徽标(层表已取到、覆盖已确认之后再核)
   await sleep(3000);
@@ -452,10 +457,10 @@ try {
     const clips = d?.lastClips ?? [];
     return [ID.s1, ID.s2, ID.s3].every((id) => clips.includes(id)) ? d : null;
   }, 90_000) ?? await A.evaluate(() => window.__pcPlanPublisher?.() ?? null);
-  check([ID.s1, ID.s2, ID.s3].every((id) => (n.plan?.lastClips ?? []).includes(id)), '普通档清单计划含同步卡片段(s1、s2、s3)', { lastClips: n.plan?.lastClips, log: n.plan?.log?.slice(-3) });
+  check([ID.s1, ID.s2, ID.s3].every((id) => (n.plan?.lastClips ?? []).includes(id)), '电脑浏览器清单计划含同步卡片段(s1、s2、s3)', { lastClips: n.plan?.lastClips, log: n.plan?.log?.slice(-3) });
   // 新语义:u 判轻,不进预渲染集合,所以不在清单计划里(测量完成前它按重,计划可能先含它;这里看的是稳定之后)
   n.planNoU = await until('页面发布的清单计划不含判轻的仓库用户卡 u', async () => { const d = await A.evaluate(() => window.__pcPlanPublisher?.() ?? null); return d && !(d.lastClips ?? []).includes(ID.u) ? d : null; }, 60_000, 1000);
-  check(!!n.planNoU && !(n.planNoU.lastClips ?? []).includes(ID.u), '普通档清单计划不含判轻的仓库用户卡 u(它在浏览器里活渲)', { lastClips: n.planNoU?.lastClips });
+  check(!!n.planNoU && !(n.planNoU.lastClips ?? []).includes(ID.u), '电脑浏览器清单计划不含判轻的仓库用户卡 u(它在浏览器里活渲)', { lastClips: n.planNoU?.lastClips });
   check(!(n.plan?.lastClips ?? []).includes(ID.x), '清单计划不含未知 id(它不画、不判重)', n.plan?.lastClips);
 
   /* ------------------------------------------------ 乙:页面一打开就每 100 ms 采样(刚打开页面不闪图标) */
@@ -680,46 +685,52 @@ try {
     check(d && !(d.plan ?? []).includes(ID.x), `${label}:未知卡片 ouc-x 不在清单计划里`, d?.plan);
   }
   n.errors = A.errors.slice(0, 5);
-  check(A.errors.length === 0, '普通档页面没有页面错误(没有定义的同步卡沿线不崩)', n.errors);
+  check(A.errors.length === 0, '电脑浏览器页面没有页面错误(没有定义的同步卡沿线不崩)', n.errors);
   out.normal = n;
 
-  /* ============================================================ 低内存档(仿手机) */
+  /* ============================================================ 模拟手机(精简模式,只有一个舞台;原「低内存档」) */
   const P = await newPage('丙', { mobile: true });
   await join(P, '丙');
   const lm = {};
-  lm.diag = await P.evaluate(() => ({ lowMemory: !!document.querySelector('[data-pc-low-memory]') || null, stages: [...document.querySelectorAll('iframe')].filter((f) => /[?&]stage=1/.test(f.src)).length }));
-  lm.backfill = await until('低内存档:预渲染重试在等的片段含 s3', async () => {
-    const d = await P.evaluate(() => window.__pcBackfill?.() ?? null);
-    const waiting = new Set([...(d?.waiting ?? []).map((w) => w.clip), ...(d?.log ?? []).flatMap((e) => e.clips ?? [])]);
-    return waiting.has(ID.s3) ? { waiting: [...waiting], log: d.log.slice(-3) } : null;
+  lm.diag = await until('模拟手机:舞台闸门判完', async () => {
+    const d = await P.evaluate(() => { const x = window.__pcPreviewDiag?.(); return x ? { single: x.single, lowest: x.lowest, tier: x.tier } : null; });
+    return d?.tier?.online ? d : null;
   }, 120_000);
-  check(lm.backfill?.waiting?.includes(ID.s3), '低内存档:__pcBackfill 的缺口含没有层的同步卡 s3', lm.backfill);
-  check(!(lm.backfill?.waiting ?? []).includes(ID.u) && !(lm.backfill?.waiting ?? []).includes(ID.s1), '低内存档:有层的 u、s1 不进预渲染重试', lm.backfill);
-  check(!(lm.backfill?.waiting ?? []).includes(ID.x), '低内存档:未知卡片 ouc-x 不在预渲染重试清单里', lm.backfill);
+  lm.diag = { ...(lm.diag ?? {}), stages: await P.evaluate(() => [...document.querySelectorAll('iframe')].filter((f) => /[?&]stage=1/.test(f.src)).length) };
+  check(lm.diag?.single === true && lm.diag?.lowest === false && lm.diag?.tier?.reached === 1 && lm.diag?.stages === 1, '模拟手机:安卓、内存 4 GB 停在第一级(精简模式,只有一个舞台)', lm.diag);
+  lm.plan = await until('模拟手机:本页发布的清单计划含 s3', async () => {
+    const d = await P.evaluate(() => window.__pcPlanPublisher?.() ?? null);
+    return d && (d.lastClips ?? []).includes(ID.s3) ? { lastClips: d.lastClips, log: (d.log ?? []).slice(-3) } : null;
+  }, 120_000);
+  check(lm.plan?.lastClips?.includes(ID.s3), '模拟手机:清单计划(普通优先级)含没有层的同步卡 s3', lm.plan);
+  check(!(lm.plan?.lastClips ?? []).includes(ID.x), '模拟手机:未知卡片 ouc-x 不在清单计划里', lm.plan);
+  lm.backfill = await P.evaluate(() => typeof window.__pcBackfill === 'function');
+  check(lm.backfill === false, '模拟手机:没有「为弱设备补发预渲染任务」那一路(`__pcBackfill` 不在了)', lm.backfill);
   await store(P, `S.actions.seek(1.5); return true;`);
-  lm.stage = await until('低内存档舞台:s3 是沙漏,u、s1 不出图标', async () => {
+  lm.stage = await until('模拟手机舞台:s3 是沙漏,u、s1 不出图标', async () => {
     const s = await stageState(P, [ID.u, ID.s1, ID.s3, ID.x]);
     return s && s[ID.u]?.wrapper && s[ID.u].reason !== 'unsupported' && s[ID.s1]?.wrapper && s[ID.s1].reason !== 'unsupported' && s[ID.s3]?.placeholderShown && s[ID.s3]?.reason === 'awaiting' ? s : null;
   }, 60_000) ?? await stageState(P, [ID.u, ID.s1, ID.s3, ID.x]);
-  for (const k of ['u', 's1']) check(lm.stage?.[ID[k]]?.wrapper && lm.stage[ID[k]].reason !== 'unsupported', `低内存档舞台:${k} 不出图标`, lm.stage?.[ID[k]]);
-  check(lm.stage?.[ID.s3]?.placeholderShown && lm.stage[ID.s3].reason === 'awaiting' && !(lm.stage[ID.s3].text ?? '').includes(UNSUPPORTED), '低内存档舞台:没有层的 s3 是沙漏(等渲染节点),不是「本地 PC 辅助渲染」', lm.stage?.[ID.s3]);
-  check(lm.stage?.[ID.x]?.wrapper === false, '低内存档舞台:未知 id 不画', lm.stage?.[ID.x]);
+  for (const k of ['u', 's1']) check(lm.stage?.[ID[k]]?.wrapper && lm.stage[ID[k]].reason !== 'unsupported', `模拟手机舞台:${k} 不出图标`, lm.stage?.[ID[k]]);
+  check(lm.stage?.[ID.s3]?.placeholderShown && lm.stage[ID.s3].reason === 'awaiting' && !(lm.stage[ID.s3].text ?? '').includes(UNSUPPORTED), '模拟手机舞台:没有层的 s3 是沙漏(等渲染节点),不是「本地 PC 辅助渲染」', lm.stage?.[ID.s3]);
+  check(lm.stage?.[ID.x]?.wrapper === false, '模拟手机舞台:未知 id 不画', lm.stage?.[ID.x]);
   lm.requests = { pxU: reqsFor(L.u, 'px'), pxS1: reqsFor(L.s1, 'px') };
-  // 停下追一帧之后(时限 5 秒):u(仓库用户卡,本页能运行)画好活渲的精确帧(2026-10-21 用户定;原先低内存档不追用户卡),
-  // s1 不出图标,s3 仍是沙漏
-  await sleep(6000);
-  lm.afterSettle = await stageState(P, [ID.u, ID.s1, ID.s3]);
-  for (const k of ['u', 's1']) check(lm.afterSettle?.[ID[k]]?.wrapper && lm.afterSettle[ID[k]].reason !== 'unsupported', `低内存档停下之后:${k} 不出图标`, lm.afterSettle?.[ID[k]]);
-  check(lm.afterSettle?.[ID.u]?.live && !lm.afterSettle[ID.u].placeholderShown, '低内存档停下之后:仓库用户卡 u 是活渲的精确帧(不再只贴小尺寸)', lm.afterSettle?.[ID.u]);
-  check(lm.afterSettle?.[ID.s3]?.reason === 'awaiting', '低内存档停下之后:s3 仍是沙漏', lm.afterSettle?.[ID.s3]);
+  // 停下追一帧之后(不设时限,这里等它画完):u(仓库用户卡,本页能运行)画好活渲的精确帧(2026-10-21 用户定),s1 不出图标,s3 仍是沙漏
+  lm.afterSettle = await until('模拟手机停下之后:u 是活渲的精确帧', async () => {
+    const s = await stageState(P, [ID.u, ID.s1, ID.s3]);
+    return s && s[ID.u]?.live && !s[ID.u].placeholderShown ? s : null;
+  }, 60_000) ?? await stageState(P, [ID.u, ID.s1, ID.s3]);
+  for (const k of ['u', 's1']) check(lm.afterSettle?.[ID[k]]?.wrapper && lm.afterSettle[ID[k]].reason !== 'unsupported', `模拟手机停下之后:${k} 不出图标`, lm.afterSettle?.[ID[k]]);
+  check(lm.afterSettle?.[ID.u]?.live && !lm.afterSettle[ID.u].placeholderShown, '模拟手机停下之后:仓库用户卡 u 是活渲的精确帧', lm.afterSettle?.[ID.u]);
+  check(lm.afterSettle?.[ID.s3]?.reason === 'awaiting', '模拟手机停下之后:s3 仍是沙漏', lm.afterSettle?.[ID.s3]);
   lm.pageText = await P.evaluate((t) => document.body.innerText.includes(t), UNSUPPORTED);
-  check(lm.pageText === false, '低内存档页面上没有「本地 PC 辅助渲染」的字样', lm.pageText);
-  lm.settle = await P.evaluate(() => window.__pcPreviewDiag?.()?.lowMemSettle ?? null).catch(() => null);
-  await shot(P, 'lowmem-1');
-  lm.stageShot = await stageShot(P, 'lowmem-1-stage');
+  check(lm.pageText === false, '模拟手机页面上没有「本地 PC 辅助渲染」的字样', lm.pageText);
+  lm.settle = await P.evaluate(() => window.__pcPreviewDiag?.()?.lastSettle ?? null).catch(() => null);
+  await shot(P, 'single-1');
+  lm.stageShot = await stageShot(P, 'single-1-stage');
   lm.errors = P.errors.slice(0, 5);
-  check(P.errors.length === 0, '低内存档页面没有页面错误', lm.errors);
-  out.lowmem = lm;
+  check(P.errors.length === 0, '模拟手机页面没有页面错误', lm.errors);
+  out.single = lm;
   node.close();
 } catch (e) {
   fails.push(`探针异常:${String(e?.stack ?? e).slice(0, 600)}`);
@@ -738,6 +749,6 @@ console.log(JSON.stringify({ ok: out.ok, fails, uSeq: out.normal.uSeq ?? null, h
   sizes: { hourglass_s2: sizeOf(out.normal.icon), hourglass_s4: sizeOf(out.normal.geom?.s4Glass), hourglass_s5: sizeOf(out.normal.geom?.s5Glass), hourglass_s6: sizeOf(out.normal.geom?.s6Glass), hourglass_s7: sizeOf(out.normal.geom?.s7Glass) },
   stageSeen: out.normal.stageSeen ?? null, dense: out.normal.dense ?? null, params: out.normal.params ?? null, paramsRemote: out.normal.paramsRemote ?? null, measure: { a: out.normal.measureA ?? null, b: out.normal.measureB ?? null },
   switchProject: out.normal.switchProject ? { gate: out.normal.switchProject.gate, gateBefore: out.normal.switchProject.gateBefore, gateLast: out.normal.switchProject.gateLast, probed: out.normal.switchProject.probed } : null,
-  unknownX: { a: out.normal.unknownXA ?? null, b: out.normal.unknownXB ?? null }, normal: { timeline: out.normal.timeline, requests: out.normal.requests, planClips: out.normal.plan?.lastClips, after: out.normal.after }, lowmem: { backfill: out.lowmem.backfill, requests: out.lowmem.requests }, assetRequests: out.assetRequests }));
+  unknownX: { a: out.normal.unknownXA ?? null, b: out.normal.unknownXB ?? null }, normal: { timeline: out.normal.timeline, requests: out.normal.requests, planClips: out.normal.plan?.lastClips, after: out.normal.after }, single: { diag: out.single.diag, plan: out.single.plan, requests: out.single.requests }, assetRequests: out.assetRequests }));
 timingLog.print();
 process.exit(out.ok ? 0 : 1);

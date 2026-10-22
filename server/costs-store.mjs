@@ -10,7 +10,7 @@
  * `(identityKey, device)`。`identityKey` 已经把 fps、卡片参数、源码版本、审阅表、片段长度
  * 都吃进去了(`src/render/cardCostKey.mjs`),所以这里只补一个 `device` —— 换机器、换 GPU、
  * 换共享 WebGL 路线之后同一张卡的耗时完全不是一回事,必须重测(目标 K/K1)。
- * `device` 由页面侧算(UA + WebGL `UNMASKED_RENDERER_WEBGL` + `lowMemory` / `offscreenGl` / `glRoute`),
+ * `device` 由页面侧算(UA + WebGL `UNMASKED_RENDERER_WEBGL` + 只有一个舞台(历史字段名,见 `src/render/costDevice.mjs`)/ `offscreenGl` / `glRoute`),
  * 服务端只当不透明字符串用,不解析。
  *
  * # 为什么 `demoted` / `pinnedHeavy` 要粘住

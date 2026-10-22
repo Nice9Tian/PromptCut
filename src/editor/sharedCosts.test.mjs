@@ -20,9 +20,10 @@ const ENV = {
   vendor: "Google Inc. (Intel)",
 };
 const FP = describeEnvironment({ platform: ENV.platform, renderer: ENV.renderer, vendor: ENV.vendor, chromeVersion: ENV.userAgent }).fingerprint;
-const deviceHere = costDeviceString({ ua: ENV.userAgent, renderer: ENV.renderer, lowMemory: false, offscreenGl: true, mode: "dev" });
-const deviceOther = costDeviceString({ ua: "Mozilla/5.0 (Macintosh) Chrome/150.0.0.0", renderer: "Apple M2", lowMemory: false, offscreenGl: true, mode: "dev" });
-const deviceLow = costDeviceString({ ua: ENV.userAgent, renderer: ENV.renderer, lowMemory: true, offscreenGl: false, mode: "build" });
+const deviceHere = costDeviceString({ ua: ENV.userAgent, renderer: ENV.renderer, compact: false, offscreenGl: true, mode: "dev" });
+const deviceOther = costDeviceString({ ua: "Mozilla/5.0 (Macintosh) Chrome/150.0.0.0", renderer: "Apple M2", compact: false, offscreenGl: true, mode: "dev" });
+/** 同一台浏览器只有一个舞台时测的(舞台闸门第一级) */
+const deviceSingle = costDeviceString({ ua: ENV.userAgent, renderer: ENV.renderer, compact: true, offscreenGl: false, mode: "build" });
 const k1 = (identityKey, stepMs, extra = {}) => ({ identityKey, fps: 30, stepMs, inlineMs: 0, rasterMs: 0, serializeMs: 0, catchUpMs: 0, kind: "stepped", mode: "dev", measuredAt: 1_790_000_000_000, device: deviceHere, ...extra });
 
 /** 测试的 WebSocket 客户端 → `docRequest` 的形状 */
@@ -53,7 +54,7 @@ test("SC-01 samplesOf / toSharedInput / measuredHere:形状转换与「是不是
   assert.equal(S.toSharedInput(k1("x", 1, { measuredAt: undefined, mode: "build" }), () => 42).measuredAt, 42);
   assert.equal(S.measuredHere(k1("a", 1), ENV), true);
   assert.equal(S.measuredHere(k1("a", 1, { device: deviceOther }), ENV), false, "别的机器测的不转写");
-  assert.equal(S.measuredHere(k1("a", 1, { device: deviceLow }), ENV), false, "低内存档测的不转写");
+  assert.equal(S.measuredHere(k1("a", 1, { device: deviceSingle }), ENV), true, "只有一个舞台时测的同样转写(所有在线浏览器测完都写,2026-10-07 用户定)");
   assert.equal(S.measuredHere(k1("a", 1, { device: "" }), ENV), false);
 });
 
@@ -90,21 +91,21 @@ test("SC-04 被拒、连不上:publish 不抛、回 ok:false;list 抛错", async
   await assert.rejects(S.listSharedCosts({ request: dead, projectId: P.projectId, environment: ENV }), /没连上/);
 });
 
-test("SC-05 桌面转写:连着共享项目时把本机测的、当前项目用到的卡写进文档服务;别的机器、低内存档、项目外的卡不写", async (t) => {
+test("SC-05 转写:连着共享项目时把本机测的(单舞台、双舞台都算)、当前项目用到的卡写进文档服务;别的机器、项目外的卡不写", async (t) => {
   const { P, desk, phone } = await member(t);
   const costs = [
     k1("cardA", 3), k1("cardB", 40, { measuredAt: 1_790_000_000_500 }),
     k1("cardA", 99, { device: deviceOther }),        // 别的机器
-    k1("cardC", 5, { device: deviceLow }),           // 低内存档测的
+    k1("cardC", 5, { device: deviceSingle }),        // 同一台浏览器只有一个舞台时测的:照样写
     k1("notInProject", 7),                           // 项目里没用到
   ];
   const relay = new S.SharedCostRelay({
     request: desk, linkKey: () => "link-1", projectId: () => P.projectId, environment: () => ENV,
     costs: () => costs, identityKeys: () => new Set(["cardA", "cardB", "cardC"]),
   });
-  assert.equal(await relay.sync(), 2);
+  assert.equal(await relay.sync(), 3);
   const l = await S.listSharedCosts({ request: phone, projectId: P.projectId, environment: ENV });
-  assert.deepEqual(l.records.map((r) => [r.identityKey, r.stepMs, r.samples, r.mode]), [["cardA", 3, 16, "dev"], ["cardB", 40, 16, "dev"]]);
+  assert.deepEqual(l.records.map((r) => [r.identityKey, r.stepMs, r.samples, r.mode]), [["cardA", 3, 16, "dev"], ["cardB", 40, 16, "dev"], ["cardC", 5, 16, "dev"]]);
   // 没变:不再写
   assert.equal(await relay.sync(), 0);
   // 本机又测了一次 cardA(新的测量时刻):只补这一条

@@ -16,8 +16,8 @@ const video = { url: `/@media/${original}`, hash: original, tiers: { original, s
 
 test("在线页地址未就绪时连后台可播性探针也不请求 /@media", () => {
   const hashes = [original, small];
-  assert.deepEqual(chooseTier(video, hashes, { online: true, remote: null, lowMemory: false }), { url: "", tier: "none", awaiting: true });
+  assert.deepEqual(chooseTier(video, hashes, { online: true, remote: null, smallOnly: false }), { url: "", tier: "none", awaiting: true });
   assert.deepEqual(probes, []);
-  chooseTier(video, hashes, { online: true, remote: { base: "https://asset.example", ticket: null }, lowMemory: false });
+  chooseTier(video, hashes, { online: true, remote: { base: "https://asset.example", ticket: null }, smallOnly: false });
   assert.deepEqual(probes, [`https://asset.example/media/${original}`]);
 });

@@ -1,6 +1,6 @@
 /**
  * M7-T：页面一侧的纯浏览器节点。
- *   - 当节点的条件（第 2 节）：低内存档、退回单舞台、开发构建（D16）、非 Chromium（D14）、非成员、测量没落定 → 不当节点；
+ *   - 当节点的条件（第 2 节）：身份为手机、最低一档、退回单舞台、开发构建（D16）、非 Chromium（D14）、非成员、测量没落定 → 不当节点；
  *   - D10 页面侧：`node.hello` 只报原始值 `environment`、`profile: 'browser'`、`maxConcurrent: 1`，watch 只列本项目；
  *   - 第 4.1 节：认领到就 progress(0)；
  *   - D8 让路：播放 / 拖动 / 更急的后台活来了，当前帧做完就放回（一次，不计失败），此后不再生成快照、不再认领；
@@ -21,17 +21,19 @@ import {
 
 /* ================================================================== K10 当节点的条件 */
 
-const GOOD = Object.freeze({ online: true, codeVersion: 'cv-1', lowMemory: false, stageLayout: 'dual', userAgent: UA.chrome, member: true, measured: true });
+const GOOD = Object.freeze({ online: true, codeVersion: 'cv-1', phone: false, lowest: false, stageLayout: 'dual', userAgent: UA.chrome, member: true, measured: true });
 
-test('当节点的条件：普通档、双舞台、嵌了代码版本、Chromium、成员、测量落定才当；缺一样都不当（第 2 节、D14、D16）', gateOpts(eligibilityGate()), async () => {
+test('当节点的条件：身份为电脑、不是最低一档、双舞台、嵌了代码版本、Chromium、成员、测量落定才当；缺一样都不当（第 2 节、D14、D16）', gateOpts(eligibilityGate()), async () => {
   const gate = eligibilityGate();
   const fn = (await importRepo(gate.file))[gate.name];
   const judge = (patch) => normalizeEligible(fn({ ...GOOD, ...patch }));
   assert.equal(judge({}), true, '条件齐全应当节点');
   assert.equal(judge({ userAgent: UA.edge }), true, 'Edge 是 Chromium 内核，能当');
   const no = [
-    [{ lowMemory: true }, '低内存档'],
+    [{ phone: true }, '身份为手机（2026-10-07 用户定：手机不当渲染节点）'],
+    [{ lowest: true }, '最低一档'],
     [{ stageLayout: 'single' }, '退回同源单舞台'],
+    [{ stageLayout: 'pending' }, '两个舞台还没都握上手(舞台闸门在试后台舞台)'],
     [{ codeVersion: '' }, '开发构建（CODE_VERSION 为空）'],
     [{ codeVersion: null }, '没有代码版本'],
     [{ userAgent: UA.firefox }, 'Firefox'],

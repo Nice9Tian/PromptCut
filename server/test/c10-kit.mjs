@@ -22,7 +22,7 @@
  *
  *   K2  页面内快照库 L2（契约第 4 节）：
  *       - 文件取 `L2_FILES` 里第一个存在的；打开函数取 `L2_OPEN_NAMES` 之一，调用 `await open(opts)`，
- *         `opts = { indexedDB, lowMemory, estimate, now }`：`indexedDB` 是工厂（测试传内存桩，同时装到全局），
+ *         `opts = { indexedDB, deviceMemory, estimate, now }`（2026-10-22 起软上限按环境分配，原来的档位参数删掉）：`indexedDB` 是工厂（测试传内存桩，同时装到全局），
  *         `estimate` 是 `() => Promise<{ quota, usage }>`（同时装成 `navigator.storage.estimate`），`now` 是毫秒时钟；
  *       - 回的对象上的方法（名字各取候选之一，见 `L2_METHODS`）：
  *         `putBlock(key, bytes, type)`（`key` 形如 `snap/<hash>` 或 `px/<hash>`，`bytes` 是 Uint8Array）、
@@ -45,7 +45,7 @@
  *   K5  两个舞台的运行配置（契约第 2 节）：`STAGE_FILES` 之一导出
  *       - 解析函数（`STAGE_PARSE_NAMES` 之一）：`fn(config)`，`config` 是 `/editor/` 运行配置解析后的对象 `{ stageOrigins: [A 源, B 源] }`
  *         或它的 JSON 文本；回 `{ A, B }`（也认两项数组），读不到或不合法回 `null`，不抛；
- *       - 取舍函数（`STAGE_DECIDE_NAMES` 之一）：`fn({ lowMemory, origins, handshake })`，`handshake` 为 `'ok' | 'failed'`；
+ *       - 取舍函数（`STAGE_DECIDE_NAMES` 之一）：`fn({ single, origins, handshake })`（2026-10-22 起 `single` = 舞台闸门停在第一级，原来是档位），`handshake` 为 `'ok' | 'failed'`；
  *         回 `'dual' | 'single'`（也认布尔：true = 双舞台）。
  *   K6  页面发布 plan（契约第 7 节）：`PLAN_FILES` 之一导出工厂（`PLAN_FACTORY_NAMES` 之一），
  *       `factory({ endpoint, debounceMs? })`，`endpoint` 是 `createWsEndpoint` 的形状（`send(msg) → boolean`、`onMessage(handler)`）；
@@ -200,10 +200,11 @@ export const L2_METHODS = {
 };
 /** 契约第 4 节 */
 export const L2_TABLES = ['costs', 'ranges', 'snapshots'];
-export const L2_SOFT_LIMIT = { normal: 256 * MiB, low: 64 * MiB };
+/** 软上限按环境分配（2026-10-22 起；原来按档 256 / 64 MiB）：额度的 10% 夹在 [min, max]；拿不到额度按内存（GiB × 32 MiB，夹在 64～256 MiB），都没有取 fallback */
+export const L2_SOFT_LIMIT = { min: 32 * MiB, max: 1024 * MiB, fallback: 128 * MiB, memoryMin: 64 * MiB, memoryMax: 256 * MiB };
 export const L2_RECLAIM = { min: 16 * MiB, max: 64 * MiB };
 /** 「剩余额度的 10%」 */
-export const l2Limit = ({ lowMemory, remaining }) => Math.min(lowMemory ? L2_SOFT_LIMIT.low : L2_SOFT_LIMIT.normal, 0.1 * remaining);
+export const l2Limit = ({ remaining }) => Math.min(remaining, Math.max(L2_SOFT_LIMIT.min, Math.min(L2_SOFT_LIMIT.max, 0.1 * remaining)));
 
 export function l2Gate() {
   const hit = findExport(L2_FILES, L2_OPEN_NAMES);
@@ -211,9 +212,9 @@ export function l2Gate() {
 }
 
 /** 打开 L2，并把方法按候选名接成统一的形状（K2） */
-export async function openL2(gate, { indexedDB, lowMemory = false, estimate, now = () => Date.now() }) {
+export async function openL2(gate, { indexedDB, deviceMemory, estimate, now = () => Date.now() }) {
   const mod = await importRepo(gate.file);
-  const store = await within(mod[gate.name]({ indexedDB, lowMemory, estimate, now }), 5000, `L2 ${gate.name}() 打开`);
+  const store = await within(mod[gate.name]({ indexedDB, deviceMemory, estimate, now }), 5000, `L2 ${gate.name}() 打开`);
   if (!store || typeof store !== 'object') throw new Error(`假设 K2：${gate.name}() 没回对象`);
   const m = {};
   for (const [k, names] of Object.entries(L2_METHODS)) m[k] = pickMethod(store, names);

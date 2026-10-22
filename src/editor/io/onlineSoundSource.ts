@@ -17,7 +17,7 @@ import { decideClipSound, requestSoundBackfill } from "./onlineSoundJudge";
 /**
  * 卡片声音(内置有声卡、内置音频卡)的在线播放源。
  * 回 null = 不归这里管(桌面运行环境,或这台设备跑不了它的代码),调用方照原来的办法提示;
- * 判重、低内存档抛出说明原因的错误。
+ * 判重抛出说明原因的错误。
  */
 export async function onlineLiveCardAudio(project: Project, clip: TrackClip, nodeId: string, frames: number): Promise<CardAudioLease | null> {
   if (!onlinePage()) return null;

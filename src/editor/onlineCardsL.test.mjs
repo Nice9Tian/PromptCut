@@ -3,13 +3,14 @@
  *   node --experimental-test-module-mocks --test src/editor/onlineCardsL.test.mjs
  *
  *   OCE-L-01 「本页运行不了」的判法(`placeholderHost.needsLocalPc`):素材效果卡照旧算;用户卡只有运行不了的才算 ——
- *            构建时就在包里的不算(低内存档也不算,2026-10-21 起),同步来的看运行状态(只有 `ready` 不算);桌面恒不算
+ *            构建时就在包里的不算(不按档另挡,2026-10-21 起),同步来的看运行状态(只有 `ready` 不算);桌面恒不算
  *   OCE-L-02 时间轴不再挂「需要本地 PC 渲染辅助」徽标(2026-10-21 用户定撤掉):判定函数没了,片段里也不引它
  *   OCE-L-03 测量门:卡片源码同步完之后,再等同步来的卡第一次载入有结果(没有 `loading` 的了)才开;成功失败都算;
  *            仍受同一个上限封顶;没有在载入的卡时与原来相同
  *   OCE-L-04 导出:同步来的用户卡与素材效果卡不管判轻判重都必须用预渲染原尺寸(导出页不执行它们的代码);层表里没有它们的层、
- *            或没有层表,算缺;低内存档的「只核对判重的卡」不把它们放过去;别的卡的核对与原来相同
- *   OCE-L-05 参数面板的说明跟着运行状态走:能运行、还在载入不出说明,十种里其余八种各有一句(文字见 `cardRunStates.ts`)
+ *            或没有层表,算缺;「只核对判重的卡」(按判定的表)不把它们放过去;别的卡的核对与原来相同
+ *   OCE-L-05 参数面板的说明跟着运行状态走:能运行、还在载入不出说明,九种里其余七种各有一句(文字见 `cardRunStates.ts`;
+ *            原来的第十种随旧档位 2026-10-22 删掉)
  *   OCE-L-06 接线(按源码核):分派表、测量、时间轴片段都订阅了运行状态;六处判断都经 `placeholderHost` 的同一个函数
  */
 import { srcUrl } from "../testing/registerTs.mjs";
@@ -37,13 +38,12 @@ function setup() {
   R.setSyncedUserCards([{ id: "synced", name: "同步卡" }]);
   R.setCardRunStates([]);
   R.setRuntimeCards([]);
-  H.setLocalOnlyLowMemory(false);
   H.setOnlineBrowserMode(true);
 }
-const cleanup = () => { H.setOnlineBrowserMode(false); H.setLocalOnlyLowMemory(false); R.setCardRunStates([]); R.setRuntimeCards([]); R.setSyncedUserCards([]); };
+const cleanup = () => { H.setOnlineBrowserMode(false); R.setCardRunStates([]); R.setRuntimeCards([]); R.setSyncedUserCards([]); };
 const local = (id) => H.unsupportedHere(id, R.getCard(id));
 
-test("OCE-L-01 本页运行不了的判法:素材效果卡照旧;用户卡看能不能运行;低内存档不另挡;桌面恒不算", () => {
+test("OCE-L-01 本页运行不了的判法:素材效果卡照旧;用户卡看能不能运行;不按档另挡;桌面恒不算", () => {
   setup();
   try {
     assert.equal(local("builtin"), false);
@@ -64,19 +64,13 @@ test("OCE-L-01 本页运行不了的判法:素材效果卡照旧;用户卡看能
     R.setRuntimeCards([dom("synced", { Component: undefined, card: () => ({}) })]);
     assert.equal(local("synced"), true, "舞台里载入的同步素材效果卡:素材效果卡照旧算");
     R.setRuntimeCards([]);
-    // 低内存档(2026-10-21 起):不另挡用户卡 —— 本页能运行的照常运行、停下追精确帧;同步来的卡在低内存档的运行状态是
-    // `low-memory`(编辑页面这一侧合出来的,单舞台没有隔离环境),照旧算运行不了
-    R.setCardRunStates([["synced", { state: "ready" }]]);
-    H.setLocalOnlyLowMemory(true);
-    assert.equal(H.localOnlyLowMemory(), true);
-    assert.equal(local("repo-user"), false, "低内存档:构建时的用户卡本页能运行,不算");
-    assert.equal(local("synced"), false, "低内存档:运行状态是 ready 的不算");
-    R.setCardRunStates([["synced", { state: "low-memory" }]]);
-    assert.equal(local("synced"), true, "低内存档:运行状态 low-memory 的算");
+    // 2026-10-21 起不按档另挡用户卡(原来按档挡的那道开关与那一种运行状态 2026-10-22 删掉):本页能运行的照常运行、停下追精确帧
+    R.setCardRunStates([["synced", { state: "not-isolated" }]]);
+    assert.equal(local("repo-user"), false, "构建时的用户卡本页能运行,不算");
+    assert.equal(local("synced"), true, "同步卡运行状态不是 ready:算");
     assert.equal(local("builtin"), false);
     assert.deepEqual([...H.localOnlyClipIds([{ id: "a", cardId: "builtin" }, { id: "b", cardId: "repo-user" }, { id: "c", cardId: "synced" }, { id: "d", cardId: "gpu" }])], ["c", "d"]);
     R.setCardRunStates([["synced", { state: "ready" }]]);
-    H.setLocalOnlyLowMemory(false);
     assert.deepEqual([...H.localOnlyClipIds([{ id: "a", cardId: "builtin" }, { id: "b", cardId: "repo-user" }, { id: "c", cardId: "synced" }, { id: "d", cardId: "gpu" }])], ["d"]);
     // 桌面(模式关着)
     H.setOnlineBrowserMode(false);
@@ -181,7 +175,7 @@ test("OCE-L-04 导出:同步来的卡必须用预渲染原尺寸,缺了算缺;�
   assert.equal(idx.hashAt("heavy", 1), HASH);
   assert.equal(idx.hashAt("light", 1), undefined, "别的卡照旧");
 
-  // 低内存档「只核对判重的卡」不把同步卡放过去
+  // 「只核对判重的卡」(按判定的表)不把同步卡放过去
   const low = await O.loadOriginalsIndex("proj", deps, { onlyClips: ["heavy"], requiredClips: ["s1", "s2"] });
   assert.deepEqual(low.missing, ["s2"]);
   assert.equal(low.hashAt("s1", 2), HASH, "页面判它轻也照取原尺寸");
@@ -205,7 +199,7 @@ test("OCE-L-05 参数面板的说明跟着运行状态走", () => {
     else assert.ok(typeof text === "string" && text.length > 8, `${state} 有说明`);
   }
   assert.match(ERS.runStateMessage({ state: "missing-module", detail: "lodash" }), /引用了在线页面里没有的模块 lodash/);
-  assert.match(ERS.runStateMessage({ state: "low-memory" }), /低内存档/);
+  assert.equal(R.CARD_RUN_STATES.length, 9, "九种运行状态(原来的第十种随旧档位删掉)");
   // 面板组件读注册表的运行状态并订阅它
   const form = fs.readFileSync(fileURLToPath(srcUrl("editor/left/ParamsForm.tsx")), "utf8");
   assert.match(form, /useSyncExternalStore\(onCardRunStatesChanged, cardRunStatesGen\)/);

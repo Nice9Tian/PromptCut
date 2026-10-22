@@ -56,8 +56,9 @@
  *       （层上的 `resultKey` / `envFingerprint` / `key` 等于第一个候选，旧读法照样能读）；`opts.alive` 是认定活着的结果键集合（`Set<string>`，
  *       由 `task.done` 与清单得出）。选中的候选整份回来（`resultKey`、`envFingerprint`、`key` 同出一个候选），认不出时回 null；
  *       v2 表当「一个候选」：有没有 `alive` 都照旧回那一层。门：`KNOWN_LAYER_MAP_VERSIONS` 里出现 3。
- *   K10 页面节点能不能开（第 2 节「当节点的条件」、D14、D16、低内存档）：`ELIGIBILITY_FILES` 之一导出纯函数（`ELIGIBILITY_NAMES` 之一），
- *       `fn({ online, codeVersion, lowMemory, stageLayout: 'dual' | 'single', userAgent, member, measured })` → 布尔，
+ *   K10 页面节点能不能开（第 2 节「当节点的条件」、D14、D16、身份）：`ELIGIBILITY_FILES` 之一导出纯函数（`ELIGIBILITY_NAMES` 之一），
+ *       `fn({ online, codeVersion, phone, lowest, stageLayout: 'dual' | 'single', userAgent, member, measured })` → 布尔（2026-10-22 起
+ *       原来的档位参数换成身份为手机 `phone` 与最低一档 `lowest`），
  *       或 `{ ok | eligible: 布尔, reason? }`。
  *   K11 页面节点编排（第 2、4 节；D6、D8、D10 页面侧）：`NODE_FILES` 之一导出工厂（`NODE_FACTORY_NAMES` 之一），
  *       `factory(deps)`，`deps` = `{ nodeId, projectId, userId, codeVersion, environment, now, isIdle(), send(message),

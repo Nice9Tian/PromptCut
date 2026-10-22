@@ -43,16 +43,16 @@
  *   - 画面从无到有、从有到无时叫宿主一次(`onShowingChange`):帧是异步解出来的,暂停着没有下一拍,
  *     占位符撤不撤、活子树藏不藏都靠这一下。
  *
- * # 低内存档:每个分段只解第一帧(`StreamPlaneRequest.first`,`presentFirst`)
+ * # 最低一档:每个分段只解第一帧(`StreamPlaneRequest.first`,`presentFirst`)
  *
- * 手机、平板身份的在线浏览器贴的是轨道流的稀疏版(2026-10-13 用户定)。父页给流平面带上 `first`,这条流就**不管那一段是稀疏还是满密度,
+ * 性能不足的在线浏览器只贴轨道流的稀疏版(2026-10-13 用户定;2026-10-22 起归最低一档)。父页给流平面带上 `first`,这条流就**不管那一段是稀疏还是满密度,
  * 都只解分段的第一帧那一张**,这一段的每一帧都贴它(帧号换算在 `./streamSegments.mjs` 的 `streamFirstFrameOf`):
  *
  *   - 一个分段只喂一块(那个关键帧),喂完叫解码器 `flush()` 把它吐出来;同一个解码器同时只有一块在解;
- *   - 画上以后解码输出当场关掉,只留画布上那一张的引用:稳态每条流占 1 帧,换分段的那一下 2 帧(普通档每流 3～8 帧);
+ *   - 画上以后解码输出当场关掉,只留画布上那一张的引用:稳态每条流占 1 帧,换分段的那一下 2 帧(别的档每流 3～8 帧);
  *   - 不往后多解(不预解下一段),不做寻帧、替身那一套 —— 每一块都是关键帧,跳到哪一段都是解一块;
  *   - 解码器连着报错 `FIRST_FRAME_MAX_FAILURES` 次(这条流的编码这台设备解不了)就不再试,这一层落到占位符;
- *   - 别的(留着上一张最多一个分段、清空、换画布重画、占位符的位置)和普通档同一套。
+ *   - 别的(留着上一张最多一个分段、清空、换画布重画、占位符的位置)和别的档同一套。
  */
 
 import { isStreamOrigin, STREAM_SEGMENT_FRAMES, streamFirstFrameOf, streamSegmentFirstFrame, streamSegmentOf } from "./streamSegments.mjs";
@@ -85,9 +85,9 @@ export const SEEK_PATIENCE_MS = 250;
  * (原型 `claude/scrub-streams` 量的:取 50 时快速拖动里第一张画面要等 400 毫秒,取 100 不会。)
  */
 export const FIRST_PICTURE_LAG_MS = 100;
-/** 低内存档(只解分段第一帧):解码器连着报错这么多次,这条流就不再试(落到占位符);解出一帧就清零 */
+/** 最低一档(只解分段第一帧):解码器连着报错这么多次,这条流就不再试(落到占位符);解出一帧就清零 */
 export const FIRST_FRAME_MAX_FAILURES = 3;
-/** 低内存档:送去解的那一块过这么久还没出来(解码器卡住了),重置解码器再送 */
+/** 最低一档:送去解的那一块过这么久还没出来(解码器卡住了),重置解码器再送 */
 export const FIRST_FRAME_STALL_MS = 1000;
 
 /** 真实毫秒:舞台里 `performance.now` / `Date.now` 都被接管成舞台时间,留的口子是 `__pcRealNow`;别处(单测)就是 `Date.now` */
@@ -133,7 +133,7 @@ export interface StreamPlaneRequest {
    */
   originFrame?: number;
   /**
-   * 低内存档(手机、平板身份的在线浏览器):这条流每个分段只解第一帧那一张,这一段的每一帧都贴它(文件头「低内存档」)。
+   * 最低一档:这条流每个分段只解第一帧那一张,这一段的每一帧都贴它(文件头「最低一档」)。
    * 父页按档位带(`src/editor/snapshotFeed.ts`);不带就是照常逐帧解。
    */
   first?: true;
@@ -327,7 +327,7 @@ export function streamLayerHas(layer: { ranges?: ReadonlyArray<readonly number[]
  * 舞台不重算像素(它手里没有项目的框),照父页标的办,只用这个函数守住条数的硬上限(`STAGE_PLANE_PIXELS`)。
  * 画布还没挂上的平面照样占着它的预算(父页不知道画布到没到),那一拍按流 blank 处理。
  *
- * `budget`:不给就是产品的那一组数;低内存档给 `lowMemoryStreamBudget()`、`fps` 传 `STREAM_BUDGET_MIN_FPS`(`./streamBudget.mjs` 文件头)。
+ * `budget`:不给就是产品的那一组数;最低一档给 `sparseStreamBudget()`、`fps` 传 `STREAM_BUDGET_MIN_FPS`(`./streamBudget.mjs` 文件头)。
  */
 export function planesWithinBudget<P extends { clipIds?: readonly string[]; key?: string; originFrame?: number; over?: boolean }>(
   planes: readonly P[], fps = 30, pixelsOf: (plane: P) => number | null | undefined = () => undefined, budget: StreamBudget = undefined,
@@ -818,10 +818,10 @@ class StreamTrack {
   private pending = 0;
   private pumpQueued = false;
   private disposed = false;
-  /** 低内存档:送去解、还没出来的那一块是哪一帧(分段的第一帧),和送的真实时刻 */
+  /** 最低一档:送去解、还没出来的那一块是哪一帧(分段的第一帧),和送的真实时刻 */
   private firstFed: number | null = null;
   private firstFedAt = 0;
-  /** 低内存档:解码器连着报错几次了(解出一帧就清零) */
+  /** 最低一档:解码器连着报错几次了(解出一帧就清零) */
   private firstFailures = 0;
   bytesPerFrame = 1920 * 2176 * 1.5;
   stats = { decoded: 0, drawn: 0, holds: 0, blanks: 0, seeks: 0, deferred: 0, standIns: 0, seekMaxMs: 0, errors: 0, maxHeld: 0, lastError: "" };
@@ -861,7 +861,7 @@ class StreamTrack {
   private segmentOf(f: number): number { return streamSegmentOf(f, this.origin); }
   /** 这个分段的第一帧(项目帧号) */
   private segmentStart(seg: number): number { return streamSegmentFirstFrame(seg, this.origin); }
-  /** 低内存档:每个分段只解第一帧(父页随流平面带的 `first`) */
+  /** 最低一档:每个分段只解第一帧(父页随流平面带的 `first`) */
   private get firstOnly(): boolean { return this.plane.first === true; }
   /** 此刻占着解码器输出池的帧:手里没关的 + 喂进去还没出来的 + 画布上那一张(它已经不在手里时另算一块) */
   get heldCount(): number { return this.frames.size + this.pending + (this.shown && !this.frames.has(this.shown.f) ? 1 : 0); }
@@ -967,7 +967,7 @@ class StreamTrack {
         this.stats.lastError = String(e?.message || e);
         if (this.decoder === decoder) {
           this.decoder = null; this.configuredInit = null; this.nextFeed = null; this.pending = 0; this.seekTarget = null; this.standIn = null;
-          // 低内存档:送去的那一块没了,记一次失败;没到上限就按此刻要的那一帧再送一次(暂停着没有下一拍来叫)
+          // 最低一档:送去的那一块没了,记一次失败;没到上限就按此刻要的那一帧再送一次(暂停着没有下一拍来叫)
           if (this.firstOnly) { this.firstFed = null; this.firstFailures++; this.wake(); }
         }
       },
@@ -1060,7 +1060,7 @@ class StreamTrack {
    * 当成每个样本各是一张,照样解到这一帧自己。
    */
   private pictureOf(f: number): number {
-    // 低内存档:不管这一段多密,都是分段第一帧那一张
+    // 最低一档:不管这一段多密,都是分段第一帧那一张
     if (this.firstOnly) return streamFirstFrameOf(f, this.origin);
     const seg = this.segmentOf(f);
     const stride = this.manifest?.segments[String(seg)]?.stride ?? 1;
@@ -1175,7 +1175,7 @@ class StreamTrack {
   /** 这一拍画的是满帧段还是稀疏段(兜底顺序第 1 / 2 步;探针按它分级)。没画面时 null */
   get level(): "dense" | "sparse" | null {
     if (this.lastDrawn === null) return null;
-    // 低内存档贴的一律是分段第一帧那一张(照稀疏版的样子),不看清单里这一段多密
+    // 最低一档贴的一律是分段第一帧那一张(照稀疏版的样子),不看清单里这一段多密
     if (this.firstOnly) return "sparse";
     const meta = this.manifest?.segments[String(this.segmentOf(this.lastDrawn))];
     return (meta?.stride ?? 1) > 1 ? "sparse" : "dense";
@@ -1251,8 +1251,8 @@ class StreamTrack {
   }
 
   /**
-   * 低内存档的一拍(文件头「低内存档」):这一帧所在分段的第一帧那一张已经在画布上就什么都不做;在手里就画;都不在就把那一个关键帧送去解,
-   * 这一拍留着上一张(限时,同普通档)。`present` 已经确认过这一段就绪、清单里有它。
+   * 最低一档的一拍(文件头「最低一档」):这一帧所在分段的第一帧那一张已经在画布上就什么都不做;在手里就画;都不在就把那一个关键帧送去解,
+   * 这一拍留着上一张(限时,同别的档)。`present` 已经确认过这一段就绪、清单里有它。
    */
   private presentFirst(seg: number): void {
     const p = this.segmentStart(seg);
@@ -1265,7 +1265,7 @@ class StreamTrack {
     this.feedFirst(seg, p);
   }
 
-  /** 低内存档:画上了,解码输出当场关掉(画布换一块时靠 `shown` 那一份引用画回去) */
+  /** 最低一档:画上了,解码输出当场关掉(画布换一块时靠 `shown` 那一份引用画回去) */
   private releaseFirst(p: number): void {
     const held = this.frames.get(p);
     if (!held) return;
@@ -1273,7 +1273,7 @@ class StreamTrack {
     this.frames.delete(p);
   }
 
-  /** 低内存档:把第 `seg` 段的第一个样本(关键帧)送去解。字节、开头文件没到就先去取,到了会再走一遍 `present` */
+  /** 最低一档:把第 `seg` 段的第一个样本(关键帧)送去解。字节、开头文件没到就先去取,到了会再走一遍 `present` */
   private feedFirst(seg: number, p: number): void {
     if (this.disposed || !this.manifest || this.firstFailures >= FIRST_FRAME_MAX_FAILURES) return;
     if (this.firstFed !== null) {
@@ -1297,7 +1297,7 @@ class StreamTrack {
     if (!this.decoder || this.decoder.state === "closed") {
       this.decoder = this.newDecoder();
       this.configuredInit = null;
-      // 浏览器没有 `VideoDecoder`:这条流贴不了,落到占位符(父页在低内存档本来就不该发来,`snapshotSource.ts` 的 `decodeSupport`)
+      // 浏览器没有 `VideoDecoder`:这条流贴不了,落到占位符(父页在最低一档本来就不该发来,`snapshotSource.ts` 的 `decodeSupport`)
       if (!this.decoder) { this.firstFailures = FIRST_FRAME_MAX_FAILURES; return; }
     }
     const decoder = this.decoder;
@@ -1329,7 +1329,7 @@ class StreamTrack {
     }
   }
 
-  /** 低内存档:送去解的那一块出来了。还是此刻要的那一张就画上、关掉;不是(播放头已经走到别的分段)就关掉,按此刻要的再来 */
+  /** 最低一档:送去解的那一块出来了。还是此刻要的那一张就画上、关掉;不是(播放头已经走到别的分段)就关掉,按此刻要的再来 */
   private onFirstFrame(frame: VideoFrame, f: number): void {
     if (this.firstFed === f) this.firstFed = null;
     if (this.disposed) { frame.close(); return; }
@@ -1501,7 +1501,7 @@ class StreamTrack {
       decoder: this.decoder?.state ?? null, nextFeed: this.nextFeed, lastDrawn: this.lastDrawn,
       // 要哪一帧、画着的是哪一张画面(稀疏段里是不晚于那一帧的最近一张)、是不是留着的旧画面、在途的寻帧、上一次寻帧的耗时
       want: this.wantFrame, picture: this.lastDrawn === null ? null : this.pictureOf(this.lastDrawn), level: this.level,
-      // 画着的那一张所在的分段在清单里多密(1 = 满密度;低内存档不管它多密都只解第一帧)
+      // 画着的那一张所在的分段在清单里多密(1 = 满密度;最低一档不管它多密都只解第一帧)
       stride: this.lastDrawn === null ? null : this.manifest?.segments[String(this.segmentOf(this.lastDrawn))]?.stride ?? null,
       stale: this.staleSince !== null, seekTarget: this.seekTarget, lastSeek: this.lastSeek,
       segments: [...this.segments.keys()], manifest: !!this.manifest, bound: this.manifest?.bound ?? null,

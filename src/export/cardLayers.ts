@@ -22,7 +22,7 @@ import type { Project } from "../kernel/project";
  * 这张卡在此刻是否能在浏览器中运行：
  *   - 构建时在包里的卡（内置卡、内置素材效果卡、仓库卡）：`getCard` 有定义，直接可运行；
  *   - 同步来的用户卡：未同步或非用户卡不可运行；运行状态只有 `ready` 视为可运行；
- *     其它错误状态（`missing-module`, `unsupported-syntax`, `gpu`, `load-error`, `runtime-error`, `not-isolated`, `media`, `disabled`, `low-memory`, `loading`）均不可运行。
+ *     其它错误状态（`missing-module`, `unsupported-syntax`, `gpu`, `load-error`, `runtime-error`, `not-isolated`, `media`, `disabled`, `loading`）均不可运行。
  */
 export function isCardRunnable(cardId: string): boolean {
   if (getCard(cardId)) return true;

@@ -1,22 +1,22 @@
 /**
- * C10a 能力闸：低内存档不追活渲、不起后台舞台的活（`docs/plan/c10a-contract.md` 第 8 节「不追活渲」「不开后台舞台」，
- * 第 12 节「能力闸」）。
+ * C10a 能力闸：只有一个舞台时不经后台舞台追活渲、不起后台舞台的活（`docs/plan/c10a-contract.md` 第 8 节「不追活渲」「不开后台舞台」，
+ * 第 12 节「能力闸」；2026-10-22 起闸门从撤销的旧档位改成「只有一个舞台」——舞台闸门第一级、最低一档、握手失败退回）。
  * 跑：node --experimental-test-module-mocks --test src/editor/c10a-swap-gate.test.mjs
  *
  * 做法照 `stageSwap.test.mjs`：store、舞台桥、后台任务队列、分派表、身份表、快照投递都换成假的，
- * 造一个在普通档下一定会走「后台补跑再互换」的场面（判重、`vtOk = false`），再把低内存档打开：
+ * 造一个在双舞台下一定会走「后台补跑再互换」的场面（判重、`vtOk = false`），再把「只有一个舞台」打开：
  * `runSettleSwap` / `runPlayingSwap` 必须什么都不做 —— 不排后台任务（`runBackJob`）、不对后台舞台灌项目或 `render`、不互换。
  *
- * 低内存档从哪来：假设 K3，`stageSwap.ts` 从 `src/online/lowMemory.ts` 取当前档位；测试把那个模块整个换成桩
- * （`lowMemoryStubExports`，各种可能的名字都说「是」）。`src/online/lowMemory.ts` 不在时整组 skip。
+ * 闸从哪来：假设 K3（集成对账后），`stageSwap.ts` 问宿主 `SwapHost.singleStage()`（`singleStageSwapHost` 补上）。
+ * `src/online/onlineTier.ts` 不在时整组 skip。
  */
 import { srcUrl } from "../testing/registerTs.mjs";
 import { test, mock, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { exists, skipIf, LOW_MEMORY_FILE, lowMemoryStubExports, lowMemorySwapHost } from "../../server/test/c10a-kit.mjs";
+import { exists, skipIf, TIER_FILE, singleStageSwapHost } from "../../server/test/c10a-kit.mjs";
 
-const missing = !exists(LOW_MEMORY_FILE);
-const skip = skipIf(missing, `${LOW_MEMORY_FILE}（stageSwap 的低内存档闸随它来）`);
+const missing = !exists(TIER_FILE);
+const skip = skipIf(missing, `${TIER_FILE}（stageSwap 的单舞台闸随它来）`);
 const it = (name, fn) => test(name, { skip }, fn);
 
 globalThis.window = globalThis;
@@ -34,7 +34,6 @@ let back = null;
 let swap = null;
 if (!missing) {
   mock.module(srcUrl("online/mode.ts"), { exports: { ONLINE: true } });
-  mock.module(srcUrl("online/lowMemory.ts"), { exports: lowMemoryStubExports(true) });
   mock.module(srcUrl("store/project.ts"), { exports: { getState: () => state } });
   mock.module(srcUrl("editor/stageBridge.ts"), {
     exports: {
@@ -100,18 +99,18 @@ beforeEach(() => {
   identityKeys = {};
   front = fakeStage("A");
   back = fakeStage("B");
-  // 集成对账（K3）：低内存档闸在 SwapHost.lowMemory() 上
-  swap.setSwapHost(lowMemorySwapHost({
+  // 集成对账（K3）：单舞台闸在 SwapHost.singleStage() 上
+  swap.setSwapHost(singleStageSwapHost({
     swapRoles() { log.push(["swapRoles"]); [front, back] = [back, front]; return { front, back }; },
     proxy: () => true,
     localHashes: () => ["h1"],
   }));
 });
 
-/** 普通档下这两个场面一定会走补跑（与 stageSwap.test.mjs 的「暂停态互换」「播放态互换」同一组数据） */
+/** 双舞台下这两个场面一定会走补跑（与 stageSwap.test.mjs 的「暂停态互换」「播放态互换」同一组数据） */
 const TOUCHES_BACK = (e) => e[0] === "runBackJob" || e[0] === "swapRoles" || (e[0] === "pushProject" && e[1] === "back") || (e[0] === "B" && (e[1] === "render" || e[1] === "setMediaT"));
 
-it("C10A-GT-05 暂停后不追活渲：判重、vtOk = false 的卡在场，低内存档下 runSettleSwap 什么都不做", async () => {
+it("C10A-GT-05 暂停后不追活渲：判重、vtOk = false 的卡在场，只有一个舞台时 runSettleSwap 什么都不做", async () => {
   Object.assign(state, { project: project([card("h", 0, 10)]), t: 1, playing: false });
   plan = { segments: [{ fromSec: 0, toSec: 1000, heavy: new Set(["h"]) }] };
   withRecord("h", { vtOk: false });
@@ -121,7 +120,7 @@ it("C10A-GT-05 暂停后不追活渲：判重、vtOk = false 的卡在场，低�
   assert.equal(swap.swapInFlight(), false);
 });
 
-it("C10A-GT-06 播放中也不追：判轻、(b) 档的卡在场，低内存档下 runPlayingSwap 什么都不做", async () => {
+it("C10A-GT-06 播放中也不追：判轻、(b) 档的卡在场，只有一个舞台时 runPlayingSwap 什么都不做", async () => {
   Object.assign(state, { project: project([card("b", 0, 10)]), t: 1, playing: true });
   plan = { segments: [{ fromSec: 0, toSec: 1000, heavy: new Set() }] };
   withRecord("b", { vtOk: false, stepMs: 2, stepMaxMs: 3, catchUpMs: 200 });
