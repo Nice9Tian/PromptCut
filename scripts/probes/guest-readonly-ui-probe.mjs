@@ -20,7 +20,8 @@
  *   R7 顶栏：撤销 / 重做置灰；改名点不开；「项目」菜单里保存、打包保存置灰、「项目设置…」能打开但设置项禁用、「确定」置灰。
  *   R8 ?observe=1 那条老路没变：徽标仍是「只读查看」，保存置灰，而新加的这些锁都没有（「+ 序列」、输入区、参数控件照常可用）。
  *   R9 切回读写：上面各项恢复可点，<html> 标记撤掉。
- *   M1 手机版（`--mobile`：另起一台在线模式的开发服务，`?layout=mobile`）：子导航栏整排置灰、撤销置灰、播放与导出照常、Agent 输入区换成说明。
+ *   M1～M3 手机版（`--mobile`：另起一台在线模式的开发服务，`?layout=mobile`）：顶栏下有一条说明（手机上没有悬停）、子导航栏整排置灰、撤销置灰、播放与导出照常；
+ *      Agent 输入区换成说明；时间轴分页里点选后拖动卡片段不动（读写下会动，作对照）、对齐按钮置灰。
  * 截图写进 --out：ro-full.png、ro-timeline.png、ro-params.png、ro-agent.png、ro-library.png、ro-project-menu.png、ro-settings.png、
  *   rw-full.png、observe-full.png、ro-mobile.png、ro-mobile-agent.png。
  */
@@ -138,17 +139,18 @@ try {
     }, sel);
     if (!ok) throw new Error(`点不到 ${sel}`);
   };
-  const setAccess = async (page, access) => {
-    await page.evaluate(async (access) => {
-      const vo = await import('/src/editor/io/viewOnly.ts');
+  // prefix:在线模式的开发服务把页面放在 /editor/ 下(vite.config.ts 的 base),模块路径跟着带上
+  const setAccess = async (page, access, prefix = '') => {
+    await page.evaluate(async (access, prefix) => {
+      const vo = await import(`${prefix}/src/editor/io/viewOnly.ts`);
       vo.setProjectAccess(access);
       // 借同步管理的一次状态通知让界面重渲(真实路径是 syncManager 进 / 退项目时拨)
-      const sm = await import('/src/editor/sync/syncManager.ts');
+      const sm = await import(`${prefix}/src/editor/sync/syncManager.ts`);
       sm.pushToast('probe', 'info', 1);
-    }, access);
+    }, access, prefix);
     await sleep(500);
   };
-  const WHY = (page) => page.evaluate(async () => (await import('/src/editor/io/viewOnly.ts')).viewOnlyText());
+  const WHY = (page, prefix = '') => page.evaluate(async (prefix) => (await import(`${prefix}/src/editor/io/viewOnly.ts`)).viewOnlyText(), prefix);
   /** 往时间轴第一条序列上扔一张卡(合成的 HTML5 拖放事件;真拖放 puppeteer 做不到):回「落点接了没有」和「多了几个片段」 */
   const tryDrop = (page) => page.evaluate(() => {
     const st = window.__pcStore.getState();
@@ -385,19 +387,19 @@ try {
     });
     mobileServer = { stop: () => killTree(child.pid) };
     await waitHttp(`http://127.0.0.1:${MOBILE_PORT}/`, () => true, 120_000, '在线模式开发服务').catch(() => {});
-    const mobOrigin = `http://127.0.0.1:${MOBILE_PORT}`;
-    const mob = await openEditor(mobOrigin, '?editor&layout=mobile', { width: 390, height: 844 });
+    const mob = await openEditor(`http://127.0.0.1:${MOBILE_PORT}/editor`, '?editor&layout=mobile', { width: 390, height: 844 });
     await waitFor(() => mob.evaluate(() => !!document.querySelector('[data-pcm="editor"]')), 60_000, '手机版编辑页');
-    await setAccess(mob, 'r');
-    const mWhy = await WHY(mob);
+    await setAccess(mob, 'r', '/editor');
+    const mWhy = await WHY(mob, '/editor');
     const m = await mob.evaluate(() => ({
       flag: document.querySelector('[data-pcm="editor"]')?.getAttribute('data-readonly'),
       sub: [...document.querySelectorAll('[data-pcm="subnav-preview"] button')].map((b) => ({ d: b.disabled, t: b.title })),
       undo: document.querySelector('[data-pcm="undo"]')?.disabled,
       play: document.querySelector('[data-pcm="play"]')?.disabled,
       exportBtn: document.querySelector('[data-pcm="top-export"]')?.disabled,
+      bar: document.querySelector('[data-pcm="ro-bar"]')?.textContent ?? null,
     }));
-    check('M1.mobile-subnav-off', m.flag === '1' && m.sub.length > 0 && m.sub.every((b) => b.d && b.t === mWhy) && m.undo === true && m.play === false && m.exportBtn === false, { m });
+    check('M1.mobile-subnav-off', m.bar === mWhy && m.flag === '1' && m.sub.length > 0 && m.sub.every((b) => b.d && b.t === mWhy) && m.undo === true && m.play === false && m.exportBtn === false, { m });
     await shot(mob, 'ro-mobile.png');
     await mob.evaluate(() => document.querySelector('[data-pcm="pg-agent"]').click());
     await sleep(1200);
@@ -409,6 +411,34 @@ try {
     }));
     check('M2.mobile-agent-composer-explains', a.composer === '1' && a.note === mWhy && !a.input, { a });
     await shot(mob, 'ro-mobile-agent.png');
+    // 时间轴分页:卡片段点选后拖动平移——只读不动,读写会动
+    const mobProject = () => mob.evaluate(() => JSON.stringify(window.__pcStore.getState().project));
+    const dragClip = async () => {
+      const box = await mob.evaluate(() => { const r = document.querySelector('[data-pcm="clip"]').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+      await mob.mouse.click(box.x, box.y); // 先点选
+      await sleep(300);
+      await mob.mouse.move(box.x, box.y);
+      await mob.mouse.down();
+      await mob.mouse.move(box.x + 70, box.y, { steps: 6 });
+      await mob.mouse.up();
+      await sleep(400);
+    };
+    await mob.evaluate(async () => {
+      const { allCards } = await import('/editor/src/kernel/registry.ts');
+      window.__pcStore.actions.addCardClip(allCards()[0].id, 2, {});
+    });
+    await mob.evaluate(() => document.querySelector('[data-pcm="pg-timeline"]').click());
+    await sleep(1200);
+    const mBefore = await mobProject();
+    await dragClip();
+    check('M3.mobile-timeline-drag-refused', (await mobProject()) === mBefore, { clips: await mob.evaluate(() => document.querySelectorAll('[data-pcm="clip"]').length) });
+    const align = await mob.evaluate(() => [...document.querySelectorAll('[data-pcm="align-start"],[data-pcm="align-end"]')].map((b) => b.disabled));
+    check('M3.mobile-align-off', align.length === 2 && align.every(Boolean), { align });
+    await shot(mob, 'ro-mobile-timeline.png');
+    await setAccess(mob, 'rw', '/editor');
+    const mBefore2 = await mobProject();
+    await dragClip();
+    check('M3.mobile-timeline-drag-works-in-readwrite', (await mobProject()) !== mBefore2);
     await mob.close();
   }
 } catch (e) {

@@ -305,6 +305,9 @@ export function MobileEditor() {
         </div>
       )}
 
+      {/* 只读项目(游客):手机上看不到悬停说明,置灰的按钮得有一句话讲清为什么(播放、预览、导出、读 Agent 对话照常) */}
+      {ro.locked && <div className="robar" data-pcm="ro-bar">{ro.why}</div>}
+
       {conflicts.pending && (
         <div className="cfbar" data-pcm="cfbar">
           <Icon name="warn" />
