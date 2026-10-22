@@ -108,9 +108,13 @@ it('C10-MERGE-01 「合并 Skill 结果…」随 SKILL 的三方合并归档(计
 });
 
 /*
- * C10-TITLEBAR-01 标题栏菜单同顶栏（C10 契约第 10 节〔裁〕，2026-09-28）：`src/ui/WindowTitleBar.tsx` 在线页面上照样渲染，
- * 桌面才有的项在线构建里置灰（disabled 看 `desktopOnly`）、悬停说明用 `onlineUnsupported`、点了不动作，桌面壳命令那一支剪掉；
- * 桌面构建照旧。开关是编译期常量，就对产物核。
+ * C10-TITLEBAR-01 在线构建里整条标题栏不画（2026-10-22 用户定，原话「浏览器版不需要『显示顶部菜单栏』和『放大缩小关闭』
+ * 三个无用的按钮」「桌面版要有」）。这一条取代了 C10 契约第 10 节 2026-09-28 那条〔裁〕「在线标题栏菜单同顶栏、桌面项置灰」：
+ * 菜单在在线页面上已经不存在，置灰无从谈起。在线产物里菜单行、窗口按钮（− □ ×）、桌面壳命令都应剪掉；
+ * 菜单里在线还用得上的七项不许丢——五项在顶栏原有按钮上（导出视频、首页、撤销、重做、皮肤…），
+ * 「快捷键」「关于 PromptCut」挪进顶栏「⋯」菜单（`TopBar.tsx`，`data-pc` 为 more-shortcuts / more-about）。
+ * 桌面构建照旧：菜单项都在、不置灰、没有在线的悬停说明、桌面壳命令与窗口按钮还在，且不重复「⋯」里那两项。
+ * 开关是编译期常量，就对产物核。
  */
 const TITLEBAR_DESKTOP_ONLY = ['new-project', 'open-project', 'save-project', 'open-export', 'open-data', 'quit', 'open-voice', 'open-pylibs', 'open-models', 'reset-pylibs', 'open-logs'];
 const TITLEBAR_ALWAYS = ['export-video', 'go-home', 'undo', 'redo', 'open-skin', 'shortcuts', 'about'];
@@ -128,20 +132,17 @@ function titlebarItemProps(dir) {
 const menuEntry = (text, cmd) => text.match(new RegExp(`command:[\`"']${cmd}[\`"'][^}]*}`))?.[0] ?? null;
 const bundleText = (dir) => walkBundle(dir).map((f) => fs.readFileSync(f, 'utf8')).join('\n');
 
-it('C10-TITLEBAR-01 在线构建里标题栏菜单的桌面项置灰、点了不动作、桌面壳命令剪掉；桌面构建照旧', { timeout: 240_000 }, async () => {
+/** 从标题栏菜单挪进顶栏「⋯」菜单的两项（只在在线构建里出现） */
+const TITLEBAR_MOVED = ['more-shortcuts', 'more-about'];
+
+it('C10-TITLEBAR-01 在线构建里标题栏菜单行与窗口按钮都剪掉、七项功能不丢；桌面构建照旧', { timeout: 240_000 }, async () => {
   await buildOnline();
-  const on = titlebarItemProps(onlineDir);
-  assert.ok(on, '在线产物里找不到标题栏菜单项（titlebar-${…}）');
-  assert.match(on.props, /disabled:[^,]*desktopOnly/, `在线产物里 disabled 应看 desktopOnly:${on.props}`);
-  assert.match(on.props, /title:[^,]*desktopOnly[^,]*onlineUnsupported|title:[^,]*onlineUnsupported/, `悬停说明应走 onlineUnsupported:${on.props}`);
-  assert.match(on.props, /onClick:[^}]*desktopOnly/, `点了应先看 desktopOnly、不动作:${on.props}`);
-  for (const cmd of TITLEBAR_DESKTOP_ONLY) assert.match(menuEntry(on.text, cmd) ?? '', /desktopOnly:/, `${cmd} 在线应置灰`);
-  for (const cmd of TITLEBAR_ALWAYS) {
-    const e = menuEntry(on.text, cmd);
-    assert.ok(e, `找不到 ${cmd}`);
-    assert.equal(/desktopOnly:/.test(e), false, `${cmd} 在线照常可点:${e}`);
-  }
-  assert.equal(bundleText(onlineDir).includes('desktop_titlebar_command'), false, '在线产物里不该还有桌面壳命令');
+  const onText = bundleText(onlineDir);
+  assert.equal(titlebarItemProps(onlineDir), null, '在线产物里不该还有标题栏菜单项（titlebar-${…}）');
+  assert.equal(/pc-titlebar-menu-button/.test(onText), false, '在线产物里不该还有标题栏菜单行');
+  assert.equal(/pc-titlebar-window-controls|toggleMaximize/.test(onText), false, '在线产物里不该还有窗口按钮（− □ ×）');
+  assert.equal(onText.includes('desktop_titlebar_command'), false, '在线产物里不该还有桌面壳命令');
+  for (const mark of TITLEBAR_MOVED) assert.ok(onText.includes(mark), `在线产物里找不到挪进「⋯」菜单的 ${mark}`);
 
   await buildDesktop();
   const desk = titlebarItemProps(desktopDir);
@@ -151,7 +152,11 @@ it('C10-TITLEBAR-01 在线构建里标题栏菜单的桌面项置灰、点了不
   const falsy = d[1] === '!1' || d[1] === 'false' || new RegExp(`(^|[^\\w$])${d[1].replace(/\$/g, '\\$')}=(!1|false)(?![\\w$])`).test(desk.text);
   assert.ok(falsy, `桌面产物里标题栏菜单项不该置灰:${d[1]}`);
   assert.equal(desk.props.includes('onlineUnsupported'), false, `桌面产物里不该有在线的悬停说明:${desk.props}`);
-  assert.ok(bundleText(desktopDir).includes('desktop_titlebar_command'), '桌面产物里桌面壳命令照旧');
+  const deskText = bundleText(desktopDir);
+  for (const cmd of [...TITLEBAR_DESKTOP_ONLY, ...TITLEBAR_ALWAYS]) assert.ok(menuEntry(deskText, cmd), `桌面产物里找不到标题栏菜单项 ${cmd}`);
+  assert.ok(deskText.includes('desktop_titlebar_command'), '桌面产物里桌面壳命令照旧');
+  assert.ok(/pc-titlebar-window-controls/.test(deskText), '桌面产物里窗口按钮照旧');
+  for (const mark of TITLEBAR_MOVED) assert.equal(deskText.includes(mark), false, `桌面「⋯」菜单不该重复 ${mark}`);
 });
 
 /*
