@@ -286,6 +286,7 @@ Claude 主会话与 Antigravity 主会话接手后合进 `main` 的（每块的�
 **已汇总的「发版前全量要特别核」清单**（随合入持续追加）：
 
 - 截至本条写下时，`main` 上最后一次**干净全量**是 `07fca42d`：7635 条 7620 通过 **0 失败 0 取消** 15 跳过（918,637 字节日志、有汇总行）。此后合入的改动只做了影响范围测试，发版前要补回整套。
+- **`84f55261` 浏览器版不画应用标题栏**（2026-10-22 用户当场加的小需求）。跑过的：`tsc` 零错误；守门测试 `server/test/c10a-online-build.test.mjs` 改写前 11 条 10 过 1 失败、改写后 11 条全过；`src/ui/*.test.mjs` 与 `src/editor/**/*.test.mjs` 共 **770 条全过**；`npm run build` 与 `npx vite build --mode online` 都通过；探针 `browser-titlebar-probe` 8 项全过（含桌面版三组都还在）。**没覆盖到、发版前全量要特别看的**：① 别处引用 `WindowTitleBar` 的地方只有 `Shell.tsx` 与 `StartPage.tsx`（后者只引 `STORAGE_EVENT`），`src/*.test.mjs`（`Shell`、`StartPage` 那一层）这次没跑；② 顶栏「⋯」菜单新增两项，`src/editor/` 以外引用顶栏的端到端用例（`server/test/` 里经真浏览器开编辑器的那些，例如 `accept-018-*`、`c10a-online-probe`）没跑；③ 桌面壳 `desktop/` 下的发版构建没跑（改动只在网页一侧，没碰 `desktop/src-tauri/src/**`）。
 
 ## 分支去向
 
