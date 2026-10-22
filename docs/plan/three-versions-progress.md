@@ -288,6 +288,22 @@ Claude 主会话与 Antigravity 主会话接手后合进 `main` 的（每块的�
 - 截至本条写下时，`main` 上最后一次**干净全量**是 `07fca42d`：7635 条 7620 通过 **0 失败 0 取消** 15 跳过（918,637 字节日志、有汇总行）。此后合入的改动只做了影响范围测试，发版前要补回整套。
 - **`84f55261` 浏览器版不画应用标题栏**（2026-10-22 用户当场加的小需求）。跑过的：`tsc` 零错误；守门测试 `server/test/c10a-online-build.test.mjs` 改写前 11 条 10 过 1 失败、改写后 11 条全过；`src/ui/*.test.mjs` 与 `src/editor/**/*.test.mjs` 共 **770 条全过**；`npm run build` 与 `npx vite build --mode online` 都通过；探针 `browser-titlebar-probe` 8 项全过（含桌面版三组都还在）。**没覆盖到、发版前全量要特别看的**：① 别处引用 `WindowTitleBar` 的地方只有 `Shell.tsx` 与 `StartPage.tsx`（后者只引 `STORAGE_EVENT`），`src/*.test.mjs`（`Shell`、`StartPage` 那一层）这次没跑；② 顶栏「⋯」菜单新增两项，`src/editor/` 以外引用顶栏的端到端用例（`server/test/` 里经真浏览器开编辑器的那些，例如 `accept-018-*`、`c10a-online-probe`）没跑；③ 桌面壳 `desktop/` 下的发版构建没跑（改动只在网页一侧，没碰 `desktop/src-tauri/src/**`）。
 
+- **`cda654f7` 改密退出后逐项撤回、撤销冲突接进冲突合并窗口（0.7.20）**。跑过的：`tsc` 零错误；受影响的 **106 个测试文件 759 条 759 过 0 失败 0 取消**；`npm run build` 退出码 0；VisuHive `account/test/*` **120 条 110 过 0 失败 10 跳过**（原本就跳过）；探针 `logout-rollback-probe` 全过。**过了专门的 Opus 对抗性安全专审**，查出 5 条全部修掉（见下）；专审那 5 条反例测试主会话亲自复跑过「改之前 5 条 0 过 5 失败」「改之后在上面 759 条里全绿」。**没覆盖到、发版前全量要特别看的**：① 经 `server/hosted/combo.mjs` 间接起整套托管组合、但没直接引用改动模块的端到端用例（部分 `accept-018-*`、`c10-*`、`render-*`）；② 只经 `src/store/project` 走到撤销栈、不直接引用 `docsync.ts` 的编辑器测试；③ `scripts/probes/` 里其它用 `lib/mobile-env.mjs` 的探针（`mobile-ui-probe`、`mobile-business-probe`、`conflict-merge-probe`）；④ 真实网络环境验收（不部署就不跑）。
+
+### 安全专审查出并修掉的 5 条（2026-10-22）
+
+专审报告归档在 `docs/archive/agent-reports/AGENT-claude-sec-logout-rollback.md`。它同时**否掉**了五个方向（伪造或重放撤回证明、撤回范围被撑大、页面连接串台走系统提交路径、泄露、同一次撤回落地两次或落错项目），各有代码出处；其中「页面串台」一条主会话也独立查到同一结论（连接的 principal 过 `normalizePrincipal` 时只抄一张固定字段表，`kind` 不在表上）。
+
+| 编号 | 是什么 | 怎么修的 |
+|---|---|---|
+| SEC-01 | 补偿操作号和页面提交同一命名空间，成员先占号就让撤回永久卡死、用户的退出一直办不完；事件号还随广播泄给同项目成员 | `logout-rollback:` 前缀留给文档服务，页面与 Agent 提交用它一律拒；发给页面的操作号与写入身份里不带事件号（广播、历史摘要、覆盖通知、写入者列表四处统一过滤） |
+| SEC-02 | `isIdList` 只判「是不是字符串数组」，把卡片词表这类 `string[]` 当成带 id 数组的顺序项，区间里对它的改动既不撤也不记保留 | 按真实数组用 `isIdArray` 判，plain 数组整个回退、照常参与冲突判定 |
+| SEC-03 | 冲突判定 O(n²) 且同步跑，16000 项把事件循环冻住 28.3 秒，区间大小由被踢的会话自己决定 | 按路径建索引，16000 项 82 毫秒；另加分批落地与每项目上限，超出的单独记账不静默丢 |
+| SEC-04 | 一个账号的撤回卡住会挡住同实例别的账号登记结束见证 | 每次退出的撤回各自在后台办，一轮最多等 1 秒就去办下一个 |
+| SEC-05 | 账本里记的路径没有长度上限，一次退出可塞约 1 MB 进单行 JSON 账本 | 单条路径上限 300 字符、截断时标记 |
+
+主会话另外改掉一处**不是专审查出的**：超出上限没撤的那几处原本被算进网页上「M 处已被别人接着改过，保留」。那句话对用户是假的——那几处没人碰过，是系统到了上限自己放弃的，用户会以为同事覆盖了自己的改动。现在三个数分开报、分开显示，只有超限数大于 0 时才多一句。
+
 ## 分支去向
 
 2026-10-13 清掉的（都是 `main` 的祖先，提交全在 `main` 里；清之前核过没有未提交的文件、没有目录联接）：本机和远端的 `codex/018-account-path-main`、`codex/018-agent-worker-doc`、`codex/018-agent-worker-runtime`（三条同一个提交，随块一进了 `main`，三个工作区一并清了）、`codex/018-run-assets-current-v2`、`codex/018-run-assets-current`（随块六进了 `main`）、`codex/018-instance-http-repair-verification`；只在远端的 `codex/018-account-public-path`、`codex/018-asset-root-publisher`、`codex/018-cloud-consent-user-path`、`codex/018-member-native-route`、`codex/018-root-registry-stage`、`codex/render-scheduling-doc-sync`、`claude/render-service`。
