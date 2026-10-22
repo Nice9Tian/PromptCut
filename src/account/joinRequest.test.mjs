@@ -149,7 +149,8 @@ test('JRC-5 每个新 code 都有一句话,不落到「请求失败（code）」
   for (const code of ['not-listed', 'banned', 'no-project', 'relocating', 'entry-open', 'join-request-limit', 'join-request-full', 'join-request-account-limit',
     'invalid-join-request', 'no-join-request', 'join-request-decided', 'join-request-banned', 'already-member', 'invalid-entry', 'invalid-member',
     'request-mismatch', 'creator-required', 'access-revision-mismatch', 'login-required', 'credential-revoked',
-    'bad-request-id', 'invalid-authority-claim', 'invalid-project', 'invalid-role', 'invalid-device']) {
+    'bad-request-id', 'invalid-authority-claim', 'invalid-project', 'invalid-role', 'invalid-device',
+    'secondary-password-required', 'bad-secondary-password']) {
     for (const status of [400, 403, 404, 409, 429]) {
       const text = accountErrorText(status, code);
       assert.ok(text && !text.includes('请求失败') && !text.includes(code), `${code} → ${text}`);
@@ -183,4 +184,49 @@ test('JRC-6 界面上的话:被挡住、已发送、被拒、通过;重开文件
   assert.equal(autoJoinKey(s({ state: 'rejected' })), null);
   assert.equal(autoJoinKey(s({ state: 'member', canApply: false })), `${projectId}:member:list`);
   assert.equal(autoJoinKey(s({ state: 'pending', entry: 'link', canApply: false })), `${projectId}:pending:link`);
+});
+
+/** 去掉 `//` 与 `/* … *\/` 注释,保留字符串与模板字面量里的字(只为扫路由字面量,不求完整的 JS 词法) */
+function stripComments(source) {
+  let out = '', i = 0, quote = null;
+  while (i < source.length) {
+    const c = source[i], n = source[i + 1];
+    if (quote) {
+      out += c;
+      if (c === '\\') { out += n ?? ''; i += 2; continue; }
+      if (c === quote) quote = null;
+      i++; continue;
+    }
+    if (c === '/' && n === '/') { while (i < source.length && source[i] !== '\n') i++; continue; }
+    if (c === '/' && n === '*') { const end = source.indexOf('*/', i + 2); i = end < 0 ? source.length : end + 2; continue; }
+    if (c === '"' || c === "'" || c === '`') quote = c;
+    out += c; i++;
+  }
+  return out;
+}
+/** 一段代码里写到的账号项目路由(字面量里以 `/hosted/shared/account` 开头的那一截;末尾的 `/` 去掉再比) */
+const accountRouteLiterals = source => [...stripComments(source).matchAll(/\/hosted\/shared\/account(?:\/[A-Za-z0-9_.~-]*)*/g)]
+  .map(m => m[0].replace(/\/+$/, ''));
+const SHELL_ROUTES = ['/hosted/shared/account/create', '/hosted/shared/account/join', '/hosted/shared/account/session', '/hosted/shared/account/admin', '/hosted/shared/account/members'];
+
+test('JRC-7 守门:页面代码里写到的每一条账号项目路由都在外壳的放行清单里(扫字面量,不只看测试走到的那几个函数;安全专审 F2)', () => {
+  // 外壳那份清单本身:与这里的五条逐字相同(谁往外壳里加一条,这里也红,提醒要发新外壳)
+  const vault = fs.readFileSync(new URL('../../desktop/src-tauri/src/account_vault.rs', import.meta.url), 'utf8');
+  assert.deepEqual(JSON.parse(`[${/\$projectRoute=\$path -cin @\(([^)]*)\)/.exec(vault)[1].replace(/'/g, '"')}]`), SHELL_ROUTES);
+  // client.ts:页面发账号项目请求的唯一出口
+  const clientRoutes = accountRouteLiterals(fs.readFileSync(new URL('./client.ts', import.meta.url), 'utf8'));
+  assert.ok(clientRoutes.length >= 10, `client.ts 里应当扫到一批路由字面量,实际 ${clientRoutes.length} 个(扫法坏了也要红)`);
+  assert.deepEqual([...new Set(clientRoutes)].filter(route => !SHELL_ROUTES.includes(route)), [], 'client.ts 里有外壳不放行的路由');
+  // 整个 src(测试文件除外):别处直接拼路由、绕过 client.ts 也要拦住
+  const root = new URL('../', import.meta.url);
+  const offenders = [];
+  for (const rel of fs.readdirSync(root, { recursive: true })) {
+    const file = String(rel).replace(/\\/g, '/');
+    if (!/\.(ts|tsx|mjs|js)$/.test(file) || /\.test\.[a-z]+$/.test(file)) continue;
+    for (const route of accountRouteLiterals(fs.readFileSync(new URL(file, root), 'utf8'))) if (!SHELL_ROUTES.includes(route)) offenders.push(`${file}: ${route}`);
+  }
+  assert.deepEqual(offenders, [], '页面代码里有外壳不放行的账号项目路由');
+  // 扫法自检:注释里的不算;字符串里的、拼出来只剩前缀的都算
+  assert.deepEqual(accountRouteLiterals("// '/hosted/shared/account/nope'\n/* `/hosted/shared/account/nope2` */ x('/hosted/shared/account/join'); y(`/hosted/shared/account/${a}`);"),
+    ['/hosted/shared/account/join', '/hosted/shared/account']);
 });

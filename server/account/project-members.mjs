@@ -1,4 +1,5 @@
 import { accountError } from './client.mjs';
+import { secondaryPasswordPending } from './authority.mjs';
 
 const fail = (status, code) => { throw accountError(status, code); };
 /**
@@ -37,6 +38,9 @@ export function createProjectMembers({ ledger, authority, getConnections }) {
     const state = ledger.read(), project = state.projects[body.projectId];
     if (!project || project.status !== 'active' || principal.projectId !== body.projectId || principal.authorityId !== ledger.authorityId ||
         principal.accessRevision !== project.accessRevision || principal.revocationSeq !== state.accessHead) fail(503, 'members-changed');
+    // 二级密码挡的是「进这个项目」,读成员名单也算:没输过当前这一版的(设密码之前进来的老成员、改过密码之后的老成员、
+    // 刚被通过的申请人)不给名单,与 `/session` 同一个判据(`authority.mjs` 的 `secondaryPasswordPending`)。2026-10-22 安全专审 F1
+    if (secondaryPasswordPending(project, principal.accountId)) fail(403, 'secondary-password-required');
     const connections = getConnections();
     if (!Array.isArray(connections)) fail(503, 'members-unavailable');
     const names = new Map(), groups = new Map();

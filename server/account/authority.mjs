@@ -70,6 +70,14 @@ const sameSecret = (a, b) => {
 const secondaryHash = (password, salt) => scryptSync(password, salt, 32).toString('base64url');
 /** 项目二级密码最长几个字(只防超长输入拖慢哈希;不限字符种类) */
 const SECONDARY_PASSWORD_MAX = 256;
+/**
+ * 这个账号还没输过项目二级密码的当前这一版:项目设了二级密码、他不是创建者、成员记录上的版本号与当前不符
+ * (从没输过的——设密码之前进来的老成员、刚被通过的申请人——没有版本号;改过密码之后旧版本号也不算)。
+ * 二级密码挡的是「进这个项目」,读成员名单也算:`/session`(`entryState`)与 `/members`(`project-members.mjs`)用这同一条判,
+ * 不各写一份(两处给两种答案正是漏洞长出来的地方,2026-10-22 主会话定;`/join` 另在 `joinProject` 里凭密码核)。
+ */
+export const secondaryPasswordPending = (p, accountId) => !!p?.secondaryPassword && accountId !== p.creatorAccountId &&
+  p.members?.[accountId]?.secondaryPasswordRev !== p.secondaryPassword.rev;
 
 /**
  * 申请加入(2026-10-22 用户定,`docs/semantics/workflow/project.md`「多用户协作」):项目只放账号名单时,被名单挡住的账号可以发申请,
@@ -478,7 +486,7 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
   function entryState({ accountId, projectId } = {}) {
     const p = projectOf(ledger.read(), projectId); active(p);
     if (accountId === p.creatorAccountId) return { linkToken: typeof p.linkToken === 'string' ? p.linkToken : null, secondaryPassword: !!p.secondaryPassword };
-    if (p.secondaryPassword && p.members[accountId]?.secondaryPasswordRev !== p.secondaryPassword.rev) reject(403, 'secondary-password-required');
+    if (secondaryPasswordPending(p, accountId)) reject(403, 'secondary-password-required');
     return {};
   }
   async function adminProject(input, body) {

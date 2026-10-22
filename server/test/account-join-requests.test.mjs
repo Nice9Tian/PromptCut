@@ -549,3 +549,34 @@ test('JR-14 「通过」那一刻现核:申请人在创建者看到申请之后�
   expectCode(await s.decide('a', 'approve-join', 'y', s.pendingId('y')), 401, 'credential-revoked');
   assert.equal(s.record().members[ID.y], undefined);
 });
+
+test('JR-15 二级密码挡「进这个项目」也挡读成员名单:没输过当前这一版的三种人 /members 回 403,输对之后恢复 200(安全专审 F1)', async t => {
+  const s = await stack(t);
+  // ① 设密码之前凭链接进来的老成员(成员记录里没有二级密码的版本号)
+  assert.equal((await s.join('b')).status, 200);
+  expectCode(await s.admin('a', { op: 'set-secondary-password', password: 'P1' }), 200, undefined);
+  // ② 输过第一版进来、之后创建者把密码改成第二版的老成员
+  assert.equal((await s.join('d', s.projectId, { secondaryPassword: 'P1' })).status, 200);
+  assert.equal((await s.members('d')).status, 200, '输过当前这一版(第一版)时照常读得到名单');
+  expectCode(await s.admin('a', { op: 'set-secondary-password', password: 'P2' }), 200, undefined);
+  // ③ 只放名单时发申请、被通过、还没输密码
+  await listOnly(s);
+  assert.equal((await s.send('c')).status, 200);
+  assert.equal((await s.decide('a', 'approve-join', 'c', s.pendingId('c'))).status, 200);
+  for (const [token, label] of [['b', '① 设密码之前进来的老成员'], ['d', '② 改过密码之后的老成员'], ['c', '③ 刚被通过、没输密码']]) {
+    expectCode(await s.members(token), 403, 'secondary-password-required', `${label}:读不到成员名单`);
+    expectCode(await s.session(token), 403, 'secondary-password-required', `${label}:与 /session 同一个答案`);
+  }
+  assert.equal((await s.members('a')).status, 200, '创建者自己不用输');
+  // 输对当前这一版(第二版)之后,三种人都恢复
+  for (const token of ['b', 'd', 'c']) {
+    expectCode(await s.join(token, s.projectId, { secondaryPassword: 'P1' }), 403, 'bad-secondary-password', `${token}:旧版本的密码不算`);
+    assert.equal((await s.join(token, s.projectId, { secondaryPassword: 'P2' })).status, 200);
+    const snap = await s.members(token);
+    assert.equal(snap.status, 200, `${token}:输对之后读得到名单`);
+    assert.equal(snap.value.requests, undefined, `${token}:普通成员的名单里照旧没有申请`);
+  }
+  // 清掉二级密码:谁都不用输
+  expectCode(await s.admin('a', { op: 'set-secondary-password', password: null }), 200, undefined);
+  assert.equal((await s.members('b')).status, 200);
+});
