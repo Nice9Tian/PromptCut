@@ -10,7 +10,8 @@
  *         和生产的摆法一样;页面凭网站登录(cookie)走,没有任何替身;
  *   手机  同一份在线构建,`?layout=mobile`、手机视口与触屏。
  * 每处:创建者取消勾选(截图)→ 申请人被挡住、点「发送申请」(截图)→ 创建者成员按钮上的数字角标、成员浮层 / 面板里的申请列表(截图)
- *   → 通过一个(他直接进来;桌面那一遍项目设了二级密码,他要输一次)→ 拒绝一个(他看到「创建者没有通过你的申请」)。桌面另看被踢的人。
+ *   → 通过一个(他自己再走一次加入;项目设了二级密码,他要输一次;在线、手机另换干净的开始页从「我加入的」点进去,核先问二级密码、不报错)
+ *   → 拒绝一个(他看到「创建者没有通过你的申请」)。桌面另看被踢的人。
  *
  *   node scripts/probes/account-join-request-probe.mjs [--only desktop,online,mobile] [--out out/join-requests] [--keep-temp]
  *        [--dist dist-online] [--editor-port 5940] [--fixture-ports 5943,5944,5945,5946,5947,5948,5949]
@@ -415,7 +416,7 @@ async function scenarioDesktop(accounts) {
   await startJoin(pageC, link);
   await waitFor(async () => (await requestState(pageC)) === 'none', 60_000, '丙看到被挡住');
   out.blockedText = await textOf(pageC, '[data-pc="join-request-text"]');
-  check(out.blockedText === '你不在这个项目的成员名单中。' && await has(pageC, '[data-pc="join-request-send"]'), '桌面-被名单挡住:「你不在这个项目的成员名单中」和「发送申请」按钮', out.blockedText);
+  check(out.blockedText === '你不在这个项目的成员名单中' && await has(pageC, '[data-pc="join-request-send"]'), '桌面-被名单挡住:「你不在这个项目的成员名单中」和「发送申请」按钮', out.blockedText);
   check(!(await has(pageC, '[data-pc="account-error"]')), '桌面-被挡住时不另弹错误条');
   await shot(pageC, 'desktop-3-blocked');
   await click(pageC, '[data-pc="join-request-send"]', '发送申请');
@@ -455,7 +456,7 @@ async function scenarioDesktop(accounts) {
   await waitFor(() => has(pageC, '[data-pc="cloud-secondary-password"]'), 60_000, '丙被通过后问二级密码');
   out.approvedText = await textOf(pageC, '[data-pc="join-request-text"]');
   out.approvedError = await textOf(pageC, '[data-pc="account-error"]');
-  check(out.approvedText === '创建者已通过你的申请。' && /二级密码/.test(out.approvedError ?? ''), '桌面-通过后申请人直接进,设了二级密码的仍要输一次', { text: out.approvedText, error: out.approvedError });
+  check(out.approvedText === '创建者已通过你的申请' && /二级密码/.test(out.approvedError ?? ''), '桌面-通过后申请人直接进,设了二级密码的仍要输一次', { text: out.approvedText, error: out.approvedError });
   await shot(pageC, 'desktop-8-approved-password');
   await fill(pageC, '[data-pc="cloud-secondary-password"]', secondary);
   await P(pageC, () => document.querySelector('[data-pc="cloud-join"]').closest('form').requestSubmit());
@@ -591,7 +592,7 @@ async function scenarioOnline(accounts) {
   check((await P(pageE, () => document.querySelector('[data-pc="cloud-project-link"]').value)).includes(out.projectId), '在线-打开项目链接时链接已经填好');
   await click(pageE, '[data-pc="cloud-join"]', '加入并打开项目');
   await waitFor(async () => (await requestState(pageE)) === 'none', 60_000, '戊看到被挡住');
-  check((await textOf(pageE, '[data-pc="join-request-text"]')) === '你不在这个项目的成员名单中。', '在线-被名单挡住的提示与按钮');
+  check((await textOf(pageE, '[data-pc="join-request-text"]')) === '你不在这个项目的成员名单中', '在线-被名单挡住的提示与按钮');
   await shot(pageE, 'online-3-blocked');
   await click(pageE, '[data-pc="join-request-send"]', '发送申请');
   await waitFor(async () => (await requestState(pageE)) === 'pending', 30_000, '戊的申请发出');
@@ -604,6 +605,11 @@ async function scenarioOnline(accounts) {
   await waitFor(async () => (await requestState(pageF)) === 'none', 60_000, '己看到被挡住');
   await click(pageF, '[data-pc="join-request-send"]', '己发送申请');
   await waitFor(async () => (await requestState(pageF)) === 'pending', 30_000, '己的申请发出');
+  // 项目二级密码(创建者经接口设):被通过的戊仍要输一次;从「我加入的」点进去也是先问二级密码、不报错(交叉审查必改 1)。
+  // 手机那一遍用的也是这个项目,被通过的庚同样要输一次
+  const secondary = out.secondary = `二级-在线-${RUN}`;
+  check((await adminAs(await A.editorToken(), out.projectId, { op: 'set-secondary-password', password: secondary })).status === 200, '在线-创建者设了项目二级密码');
+  accounts.onlineSecondary = secondary;
   // 创建者:角标、申请列表、通过戊、拒绝己
   await pageA.bringToFront();
   await waitFor(async () => (await textOf(pageA, '[data-pc="members-request-badge"]')) === '2', 60_000, '在线-成员按钮上出数字角标 2');
@@ -617,12 +623,33 @@ async function scenarioOnline(accounts) {
   await click(pageA, `${requestRow(F.id)} [data-pc="account-join-reject"]`, '拒绝己');
   await waitFor(async () => !(await has(pageA, requestRow(F.id))), 30_000, '己那一条消失');
   await shot(pageA, 'online-7-after-decisions');
-  // 戊:自己进来(这个项目没设二级密码);己:看到被拒
+  // 戊:不用再点什么,自己再走一次加入;项目设了二级密码,先问一次(不报错);这个项目当场出现在「我加入的」里
   await pageE.bringToFront();
-  await waitFor(() => inEditor(pageE), 120_000, '在线-戊被通过后直接进来');
+  await waitFor(() => has(pageE, '[data-pc="cloud-secondary-password"]'), 60_000, '在线-戊被通过后问二级密码');
+  out.approved = { text: await textOf(pageE, '[data-pc="join-request-text"]'), error: await textOf(pageE, '[data-pc="account-error"]') };
+  check(out.approved.text === '创建者已通过你的申请' && out.approved.error === '该项目设置了项目二级密码，请输入二级密码。', '在线-通过后申请人自己再走一次加入,设了二级密码的先问一次', out.approved);
+  const openSel = `[data-pc="cloud-project-open"][data-project="${out.projectId}"]`;
+  await waitFor(() => has(pageE, openSel), 30_000, '戊的「我加入的」里出现这个项目');
+  check(true, '在线-被通过那一刻这个项目就出现在申请人的「我加入的」里(不用刷新)');
+  await shot(pageE, 'online-8a-approved-asks-password');
+  // 交叉审查必改 1:换一个干净的开始页(不带项目链接),从「我加入的」点这个项目:链接填好、弹出二级密码框、不报「请求失败」;输对了进项目
+  await pageE.goto(`${ORIGIN}/editor/?nosetup=1`, { waitUntil: 'domcontentloaded' });
+  await pageE.waitForSelector(openSel, { timeout: 120_000 });
+  out.cleanStart = { secondaryBox: await has(pageE, '[data-pc="cloud-secondary-password"]'), link: await P(pageE, () => document.querySelector('[data-pc="cloud-project-link"]')?.value ?? '') };
+  check(!out.cleanStart.secondaryBox && out.cleanStart.link === '', '在线-干净的开始页:没有二级密码框、链接栏是空的', out.cleanStart);
+  await click(pageE, openSel, '从「我加入的」点进项目');
+  await waitFor(() => has(pageE, '[data-pc="cloud-secondary-password"]'), 30_000, '在线-从「我加入的」点进去弹出二级密码框');
+  out.listOpen = await P(pageE, () => ({ link: document.querySelector('[data-pc="cloud-project-link"]')?.value ?? '',
+    error: document.querySelector('[data-pc="account-error"]')?.textContent ?? null, button: document.querySelector('[data-pc="cloud-join"]')?.textContent ?? null }));
+  check(out.listOpen.link.includes(out.projectId) && out.listOpen.error === '该项目设置了项目二级密码，请输入二级密码。' && out.listOpen.button === '验证二级密码并加入',
+    '在线-从「我加入的」点进设了二级密码的项目:链接填好、弹出二级密码框、只说「请输入二级密码」', out.listOpen);
+  await shot(pageE, 'online-8b-list-click-asks-password', { scrollTo: '[data-pc="cloud-secondary-password"]' });
+  await fill(pageE, '[data-pc="cloud-secondary-password"]', secondary);
+  await click(pageE, '[data-pc="cloud-join"]', '验证二级密码并加入');
+  await waitFor(() => inEditor(pageE), 120_000, '在线-戊输对二级密码后进来');
   await waitGateGone(pageE);
   await dismissConsent(pageE, 8000);
-  check(true, '在线-通过后申请人直接能进');
+  check(true, '在线-被通过的人从「我加入的」点进去、输一次二级密码就进');
   await shot(pageE, 'online-8-approved-entered');
   await pageF.bringToFront();
   await waitFor(async () => (await requestState(pageF)) === 'rejected', 60_000, '己看到被拒');
@@ -656,7 +683,7 @@ async function scenarioMobile(accounts) {
   await click(pageG, '[data-pcm="home-join"]', '加入别人的项目');
   await click(pageG, '[data-pcm="join-submit"]', '加入');
   await waitFor(async () => (await requestState(pageG, 'data-pcm')) === 'none', 60_000, '庚看到被挡住');
-  check((await textOf(pageG, '[data-pcm="join-request-text"]')) === '你不在这个项目的成员名单中。' && await has(pageG, '[data-pcm="join-request-send"]'), '手机-被名单挡住的提示与「发送申请」');
+  check((await textOf(pageG, '[data-pcm="join-request-text"]')) === '你不在这个项目的成员名单中' && await has(pageG, '[data-pcm="join-request-send"]'), '手机-被名单挡住的提示与「发送申请」');
   await shot(pageG, 'mobile-1-blocked');
   await click(pageG, '[data-pcm="join-request-send"]', '发送申请');
   await waitFor(async () => (await requestState(pageG, 'data-pcm')) === 'pending', 30_000, '庚的申请发出');
@@ -685,11 +712,33 @@ async function scenarioMobile(accounts) {
   await click(pageA, `[data-pcm="join-request-row"][data-account-id="${H.id}"] [data-pcm="join-request-reject"]`, '拒绝辛');
   await waitFor(async () => !(await has(pageA, '[data-pcm="join-request-row"]')), 30_000, '申请都处理完');
   await shot(pageA, 'mobile-5-after-decisions');
-  // 庚:自己进来;辛:看到被拒
+  // 庚:不用再点什么,自己再走一次加入;项目设了二级密码(在线那一遍设的),「加入」面板里先问一次
   await pageG.bringToFront();
-  await waitFor(() => has(pageG, '[data-pcm="members-btn"]'), 120_000, '手机-庚被通过后直接进来');
-  check(true, '手机-通过后申请人直接能进');
+  await waitFor(() => has(pageG, '[data-pcm="join-secondary"]'), 60_000, '手机-庚被通过后问二级密码');
+  out.approvedText = await textOf(pageG, '[data-pcm="join-request-text"]');
+  check(out.approvedText === '创建者已通过你的申请', '手机-通过后申请人自己再走一次加入,设了二级密码的先问一次', out.approvedText);
+  await shot(pageG, 'mobile-6a-approved-asks-password');
+  // 交叉审查必改 1:换一个干净的开始页,从「我的项目」点这个项目(标着「我加入的」):打开「加入」面板、链接填好、弹出二级密码框;输对了进项目
+  const secondary = accounts.onlineSecondary;
+  if (!secondary) throw new Error('手机那一遍要在线那一遍设的二级密码:先跑 online');
+  const projSel = `[data-pcm="proj"][data-project="${projectId}"]`;
+  await pageG.goto(`${ORIGIN}/editor/?layout=mobile&nosetup=1`, { waitUntil: 'domcontentloaded' });
+  await pageG.waitForSelector(projSel, { timeout: 300_000 });
+  out.listSub = await textOf(pageG, `${projSel} .sub`);
+  check(out.listSub === '我加入的' && !(await has(pageG, '[data-pcm="sheet-join"]')), '手机-被通过的项目在「我的项目」里、标着「我加入的」', out.listSub);
+  await click(pageG, projSel, '庚从「我的项目」点进项目');
+  await waitFor(() => has(pageG, '[data-pcm="sheet-join"] [data-pcm="join-secondary"]'), 30_000, '手机-从列表点进去弹出二级密码框');
+  out.listOpen = await P(pageG, () => ({ link: document.querySelector('[data-pcm="join-link"]')?.value ?? '',
+    error: document.querySelector('[data-pcm="sheet-join"] .err')?.textContent ?? null, button: document.querySelector('[data-pcm="join-submit"]')?.textContent ?? null }));
+  check(out.listOpen.link.includes(projectId) && out.listOpen.error === '该项目设置了项目二级密码，请输入二级密码。' && out.listOpen.button === '验证二级密码并加入',
+    '手机-从「我的项目」点进设了二级密码的项目:「加入」面板里链接填好、弹出二级密码框、只说「请输入二级密码」', out.listOpen);
+  await shot(pageG, 'mobile-6b-list-click-asks-password');
+  await fill(pageG, '[data-pcm="join-secondary"]', secondary);
+  await click(pageG, '[data-pcm="join-submit"]', '验证二级密码并加入');
+  await waitFor(() => has(pageG, '[data-pcm="members-btn"]'), 180_000, '手机-庚输对二级密码后进来');
+  check(true, '手机-被通过的人从列表点进去、输一次二级密码就进');
   await shot(pageG, 'mobile-6-approved-entered');
+  // 辛:看到被拒
   await pageH.bringToFront();
   await waitFor(async () => (await requestState(pageH, 'data-pcm')) === 'rejected', 60_000, '辛看到被拒');
   check((await textOf(pageH, '[data-pcm="join-request-text"]')) === '创建者没有通过你的申请', '手机-被拒显示「创建者没有通过你的申请」');
