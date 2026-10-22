@@ -122,6 +122,11 @@
     ```
   - 反向对照（确认探针不是空过）：临时把 `server/asset-service.ts` 的长期缓存条件改成恒假后再跑，探针按预期失败 4 项（会话 1 的 `Cache-Control` 为 `no-store`、`Vary` 为空；会话 2 回源 1 次，`transferSize=262444`），`media-cache-probe: FAIL (4 failed)`；随即还原，文件与提交内容逐字节一致。
 
+### 最终验收（提交 `c0343c19`，manager 在沙箱外实跑）
+
+- `npx tsc -b --force` -> 退出码 0，无输出（零错误）。
+- `npm test`（单独一条命令，设 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT=C:\Users\admin\Documents\VisuHive` 与 `PROMPTCUT_PASSWORD_ORDER_MODULE=C:\Users\admin\Documents\VisuHive\account\password-order.mjs`）-> `ℹ tests 7684` / `ℹ pass 7669` / `ℹ fail 0` / `ℹ cancelled 0` / `ℹ skipped 15`，`✓ npm test 最终结果：零失败`；用时约 204 秒，没有文件级崩溃重跑。跳过的 15 条都是既有的环境条件项（Windows 权限位、本机没有 faster_whisper、要联网的 pip 等），不含本分支的测试；本分支的 7 条（`asset-media-cache-headers.test.mjs` 6 条、`stageIsolation.test.mjs` 的 (f)）在全量里都通过。
+- `node scripts/probes/media-cache-probe.mjs` -> 14 项 PASS，末行 `media-cache-probe: PASS`，退出码 0（路径号与上面那次不同，因为每次探针都新建临时配置目录）。跑完没有残留的临时目录、Chrome 进程或 6420～6429 上的监听。
 ## 编辑器页仍用 `?t=` 读素材字节的地方（任务第 5 步）
 
 在线**编辑器页**（非舞台文档）在 `src/editor/Preview.tsx:466-467` 将主文档的 `mediaTierPolicy` 设为 `remote: { base, ticket }`（带只读票据原文），经 `src/render/mediaTier.ts` 的 `remoteMediaUrl`（`L141-151`）把 `/@media/<hash>` 转成 `<base>/media/<hash>?t=<ticket>`。编辑器页仍用 `?t=` URL 读取素材字节的位置如下：
