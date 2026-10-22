@@ -1,4 +1,4 @@
-import { GUEST_ID_RE, adoptGuestSession, clearGuest, guestName, loadGuest } from './guest.ts';
+import { GUEST_ID_RE, GUEST_LIMITS, adoptGuestSession, clearGuest, guestName, loadGuest } from './guest.ts';
 
 /** Account credentials live in RAM. Only the native vault owns desktop recovery. */
 export interface Account { id: string; name: string; email?: string | null }
@@ -87,7 +87,16 @@ export function accountErrorText(status: number, code: string): string {
     // 项目设了二级密码而这个账号没输过当前这一版(新设、改过之后、刚被通过):进项目、续会话、读成员名单都回它。
     // 原来落到 403 的兜底「没有访问这个项目的权限。」,像是被移出了项目;要让人知道是要输这个项目的二级密码
     'secondary-password-required': '这个项目要输入项目二级密码才能进。请用项目链接加入，按提示输入二级密码。',
-    'bad-secondary-password': '项目二级密码不正确。' };
+    'bad-secondary-password': '项目二级密码不正确。',
+    // 游客（2026-10-23 用户定，`product/document-service.md`「游客」）。数都从 GUEST_LIMITS 拼，别手写死：
+    // 界面说的和服务端真正拦的不一致，就是在骗人（`guest.test.mjs` 有一条守着两边的数一致）
+    'guest-unavailable': '这个云端现在不接待游客，请登录网站账号。',
+    'guest-rate-limited': '领取游客身份的次数太多了，请过一会儿再试，或者登录网站账号。',
+    'guest-project-limit': `游客只能建 ${GUEST_LIMITS.projects} 个项目。要建更多，请注册一个账号。`,
+    'guest-read-only': '你在这个项目里只能查看，改不了内容。',
+    'guest-asset-limit': `游客最多上传 ${GUEST_LIMITS.assets} 条素材。要传更多，请注册一个账号。`,
+    'guest-asset-too-large': `游客上传的每条素材不能超过 ${GUEST_LIMITS.assetMB} MB。`,
+    'invalid-asset': '这条素材的信息不完整，请重新选择。' };
   return messages[code] || (status === 401 ? '登录已失效，请重新登录。' : status === 503 ? '云端服务暂时不可用，请稍后重试。' : status === 403 ? '没有访问这个项目的权限。' : status === 0 ? '连接云端失败，请检查网络后重试。' : `请求失败（${code}）。`);
 }
 /** 在线页面一次账号请求最多等多久(桌面版走外壳的账号桥,那边自己有 20 秒的时限) */

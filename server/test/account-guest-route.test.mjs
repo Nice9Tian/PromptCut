@@ -20,10 +20,11 @@ import { openAccountLedger } from '../account/ledger.mjs';
 import { createAccountHostedRuntime } from '../docservice/account-hosted.mjs';
 import { mountAccountProjects } from '../docservice/modules/account-projects.mjs';
 import { GUEST_ID_RE, GUEST_LIMITS } from '../account/guest.mjs';
+import { createGuestRateLimit } from '../account/guest-rate.mjs';
 
 const A = 'acc_' + 'a'.repeat(24);
 
-async function fixture(t, { guestKey = randomBytes(32) } = {}) {
+async function fixture(t, { guestKey = randomBytes(32), guestRateLimit = null } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-guest-route-'));
   const ledger = openAccountLedger({ file: path.join(dir, 'doc.sqlite'), authorityId: 'doc-guest-fixture' });
   const accountClient = {
@@ -42,15 +43,19 @@ async function fixture(t, { guestKey = randomBytes(32) } = {}) {
   await runtime.start();
   t.after(() => { try { runtime.close(); } catch { /* 已关 */ } fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); });
 
-  const mounted = mountAccountProjects({ authority: runtime.authority, issueSession: (o) => runtime.issueSession(o) });
-  /** 打一条公开路由。`token` 给 null 就不带 Bearer（领游客令牌那一条就是这样） */
-  const post = async (token, pathname, body) => {
+  const mounted = mountAccountProjects({ authority: runtime.authority, issueSession: (o) => runtime.issueSession(o),
+    ...(guestRateLimit ? { guestRateLimit } : {}) });
+  /**
+   * 打一条公开路由。`token` 给 null 就不带 Bearer（领游客令牌那一条就是这样）；
+   * `peer` 是套接字对端，限流按它算（`server/account/guest-rate.mjs`）。
+   */
+  const post = async (token, pathname, body, { peer = '203.0.113.1', extraHeaders = {} } = {}) => {
     const req = Readable.from([Buffer.from(JSON.stringify(body))]);
-    Object.assign(req, { method: 'POST', url: pathname, headers: { 'content-type': 'application/json',
-      ...(token ? { authorization: `Bearer ${token}` } : {}) } });
-    let status, value;
-    assert.equal(await mounted.handlePublic(req, { writeHead: (s) => { status = s; }, end: (text) => { value = JSON.parse(text); } }, {}), true);
-    return { status, value };
+    Object.assign(req, { method: 'POST', url: pathname, socket: { remoteAddress: peer },
+      headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}), ...extraHeaders } });
+    let status, value, headers;
+    assert.equal(await mounted.handlePublic(req, { writeHead: (s, h) => { status = s; headers = h; }, end: (text) => { value = JSON.parse(text); } }, {}), true);
+    return { status, value, headers };
   };
   /** 领一张游客令牌（不带 Bearer）。`previous` 给了就是续期 */
   const guest = async (previous) => {
@@ -144,4 +149,25 @@ test('GR-5 没配密钥的部署：游客这条路回 503，账号那条路照�
   assert.equal(out.status, 503);
   assert.equal(out.value.code, 'guest-unavailable');
   assert.equal((await f.create('tok-a', '账号的项目')).status, 201, '账号那条路不该受影响');
+});
+
+test('GR-6 领令牌按 IP 限流：到数回 429 并带 Retry-After，换个 IP 不受牵连', async t => {
+  let at = 1_000_000;
+  const f = await fixture(t, { guestRateLimit: createGuestRateLimit({ max: 2, windowMs: 60_000, now: () => at }) });
+  const claim = (peer, headers) => f.post(null, '/hosted/shared/account/guest', {}, { peer, extraHeaders: headers });
+
+  for (let i = 0; i < 2; i++) assert.equal((await claim('198.51.100.5')).status, 200, `第 ${i + 1} 次`);
+  const refused = await claim('198.51.100.5');
+  assert.equal(refused.status, 429);
+  assert.equal(refused.value.code, 'guest-rate-limited');
+  assert.equal(refused.headers['retry-after'], '60', '要告诉页面等多久，不然它原地重试');
+
+  assert.equal((await claim('198.51.100.6')).status, 200, '换个 IP 不该被牵连');
+  // 经 nginx 进来按最后一跳算:伪造前面那几跳绕不过去
+  assert.equal((await claim('127.0.0.1', { 'x-forwarded-for': '1.1.1.1, 198.51.100.5' })).status, 429);
+  assert.equal((await claim('127.0.0.1', { 'x-forwarded-for': '198.51.100.5, 9.9.9.9' })).status, 200, '最后一跳是别人就是别人');
+
+  // 窗口滚过去就又能领
+  at += 60_001;
+  assert.equal((await claim('198.51.100.5')).status, 200);
 });
