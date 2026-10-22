@@ -4,6 +4,7 @@ import { findClip } from "../../../kernel/project";
 import { AUDIO_FX_KINDS, AUDIO_FX_PRESETS, describeAudioFx, isAudioFxAnimated } from "../../../kernel/audioFx.mjs";
 import { createAudioFxTools, audioFxUsesOf } from "../../right/audioFxTools";
 import { AudioStrip } from "./AudioStrip";
+import { useReadOnly } from "../../readOnly";
 import type { GroupData, GroupItem } from "./groups";
 
 /** 和 Agent 的 apply_audio_fx / remove_audio_fx 同一份校验 */
@@ -25,6 +26,8 @@ function useSelectedAudioClip() {
  * 每条的「挂到选中 / 删除」只在悬停或键盘聚焦时露出来。
  */
 export function useAudioFxGroup(q: string, flash: (text: string, ms?: number) => void): GroupData {
+  // 这个项目只给了只读权限(游客):挂 / 摘音频效果、删效果都是写
+  const ro = useReadOnly();
   const { project, selClip, selMedia } = useSelectedAudioClip();
   const [armed, setArmed] = useState<string | null>(null);
   const canApply = selClip && selMedia && selMedia.kind !== "image";
@@ -71,8 +74,8 @@ export function useAudioFxGroup(q: string, flash: (text: string, ms?: number) =>
               <button
                 type="button"
                 className="pc-left-btn"
-                disabled={!canApply}
-                title={canApply ? (on ? "从选中的片段上摘掉" : "挂到选中的片段上(每段只挂一个,会替换原来的)") : "先在时间轴上选中一段视频或声音"}
+                disabled={!canApply || ro.locked}
+                title={ro.locked ? ro.why : canApply ? (on ? "从选中的片段上摘掉" : "挂到选中的片段上(每段只挂一个,会替换原来的)") : "先在时间轴上选中一段视频或声音"}
                 onClick={() =>
                   canApply &&
                   (on
@@ -85,7 +88,8 @@ export function useAudioFxGroup(q: string, flash: (text: string, ms?: number) =>
               <button
                 type="button"
                 className={`pc-left-btn${armed === f.id ? " is-danger" : ""}`}
-                title={uses.length ? `用在 ${uses.length} 段上,删了会一起摘掉` : "从效果库删掉"}
+                disabled={ro.locked}
+                title={ro.title(uses.length ? `用在 ${uses.length} 段上,删了会一起摘掉` : "从效果库删掉")}
                 onClick={() => {
                   if (uses.length && armed !== f.id) {
                     setArmed(f.id);
@@ -160,6 +164,7 @@ export function useAudioFxGroup(q: string, flash: (text: string, ms?: number) =>
 
 /** 特效 → 音频预设组:AUDIO_FX_PRESETS,点一条 = 从预设新建(选中了能挂的片段就顺手挂上) */
 export function useAudioPresetsGroup(q: string, flash: (text: string, ms?: number) => void): GroupData {
+  const ro = useReadOnly();
   const { selClip, selMedia } = useSelectedAudioClip();
   const canApply = selClip && selMedia && selMedia.kind !== "image";
 
@@ -178,7 +183,7 @@ export function useAudioPresetsGroup(q: string, flash: (text: string, ms?: numbe
   );
 
   const create = (preset: (typeof AUDIO_FX_PRESETS)[number]) =>
-    run(
+    ro.locked ? undefined : run(
       () => tools.createAudioFx({ ...preset, createdBy: "user", ...(canApply ? { clipId: selClip.id } : null) }),
       canApply ? `已新建「${preset.name}」并挂到选中片段` : `已新建「${preset.name}」`,
     );
@@ -190,6 +195,7 @@ export function useAudioPresetsGroup(q: string, flash: (text: string, ms?: numbe
         attrs={{ "data-pc-audio-preset": String(idx) }}
         icon="plus"
         className="is-click"
+        edits
         role="button"
         tabIndex={0}
         title={canApply ? `点一下:从「${preset.name}」新建并挂到选中片段` : `点一下:从「${preset.name}」新建`}

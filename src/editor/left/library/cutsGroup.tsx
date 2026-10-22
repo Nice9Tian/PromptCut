@@ -7,6 +7,7 @@ import { ConfirmDialog } from "../ConfirmDialog";
 import { IconFilm, openCutInTimeline } from "../../timeline/CutTabs";
 import { fmtDur } from "./mediaGroups";
 import type { GroupData, GroupItem } from "./groups";
+import { useReadOnly } from "../../readOnly";
 import "../../timeline/cut-tabs.css";
 
 /**
@@ -27,6 +28,8 @@ function describeRefs(row: Row): string {
 
 export function useCutsGroup(q: string, flash: (text: string, ms?: number) => void): { data: GroupData; overlay: React.ReactNode } {
   const project = useStore((s) => s.project);
+  // 这个项目只给了只读权限(游客):新建 / 改名 / 删除 / 打开(切换激活的剪辑)/ 拖进时间轴都是写
+  const ro = useReadOnly();
   const [ctx, setCtx] = useState<{ x: number; y: number; id: string } | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<Row | null>(null);
@@ -43,7 +46,7 @@ export function useCutsGroup(q: string, flash: (text: string, ms?: number) => vo
       id: r.id,
       aspect: 9 / 16,
       node: (
-        <CutTile row={r} canDelete={rows.length > 1} renaming={renaming === r.id}
+        <CutTile row={r} canDelete={rows.length > 1} renaming={renaming === r.id} locked={ro.locked} why={ro.why}
           onRename={() => setRenaming(r.id)} onRenamed={() => setRenaming(null)} onDelete={() => askDelete(r)}
           onContextMenu={(e) => { e.preventDefault(); setCtx({ x: e.clientX, y: e.clientY, id: r.id }); }} />
       ),
@@ -54,6 +57,7 @@ export function useCutsGroup(q: string, flash: (text: string, ms?: number) => vo
       thumbs,
       detailTop: (
         <button type="button" className="pc-btn-primary is-block pc-lib-cut-new" data-pc="lib-cut-add"
+          disabled={ro.locked} title={ro.title()}
           onClick={() => { const cut = actions.addCut(undefined, { switchTo: false }); openCutInTimeline(cut.id); }}>
           新建剪辑
         </button>
@@ -62,18 +66,20 @@ export function useCutsGroup(q: string, flash: (text: string, ms?: number) => vo
       emptyDetail: <div className="pc-left-note">没有匹配的剪辑</div>,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, q, renaming]);
+  }, [rows, q, renaming, ro.locked]);
 
   const menuItems = (id: string): ContextMenuItem[] => {
     const row = rows.find((r) => r.id === id);
     if (!row) return [];
+    const off = ro.locked ? { disabled: true, title: ro.why } : null;
     return [
-      { label: "在时间轴上打开", onClick: () => openCutInTimeline(id) },
-      { label: "改名", onClick: () => setRenaming(id) },
+      { label: "在时间轴上打开", onClick: () => openCutInTimeline(id), ...off },
+      { label: "改名", onClick: () => setRenaming(id), ...off },
       {
         label: "删除剪辑", danger: true, disabled: rows.length <= 1,
         title: rows.length <= 1 ? "这是最后一条剪辑,不能删" : undefined,
         onClick: () => askDelete(row),
+        ...off,
       },
     ];
   };
@@ -116,8 +122,10 @@ function CutThumb({ row }: { row: Row }) {
   );
 }
 
-function CutTile({ row, canDelete, renaming, onRename, onRenamed, onDelete, onContextMenu }: {
+function CutTile({ row, canDelete, renaming, locked, why, onRename, onRenamed, onDelete, onContextMenu }: {
   row: Row; canDelete: boolean; renaming: boolean;
+  /** 只读项目(游客):不接点击 / 拖动 / 改名 / 删除;why 是置灰说明 */
+  locked: boolean; why: string;
   onRename: () => void; onRenamed: () => void; onDelete: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
 }) {
@@ -134,10 +142,11 @@ function CutTile({ row, canDelete, renaming, onRename, onRenamed, onDelete, onCo
       data-pc-lib-cut={row.id}
       role="button"
       tabIndex={0}
-      draggable={!renaming}
-      title={`${row.name} · ${fmtDur(row.duration)}${refs}\n单击在时间轴上打开,拖到序列上放一个剪辑段`}
-      onClick={() => { if (!renaming) openCutInTimeline(row.id); }}
-      onKeyDown={(e) => { if (!renaming && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openCutInTimeline(row.id); } }}
+      draggable={!renaming && !locked}
+      aria-disabled={locked || undefined}
+      title={locked ? `${row.name} · ${fmtDur(row.duration)}${refs}\n${why}` : `${row.name} · ${fmtDur(row.duration)}${refs}\n单击在时间轴上打开,拖到序列上放一个剪辑段`}
+      onClick={() => { if (!renaming && !locked) openCutInTimeline(row.id); }}
+      onKeyDown={(e) => { if (!locked && !renaming && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openCutInTimeline(row.id); } }}
       onContextMenu={onContextMenu}
       onDragStart={(e) => {
         e.dataTransfer.setData(MIME_CUT, row.id);
@@ -160,12 +169,13 @@ function CutTile({ row, canDelete, renaming, onRename, onRenamed, onDelete, onCo
         {fmtDur(row.duration)} · {row.clipCount} 段{row.active ? " · 当前" : ""}{row.referencedBy.length ? ` · 被引用 ${row.referencedBy.length}` : ""}
       </span>
       <span className="pc-lib-cut-acts">
-        <button type="button" className="pc-lib-cut-act" data-pc="lib-cut-rename" title="改名" aria-label={`改名 ${row.name}`}
+        <button type="button" className="pc-lib-cut-act" data-pc="lib-cut-rename" title={locked ? why : "改名"} aria-label={`改名 ${row.name}`}
+          disabled={locked}
           onClick={(e) => { e.stopPropagation(); onRename(); }}>
           <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true"><path d="M3 13l1-3.5L11 2.5l2.5 2.5L6.5 12z" /></svg>
         </button>
-        <button type="button" className="pc-lib-cut-act" data-pc="lib-cut-delete" disabled={!canDelete}
-          title={canDelete ? "删除这条剪辑" : "这是最后一条剪辑,不能删"} aria-label={`删除 ${row.name}`}
+        <button type="button" className="pc-lib-cut-act" data-pc="lib-cut-delete" disabled={!canDelete || locked}
+          title={locked ? why : canDelete ? "删除这条剪辑" : "这是最后一条剪辑,不能删"} aria-label={`删除 ${row.name}`}
           onClick={(e) => { e.stopPropagation(); onDelete(); }}>
           <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5" /></svg>
         </button>

@@ -5,6 +5,7 @@ import type { AiProvider, ChatAttachment, ProviderInfo, PublicAiConfig } from ".
 import type { Role } from "../../../ai/roles";
 import { attachIcon } from "./attachIcon";
 import { usePopover } from "./usePopover";
+import { useReadOnly } from "../../readOnly";
 import {
   COMPOSER_MAX_RATIO,
   COMPOSER_MIN_H,
@@ -109,6 +110,8 @@ function providerLabel(p: ProviderInfo): string {
 function ComposerMenu(props: ComposerMenuProps & { streaming: boolean }) {
   const { workflowRoles, onRunWorkflow, canDiagnose, onOpenDiagnostics, onNewChat, streaming, cloudMode } = props;
   const pop = usePopover();
+  // 这个项目只给了只读权限(游客):一键配特效、新对话都是要给 Agent 发话,置灰;诊断报告只读对话内容,照常
+  const ro = useReadOnly();
   /** 点了一项就收起菜单 */
   const pick = (fn: () => void) => () => {
     pop.setOpen(false);
@@ -134,8 +137,8 @@ function ComposerMenu(props: ComposerMenuProps & { streaming: boolean }) {
           role="menuitem"
           className="ai-menu-item"
           data-pc="ai-auto-workflow"
-          title={cloudMode ? CLOUD_NO_WORKFLOW : `依次跑：${workflowRoles.map((r) => r.name).join(" → ")}`}
-          disabled={streaming || cloudMode}
+          title={ro.locked ? ro.why : cloudMode ? CLOUD_NO_WORKFLOW : `依次跑：${workflowRoles.map((r) => r.name).join(" → ")}`}
+          disabled={streaming || cloudMode || ro.locked}
           onClick={pick(onRunWorkflow)}
         >
           <span className="ai-menu-icon" aria-hidden="true" />
@@ -154,7 +157,7 @@ function ComposerMenu(props: ComposerMenuProps & { streaming: boolean }) {
           诊断报告
         </button>
         <div className="ai-menu-sep" role="separator" />
-        <button type="button" role="menuitem" className="ai-menu-item" data-pc="ai-new-chat" onClick={pick(onNewChat)}>
+        <button type="button" role="menuitem" className="ai-menu-item" data-pc="ai-new-chat" disabled={ro.locked} title={ro.title()} onClick={pick(onNewChat)}>
           <span className="ai-menu-icon" aria-hidden="true">＋</span>
           新对话
         </button>
@@ -275,8 +278,8 @@ export function Composer(props: ComposerProps) {
     onRemoveAttachment,
     onSubmit,
     onStop,
-    canStop = true,
-    stopDisabledReason = "只能停止自己发起的任务",
+    canStop: canStopProp = true,
+    stopDisabledReason: stopReasonProp = "只能停止自己发起的任务",
     streaming,
     hotkeysOff,
     active = true,
@@ -287,10 +290,18 @@ export function Composer(props: ComposerProps) {
     menu,
     tabId,
     cloud,
-    guide = null,
-    disabled = false,
-    disabledReason,
+    guide: guideProp = null,
+    disabled: disabledProp = false,
+    disabledReason: disabledReasonProp,
   } = props;
+  // 这个项目只给了只读权限(游客):不能给 Agent 发消息(也不能停别人的任务)。对话历史照常读,输入区整个置灰,说明是 viewOnlyText()。
+  // 已有的「对话无读取权限」那一条原因优先(那是另一回事)
+  const ro = useReadOnly();
+  const disabled = disabledProp || ro.locked;
+  const disabledReason = disabledProp ? disabledReasonProp : ro.locked ? ro.why : disabledReasonProp;
+  const guide = ro.locked ? null : guideProp;
+  const canStop = canStopProp && !ro.locked;
+  const stopDisabledReason = ro.locked ? ro.why : stopReasonProp;
   const cloudOn = !!cloud?.selected;
   /** 附件条上的动词:本机是「导入」,云端是传到云节点的「上传」 */
   const verb = cloudOn ? "上传" : "导入";

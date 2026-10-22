@@ -15,6 +15,7 @@ import { CardAudioForm } from "./CardAudioForm";
 import { CutSegmentForm } from "./CutSegmentForm";
 import { isCutSegment } from "../../kernel/cutSegments";
 import { NumberField } from "../fields/NumberField";
+import { ReadOnlyFence } from "../ReadOnlyFence";
 
 /**
  * 编辑分区的参数 / 代码两页。哪一页显示由分区头部的胶囊分页决定(tab),
@@ -40,12 +41,14 @@ export function Inspector({ tab }: { tab: "form" | "code" }) {
   const { clip } = hit;
 
   // 剪辑段:没有卡也没有素材,属性是引用哪条剪辑、偏移,以及框、不透明度、淡入淡出、音量与静音
-  if (isCutSegment(clip)) return <CutSegmentForm key={clip.id} clip={clip} />;
+  if (isCutSegment(clip)) return <ReadOnlyFence><CutSegmentForm key={clip.id} clip={clip} /></ReadOnlyFence>;
 
   if (clip.mediaId && !clip.cardId) {
     const media = project.media.find(m => m.id === clip.mediaId);
+    // 参数面板整块进只读围栏:这个项目只给了只读权限(游客)时值照常显示、控件一起置灰(悬停是 viewOnlyText())
     return (
       <div className="flex-1 min-h-0 overflow-y-auto pc-left-scroll flex flex-col p-3 text-xs">
+        <ReadOnlyFence>
         <div className="pc-left-muted mb-2">标签: <span className="pc-left-strong">{clip.label || "无"}</span></div>
         <div className="flex items-center gap-2 mb-2 pc-left-muted">
           <span>开始</span>
@@ -57,6 +60,7 @@ export function Inspector({ tab }: { tab: "form" | "code" }) {
         {clip.soundEffect && <SoundEffectForm key={clip.id} clip={clip} />}
         {media && (media.kind === "video" || media.kind === "image") && <ClipFilterForm clip={clip} />}
         {media && (media.kind === "video" || media.kind === "audio") && <ClipAudioFxForm clip={clip} />}
+        </ReadOnlyFence>
       </div>
     );
   }
@@ -70,7 +74,8 @@ export function Inspector({ tab }: { tab: "form" | "code" }) {
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <CardAudioForm key={clip.id} clip={clip} />
+      <ReadOnlyFence><CardAudioForm key={clip.id} clip={clip} /></ReadOnlyFence>
+      <ReadOnlyFence>
       <div className="px-3 pb-2 pc-left-divider-b flex flex-col gap-2 shrink-0">
         <div className="flex items-center justify-between">
           <div className="font-semibold text-xs pc-left-strong truncate pr-2">{cardDef?.name ?? clip.cardId}</div>
@@ -110,12 +115,15 @@ export function Inspector({ tab }: { tab: "form" | "code" }) {
           <span className="pc-left-faint ml-auto">{(clip.end - clip.start).toFixed(2)}s</span>
         </div>
       </div>
+      </ReadOnlyFence>
 
       <div className="flex-1 min-h-0 overflow-y-auto pc-left-scroll" style={{ display: tab === "form" ? "block" : "none" }}>
+        <ReadOnlyFence>
         {clip.cardId === "mu-typing" && <TypingSoundControls key={clip.id} clip={clip} />}
         {isComposite(clip) ? <PartsForm clip={clip} /> : <ParamsForm clip={clip} cardDef={cardDef} />}
         {/* 三维排在卡片参数后面:它改的是「这张卡摆在哪」,不是卡片自己的内容 */}
         <Frame3DForm clip={clip} />
+        </ReadOnlyFence>
       </div>
       <div className="flex-1 min-h-0 flex flex-col" style={{ display: tab === "code" ? "flex" : "none" }}>
         {/* 按片段 id 做 key:换了片段就换一份草稿,不会把上一段没提交的内容带过来 */}

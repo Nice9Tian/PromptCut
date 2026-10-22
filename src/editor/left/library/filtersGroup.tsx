@@ -4,6 +4,7 @@ import { findClip } from "../../../kernel/project";
 import { cssFilter, describeFilter, isAnimated, resolveOps, type FilterDef } from "../../../kernel/filters.mjs";
 import { createFilterTools, usesOf } from "../../right/filterTools";
 import { ThumbTile } from "./ThumbTile";
+import { useReadOnly } from "../../readOnly";
 import type { GroupData, GroupItem } from "./groups";
 
 /** 和 Agent 的 apply_filter / remove_filter 同一份校验(锁定的序列、卡片段、还挂着就删要确认) */
@@ -32,6 +33,8 @@ function Swatch({ def, className }: { def: FilterDef; className?: string }) {
  * 滤镜大多是 Agent 用 create_filter 建的;这里让人看得到、能挂到选中的视频 / 图片片段上复用、能删。
  */
 export function useFiltersGroup(q: string, flash: (text: string, ms?: number) => void): GroupData {
+  // 这个项目只给了只读权限(游客):挂 / 摘滤镜、删滤镜都是写
+  const ro = useReadOnly();
   const project = useStore((s) => s.project);
   const selection = useStore((s) => s.selection);
   const [armed, setArmed] = useState<string | null>(null);
@@ -79,8 +82,8 @@ export function useFiltersGroup(q: string, flash: (text: string, ms?: number) =>
               <button
                 type="button"
                 className="pc-left-btn"
-                disabled={!selClip}
-                title={selClip ? (on ? "从选中的片段上摘掉" : "挂到选中的片段上(每段只挂一个,会替换原来的)") : "先在时间轴上选中一段视频或图片"}
+                disabled={!selClip || ro.locked}
+                title={ro.locked ? ro.why : selClip ? (on ? "从选中的片段上摘掉" : "挂到选中的片段上(每段只挂一个,会替换原来的)") : "先在时间轴上选中一段视频或图片"}
                 onClick={() =>
                   selClip &&
                   (on
@@ -93,7 +96,8 @@ export function useFiltersGroup(q: string, flash: (text: string, ms?: number) =>
               <button
                 type="button"
                 className={`pc-left-btn${armed === f.id ? " is-danger" : ""}`}
-                title={uses.length ? `用在 ${uses.length} 段上,删了会一起摘掉` : "从滤镜库删掉"}
+                disabled={ro.locked}
+                title={ro.title(uses.length ? `用在 ${uses.length} 段上,删了会一起摘掉` : "从滤镜库删掉")}
                 onClick={() => {
                   if (uses.length && armed !== f.id) {
                     setArmed(f.id);

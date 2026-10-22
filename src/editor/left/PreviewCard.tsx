@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useReadOnly } from "../readOnly";
 
 /**
  * 左栏统一的预览卡:动效卡片、部件、转场、强调、视频、图像都长这样。
@@ -45,13 +46,20 @@ export interface PreviewCardProps {
   badge?: ReactNode;
   /** 铺满父容器(瀑布流的格子) */
   fill?: boolean;
+  /**
+   * 点它或拖它会改项目(加到时间轴、加进组合卡、给片段套强调 / 转场)。这个项目只给了只读权限(游客)时,
+   * 带这一项的卡不接点击和拖动,悬停写明原因;悬停预览、右键菜单这类只看的照常。
+   */
+  edits?: boolean;
 }
 
 export function PreviewCard(props: PreviewCardProps) {
   const {
     title, subtitle, preview, progress, hoverDelayMs = 0, onHover, onClick, onContextMenu, draggable, onDragStart, onDragEnd,
-    error, footer, attrs, titleAttr, caption = "always", aspect, badge, fill,
+    error, footer, attrs, titleAttr, caption = "always", aspect, badge, fill, edits,
   } = props;
+  const ro = useReadOnly();
+  const frozen = !!edits && ro.locked;
   const [hot, setHot] = useState(false);
   const timer = useRef<number | null>(null);
   const hotRef = useRef(false);
@@ -88,15 +96,16 @@ export function PreviewCard(props: PreviewCardProps) {
     <div className={`pc-lib-card-wrap${fill ? " is-fill" : ""}`}>
       <div
         {...attrs}
-        className={`pc-lib-card${hot ? " is-hot" : ""}${draggable ? " is-grab" : ""}${onClick ? " is-click" : ""}`}
-        draggable={draggable}
+        className={`pc-lib-card${hot ? " is-hot" : ""}${draggable && !frozen ? " is-grab" : ""}${onClick && !frozen ? " is-click" : ""}${frozen ? " is-readonly" : ""}`}
+        aria-disabled={frozen || undefined}
+        draggable={draggable && !frozen}
         onMouseEnter={enter}
         onMouseLeave={leave}
         onDragStart={(e) => { leave(); onDragStart?.(e); }}
         onDragEnd={onDragEnd}
-        onClick={onClick}
+        onClick={frozen ? undefined : onClick}
         onContextMenu={onContextMenu}
-        title={titleAttr}
+        title={frozen ? `${title}\n${ro.why}` : titleAttr}
         style={fill ? undefined : { aspectRatio: `1 / ${aspect && aspect > 0 ? aspect : 1}` }}
       >
         <div className="pc-lib-card-view">{preview}</div>

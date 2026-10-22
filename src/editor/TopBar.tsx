@@ -35,7 +35,9 @@ import { AgentBrowserTab } from "./AgentBrowserTab";
 import { ProjectSettingsDialog } from "./ProjectSettingsDialog";
 import { SkinDialog } from "./SkinDialog";
 import { SkillDialog } from "./SkillDialog";
-import { isViewOnly } from "./io/viewOnly";
+import { isViewOnly, viewOnlyReason, viewOnlyText } from "./io/viewOnly";
+import { useReadOnly } from "./readOnly";
+import { ReadOnlyMarker } from "./ReadOnlyFence";
 import { SyncChips } from "./sync/SyncChips";
 import { BackupsDialog } from "./sync/BackupsDialog";
 import { useSync, whenSaved } from "./sync/syncManager";
@@ -193,8 +195,11 @@ export function TopBar() {
       window.removeEventListener("keydown", onKey);
     };
   }, [projOpen]);
-  // 只读查看在页面地址里就定了,不会中途变,所以不进 state
-  const viewOnly = isViewOnly();
+  // 只读有两个来源:地址里的 ?observe(页面一开就定了)、这个项目只给了只读权限(进 / 退项目时变,要重渲),都订阅同步状态
+  const viewOnly = useSync(() => isViewOnly());
+  const reason = useSync(() => viewOnlyReason());
+  // 只读权限(游客进别人的项目):改项目的控件置灰,悬停说明用 viewOnlyText()。?observe 那条路不在这里,它照旧
+  const ro = useReadOnly();
 
   const name = useStore((s) => s.project.name);
   // 不订阅整份项目:顶栏只在导出那一下要项目,当场 getState() 取;订阅了的话每挪一次片段顶栏整条重渲(tiers-probe T4)
@@ -214,6 +219,7 @@ export function TopBar() {
   const renamingRef = useRef(false);
 
   const startRename = () => {
+    if (ro.locked) return;
     setDraftName(name);
     renamingRef.current = true;
     setRenaming(true);
@@ -538,8 +544,8 @@ export function TopBar() {
         case "save-project": if (!viewOnly && !ONLINE_BUILD) void saveProject(); break;
         case "export-video": void run(() => exportProject())(); break;
         case "go-home": goHome(); break;
-        case "undo": actions.undo(); break;
-        case "redo": actions.redo(); break;
+        case "undo": if (!ro.locked) actions.undo(); break;
+        case "redo": if (!ro.locked) actions.redo(); break;
         case "open-skin": setSkinOpen(true); break;
         case "open-voice": if (!ONLINE_BUILD) openVoiceSettings(); break;
         case "shortcuts": alert(SHORTCUTS_TEXT); break;
@@ -548,7 +554,7 @@ export function TopBar() {
     };
     window.addEventListener("pc-titlebar-command", onCommand);
     return () => window.removeEventListener("pc-titlebar-command", onCommand);
-  }, [viewOnly, dirty, name]);
+  }, [viewOnly, ro.locked, dirty, name]);
 
   const toggleMoreMenu = () => {
     if (!menuOpen && moreBtnRef.current) {
@@ -559,6 +565,7 @@ export function TopBar() {
 
   return (
     <div ref={barRef} className="pc-bar pc-bar--main">
+      <ReadOnlyMarker />
       <Logo size={22} />
       {renaming ? (
         <input
@@ -578,7 +585,8 @@ export function TopBar() {
         <button
           type="button"
           className="pc-projname pc-projname--btn"
-          title="点击重命名项目"
+          title={ro.title("点击重命名项目")}
+          aria-disabled={ro.locked || undefined}
           onClick={startRename}
         >
           {name}
@@ -590,11 +598,11 @@ export function TopBar() {
       {/* A · 编辑控制:撤销与重做恒为纯图标态 */}
       <div className="pc-bar-group">
         {/* 禁用的按钮收不到悬停,提示挂在外面那层上(稿件:悬停提示含不可点时) */}
-        <span title="撤销 (Ctrl+Z) —— 只撤你自己在这个页面做的" data-pc="undo-btn">
-          <Btn onClick={() => actions.undo()} label="撤销" title="撤销 (Ctrl+Z) —— 只撤你自己在这个页面做的" icon={<IconUndo />} collapsed disabled={!canUndo} />
+        <span title={ro.title("撤销 (Ctrl+Z) —— 只撤你自己在这个页面做的")} data-pc="undo-btn">
+          <Btn onClick={() => actions.undo()} label="撤销" title={ro.title("撤销 (Ctrl+Z) —— 只撤你自己在这个页面做的")} icon={<IconUndo />} collapsed disabled={!canUndo || ro.locked} />
         </span>
-        <span title="重做 (Ctrl+Shift+Z / Ctrl+Y) —— 恢复刚撤销的操作（有新操作后即失效）" data-pc="redo-btn">
-          <Btn onClick={() => actions.redo()} label="重做" title="重做 (Ctrl+Shift+Z / Ctrl+Y) —— 恢复刚撤销的操作（有新操作后即失效）" icon={<IconRedo />} collapsed disabled={!canRedo} />
+        <span title={ro.title("重做 (Ctrl+Shift+Z / Ctrl+Y) —— 恢复刚撤销的操作（有新操作后即失效）")} data-pc="redo-btn">
+          <Btn onClick={() => actions.redo()} label="重做" title={ro.title("重做 (Ctrl+Shift+Z / Ctrl+Y) —— 恢复刚撤销的操作（有新操作后即失效）")} icon={<IconRedo />} collapsed disabled={!canRedo || ro.locked} />
         </span>
       </div>
       <span className="pc-bar-sep" />
@@ -721,7 +729,7 @@ export function TopBar() {
             role="menuitem"
             className="pc-proj-item"
             disabled={viewOnly || ONLINE_BUILD}
-            title={ONLINE_BUILD ? ONLINE_OFF("保存项目") : viewOnly ? "只读查看模式:改不了这个项目" : undefined}
+            title={ONLINE_BUILD ? ONLINE_OFF("保存项目") : viewOnly ? viewOnlyText() : undefined}
             onClick={() => { setProjOpen(false); void saveProject(); }}
           >
             <IconSave />
@@ -734,7 +742,7 @@ export function TopBar() {
             className="pc-proj-item"
             data-pc="menu-pack"
             disabled={viewOnly || ONLINE_BUILD}
-            title={ONLINE_BUILD ? ONLINE_OFF("打包保存") : viewOnly ? "只读查看模式:改不了这个项目" : "编排和素材打成一个包,换台机器直接打开"}
+            title={ONLINE_BUILD ? ONLINE_OFF("打包保存") : viewOnly ? viewOnlyText() : "编排和素材打成一个包,换台机器直接打开"}
             onClick={() => { setProjOpen(false); void savePackedProject(); }}
           >
             <IconSave />
@@ -788,10 +796,15 @@ export function TopBar() {
         </div>
       )}
 
-      {/* 只读查看(?observe=1):告诉人这份是看的不是改的,别让人白点一下才发现 */}
+      {/* 只读(?observe=1,或这个项目只给了只读权限):告诉人这份是看的不是改的,别让人白点一下才发现 */}
       {viewOnly && (
-        <span className="pc-viewonly-badge" title="这个页面是用只读方式打开的(?observe=1):能看,不能改。">
-          只读查看
+        <span
+          className="pc-viewonly-badge"
+          data-pc="viewonly-badge"
+          data-pc-reason={reason ?? undefined}
+          title={reason === "read-only-member" ? viewOnlyText() : "这个页面是用只读方式打开的(?observe=1):能看,不能改。"}
+        >
+          {reason === "read-only-member" ? "只能查看" : "只读查看"}
         </span>
       )}
 
