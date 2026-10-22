@@ -127,7 +127,7 @@ async function openHostedProjectOverWebSocket({ origin, ca, ticket, projectId })
 export async function runAccountPasswordUserPath({ ports = [6680, 6681, 6682, 6683, 6684, 6685, 6686], agentPort = 6687, keepOpen = false,
   providerRoot = process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT,
   passwordOrderModule = process.env.PROMPTCUT_PASSWORD_ORDER_MODULE,
-  publicHandler = null, logoutConfirmPollMs = undefined, logoutConfirmTimeoutMs = undefined, assetEntry = null,
+  publicHandler = null, logoutConfirmPollMs = undefined, logoutConfirmTimeoutMs = undefined, assetEntry = null, agentEntry = null,
   diagnostic = () => {} } = {}) {
   assert.equal(ports.length, 7);
   assert.ok(Number.isInteger(agentPort) && agentPort > 1024 && agentPort < 65536 && !ports.includes(agentPort), 'agentPort must be a free probe-owned port');
@@ -188,6 +188,12 @@ export async function runAccountPasswordUserPath({ ports = [6680, 6681, 6682, 66
     await childClose;
     child = null;
   };
+  /** agentEntry 给了时，Agent 服务在单独的进程里跑（agent-entry-restartable.mjs），测试能真的结束它再起一个新的。 */
+  const agentChildren = new Set();
+  const stopAgentChildren = async () => Promise.all([...agentChildren].map(async entry => {
+    if (entry.process.exitCode === null && entry.process.signalCode === null) entry.process.kill('SIGKILL');
+    await entry.closed; agentChildren.delete(entry);
+  }));
   const close = async () => {
     if (cleanupComplete) return { closed: true, childClosed: child === null, assetPid, ports };
     const failures = [];
@@ -200,6 +206,7 @@ export async function runAccountPasswordUserPath({ ports = [6680, 6681, 6682, 66
     await settle([['read-control', () => agentReadControl?.close()]]);
     await settle([
       ['asset-child', stopChild],
+      ['agent-children', stopAgentChildren],
       ['websocket-upgrades', async () => Promise.all([...upgradePairs].map(pair => {
         pair.client.destroy(); pair.upstream.destroy(); return pair.closed;
       }))],
@@ -363,6 +370,36 @@ export async function runAccountPasswordUserPath({ ports = [6680, 6681, 6682, 66
     assert.equal(combo.assetPort, null, 'account mode uses the separate asset process');
     const agentOptions = { origin: `https://127.0.0.1:${docInternalPort}`, tls: pki.wrong,
       serverFingerprint256: pki.doc.fingerprint256 };
+    const agentReceiptFile = path.join(dir, 'agent-read-closures.sqlite');
+    /** 起一个 Agent 服务进程（缺省同一个本地数据目录、同一个端口）。等它打出 agent.ready 才回；起不来（例如同一个数据目录
+     * 已经有一个活着的 Agent 进程握着）就抛错，错误里带它打出来的那几行。 */
+    const startAgent = async ({ port = agentPort, receiptFile = agentReceiptFile } = {}) => {
+      assert.ok(agentEntry, 'startAgent needs the agentEntry option');
+      const started = spawn(process.execPath, [agentEntry], { cwd: process.cwd(), windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: { ...process.env, PROMPTCUT_TEST_AGENT_CONFIG: JSON.stringify({
+          origin: agentOptions.origin, serverFingerprint256: agentOptions.serverFingerprint256,
+          keyFile: path.join(dir, 'wrong.key'), certFile: path.join(dir, 'wrong.crt'), caFile: path.join(dir, 'ca.crt'),
+          receiptFile, port }) } });
+      const entry = { process: started, pid: started.pid, port, stdout: '', stderr: '', ready: null,
+        closed: new Promise(resolve => started.once('close', (code, signal) => resolve({ code, signal }))) };
+      agentChildren.add(entry);
+      started.stdout.on('data', bytes => { entry.stdout += bytes;
+        for (const line of entry.stdout.split(/\r?\n/)) { try { const row = JSON.parse(line); if (row.event === 'agent.ready') entry.ready = row; } catch { /* 半行 */ } } });
+      started.stderr.on('data', bytes => { entry.stderr += bytes; });
+      await waitFor(() => {
+        if (started.exitCode !== null) throw Error(`agent child exited: ${started.exitCode}; ${entry.stdout.slice(-600)}${entry.stderr.slice(-600)}`);
+        return entry.ready !== null;
+      }, 'agent child ready', 30_000);
+      return entry;
+    };
+    /** 经进程间通道叫 Agent 进程做一件事，等它回话 */
+    const tellAgent = (entry, type, reply) => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(Error(`agent child did not answer ${type}`)), 10_000);
+      const receive = message => { if (message?.type !== reply) return; clearTimeout(timer); entry.process.off('message', receive); resolve(message); };
+      entry.process.on('message', receive); entry.process.send({ type });
+    });
+    // agentEntry 时不在这里起 Agent：由测试自己起、自己杀、自己再起。
+    if (!agentEntry) {
     agentClient = createConversationClient(agentOptions);
     agentRunClient = createRunClient(agentOptions);
     agentReadControl = createConversationControlClient({ ...agentOptions, runClient: agentRunClient,
@@ -413,6 +450,7 @@ export async function runAccountPasswordUserPath({ ports = [6680, 6681, 6682, 66
       void agentHttp.handle(req, res);
     });
     await listen(agentServer, agentPort);
+    }
     const actors = [siteActor(siteOrigin, pki.ca), siteActor(siteOrigin, pki.ca), siteActor(siteOrigin, pki.ca)];
     const doc = (method, route, body, token) => docRequest(docOrigin, method, route, body, token, pki.ca);
     const accounts = [];
@@ -566,10 +604,10 @@ export async function runAccountPasswordUserPath({ ports = [6680, 6681, 6682, 66
         accounts: accountCredentials,
         ports: { site: sitePort, accountInternal: accountPort, doc: docPort,
           docInternal: docInternalPort, asset: assetPort, assetInternal: assetInternalPort, agent: agentPort, edge: edgePort },
-        readControlReady: agentReadControl.describe().connected === true,
-        readControlState: () => ({ ...agentReadControl.describe() }),
+        readControlReady: agentEntry ? true : agentReadControl.describe().connected === true,
+        readControlState: () => ({ ...agentReadControl?.describe() }),
         agentHttpDiagnostics, edgeDiagnostics, readControlDiagnostics,
-        agentInstanceReadiness: (() => { const identity = agentRunClient.instanceIdentity();
+        agentInstanceReadiness: agentEntry ? null : (() => { const identity = agentRunClient.instanceIdentity();
           return { registered:typeof identity?.instanceId === 'string' && identity.instanceId.length > 0 &&
             Number.isSafeInteger(identity.instanceGeneration) && identity.instanceGeneration > 0,
           executorMounted:agentReadControl.describe().executorMounted === true }; })(),
@@ -581,6 +619,17 @@ export async function runAccountPasswordUserPath({ ports = [6680, 6681, 6682, 66
         accountIds: accounts.slice(), creatorEditorToken: editors[0], providerSupportsLogoutTimeout,
         /** 模拟 Agent 服务的进程带着开着的读取被结束：它的读取控制连接没了，手里的读取没来得及向文档服务关掉。 */
         async dropAgentInstance() { const control = agentReadControl; agentReadControl = null; await control?.close(); },
+        // ---- 以下只在 agentEntry（Agent 服务在单独进程里）时可用 ----
+        /** 起一个 Agent 服务进程；port 缺省是对外那个口（边缘代理的 /agent/ 指向它），receiptFile 缺省是同一个数据目录里的那份。
+         * 回 { pid, port, ready: { instanceId, instanceGeneration } }。 */
+        startAgent, agentReceiptFile: path.join(dir, 'agent-read-closures.sqlite'),
+        /** 文档服务账本此刻的内容（另开一条只读连接读，不经文档服务进程里的对象） */
+        docLedgerFile: () => path.join(combo.paths.docservice, 'account-v2.sqlite'),
+        /** 硬杀一个 Agent 服务进程（这是测试自己起的进程）：它来不及关任何读取、也来不及向文档服务说一声。 */
+        async killAgent(entry) { entry.process.kill('SIGKILL'); const exit = await entry.closed; agentChildren.delete(entry); return exit; },
+        /** 让这个 Agent 进程从此「迟迟不关」文档服务点名要关的读取；release 放开 */
+        holdAgentChildReadClose: entry => tellAgent(entry, 'hold-read-close', 'held'),
+        releaseAgentChildReadClose: entry => tellAgent(entry, 'release-read-close', 'released'),
         get combo() { return combo; },
         /** 素材服务进程：按进程号停掉（这是测试自己起的进程）、在同一个数据目录上再起。 */
         async stopAsset() {
