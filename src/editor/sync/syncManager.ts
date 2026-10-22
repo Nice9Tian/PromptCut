@@ -1138,9 +1138,12 @@ function bindMergeTable(docProjectId: string | null, user: string | null) {
   if (mergeTable && mergeTable.projectId === docProjectId && mergeTable.user === user) return;
   mergeTable?.attach(null);
   mergeAttached = null;
-  mergeTable = docProjectId && user ? new MergeTable({ projectId: docProjectId, user, kv: defaultStore(), onChange: (things) => {
-    patch({ merge: { things, version: view.merge.version + 1, blocked: mergeTable?.blocked ?? null } });
+  const table: MergeTable | null = docProjectId && user ? new MergeTable({ projectId: docProjectId, user, kv: defaultStore(), onChange: (things) => {
+    // 换了项目之后旧表迟到的回调(本机暂存读得慢、旧连接的回包)不算
+    if (!table || mergeTable !== table) return;
+    patch({ merge: { things, version: view.merge.version + 1, blocked: table.blocked } });
   } }) : null;
+  mergeTable = table;
   patch({ merge: { things: mergeTable?.things ?? [], version: view.merge.version + 1, blocked: null }, mergeOpen: false });
 }
 
