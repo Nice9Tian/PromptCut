@@ -172,3 +172,26 @@ test('PM-08 账号项目:按账号号分表(同一账号两台设备同一张表
   assert.deepEqual(sent.at(-1).m.things, [], '另一个账号看不见');
   assert.deepEqual(store.read('merges/ACC').map((r) => r.user), ['account:acc_a']);
 });
+
+test('PM-09 到上限:整条不收(不丢最旧的、不收一半),表原样;拿掉一些之后再记照常', () => {
+  const store = createMemoryStore();
+  const mod = pendingMergeModule({ store, limits: { ...MERGE_LIMITS, THINGS_PER_USER: 2 } });
+  const sent = [];
+  const ctx = { send: (connId, m) => sent.push(m) };
+  mod.connect(ctx, 'c', { userId: 'alice@d', username: 'alice', tenantId: 'P', scope: 'member', role: 'page' });
+  mod.handle(ctx, 'c', { type: 'merge.put', projectId: 'P', things: [thing('k1'), thing('k2')], reqId: 1 });
+  assert.equal(sent.at(-1).things.length, 2);
+  mod.handle(ctx, 'c', { type: 'merge.put', projectId: 'P', things: [thing('k3')], reqId: 2 });
+  assert.equal(sent.at(-1).reason, 'too-many', '第三条:拒绝再记');
+  mod.handle(ctx, 'c', { type: 'merge.list', projectId: 'P', reqId: 3 });
+  assert.deepEqual(sent.at(-1).things.map((t) => t.key), ['k1', 'k2'], '最旧的没被丢、也没收一半');
+  mod.handle(ctx, 'c', { type: 'merge.put', projectId: 'P', things: [thing('k2', ['fadeIn'])], reqId: 4 });
+  assert.equal(sent.at(-1).type, 'merge.state', '替换已有的一条不算新增,照收');
+  mod.handle(ctx, 'c', { type: 'merge.remove', projectId: 'P', remove: [{ key: 'k1' }], reqId: 5 });
+  mod.handle(ctx, 'c', { type: 'merge.put', projectId: 'P', things: [thing('k3')], reqId: 6 });
+  assert.deepEqual(sent.at(-1).things.map((t) => t.key), ['k2', 'k3']);
+  const big = pendingMergeModule({ store: createMemoryStore(), limits: { ...MERGE_LIMITS, USER_BYTES: 600 } });
+  big.connect(ctx, 'c', { userId: 'alice@d', username: 'alice', tenantId: 'P', scope: 'member', role: 'page' });
+  big.handle(ctx, 'c', { type: 'merge.put', projectId: 'P', things: [thing('a'), thing('b'), thing('c'), thing('d'), thing('e')], reqId: 7 });
+  assert.equal(sent.at(-1).reason, 'too-large', '整张表超过大小上限:整条不收');
+});

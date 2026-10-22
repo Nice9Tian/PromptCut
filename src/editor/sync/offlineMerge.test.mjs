@@ -10,13 +10,14 @@
  *   OM-04 断网时表的改动先进本机暂存,连上后按顺序交给文档服务;换一个页面(同一用户)从文档服务恢复同一张表
  *   OM-05 本机暂存(浏览器本地缓存)用 IndexedDB 落盘:新开一个页面读得回离线批次与表
  *   OM-06 断网期间没人改过:照旧直接提交,不进待合并表
+ *   OM-07 到上限(每用户每项目条数、整表大小):文档服务整条不收,页面留在本机、说明原因;处理掉一些之后自动再交,别的不丢
  */
 import { srcUrl } from "../../testing/registerTs.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { MemDocService } from "../../testing/memDocService.mjs";
 import { createFakeIndexedDB } from "../../testing/fakeIndexedDB.mjs";
-import { pendingMergeModule } from "../../../server/docservice/modules/pending-merge.mjs";
+import { pendingMergeModule, MERGE_LIMITS } from "../../../server/docservice/modules/pending-merge.mjs";
 import { createMemoryStore } from "../../../server/docservice/store/index.mjs";
 
 const { DocSync } = await import(srcUrl("store/docsync.ts"));
@@ -44,9 +45,9 @@ function page(svc, session) {
 }
 
 /** 文档服务的待合并表:一个模块实例,按连接身份分用户 */
-function mergeServer() {
+function mergeServer(limits) {
   const store = createMemoryStore();
-  const mod = pendingMergeModule({ store });
+  const mod = pendingMergeModule({ store, ...(limits ? { limits } : {}) });
   let seq = 0;
   const conns = new Map();
   const channel = (username) => {
@@ -218,4 +219,24 @@ test("OM-06 断网期间没人改过:照旧直接提交,不进待合并表", () 
   svc.drain();
   assert.equal(A.ds.status, "online");
   assert.equal(clipIn(svc.project, "c2").opacity, 0.3);
+});
+
+test("OM-07 到上限:文档服务整条不收,页面留在本机并说明;删掉一些后自动再交,已删的不会被记回去", async () => {
+  const { A } = scenario();
+  const server = mergeServer({ ...MERGE_LIMITS, THINGS_PER_USER: 1 });
+  const ch = server.channel("alice");
+  const table = new MergeTable({ projectId: "P", user: "user:alice", kv: C.memoryStore() });
+  await table.attach(ch);
+  await transfer(A, table);
+  await table.flush();
+  assert.equal(table.blocked, "too-many", "两样东西超过 1 条的上限:不收");
+  assert.equal(table.things.length, 2, "本机的表不丢");
+  assert.equal(table.pendingOps, 1);
+  assert.deepEqual((await ch.request({ type: "merge.list", projectId: "P" })).things, [], "文档服务里什么都没记(不收一半)");
+  // 用户在窗口里删掉一样:先把「拿掉」发出去,再重交剩下的一样
+  await table.remove([{ key: "offline:clip:c3", props: [""] }]);
+  await table.flush();
+  assert.equal(table.blocked, null);
+  assert.equal(table.pendingOps, 0);
+  assert.deepEqual((await ch.request({ type: "merge.list", projectId: "P" })).things.map((t) => t.key), ["offline:clip:c1"], "删掉的没被记回去");
 });

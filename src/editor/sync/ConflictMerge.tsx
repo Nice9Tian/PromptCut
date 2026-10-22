@@ -14,11 +14,13 @@ import { mergeBarText, useConflictMerge, useMergeCounts } from "./useConflictMer
 import type { ThingRow } from "./mergeItems";
 import "./sync.css";
 
-const BLOCKED_TEXT: Record<string, string> = {
+/** 文档服务不收待合并表时的说法(超限:整条不收、什么都不丢;处理掉一些之后自动再交) */
+export const MERGE_BLOCKED_TEXT: Record<string, string> = {
   unsupported: "文档服务版本较旧，待合并项暂时只存在这台设备上。",
-  "too-large": "待合并项太多，文档服务存不下，暂时只存在这台设备上。",
-  "too-many": "待合并项太多，文档服务存不下，暂时只存在这台设备上。",
+  "too-large": "待合并项太多，文档服务存不下，暂时只存在这台设备上；合并或删除一些之后会自动再交。",
+  "too-many": "待合并项太多，文档服务存不下，暂时只存在这台设备上；合并或删除一些之后会自动再交。",
 };
+export const mergeBlockedText = (reason: string) => MERGE_BLOCKED_TEXT[reason] ?? `待合并项暂时只存在这台设备上（${reason}）。`;
 
 function Check(props: { state: "all" | "some" | "none"; onChange: () => void; label: string; pc: string }) {
   return (
@@ -100,7 +102,7 @@ function DialogBody() {
           ) : (
             <div className="pc-merge-empty">全部处理完了。</div>
           )}
-          {m.blocked ? <div className="pc-sync-hint pc-merge-warn">{BLOCKED_TEXT[m.blocked] ?? `待合并项暂时只存在这台设备上（${m.blocked}）。`}</div> : null}
+          {m.blocked ? <div className="pc-sync-hint pc-merge-warn" data-pc="merge-blocked">{mergeBlockedText(m.blocked)}</div> : null}
           {!m.online && m.hasItems ? <div className="pc-sync-hint pc-merge-warn" data-pc="merge-offline">当前离线：可以先「删除选中」，连上后再「合并」。</div> : null}
           {m.note ? <div className="pc-sync-hint" role="status" data-pc="merge-note">{m.note}</div> : null}
         </div>

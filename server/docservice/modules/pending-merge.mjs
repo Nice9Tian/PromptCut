@@ -50,12 +50,12 @@ export function mergeUserOf(principal) {
   return null;
 }
 
-function checkThing(t) {
+function checkThing(t, limits = MERGE_LIMITS) {
   if (!isObj(t) || typeof t.key !== 'string' || t.key.length < 1 || t.key.length > 512) throw new Refused('bad-message', 'things[].key 必须是 1～512 个字符');
   if (!Array.isArray(t.props) || t.props.some((p) => !isObj(p) || typeof p.prop !== 'string' || p.prop.length > 256)) throw new Refused('bad-message', 'things[].props 必须是 { prop } 的数组');
   let n;
   try { n = bytes(t); } catch { throw new Refused('bad-message', '记录不能序列化'); }
-  if (n > MERGE_LIMITS.THING_BYTES) throw new Refused('too-large', `一样东西超过 ${MERGE_LIMITS.THING_BYTES} 字节`);
+  if (n > limits.THING_BYTES) throw new Refused('too-large', `一样东西超过 ${limits.THING_BYTES} 字节`);
   return t;
 }
 
@@ -63,8 +63,9 @@ function checkThing(t) {
  * @param {object} options
  * @param {{ read(stream: string): object[], rewrite(stream: string, records: object[]): void }} options.store 同一空间的日志存储
  * @param {() => number} [options.now]
+ * @param {typeof MERGE_LIMITS} [options.limits] 单测换小数字用
  */
-export function pendingMergeModule({ store, now = Date.now } = {}) {
+export function pendingMergeModule({ store, now = Date.now, limits = MERGE_LIMITS } = {}) {
   if (!store || typeof store.read !== 'function' || typeof store.rewrite !== 'function') throw new TypeError('pendingMergeModule: store 必须有 read / rewrite');
   const principals = new Map();
   /** projectId → Map<user, { things: object[], version: number }>(用到时从存储读) */
@@ -139,7 +140,7 @@ export function pendingMergeModule({ store, now = Date.now } = {}) {
   function put(ctx, connId, msg, reqId) {
     const { projectId, user } = common(connId, msg);
     if (!Array.isArray(msg.things)) throw new Refused('bad-message', 'things 必须是数组');
-    const incoming = msg.things.map(checkThing);
+    const incoming = msg.things.map((t) => checkThing(t, limits));
     const t = tableOf(projectId);
     const e = t.get(user) ?? { things: [], version: 0 };
     const things = [...e.things];
@@ -148,8 +149,9 @@ export function pendingMergeModule({ store, now = Date.now } = {}) {
       if (i >= 0) things[i] = x;
       else things.push(x);
     }
-    if (things.length > MERGE_LIMITS.THINGS_PER_USER) throw new Refused('too-many', `待合并表最多 ${MERGE_LIMITS.THINGS_PER_USER} 样东西`);
-    if (bytes(things) > MERGE_LIMITS.USER_BYTES) throw new Refused('too-large', `待合并表超过 ${MERGE_LIMITS.USER_BYTES} 字节`);
+    // 超限:整条不收(不丢最旧的、不收一半),表原样;页面把这几条留在本机,窗口里说「暂时只存在这台设备上」
+    if (things.length > limits.THINGS_PER_USER) throw new Refused('too-many', `待合并表最多 ${limits.THINGS_PER_USER} 样东西`);
+    if (bytes(things) > limits.USER_BYTES) throw new Refused('too-large', `待合并表超过 ${limits.USER_BYTES} 字节`);
     t.set(user, { things, version: e.version + 1 });
     persist(projectId);
     stats.puts += 1;

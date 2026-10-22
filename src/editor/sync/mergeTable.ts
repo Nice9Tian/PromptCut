@@ -117,6 +117,10 @@ export class MergeTable {
     await this.loaded;
     if (!list.length) return;
     this.table = removeFromTable(this.table, list);
+    // 还没交出去的「记下」里也拿掉这几项:不然被拒(超限)的那条先等着、「拿掉」先发出去后,重发时又把它们记回去
+    this.outbox = this.outbox
+      .map((op) => ("put" in op ? { put: removeFromTable(op.put, list) } : op))
+      .filter((op) => !("put" in op) || op.put.length > 0);
     this.outbox.push({ remove: list.map((r) => ({ key: r.key, props: r.props })) });
     this.changed();
     await this.save();
@@ -162,9 +166,25 @@ export class MergeTable {
             ? await ch.request({ type: "merge.put", projectId: this.projectId, things: op.put })
             : await ch.request({ type: "merge.remove", projectId: this.projectId, remove: op.remove });
           if (reply.type === "error") {
-            // 旧文档服务没有这个模块(unsupported)、超过大小或条数(too-large / too-many)、被拒:留在本机,表以本机为准,
-            // 不去取文档服务的表(取了会盖掉这几条)。原因交给界面说
-            this.blocked = String(reply.reason ?? "error");
+            const reason = String(reply.reason ?? "error");
+            // 超过条数或大小(too-many / too-large):文档服务整条不收、什么都不丢。先把排在后面的「拿掉」发出去(只会让表变小),
+            // 再重试这一条;还是不收就停。用户在窗口里合并或删掉一些之后会再试(`remove` 触发 flush)
+            if ("put" in op && (reason === "too-many" || reason === "too-large")) {
+              const removes = this.outbox.filter((o): o is Extract<MergeOp, { remove: unknown }> => "remove" in o);
+              if (removes.length) {
+                for (const r of removes) {
+                  const rr = await ch.request({ type: "merge.remove", projectId: this.projectId, remove: r.remove });
+                  if (rr.type === "error") break;
+                  this.outbox = this.outbox.filter((o) => o !== r);
+                }
+                await this.save();
+                const again = await ch.request({ type: "merge.put", projectId: this.projectId, things: op.put });
+                if (again.type !== "error") { this.blocked = null; this.outbox.shift(); await this.save(); continue; }
+              }
+            }
+            // 旧文档服务没有这个模块(unsupported)、超限、被拒:留在本机,表以本机为准,不去取文档服务的表(取了会盖掉这几条)。
+            // 原因交给界面说(「暂时只存在这台设备上」)
+            this.blocked = reason;
             this.changed();
             return;
           }

@@ -13,6 +13,7 @@ import { importMediaFiles, MEDIA_ACCEPT } from "../editor/left/importAssets";
 import { useCardLibrary } from "../editor/left/library/cardGroups";
 import { currentAccountProjectLink, currentSharedUrl, discardOffline, pausedSummary, replayOffline, setMergeOpen, setOfflineOpen, useSync } from "../editor/sync/syncManager";
 import { mergeBarText, useConflictMerge, useMergeCounts } from "../editor/sync/useConflictMerge";
+import { mergeBlockedText } from "../editor/sync/ConflictMerge";
 import { IMPORT_OFFLINE_TEXT, useImportOffline } from "../editor/sync/useImportOffline";
 import "./conflictMerge.css";
 import { exportVideo, cancelExport, streamExportFile } from "../editor/io";
@@ -372,6 +373,7 @@ export function ConflictSheet(props: { onClose: () => void }) {
             </div>
           );
         })}
+        {m.blocked && <div className="hint cf-warn" data-pcm="cf-blocked">{mergeBlockedText(m.blocked)}</div>}
         {!m.online && <div className="hint cf-warn" data-pcm="cf-offline">当前离线：可以先「删除选中」，连上后再「合并」。</div>}
         {m.note && <div className="hint" role="status" data-pcm="cf-note">{m.note}</div>}
       </>}
