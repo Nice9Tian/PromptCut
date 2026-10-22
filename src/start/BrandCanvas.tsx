@@ -24,40 +24,40 @@ import "./brandCanvas.css";
 /** 画面参数。每一条都对应着色器里的一个 uniform,改数就换花样,不用动 GLSL */
 const LOOK = {
   /** 走得多慢 */
-  speed: 0.035,
+  speed: 0.065,
   /** 噪声尺度:大了碎,小了只剩一道平滑的渐变,看不出形 */
-  scale: 1.5,
+  scale: 0.9,
   /** 纵向压扁的倍数(<1 = 纹理在竖直方向拉长):参考图里那种「帘子」靠它 */
-  yStretch: 0.74,
+  yStretch: 0.86,
   /** 冷暖分界大概在横向哪个位置(0 左 1 右) */
-  split: 0.57,
+  split: 0.5,
   /** 分界处那道暗脊有多深 */
-  spine: 0.5,
+  spine: 0.04,
   /** 细竖条纹的强弱(参考海报右半边那些细线) */
-  streak: 0.14,
+  streak: 0.0,
   /** 条纹毛玻璃:一屏放几条 */
   stripeN: 18.0,
   /** 条纹的倾斜(0 = 正竖直;照上一版 CSS 的 104° 略微斜一点) */
   stripeSkew: -0.22,
   /** 磨砂有多糊:条纹里的纹理被推开多少 */
-  frostShift: 0.05,
+  frostShift: 0.09,
   /** 磨砂条和清条的对比 */
-  frost: 0.30,
+  frost: 0.55,
   /** 颗粒 */
-  grain: 0.055,
+  grain: 0.035,
   /** 两道域扭曲各推多远 */
-  warpA: 3.2,
-  warpB: 3.6,
+  warpA: 3.6,
+  warpB: 4.2,
   /** 明暗曲线:次方越大暗部压得越狠 */
-  gamma: 2.2,
+  gamma: 2.6,
   /** 亮部提多少 */
-  gain: 3.0,
+  gain: 3.1,
   /** 最暗处还剩多少(不给 0,全黑一片没有层次) */
-  floor: 0.01,
+  floor: 0.15,
   /** 高光滚落:越大越早压住,防止冲成霓虹 */
-  roll: 0.5,
+  roll: 0.4,
   /** 饱和度:1 不变,大于 1 更浓 */
-  sat: 1.15,
+  sat: 1.2,
   /** 内部分辨率的倍率:0.6 表示按 CSS 尺寸的六成渲染再拉大 */
   resScale: 0.6,
   /** 暖侧的颜色(参考图里的琥珀);冷侧取主题色 */
@@ -111,6 +111,19 @@ float fbm(vec2 p) {
   return s;
 }
 
+// 同一张图,只取前两层 —— 大结构一样、细节没了,这才是「糊」。
+// (拿另一个尺度的噪声去混出来的是重影,不是模糊;第一版就错在这儿)
+// 1.25 是把两层的幅度(0.75)归一到四层(0.9375),不然混的时候两边亮度对不上
+float fbmLow(vec2 p) {
+  float s = 0.0, a = 0.5;
+  for (int i = 0; i < 2; i++) {
+    s += a * vnoise(p);
+    p *= 2.03;
+    a *= 0.5;
+  }
+  return s * 1.25;
+}
+
 void main() {
   vec2 uv = gl_FragCoord.xy / uRes;
   // 按长宽比拉一下,竖着的面板里纹理才不会被压扁;再把纵向压一道,让纹理在竖直方向拉长
@@ -126,11 +139,11 @@ void main() {
   // 就像隔着磨砂玻璃看;条与条之间是清的。这是上一版那层 backdrop-filter 条纹磨砂在着色器里的等价做法
   // (用户点名要的就是「流动的极光 + 条纹毛玻璃 + 噪点」这三样,不能只剩前后两样)
   float stripe = fract(uv.x * uStripeN + uv.y * uStripeSkew);
-  float frost = smoothstep(0.30, 0.70, stripe) * smoothstep(0.06, 0.45, uv.x);
+  // 条纹跑满整块(原来只在右半边,左边等于没有,看着像没生效)
+  float frost = smoothstep(0.30, 0.70, stripe);
   vec2 pw = p + uWarpB * r;
-  float fSharp = fbm(pw);
-  float fSoft = fbm(pw * 0.55 + vec2(uFrostShift, 0.0));
-  float f = mix(fSharp, fSoft, frost * uFrost);
+  // 磨砂条:同一张图的低频版,再横向推开一点(玻璃的折射感);清条用原图
+  float f = mix(fbm(pw), fbmLow(pw + vec2(uFrostShift, 0.0)), frost * uFrost);
 
   // 冷暖的分界大体是一条竖线,只让噪声轻轻推一下 —— 推多了两边就互相咬进去,
   // 参考图是「左冷右暖、中间一道暗」,不是搅在一起
