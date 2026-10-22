@@ -31,8 +31,8 @@
  *   S17 测某张卡时杀掉页面进程 → 重新载入这张卡在测崩的卡里、不再测,直接当重卡
  *   S18 载入素材原尺寸时(留了记录的那段时间)杀掉 → 重新载入解码上限调低一级
  *   S19 解码上限:浏览器只说解得动 720p(仿弱设备)→ 上限 720p;查看口里看得到
- *   S20 两个舞台、项目里已有别的设备测好的成本记录:打开时按界限搜索只测几张划线(常驻探针先等着),之后常驻探针在后台补测、改按成本记录判;
- *       单舞台(`?tier=lite`)测完写进文档服务(所有在线浏览器测完都写)
+ *   S20 单舞台(`?tier=lite`)没有记录时界限搜索逐张实测、测完写进文档服务(所有在线浏览器测完都写);再开一台两个舞台的:
+ *       读得到这些记录也照旧由常驻探针在加载遮罩下逐张测完(两个舞台不用界限搜索,见 `mechanism/rendering.md`)
  *
  * 输出:过程写 stderr;stdout 最后一行一行 JSON `{ ok, fails, scenes }`;截图在 --out。
  */
@@ -513,15 +513,18 @@ try {
     check('S20', !!searched && searched.outcome.measured.some((m) => !m.cached), '单舞台:没有记录的卡逐张实测', searched?.outcome);
     await sleep(3000);
     await a.browserContext().close();
-    // 再开一个新的上下文(另一台设备),两个舞台:读到了记录 → 界限搜索在后台舞台里只测几张;之后常驻探针在后台补测
+    // 再开一个新的上下文(另一台设备),两个舞台:读得到记录也照旧由常驻探针在加载遮罩下逐张测完
     const b = await newPage('desktop');
     await enter(b);
     await waitDone(b);
-    const ds = await until(() => b.evaluate(() => window.__pcDualSearch?.() ?? null), 120_000, 500);
-    check('S20', !!ds && ds.records >= 1 && ds.measurements <= ds.keys.length + 4, '两个舞台、有记录:界限搜索划线(只测几张)', ds);
-    const settled = await until(() => b.evaluate(() => { const d = window.__pcPreviewDiag?.(); return d && d.probeRun && !d.probeRun.running && d.probeRun.done >= 1 ? d.probeRun : null; }), 120_000, 500);
-    check('S20', !!settled, '常驻探针随后在后台补测完', settled);
-    scenes.S20.dual = ds;
+    let maskSeen = false;
+    const settled = await until(async () => {
+      if (!maskSeen) maskSeen = await b.evaluate(() => !!document.querySelector('[data-pc="probe-gate"]')).catch(() => false);
+      return b.evaluate(() => { const d = window.__pcPreviewDiag?.(); return d && d.probeRun && !d.probeRun.running && d.probeRun.done >= 1 ? d.probeRun : null; });
+    }, 120_000, 200);
+    const noSearch = await b.evaluate(() => !document.querySelector('[data-pc="cost-search-gate"]') && typeof window.__pcDualSearch !== 'function');
+    check('S20', !!settled && noSearch, '两个舞台:常驻探针逐张测完,不走界限搜索', { probeRun: settled, maskSeen, noSearch });
+    scenes.S20.dual = { probeRun: settled, maskSeen };
     await b.browserContext().close();
   }
 

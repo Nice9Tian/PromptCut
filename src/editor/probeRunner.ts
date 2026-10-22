@@ -145,17 +145,6 @@ export function setCardMeasuredHook(hook: CardMeasuredHook | null): () => void {
 }
 /** 这一轮遮罩的编号 */
 let maskRound = 0;
-/**
- * 遮罩下别的测量(两个舞台的界限搜索,`Preview.tsx`)测完一张卡之后也走同一个口子:给判重的卡产稀疏版,等它回。
- * 遮罩编号与常驻探针的同一个(一轮遮罩只有一个 50 秒的等稀疏版上限)。没人接(桌面版)时什么都不做。
- */
-export async function runCardMeasuredHook(info: Omit<CardMeasuredInfo, "round">): Promise<void> {
-  const hook = cardMeasuredHook;
-  if (!hook) return;
-  try { await hook({ ...info, round: maskRound }); }
-  catch (err) { console.warn("[probeRunner] 测完一张卡之后的口子出错", err); }
-}
-
 /* ------------------------------------------------------------------ 身份与设备 */
 
 /** `import.meta.env.DEV`：桌面版跑的就是 vite dev server，分派用当前运行模式的记录（3.1） */
@@ -598,31 +587,6 @@ export function setProbeMeasureHooks(next: ProbeMeasureHooks | null): void {
   measureHooks = next ?? {};
 }
 
-/**
- * 在线页面两个舞台、项目里已经有别的机器测好的成本记录时(语义 `product/platforms.md`「轻重判定」:有记录就二分只测几张来划线),
- * 打开项目先由界限搜索在后台舞台里只测几张(`Preview` 的界限搜索,遮罩下),常驻探针等它定下来:
- * - `holdProbe()`:先别开工(打开项目时由 `Preview` 叫);
- * - `releaseProbe({ blocking })`:开工;`blocking: false` = 这一轮不挡界面(界限搜索已经在遮罩下划好了线,探针在后台把其余的卡补测完,
- *   补齐 K3/K5 要的记录;补测完了分派表改按成本记录判)。没有记录的照旧在遮罩下逐张实测(`blocking: true`)。
- * 桌面不叫,一直开着。
- */
-let holdGate: { promise: Promise<void>; release: () => void } | null = null;
-export function holdProbe(): void {
-  if (holdGate) return;
-  let release = () => {};
-  const promise = new Promise<void>((r) => { release = r; });
-  holdGate = { promise, release };
-}
-export function releaseProbe({ blocking = true }: { blocking?: boolean } = {}): void {
-  if (!blocking) firstPassDone = true;
-  const g = holdGate;
-  holdGate = null;
-  g?.release();
-}
-export function probeHeld(): boolean {
-  return holdGate !== null;
-}
-
 async function runLoop(): Promise<void> {
   looping = true;
   try {
@@ -634,7 +598,6 @@ async function runLoop(): Promise<void> {
        * 换了项目 / 连接,门会重新关上,等新项目的卡片源码同步完。桌面这道门一开始就开着。
        */
       await whenMeasureGateOpen();
-      while (holdGate) await holdGate.promise;
       const gen = generation;
       const project = currentProject;
       if (!project) break;
@@ -740,7 +703,6 @@ export function resetProbeRunner(): void {
   generation = 0;
   settledGeneration = 0;
   firstPassDone = false;
-  holdGate = null;
   maskRound = 0;
   cardMeasuredHook = null;
   progress = IDLE;
