@@ -331,3 +331,47 @@ export function expandLookBody(pathname, body) {
   const expanded = expandProject(body[hit.key], hit.need);
   return { body: { ...body, [hit.key]: expanded.project }, expanded };
 }
+
+/* ------------------------------------------------------------------ 产流任务：一条流要的是哪一段 */
+
+/** 剪辑段里摊出来的虚拟片段 id 的分隔符（同 `src/kernel/cutFlatten.mjs` 的 `FLAT_SEP`；这里不引 `src/`） */
+const FLAT_SEP = '~';
+/** 片段 id 在顶层时间轴上对应的那个片段：摊出来的虚拟片段（`段 id~里面的片段 id`）对应它最外层的剪辑段 */
+const topLevelIdOf = (id) => (typeof id === 'string' && id.includes(FLAT_SEP) ? id.slice(0, id.indexOf(FLAT_SEP)) : id);
+
+/**
+ * 一条轨道流（或导出位图）要的是哪一段：从回放起点（挂载帧，推帧卡要从这里推）到最后一帧，点名这条流的卡、它下面的层。
+ * 发布方（切分时写 `requires.cardSources`、算依赖下层的流退回整场景时的键）与节点（产流时只装这一段用到的）**用同一个函数**，
+ * 对同一条流算出同一个 `need`，展开出同一个子集（`expandProject` 是确定的）。认不出（没有帧号、没有帧率）回 null。
+ * @param {{ fps?: number, mountFrame?: number, firstFrame?: number, lastFrame?: number, clipIds?: string[], belowClipIds?: string[], topClipId?: string }} spec
+ * @returns {null | { spans: [number, number][], clipIds: string[] }}
+ */
+export function streamNeed(spec) {
+  const fps = Number(spec?.fps);
+  const last = Number(spec?.lastFrame);
+  const starts = [spec?.mountFrame, spec?.firstFrame].map(Number).filter(Number.isFinite);
+  if (!(fps > 0) || !Number.isFinite(last) || !starts.length) return null;
+  const from = Math.min(...starts);
+  const ids = [...(spec.clipIds ?? []), ...(spec.belowClipIds ?? []), spec.topClipId].filter((id) => typeof id === 'string' && id).map(topLevelIdOf);
+  return { spans: [[from / fps, (last + 1) / fps]], clipIds: [...new Set(ids)].sort() };
+}
+
+/**
+ * 子集里用到的定制卡的代码身份：`versions`（卡片 id → 代码身份，整个项目的）里，卡片 id 在展开后的子集里出现过的那几项
+ * （片段的 `cardId`、素材效果卡节点、部件参数里按 id 引用的都算：按子集里的字符串找，取超集）。
+ * 切分时写进流任务的 `requires.cardSources`：节点手里有这几份代码就能认领，不必有整个项目的卡。
+ */
+export function subsetCardSources(project, need, versions = {}) {
+  const out = {};
+  if (!need) { for (const [k, v] of Object.entries(versions ?? {})) if (typeof v === 'string' && v) out[k] = v; return out; }
+  const sub = expandProject(project, need).project;
+  const strings = new Set();
+  collectStrings(sub.tracks, strings);
+  collectStrings(sub.cardNodes, strings);
+  collectStrings(sub.cuts, strings);
+  for (const [cardId, version] of Object.entries(versions ?? {})) if (typeof version === 'string' && version && strings.has(cardId)) out[cardId] = version;
+  return out;
+}
+
+/** 这个进程是不是多项目模式的渲染节点（独立渲染主机、托管方渲染服务的工作进程：`profile: 'host'`）。桌面版的预渲染进程是单项目模式 */
+export const multiProjectNode = (env = process.env) => String(env?.PROMPTCUT_NODE_PROFILE ?? '') === 'host';

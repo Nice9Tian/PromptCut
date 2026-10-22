@@ -329,7 +329,7 @@ test('BS-15 queueStreamOf 把 planStreams 的形状原样交给切分;planListSt
   const q = queueStreamOf(listed[0]);
   const spec = listed[0];
   assert.deepEqual(q, { streamKey: spec.streamKey, contentKey: spec.contentKey, topClipId: 'a', originFrame: 45, firstSegment: 0, lastSegment: 7,
-    kind: 'card', plane: 'local', clipIds: ['a'], fps: 30, bound: spec.bound, offset: spec.offset, firstFrame: 45, lastFrame: 164, total: 300 });
+    kind: 'card', plane: 'local', clipIds: ['a'], fps: 30, bound: spec.bound, offset: spec.offset, firstFrame: 45, lastFrame: 164, total: 300, mountFrame: spec.mountFrame });
   assert.deepEqual(q.bound, { x: -32, y: -32, w: 464, h: 304 }, '框 400×240 外扩 32');
   assert.notEqual(q.bound, spec.bound, 'bound 是拷贝');
   const control = { ...entry.cardPlan[0], cardId: 'punch-pill', tier: 'shared', start: 1.5, end: 5.5, sampling: { firstFrame: 45, phase: { numerator: 0, denominator: 1 } } };

@@ -50,6 +50,7 @@ import { mountFrameOf } from '../src/render/frameWindow.mjs';
 import { resolveFrameSize } from '../src/kernel/frameSize.mjs';
 import { cardStreamIdentity } from './card-identity.mjs';
 import { resultKeyOf } from './render-node/fingerprint.mjs';
+import { expandProject, streamNeed, multiProjectNode } from './render-node/expand.mjs';
 import { planStreamSegments } from './frame-playback.mjs';
 import { belowLayersOf, streamInputSig } from '../src/render/streamInputSig.mjs';
 import { isStreamOrigin, streamSegmentFirstFrame, streamSegmentFrameCount, streamSegmentLastFrame, streamSegmentOf, streamSegmentSpan } from '../src/render/streamSegments.mjs';
@@ -627,6 +628,8 @@ export function queueStreamOf(spec) {
     kind: spec.kind, plane: spec.plane, clipIds: [...(spec.clipIds ?? [])], fps: spec.fps,
     bound: spec.bound ? { ...spec.bound } : null, offset: spec.offset ? { ...spec.offset } : null,
     firstFrame: spec.firstFrame, lastFrame: spec.lastFrame, total: spec.total,
+    // 回放起点:切分方按它展开这条流的子集(`render-node/expand.mjs` 的 `streamNeed`),和产流的节点按完整的流算出同一个子集
+    ...(Number.isFinite(spec.mountFrame) ? { mountFrame: spec.mountFrame } : {}),
     ...(spec.projectId ? { projectId: spec.projectId } : {}),
     // 依赖下层的流另带算进键里的下层(切分据此知道这条流要整场景的下层和素材);别的流不带这一项,形状与原来相同
     ...(spec.kind === 'below' ? { belowClipIds: [...(spec.belowClipIds ?? [])] } : {}),
@@ -746,7 +749,7 @@ export function belowLayerExtra(project, clip) {
  *   - `clipIds` 只有目标卡一张(这条流挂在它身上);`belowClipIds` 是算进键里的那些下层,按画家顺序(下面的在前);
  *   - 键:`cardStreamIdentity({ kind: 'below' })`。下层取 `belowLayersOf`(与页面的输入签名、与隔离工程同一份认定),每层用它在
  *     card plan 里的缓存内容键加采样窗口,再加 `belowLayerExtra`。有一层在 card plan 里找不到键(预渲染间不认识的卡)时,
- *     整条退回用整个项目的键 `entry.key`(`belowScene: true`;更粗,但不会错);连 `entry.key` 也没有就不出这条流;
+ *     整条退回用整场景的键(`belowScene: true`;更粗,但不会错)—— 0.7.19 起按这条流展开出的子集算(`entry.subsetKey`),没有它的旧 entry 用 `entry.key`;都没有就不出这条流;
  *   - `replay` / `mountFrame`:目标卡和下层里的卡片段(含挂着节点的素材效果卡片段)有一张是 motion 式的就要回放,从这些有状态的卡里最早的
  *     挂载帧起(在 card plan 里找不到的按有状态算)。纯素材段按时间直接取帧,不算;
  *   - `hasMedia`:项目里有没有画面素材(有的话产流那一趟截图前要等素材就位,`bakeStream` 的 `hasMedia`;
@@ -774,10 +777,16 @@ function belowStreamSpecs(entry, targets, { fps, stage, total, codeVersion, envF
       if (typeof key !== 'string' || !key) { whole = true; break; }
       layers.push({ key, sampling: lower.sampling, count: lower.count, extra: belowLayerExtra(project, layer.clip) });
     }
-    if (whole && (typeof entry.key !== 'string' || !entry.key)) continue;
+    // 有一层在卡片计划里找不到键：退回整场景的键。0.7.19 起这把键按这条流展开出的子集算（两种模式、发布方与节点同一个算法，
+    // `entry.subsetKey`，`frame-pipeline.mjs` 建 entry 时挂上），不再用整个项目的 `entry.key`：项目里与这条流无关的改动不再让它作废。
+    // 没有 `subsetKey` 的 entry（旧调用方、测试替身）照旧用 `entry.key`
+    const sceneKey = !whole ? null : typeof entry.subsetKey === 'function'
+      ? entry.subsetKey(streamNeed({ fps, mountFrame: target.from, firstFrame: target.firstFrame, lastFrame: target.to, clipIds: [control.clipId], belowClipIds: found.below.map(layer => layer.id) }))
+      : entry.key;
+    if (whole && (typeof sceneKey !== 'string' || !sceneKey)) continue;
     const contentKey = cardStreamIdentity({ kind: 'below', fps, stage, codeVersion,
       members: [{ key: targetKey, sampling: control.sampling, count: control.count, extra: belowLayerExtra(project, clip) }],
-      below: whole ? { scene: entry.key } : { layers } });
+      below: whole ? { scene: sceneKey } : { layers } });
     let mountFrame = target.from;
     const stateful = [control];
     for (const layer of found.below) {
@@ -946,6 +955,14 @@ export class StreamProducer {
     this.projectId = ownership?.projectId ?? projectId ?? null;
     this.pipeline = pipeline;
     this.enabled = streamsEnabled(env);
+    /**
+     * 多项目模式（`profile: 'host'`：独立渲染主机、托管方渲染服务的工作进程）产流只装这条流用到的那一段
+     * （语义 `product/rendering.md`「渲染服务的两种模式」、`document-service.md`「渲染任务队列」）：隔离工程从按这条流展开出的
+     * 子集上建（`render-node/expand.mjs` 的 `streamNeed` / `expandProject`，切分方写 `requires.cardSources` 用同一个函数），
+     * 别的片段、它们的素材不进渲染页。画面与从整个项目建的逐像素相同（`scripts/probes/multi-project-stream-probe.mjs`）。
+     * 桌面版的预渲染进程是单项目模式，照旧从整个项目建
+     */
+    this.subset = multiProjectNode(env);
     this.budget = streamDecoderBudget(env);
     this.poolLimit = streamPoolLimit(env);
     this.pool = this.poolLimit.fixed ?? STREAM_POOL_DEFAULT;
@@ -1104,8 +1121,15 @@ export class StreamProducer {
         this.streams.set(spec.streamKey, state);
       }
     }
-    state.isolated ||= isolatedStreamProject(entry.project, spec);
+    state.isolated ||= this.isolatedOf(entry, spec);
     return state;
+  }
+
+  /** 这条流的隔离工程从哪份项目建：多项目模式按这条流展开出的子集，单项目模式整个项目（见构造函数里 `subset` 的说明） */
+  isolatedOf(entry, spec) {
+    if (!this.subset) return isolatedStreamProject(entry.project, spec);
+    const need = streamNeed(spec);
+    return isolatedStreamProject(need ? expandProject(entry.project, need).project : entry.project, spec);
   }
 
   /**
@@ -1194,7 +1218,7 @@ export class StreamProducer {
     let state = this.exportStates.get(key);
     if (!state) {
       const own = { ...spec, streamKey: key, ...(this.projectId ? { projectId: this.projectId } : {}) };
-      state = { spec: own, manifest: this.freshManifest(own), isolated: isolatedStreamProject(entry.project, spec), reserved: new Set(), failures: new Map(), exportOnly: true };
+      state = { spec: own, manifest: this.freshManifest(own), isolated: this.isolatedOf(entry, spec), reserved: new Set(), failures: new Map(), exportOnly: true };
       this.exportStates.set(key, state);
       while (this.exportStates.size > 16) this.exportStates.delete(this.exportStates.keys().next().value);
     }
@@ -1276,7 +1300,7 @@ export class StreamProducer {
       state.spec = spec;
       state.aliases = new Set();
       state.manifest = anchorManifest(manifest, spec);
-      state.isolated = isolatedStreamProject(entry.project, spec);
+      state.isolated = this.isolatedOf(entry, spec);
       state.generation = generation;
       // Item 4:这条流的层只发给当前版本正是这个 entry 的会话
       state.entryKey = entry.key;
