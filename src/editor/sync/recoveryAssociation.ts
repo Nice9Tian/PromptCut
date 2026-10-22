@@ -5,6 +5,8 @@ import { convertGoneProject, type GoneProof } from "./cloudGone";
 import { verifiedBase, type CloudSnapshot } from "./cloudSnapshot";
 // @ts-expect-error Browser-safe proof verification
 import { queryGone } from "../../../server/recovery/gone-proof.mjs";
+import { JOIN_REQUEST_TEXT, reopenNotice } from "../../account/joinRequestText";
+import type { JoinRequestStatus } from "../../account/client";
 
 export interface CollaborationDescriptor {
   version: number;
@@ -156,10 +158,41 @@ export function currentRealtimeRev(): number | null {
   return realtimeRevGetter ? realtimeRevGetter() : null;
 }
 
+type ReopenToast = (msg: string, tone?: "info" | "warn", duration?: number, action?: { label: string; run: () => void; pc?: string }) => void;
+type JoinRequestClient = { joinRequestStatus?: (projectId: string) => Promise<JoinRequestStatus>; sendJoinRequest?: (projectId: string, requestId: string) => Promise<JoinRequestStatus> };
+/**
+ * 重开文件时「这个账号不是这个云端项目的成员」那条提示。只在被账号名单挡住(`not-listed`)、项目只放账号名单时另带「发送申请」按钮
+ * (先问一次自己那一条申请:已经在等、被拒且次数用完的不给按钮,把现状接在后面说);被踢(`banned`)、问不到的照旧只有那一句。
+ * 点了按钮发申请:没收到回包再点沿用原请求号;发出后另起一条「已发送，等创建者通过」并说明通过以后怎么连回去。
+ */
+async function notMemberToast(toast: ReopenToast, client: JoinRequestClient | null | undefined, projectId: string, code: unknown) {
+  let status: JoinRequestStatus | null = null;
+  if (code === "not-listed" && typeof client?.joinRequestStatus === "function" && typeof client.sendJoinRequest === "function") {
+    try { status = await client.joinRequestStatus(projectId); } catch { status = null; }
+  }
+  const notice = status ? reopenNotice(status) : null;
+  if (!notice) { toast(JOIN_REQUEST_TEXT.reopenNotMember, "warn", 10_000); return; }
+  if (!notice.canSend) { toast(notice.text, "warn", 10_000); return; }
+  let requestId = crypto.randomUUID(), sending = false;
+  toast(notice.text, "warn", Infinity, { label: JOIN_REQUEST_TEXT.send, pc: "reopen-join-request", run: () => {
+    if (sending) return;
+    sending = true;
+    void client!.sendJoinRequest!(projectId, requestId).then(result => {
+      requestId = crypto.randomUUID();
+      const next = reopenNotice(result);
+      toast(result.state === "pending" ? JOIN_REQUEST_TEXT.reopenSent : (next?.text ?? JOIN_REQUEST_TEXT.reopenNotMember), "info", 10_000);
+    }, (error: { status?: number; message?: string }) => {
+      if (error?.status !== 0) requestId = crypto.randomUUID();
+      toast(error?.message || "申请没有发出去，请重试。", "warn", 10_000);
+    }).finally(() => { sending = false; });
+  } });
+}
+
 /**
  * 账号云端项目另存为 .proc / .procp 后的重开四规则（10-14 第 3.4 节）：
  * 1. 没登录：提示登录，以本地副本打开，保留关联；
- * 2. 登录的账号不是成员：提示「这个账号不是这个云端项目的成员」，以本地副本打开；
+ * 2. 登录的账号不是成员：提示「这个账号不是这个云端项目的成员」，以本地副本打开；项目只放账号名单时，提示里另有「发送申请」按钮
+ *    （2026-10-22 用户定，`workflow/project.md` 第 44 行；`notMemberToast`）；
  * 3. 云端项目已删：凭已删证明（goneProof）转成独立本地项目打开；
  * 4. 有权限且有离线修改：连回云端项目合并离线修改，网络错误回退本地副本。
  */
@@ -176,7 +209,8 @@ export async function handleCloudAssociationReopen(
     queryGone?: (descriptor: CollaborationDescriptor) => Promise<GoneProof | null>;
     isOfflineModified?: boolean;
     cloudProject?: Project;
-    toast?: (msg: string, tone?: "info" | "warn", duration?: number) => void;
+    /** 第 4 个参数是气泡上的按钮(重开时「不是成员」那条提示的「发送申请」);`pushToast` 本来就收它 */
+    toast?: (msg: string, tone?: "info" | "warn", duration?: number, action?: { label: string; run: () => void; pc?: string }) => void;
     openAsLocal?: (p: Project) => void;
     /**
      * 连回云端项目并处理文件里的修改;回 `"pending-merge"` 表示云端在另存之后被别人改过、修改进了「冲突合并」(没直接提交)。
@@ -235,9 +269,9 @@ export async function handleCloudAssociationReopen(
           return { status: "converted", project: converted.project };
         }
       }
-      // 规则 2：已登录但不是该项目成员
+      // 规则 2：已登录但不是该项目成员（只放账号名单的项目另给「发送申请」）
       if (status === 403 || code === "not-listed" || code === "banned" || code === "forbidden") {
-        toast("这个账号不是这个云端项目的成员", "warn", 10_000);
+        await notMemberToast(toast, client, assoc.projectId, code);
         setCloudAssociation(assoc);
         options.openAsLocal?.(project);
         return { status: "forbidden", project };
@@ -250,7 +284,7 @@ export async function handleCloudAssociationReopen(
   }
 
   if (!session && !options.client) {
-    toast("这个账号不是这个云端项目的成员", "warn", 10_000);
+    toast(JOIN_REQUEST_TEXT.reopenNotMember, "warn", 10_000);
     setCloudAssociation(assoc);
     options.openAsLocal?.(project);
     return { status: "forbidden", project };

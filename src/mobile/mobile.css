@@ -112,6 +112,8 @@
 .pcm .stage-btns { position: absolute; right: 6px; top: 6px; display: flex; gap: 4px; z-index: 20; }
 .pcm .sbtn { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-xs); line-height: 1.4; padding: 2px 8px; border-radius: var(--r-pill); background: var(--shade-strong); color: var(--white); border: 1px solid var(--edge); white-space: nowrap; backdrop-filter: blur(2px); }
 .pcm .sbtn svg { width: 12px; height: 12px; }
+/* 成员按钮上的数字角标(申请加入):外观照下面页签上的 .badge-n,只是跟在文字后面、不悬空 */
+.pcm .sbtn .badge-n { min-width: 16px; height: 16px; border-radius: var(--r-pill); background: var(--danger); color: var(--white); font-size: var(--fs-xs); display: inline-grid; place-items: center; padding: 0 4px; font-weight: 700; }
 .pcm .agent-flag { position: absolute; right: 6px; top: 28px; z-index: 20; font-size: var(--fs-xs); background: var(--plum-dim); color: var(--plum-text); padding: 1px 7px; border-radius: var(--r-pill); animation: pcm-pulse 1.2s infinite; }
 @keyframes pcm-pulse { 50% { opacity: .5; } }
 

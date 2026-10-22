@@ -11,7 +11,9 @@ import { listCuts } from "../kernel/cuts";
 import type { CardDef } from "../kernel/types";
 import { importMediaFiles, MEDIA_ACCEPT } from "../editor/left/importAssets";
 import { useCardLibrary } from "../editor/left/library/cardGroups";
-import { currentAccountProjectLink, currentSharedUrl, discardOffline, pausedSummary, replayOffline, setMergeOpen, setOfflineOpen, useSync } from "../editor/sync/syncManager";
+import { accountMemberAdmin, currentAccountProjectLink, currentSharedUrl, discardOffline, pausedSummary, replayOffline, setMergeOpen, setOfflineOpen, useSync } from "../editor/sync/syncManager";
+import { AccountFailure, type AccountJoinRequestRow } from "../account/client";
+import { JOIN_REQUEST_TEXT, requestedAtText } from "../account/joinRequestText";
 import { mergeBarText, useConflictMerge, useMergeCounts } from "../editor/sync/useConflictMerge";
 import { mergeBlockedText } from "../editor/sync/ConflictMerge";
 import { IMPORT_OFFLINE_TEXT, useImportOffline } from "../editor/sync/useImportOffline";
@@ -410,9 +412,41 @@ export function MembersSheet(props: { info: MembersInfo; onClose: () => void }) 
   const toast = useToast();
   const { info } = props;
   const link = currentAccountProjectLink() ?? currentSharedUrl();
+  const [deciding, setDeciding] = useState<string | null>(null);
+  /** 「通过」「拒绝」没收到回包时,再点沿用原请求号(同桌面 `AccountMembersPanel.tsx`) */
+  const decisionIds = useRef(new Map<string, string>());
+  // 申请加入(2026-10-22 用户定):创建者在成员面板里「通过」「拒绝」;服务端只认创建者本人,通过那一刻现核禁入与申请还在不在
+  const decide = async (op: "approve-join" | "reject-join", row: AccountJoinRequestRow) => {
+    const key = `${op}:${row.joinRequestId}`, name = row.accountName ?? row.accountId;
+    const requestId = decisionIds.current.get(key) ?? crypto.randomUUID();
+    decisionIds.current.set(key, requestId);
+    setDeciding(row.joinRequestId);
+    try {
+      await accountMemberAdmin({ op, accountId: row.accountId, joinRequestId: row.joinRequestId, requestId });
+      decisionIds.current.delete(key);
+      toast(op === "approve-join" ? `已通过 ${name} 的申请` : `已拒绝 ${name} 的申请`);
+    } catch (e) {
+      if (e instanceof AccountFailure && e.status !== 0) decisionIds.current.delete(key);
+      toast(e instanceof Error && e.message ? e.message : "暂时无法处理这条申请，请重试。");
+    } finally { setDeciding(null); info.refresh(); }
+  };
   return (
     <Sheet id="members" title={info.unavailable ? "成员" : `成员：${info.people} 人 · Agent：${info.agents} 个`} onClose={props.onClose}>
       {info.unavailable && <div className="hint">暂时无法获取项目成员。</div>}
+      {info.requests.length > 0 && <div data-pcm="join-requests">
+        <h2 className="sec" style={{ marginTop: 0 }}>{JOIN_REQUEST_TEXT.requestsTitle(info.requests.length)}</h2>
+        {info.requests.map((row) => (
+          <div key={row.joinRequestId} className="list-row" data-pcm="join-request-row" data-account-id={row.accountId}>
+            <div className="i"><Icon name="person" /></div>
+            <div className="grow"><b>{row.accountName ?? row.accountId}</b><div className="hint" style={{ margin: 0 }}>{requestedAtText(row.createdAt)}</div></div>
+            <button type="button" className="btn primary" style={{ height: 32, padding: "0 12px" }} data-pcm="join-request-approve" disabled={deciding !== null}
+              onClick={() => void decide("approve-join", row)}>{JOIN_REQUEST_TEXT.approve}</button>
+            <button type="button" className="btn" style={{ height: 32, padding: "0 12px" }} data-pcm="join-request-reject" disabled={deciding !== null}
+              onClick={() => void decide("reject-join", row)}>{JOIN_REQUEST_TEXT.reject}</button>
+          </div>
+        ))}
+        <h2 className="sec">项目成员</h2>
+      </div>}
       {info.lines.map((l) => (
         <div key={l.key} className="list-row" data-pcm="member-row">
           <div className={l.agent ? "i plum" : "i"}><Icon name={l.agent ? "card" : "person"} /></div>

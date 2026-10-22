@@ -314,6 +314,8 @@ export function MobileEditor() {
             <div className="stage-btns">
               <StageButton className="sbtn" pcm="members-btn" title="成员" onTap={() => setSheet({ kind: "members" })}>
                 {page === "timeline" ? <><Icon name="members" />{members.unavailable ? "" : `${members.people}·${members.agents}`}</> : memberLabel}
+                {/* 有新的申请加入时出数字角标(只有创建者看得到申请;2026-10-22 用户定) */}
+                {members.requests.length > 0 && <span className="badge-n" data-pcm="members-request-badge">{members.requests.length}</span>}
               </StageButton>
             </div>
             {running.size > 0 && <div className="agent-flag" data-pcm="agent-flag">Agent 正在改</div>}

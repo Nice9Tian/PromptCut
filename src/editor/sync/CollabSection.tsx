@@ -28,6 +28,7 @@ import { ACCOUNT_MOVE_TEXT, abandonFailureText, moveFailureText } from "./accoun
 import { abandonPendingMove, accountCloud, accountCloudLogin, accountCloudSignIn, accountShellTooOld, moveCurrentToAccountCloud, oldShellBlocksAccountMove, pendingMove, targetsAccountCloud, type AccountCloud } from "./accountMoveFlow";
 import { OLD_SHELL_ACCOUNT_TEXT } from "../../account/desktopVault";
 import { projectLink, type Account } from "../../account/client";
+import { AccountEntryOption } from "../../account/AccountEntryOption";
 import {
   createInvite, defaultCreatorName, disableCollab, enableCollab, fetchInviteStatus, generatePassword, localCollab,
   type InviteInfo, type InviteStatus,
@@ -621,6 +622,8 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
                   </div>
                 </div>
               ) : null}
+              {/* 「任何知道链接的人都可加入」:在上面两个按钮下面,只有创建者能改(2026-10-22 用户定;`src/account/AccountEntryOption.tsx`) */}
+              {isAccount ? <AccountEntryOption disabled={busy} /> : null}
             </>
           ) : null}
           {iAmCreator ? (

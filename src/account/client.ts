@@ -26,9 +26,27 @@ export interface AccountMembersSnapshot {
   devices: { accountId: string; accountName: string | null; deviceId: string; deviceName: string; creator: boolean;
     conns: { role: 'page' | 'agent' | 'render'; service?: 'agent' | 'render'; conversation?: string | number }[] }[];
   bans?: { accountId: string; accountName: string | null; reason: 'kick' }[];
+  /** 挂着的申请加入(只有创建者的投影里有),按申请时间从早到晚 */
+  requests?: AccountJoinRequestRow[];
 }
-export interface AccountMemberOperation { op: 'kick' | 'unban'; accountId: string; expectedAccessRevision: number; requestId: string }
-export interface AccountMemberResult { eventId: string; accessRevision: number; completed: false; state: 'pending-services' }
+export interface AccountJoinRequestRow { accountId: string; joinRequestId: string; accountName: string | null; createdAt: number }
+/** 踢人、解除禁入:按访问版本号防并发改动 */
+export interface AccountKickOperation { op: 'kick' | 'unban'; accountId: string; expectedAccessRevision: number; requestId: string }
+/** 「任何知道链接的人都可加入」勾选(只有创建者能改):同上按访问版本号 */
+export interface AccountEntryOperation { op: 'set-entry'; allowLinkJoin: boolean; expectedAccessRevision: number; requestId: string }
+/** 创建者「通过」「拒绝」一条申请:点名哪个账号的哪一条,不核访问版本号 */
+export interface AccountJoinDecision { op: 'approve-join' | 'reject-join'; accountId: string; joinRequestId: string; requestId: string }
+export type AccountMemberOperation = AccountKickOperation | AccountEntryOperation | AccountJoinDecision;
+export type AccountMemberResult =
+  | { eventId: string; accessRevision: number; completed: false; state: 'pending-services' }
+  | { joinRequest: { accountId: string; joinRequestId: string; state: 'approved' | 'rejected' }; accessRevision: number };
+/**
+ * 申请人自己那一条(查状态、发申请都回它)。`state`:`none` 没申请过 / `pending` 等创建者 / `rejected` 被拒 / `member` 已是成员(含刚被通过);
+ * `entry`:`list` 只放账号名单 / `link` 知道链接就能进;`canApply`:这个项目这边现在能不能再发;`retryAt`:次数用完时最早能再发的时刻
+ */
+export interface JoinRequestStatus { projectId: string; state: 'none' | 'pending' | 'rejected' | 'member'; entry: 'list' | 'link'; canApply: boolean; retryAt?: number }
+/** 申请人等创建者处理时,多久问一次(毫秒);只在页面看得见时问 */
+export const JOIN_REQUEST_POLL_MS = 10_000;
 export class AccountFailure extends Error {
   status: number;
   code: string;
@@ -44,7 +62,17 @@ export function accountErrorText(status: number, code: string): string {
     'members-unavailable': '暂时无法获取项目成员，请稍后重试。', 'members-changed': '成员状态已变化，请刷新后重试。',
     'access-revision-mismatch': '成员状态已变化，请刷新并重新选择操作。', 'creator-required': '只有项目创建者可以管理成员。',
     'permission-denied': '你的账号没有开启这一项的权限，请联系托管方。', 'invalid-service': '这台云节点现在没有这个服务。',
-    'invalid-option': '这台云节点现在没有这个选项。' };
+    'invalid-option': '这台云节点现在没有这个选项。',
+    // 申请加入与进入方式(2026-10-22 用户定,`workflow/project.md`「多用户协作」);code 与这句话的对照见报告 `AGENT-claude-join-requests.md`
+    'no-project': '这个云端项目已不存在。', 'relocating': '这个项目正在搬迁，请稍后再试。',
+    'entry-open': '这个项目现在知道链接就能加入，请直接加入。',
+    'join-request-limit': '这个项目你最近申请得太多了，请过一段时间再申请。',
+    'join-request-full': '这个项目等待处理的申请太多了，请稍后再申请。',
+    'join-request-account-limit': '你最近发出的申请太多了，请过一段时间再申请。',
+    'invalid-join-request': '申请信息不完整，请刷新后重试。', 'no-join-request': '这条申请已经不在了，请刷新。',
+    'join-request-decided': '这条申请已经处理过了，请刷新。', 'join-request-banned': '这个账号已被禁入，要先在「已禁入的账号」里解除。',
+    'already-member': '这个账号已经是项目成员。', 'invalid-entry': '进入方式的设置没有保存成功，请刷新后重试。',
+    'invalid-member': '成员信息不完整，请刷新后重试。', 'request-mismatch': '这次操作和之前的记录对不上，请刷新后重试。' };
   return messages[code] || (status === 401 ? '登录已失效，请重新登录。' : status === 503 ? '云端服务暂时不可用，请稍后重试。' : status === 403 ? '没有访问这个项目的权限。' : status === 0 ? '连接云端失败，请检查网络后重试。' : `请求失败（${code}）。`);
 }
 /** 在线页面一次账号请求最多等多久(桌面版走外壳的账号桥,那边自己有 20 秒的时限) */
@@ -248,18 +276,55 @@ export function createAccountClient(options: AccountClientOptions) {
       if (identity !== authIdentity() || revision !== authVersion) throw new AccountFailure(401, 'credential-revoked');
       return validateMembers(value, projectId, current.account.id);
     },
+    /**
+     * 创建者的成员操作,都走 `/hosted/shared/account/admin`:踢人、解除禁入、改「任何知道链接的人都可加入」勾选(`set-entry`)、
+     * 「通过」「拒绝」申请(`approve-join` / `reject-join`)。请求体按白名单拼,不带页面上别的东西;回包按操作逐项核。
+     * 回包没收到(网络断)时,用同一个请求号再发一次,服务端认得出是同一次
+     */
     async memberAdmin(projectId: string, operation: AccountMemberOperation): Promise<AccountMemberResult> {
-      if (!['kick', 'unban'].includes(operation.op) || !/^acc_[a-f0-9]{24}$/.test(operation.accountId) ||
-          !Number.isSafeInteger(operation.expectedAccessRevision) || operation.expectedAccessRevision < 0 ||
-          typeof operation.requestId !== 'string' || !operation.requestId || operation.requestId.length > 128)
-        throw new AccountFailure(400, 'invalid-member');
+      const okRequest = typeof operation.requestId === 'string' && !!operation.requestId && operation.requestId.length <= 128;
+      const okRevision = (x: unknown) => Number.isSafeInteger(x) && (x as number) >= 0;
+      let body: Record<string, unknown>;
+      if (operation.op === 'kick' || operation.op === 'unban') {
+        if (!/^acc_[a-f0-9]{24}$/.test(operation.accountId) || !okRevision(operation.expectedAccessRevision) || !okRequest) throw new AccountFailure(400, 'invalid-member');
+        body = { projectId, op: operation.op, accountId: operation.accountId, expectedAccessRevision: operation.expectedAccessRevision, requestId: operation.requestId };
+      } else if (operation.op === 'set-entry') {
+        if (typeof operation.allowLinkJoin !== 'boolean' || !okRevision(operation.expectedAccessRevision) || !okRequest) throw new AccountFailure(400, 'invalid-entry');
+        body = { projectId, op: 'set-entry', allowLinkJoin: operation.allowLinkJoin, expectedAccessRevision: operation.expectedAccessRevision, requestId: operation.requestId };
+      } else if (operation.op === 'approve-join' || operation.op === 'reject-join') {
+        if (!/^acc_[a-f0-9]{24}$/.test(operation.accountId) || !/^jr_[a-f0-9]{24}$/.test(operation.joinRequestId) || !okRequest) throw new AccountFailure(400, 'invalid-join-request');
+        body = { projectId, op: operation.op, accountId: operation.accountId, joinRequestId: operation.joinRequestId, requestId: operation.requestId };
+      } else throw new AccountFailure(400, 'invalid-member');
       const current = await ensureLogin(), identity = authIdentity(), revision = authVersion;
-      const value = await request('/hosted/shared/account/admin', { projectId, op: operation.op, accountId: operation.accountId,
-        expectedAccessRevision: operation.expectedAccessRevision, requestId: operation.requestId }, current.accessToken);
+      const value = await request('/hosted/shared/account/admin', body, current.accessToken);
       if (identity !== authIdentity() || revision !== authVersion) throw new AccountFailure(401, 'credential-revoked');
-      if (typeof value.eventId !== 'string' || !value.eventId || !Number.isSafeInteger(value.accessRevision) ||
-          value.accessRevision < 0 || value.completed !== false || value.state !== 'pending-services') throw new AccountFailure(503, 'account-protocol');
+      if (operation.op === 'approve-join' || operation.op === 'reject-join') {
+        const decided = value.joinRequest, state = operation.op === 'approve-join' ? 'approved' : 'rejected';
+        if (!decided || decided.accountId !== operation.accountId || decided.joinRequestId !== operation.joinRequestId || decided.state !== state ||
+            !okRevision(value.accessRevision)) throw new AccountFailure(503, 'account-protocol');
+        return { joinRequest: { accountId: operation.accountId, joinRequestId: operation.joinRequestId, state }, accessRevision: value.accessRevision };
+      }
+      if (typeof value.eventId !== 'string' || !value.eventId || !okRevision(value.accessRevision) ||
+          value.completed !== false || value.state !== 'pending-services') throw new AccountFailure(503, 'account-protocol');
       return { eventId: value.eventId, accessRevision: value.accessRevision, completed: false, state: 'pending-services' };
+    },
+    /**
+     * 申请加入,申请人这一侧:查自己那一条。走 `/hosted/shared/account/join`(带 `joinRequest`,不进项目、不发票据);
+     * 不另开路由,桌面外壳的账号桥只放行 create / join / session / admin / members 五条
+     */
+    async joinRequestStatus(projectId: string): Promise<JoinRequestStatus> {
+      const current = await ensureLogin(), identity = authIdentity(), revision = authVersion;
+      const value = await request('/hosted/shared/account/join', { projectId, joinRequest: 'status' }, current.accessToken);
+      if (identity !== authIdentity() || revision !== authVersion) throw new AccountFailure(401, 'credential-revoked');
+      return validateJoinRequest(value, projectId);
+    },
+    /** 发申请。同一次「发送申请」的重试用同一个请求号(服务端不会因此多记一次) */
+    async sendJoinRequest(projectId: string, requestId: string): Promise<JoinRequestStatus> {
+      if (typeof requestId !== 'string' || !requestId || requestId.length > 128) throw new AccountFailure(400, 'invalid-join-request');
+      const current = await ensureLogin(), identity = authIdentity(), revision = authVersion;
+      const value = await request('/hosted/shared/account/join', { projectId, requestId, joinRequest: 'send' }, current.accessToken);
+      if (identity !== authIdentity() || revision !== authVersion) throw new AccountFailure(401, 'credential-revoked');
+      return validateJoinRequest(value, projectId);
     },
     async join(projectId: string, requestId: string, joinOpts?: { token?: string; linkToken?: string; secondaryPassword?: string }): Promise<ProjectSession> {
       const current = await ensureLogin();
@@ -276,6 +341,13 @@ export function createAccountClient(options: AccountClientOptions) {
     async session(projectId: string, { minRemainingMs }: { minRemainingMs?: number } = {}): Promise<ProjectSession> { const current = await ensureLogin(minRemainingMs); return validateSession(await request('/hosted/shared/account/session', { projectId, deviceId: options.device.deviceId, requestId: crypto.randomUUID() }, current.accessToken), now(), projectId); },
   };
 }
+function validateJoinRequest(value: Record<string, any>, projectId: string): JoinRequestStatus {
+  const jr = value.joinRequest;
+  if (value.projectId !== projectId || !jr || typeof jr !== 'object' || !['none', 'pending', 'rejected', 'member'].includes(jr.state) ||
+      !['list', 'link'].includes(jr.entry) || typeof jr.canApply !== 'boolean' ||
+      (jr.retryAt !== undefined && (!Number.isSafeInteger(jr.retryAt) || jr.retryAt < 0))) throw new AccountFailure(503, 'account-protocol');
+  return { projectId, state: jr.state, entry: jr.entry, canApply: jr.canApply, ...(jr.retryAt !== undefined ? { retryAt: jr.retryAt } : {}) };
+}
 function validateMembers(value: Record<string, any>, projectId: string, accountId: string): AccountMembersSnapshot {
   const bad = () => { throw new AccountFailure(503, 'account-protocol'); };
   const id = (x: unknown) => typeof x === 'string' && /^acc_[a-f0-9]{24}$/.test(x);
@@ -286,7 +358,8 @@ function validateMembers(value: Record<string, any>, projectId: string, accountI
       value.self?.accountId !== accountId || typeof value.self.creator !== 'boolean' || !access(value.self.access) ||
       value.self.creator !== (value.creatorAccountId === accountId) ||
       !Array.isArray(value.members) || !Array.isArray(value.devices) || value.members.length > 10000 || value.devices.length > 10000 ||
-      (value.bans !== undefined && (!value.self.creator || !Array.isArray(value.bans) || value.bans.length > 10000))) bad();
+      (value.bans !== undefined && (!value.self.creator || !Array.isArray(value.bans) || value.bans.length > 10000)) ||
+      (value.requests !== undefined && (!value.self.creator || !Array.isArray(value.requests) || value.requests.length > 10000))) bad();
   const memberIds = new Set<string>(), devices = new Set<string>(), bans = new Set<string>();
   const members = value.members.map((row: any) => {
     if (!id(row?.accountId) || memberIds.has(row.accountId) || !name(row.accountName) || !access(row.access) ||
@@ -315,9 +388,19 @@ function validateMembers(value: Record<string, any>, projectId: string, accountI
     if (!id(row?.accountId) || bans.has(row.accountId) || memberIds.has(row.accountId) || !name(row.accountName) || row.reason !== 'kick') bad();
     bans.add(row.accountId); return { accountId: row.accountId, accountName: row.accountName, reason: 'kick' as const };
   });
+  // 申请:只给创建者;一个账号一条;不能同时是成员或已被禁入;字段只收这四样
+  const requested = new Set<string>();
+  const requests = value.requests?.map((row: any) => {
+    if (!id(row?.accountId) || requested.has(row.accountId) || memberIds.has(row.accountId) || bans.has(row.accountId) ||
+        typeof row.joinRequestId !== 'string' || !/^jr_[a-f0-9]{24}$/.test(row.joinRequestId) || !name(row.accountName) ||
+        !Number.isSafeInteger(row.createdAt) || row.createdAt < 0) bad();
+    requested.add(row.accountId);
+    return { accountId: row.accountId, joinRequestId: row.joinRequestId, accountName: row.accountName, createdAt: row.createdAt };
+  });
   return { v: 2, projectId, authorityId: value.authorityId, accessRevision: value.accessRevision,
     self: { accountId, creator: value.self.creator, access: value.self.access }, creatorAccountId: value.creatorAccountId,
-    allowLinkJoin: value.allowLinkJoin, members, devices: rows, ...(banned !== undefined ? { bans: banned } : {}) };
+    allowLinkJoin: value.allowLinkJoin, members, devices: rows, ...(banned !== undefined ? { bans: banned } : {}),
+    ...(requests !== undefined ? { requests } : {}) };
 }
 function validateConsent(value: Record<string, any>, accountId: string): CloudAgentConsent {
   if (value.accountId !== accountId || value.noticeVersion !== 1 || typeof value.accepted !== 'boolean' ||
