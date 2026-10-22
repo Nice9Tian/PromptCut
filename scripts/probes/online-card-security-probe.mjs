@@ -448,9 +448,15 @@ try {
       check(`A3 ${who}:读得到的一切里没有凭证、票据、设备身份、编辑器页存储里的记号(共比对 ${secrets.size} 个秘密,倒出 ${all.length} 字符)`, leaked.length === 0 && all.length > 5000, leaked);
       const shaped = TICKET_SHAPE.test(all), tq = /[?&]t=v1\./.test(all);
       check(`A3 ${who}:读得到的一切里没有任何票据形状的串,也没有 ?t=`, !shaped && !tq, { shaped, tq });
+      // 2026-10-23 起舞台加固收走了能活过本文档的持久存储(`harden.ts` 的 `denyPersistentStorage`,`mechanism/platforms.md`「舞台源上的存储」):
+      // IndexedDB、OPFS、Cache Storage 在卡片里一碰就抛错算过(比「读得出、里面没秘密」更严);真读得出时照旧不许有秘密。超时照旧算不过
+      const DENIED_OK = new Set(['indexedDB', 'opfs', 'caches']);
       for (const k of ['localStorage', 'sessionStorage', 'indexedDB', 'document.cookie', 'cookieStore', 'opfs', 'caches', 'performance', 'dom', 'globals', 'parent-messages']) {
         const v = r.dump?.[k];
-        check(`A3 ${who}:${k} 读出来了、里面没有秘密`, typeof v === 'string' && !/^抛错|^超时/.test(v) && leaksIn(v).length === 0 && !TICKET_SHAPE.test(v), typeof v === 'string' ? `${v.length} 字符` : v);
+        const denied = DENIED_OK.has(k) && typeof v === 'string' && /^抛错/.test(v);
+        const clean = typeof v === 'string' && !/^抛错|^超时/.test(v) && leaksIn(v).length === 0 && !TICKET_SHAPE.test(v);
+        check(DENIED_OK.has(k) ? `A3 ${who}:${k} 不给卡片用(收走了),或读出来了也没有秘密` : `A3 ${who}:${k} 读出来了、里面没有秘密`, denied || clean,
+          typeof v === 'string' ? (denied ? v.slice(0, 120) : `${v.length} 字符`) : v);
       }
       check(`A3 ${who}:舞台里可读的 cookie 是空的(票据的 cookie 是 HttpOnly)`, r.dump?.['document.cookie'] === '' && r.dump?.cookieStore === '[]', `${r.dump?.['document.cookie']} / ${r.dump?.cookieStore}`);
       const heard = r.heard?.['parent-messages'] ?? '';
