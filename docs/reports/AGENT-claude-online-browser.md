@@ -15,7 +15,7 @@
 - [x] 第四步：素材闸门、即时渲染闸门、最低一档、页面本地缓存上限
 - [x] 机制文档与术语表改写（`mechanism/platforms.md`「三道闸门」、`mechanism/rendering.md`「界限搜索与成本记录」、`mechanism/document-service.md` 的优先级与成本记录、`glossary.md`）
 - [x] 在线页面探针按撤档改写
-- [ ] 门槛验证（见「验证」一节，逐项记通过 / 失败 / 未跑 / 不适用）
+- [x] 门槛验证（见「验证」一节，逐项记通过 / 失败 / 未跑 / 不适用）
 
 ## 每一步的结论（给主会话）
 
@@ -124,7 +124,7 @@
 | 页面本地缓存上限 | 有 `storage.estimate()`：剩余额度的 10%，夹在 32 MiB～1 GiB；没有：`deviceMemory` 每 GiB 32 MiB，夹在 64～256 MiB；都没有：128 MiB | 按实测环境分（用户定）；PC 的无头 Chrome 报 10 GiB 额度，取到 1 GiB | `l2.ts` `l2LimitOf` |
 | 气泡 | 等基准卡结论最多 15 秒，显示 5 秒 | 用户定「几秒后自动消失」；等基准卡是为了低配模式那一句说得准 | `TierBubble.tsx`、`onlineTier.ts` |
 | 停下追一帧 | 不设时限；父页等回包上限 10 分钟 | 用户定「不设时限」；10 分钟只为防 RPC 永远挂着 | `settleFrame.ts` |
-| 最低一档流预算 | 解码器 4 个、画幅之和两张 1080p 满屏卡、流字节 16 MiB | 沿用原低内存档的数（`streamBudget.mjs` 文件头的依据） | `streamBudget.mjs`、`snapshotSource.ts` |
+| 只有一个舞台时的流预算 | 只贴稀疏版、解码器 4 个、画幅之和两张 1080p 满屏卡、流字节 16 MiB；起播不等流的第一帧 | 沿用原低内存档的数（`streamBudget.mjs` 文件头的依据）。模拟手机（CPU 降速 4 倍、精简模式）实测：按双舞台那一套同屏 5 条流，起播头 3 拍把 5 张重卡全活渲了，舞台每拍第 95 百分位 160～200 毫秒；按这一套 0.5 毫秒 | `streamBudget.mjs`、`snapshotSource.ts`、`snapshotFeed.ts`、`StageView.tsx` |
 
 用户定死、没动的数：1 分钟、8 GB、护栏 30 分钟起每次翻倍、崩一次就算。
 
@@ -137,8 +137,11 @@
 3. 从共用换到各一套渲染器不重建舞台。
 4. 解码上限按单路分辨率分级，同时几路不另测（交给已有的预热名额与流预算）。
 5. 两个舞台、项目里已有对得上的记录：打开时先用界限搜索在后台舞台只测几张划线，常驻探针随后在后台补测，补测完分派改按成本记录（任务书只说「两个舞台照旧常驻探针」，混合做法让有记录的项目打开更快，补测保证 K3/K5 追帧、互换要的记录齐全）。
-6. 「性能不足时只贴稀疏版」归最低一档（`product/platforms.md` 留给「做的时候定」）。
+6. 「性能不足时只贴稀疏版」归只有一个舞台的页面（精简模式与最低一档，`product/platforms.md` 留给「做的时候定」）：只贴稀疏版、解码器 4 个、起播不等流的第一帧，就是原低内存档那一套，给的也是原来那一批设备（内存不到 8 GB 的安卓、撑不住双舞台的 iPad 与手机）。先归给最低一档时，模拟手机（精简模式）同屏 5 条流每拍 160～200 毫秒，所以改归单舞台。
 7. 测试钩子 `?tier=`、`?gateHold=`、`?gates=1` 只给开发与验收用，不在界面上给入口。
+8. 两个舞台的界限搜索测过的卡里判重的，遮罩照旧挡着、紧接着给它产稀疏版（和常驻探针同一个口子 `runCardMeasuredHook`）；按记录划线判重、没测的归闲时产（`rendering.md`「测量」原有的规矩）。
+9. 本页产流的「舞台布局」多一个 `pending`：按两个舞台开、还没都握上手（舞台闸门在试后台舞台）时不当节点，也不按只有一个舞台算（不然会当成只产稀疏版、不等计划就开工）。
+10. 护栏内、崩过、安卓不到 8 GB 的那一次打开（舞台闸门一开始就算走完），基准卡等舞台按那一级挂好才测（`gateDriven`）。
 
 ### 二级（用户看得到区别；需要主会话播报、用户合入前审）
 
@@ -159,9 +162,60 @@
    - 修改后：舞台闸门走完后最多再等 15 秒基准卡的结论才出气泡，免得先说「精简模式」随即变「低配模式」；显示 5 秒。
 5. **手机与 iPad 的声音照常测、照常合成**（随撤档而来，不是我新定的）：原来低内存档的声音不测、不合成、导出缺声音就失败；现在和电脑一样。`rendering.md` 有声动效卡一节原本就写着这条规则待落地。
 
+## 验收中查出并修好的问题（都在本分支）
+
+| 提交 | 问题 | 怎么查出来的 | 修法 |
+|---|---|---|---|
+| `1c8bd28d` | 只有一个舞台停下追一帧时，正在画的那一层既不显示占位符也没有画面（暂停着没有下一拍来刷占位符），慢卡要空白一两秒。原低内存档同样如此，只是那时有 5 秒时限 | `page-stream-probe --only lowest` 第六条「停下以后这张卡显示精确画面」截到空白；排查脚本逐 30 毫秒看那一层：画的 1.5 秒里在 `pc-settling` 下、占位符不显示 | 每画一层之前刷一次占位符（`StageView.tsx` 的 `drawSettleLayer`）。之后同一条通过 |
+| `5fcf0b49` | 两个舞台用界限搜索时，测过的重卡没在遮罩下产稀疏版（`rendering.md`「测量」要求紧接着产） | `page-stream-probe` 甲的加载遮罩一直等不到（甲走了界限搜索那条路） | 见〔裁〕第 8 条；探针里加卡的那一页改用最低一档（不写成本记录），几场照旧验「常驻探针在遮罩下逐张测」那条路 |
+| `f2010ab1` | 精简模式按双舞台的流预算贴流，模拟手机同屏 5 条流时起播头 3 拍把 5 张重卡全活渲了（每拍 160～200 毫秒） | `page-stream-probe --only mobile` 的「播放节拍 p95 < 33 ms」；main 上同一场只有 1 拍 | 见〔裁〕第 6 条 |
+| `7a505b65` | 舞台闸门试后台舞台那几秒里，本页产流把页面当成只有一个舞台：不等清单计划没人认领就开工 | `page-stream-probe` solo 场「计划发出去 5000 毫秒以上仍是 open，本页才开工」（实际 922 毫秒）；main 上同一场这一条过 | 见〔裁〕第 9 条 |
+| `b40d84b7` | 护栏内、崩过的那一次打开：基准卡在后台舞台还没挂好时就测，测不出来；测完把记录的那一步还原成过时的「开可见舞台」，查看口一直停在那一步 | `stage-gate-probe` 的 S3 偶发失败；排查脚本看到重新载入后 `step` 从「第 2 级运行中」退回「开可见舞台」 | 见〔裁〕第 10 条；测量、载入原尺寸结束时那一步已过时就回「第几级运行中」（`stageGate.ts`，单测 SG-17） |
+| `82bda2b2`、`6c8d202a`，由 `617b7fcb` 撤回 | （误判）`below-online-e2e-probe` 的 E、G、H 像素比对失败，先以为是「试第三级时原地换渲染路线」和「两个舞台的界限搜索」引起的，分别改成重建舞台、撤掉两个舞台的界限搜索 | 之后在 main（`out/baseline`）上连跑两次，同样的 8 条以同样的数字失败（只有第一次碰巧过）：这支探针在 main 上就是时过时不过 | 两处改动整个撤回，代码与文档回到撤回前；这支探针记为「与 main 相同」 |
+
 ## 验证
 
-（门槛跑完后补；每项记通过 / 失败 / 未跑 / 不适用。）
+门槛按主会话 2026-10-22 改过的要求：不跑全量 `npm test`，跑改动影响到的测试文件；类型检查、渲染附加项、本块探针照旧。
+
+| 项 | 命令 | 结果 | 结论 |
+|---|---|---|---|
+| 类型检查 | `npx tsc -b --force` | 退出码 0，输出为空（最后一次在 `570eb092` 上） | 通过 |
+| 改动影响到的测试 | 按 `git diff 5f4523d0..HEAD -- src server` 里改过的非测试文件，找出引用它们（按文件名）的测试文件，加上本分支改过、新加的测试与引用改过的 `*-kit.mjs` 的测试：399 个文件，分 5 批 `npm test -- <文件…>`（一次全给命令行太长）；另加 `src/online`、`src/editor`、`src/render`、`src/audio`、`src/export`、`src/store` 下没被圈进去的 83 个，共 482 个文件。设了两个账号服务的环境变量 | 6 批测试数 566 / 940 / 932 / 680 / 656 / 610，共 4384 个；失败 1 个：`src/editor/measureGate.test.mjs` 的 MG-06（按源码切片核「界限搜索等门」，两个舞台的界限搜索加在前面以后切到了那一处），改测试（`570eb092`）后该批重跑 680/680、该文件 8/8；跳过 2 个（原本就标跳过） | 通过 |
+| 构建 | `npm run build` | 退出码 0 | 通过 |
+| 在线构建 | `npx vite build --mode online --outDir out/dist-online` | 退出码 0 | 通过 |
+| 与开工提交的导出像素比对 | `out/baseline`（`git archive 5f4523d0`）与本分支各起一台 dev server（5870、5875），`scripts/export-frames.mjs --url …/?export=1 --fps 30 --workers 1 --no-video`，再 `scripts/probes/export-baseline-compare.mjs` | 逐字节相同 1800/1800 | 通过 |
+| 导出确定性 | `node scripts/verify-determinism.mjs --url http://127.0.0.1:5875/?export=1 --fps 30` | Identical 1800、Different 0 | 通过 |
+| 导出与快照重放一致 | `PC_FRAME_TEST_URL=http://127.0.0.1:5875 node scripts/verify-unified-frames.mjs` | PASS | 通过 |
+
+### 探针（端口段 5870～5879，在线构建 `out/dist-online`；对照是同一支探针在 `out/baseline` 上用 main 的在线构建跑）
+
+| 探针 | 本分支 | main 对照 | 结论 |
+|---|---|---|---|
+| `stage-gate-probe.mjs`（新） | S1～S20 共 20 场，全量跑一次只有 S16 不过（舞台降速 60 倍时基准卡测不出来，判「不知道」、没进最低一档）；S16 单独跑 3 次过 2 次（单帧 160、53.5 毫秒，判跑不动） | 新探针 | S16 时过时不过，见「没做成的」 |
+| `page-stream-probe.mjs` mobile / mask / slow / desk | 全过 | — | 通过 |
+| `page-stream-probe.mjs` solo | 3 条不过 | 同样 3 条（「测量时本页产了这条流稀疏的两段」等） | 与 main 相同 |
+| `page-stream-probe.mjs` splitter | 2 条不过（「这条流经队列产出来」超时） | 同样 2 条 | 与 main 相同 |
+| `page-stream-probe.mjs --only lowest`（原 `lowmem`） | 3 条不过（第四条的像素比对：参照截图里卡没画出来） | main 上 `--only lowmem` 同样 3 条 | 与 main 相同；第六条（停下以后显示精确画面）本分支修好后通过 |
+| `online-card-exec-probe.mjs` | 61/61 | — | 通过 |
+| `online-card-security-probe.mjs` | 113/113 | — | 通过 |
+| `online-user-cards-probe.mjs` | 通过 | — | 通过 |
+| `sound-ab-probe.mjs`（桌面、在线、手机三段） | 71/71 | — | 通过 |
+| `cut-online-e2e-probe.mjs` | 通过 | — | 通过 |
+| `stateful-seq-vs-jump-probe.mjs` | 退出码 0 | — | 通过 |
+| `below-online-e2e-probe.mjs` | 8 条不过（E、G、H 的像素比对） | main 上 3 次：1 次过、2 次同样 8 条、同样的数 | 与 main 相同（时过时不过） |
+| `online-stale-layer-probe.mjs` | 20 条不过 | 同样 20 条 | 与 main 相同（v18 清单里记过「6 条断言不过，原因没查」，现在更多，main 上也是 20） |
+| `browser-stream-node-probe.mjs` | 13 条不过（等「这张卡的快照任务」超时及其后续） | 同样 13 条 | 与 main 相同；本分支第一次跑时页面中途掉成单舞台、多 10 条，重跑没再出现 |
+| `browser-stream-e2e-probe.mjs` | 卡在「甲做完这张卡的流任务与快照任务」，我手动停了 | 没跑 | 未跑完（同类的 node 探针在 main 上卡在同一处；快照任务 2026-10-13 起已不产） |
+| `online-stream-play-probe.mjs` | 多条不过（先是「等不到:card:快照齐」） | main 上跑到一半为腾端口停了 | 未比对（渲染重构一带的探针，v18 清单里排除了） |
+| `online-export-modes-probe.mjs` | 没跑 | — | 未跑：它要连号 20 个端口（+10～+12 起渲染主机），我的段只有 10 个 |
+| `stage-push-before-after-probe.mjs` | 没跑 | — | 不适用：验的是改舞台推帧公共代码（`pinAnimations.ts`、`stageClock.ts`）前后，本分支没改它们 |
+| `m7-browser-probe`、`c10-cost-probe`、`c10a-demo-probe`、`c10-browser-probe`、`c10-ui-probe`、`cloud-agent-ui-probe` | 没跑 | — | 未跑：入口在 0.7.18 起就跑不通（`scripts/acceptance/v18-manifest.mjs` 的 STALE_OLD_ENTRY）或要账号服务；只改了与低内存档有关的断言 |
+
+看过的图：`S15-low-settled.png`（最低一档停下以后金句药丸画出来了）、最低一档停下追帧排查脚本截图（画好后橙块出现）、`below-online` 的 `new-ref-28` 对 `jia-new-drag-28-stream` 对 `jia-new-settled-28`（参照里里程表还在滚，后两张是 86420；main 上同样）。
+
+### 测试覆盖不到的范围（发版前全量照这个核）
+
+全仓库 917 个测试文件，跑了 482 个；没跑的 435 个：`server/test` 351 个、`src/ai` 34、`src/kernel` 22、`desktop/test` 6、`src/cards` 4、`src/account` 3、`src/mobile` 2、`src/mcp` 2、`server/bakery` 2，其余零星几个（`archive/python-cards`、`tools/report-worker`、`src/ui`、`src/skins`、`src/parts`、`scripts/probes`、`docs/reports` 下的）。`src/online`、`src/editor`、`src/render`、`src/audio`、`src/export`、`src/store` 下的全跑了。没跑的文件清单：worktree 里 `out/b2.txt` 减 `out/ran.txt`（`out/` 不入库，要的话主会话可按上面的办法重算）。其中与本分支关系最近、建议发版全量时留意的：`src/mobile/**`（身份为手机进手机版界面；本分支改了 `Shell.tsx` 的身份判法，iPad 按闸门预判）、`server/test` 里 Agent 服务按设备分派的测试（`frame-dispatcher.mjs` 还认 `lowmem` 这个旧别名）。
 
 ## 测试与探针：删了、改了哪些，为什么
 
@@ -184,7 +238,7 @@
 
 | 探针 | 改了什么 | 原因 |
 |---|---|---|
-| `page-stream-probe.mjs` | `lowmem` 场改名 `lowest`，页面乙带 `?tier=low`（原来设设备设置「显示档：低内存」）；`mobile` 场改核「安卓 4 GB 停在第一级（精简模式）、身份手机、气泡原文」，原来核低内存档的进入提示 | 撤档 |
+| `page-stream-probe.mjs` | `lowmem` 场改名 `lowest`，页面乙带 `?tier=low`（原来设设备设置「显示档：低内存」）；`mobile` 场改核「安卓 4 GB 停在第一级（精简模式）、身份手机、气泡原文」，原来核低内存档的进入提示；模拟手机经 CDP 一并报安卓的 `userAgentData`、用 `?layout=desktop` 看桌面界面；加卡的页面改用最低一档（不写成本记录，几场照旧验常驻探针那条路）；收尾前先把结论写进日志（收尾偶尔卡住时结果不丢）；遮罩判据加上 `cost-search-gate` | 撤档；两个舞台有记录时走界限搜索；收尾卡住丢过一次结果 |
 | `online-user-cards-probe.mjs` | 模拟手机那一段：原来看 `__pcBackfill()`，改看清单计划 `__pcPlanPublisher()`，并核 `__pcBackfill` 已不存在；停下追一帧改为等画完（不设时限） | 补发那一类任务撤销 |
 | `online-card-exec-probe.mjs` | E9 由「低内存档不执行（`low-memory`）」改成「模拟手机单舞台照样执行（`ready`，记号只在那一个舞台里）」 | 二级〔裁〕第 3 条 |
 | `online-card-security-probe.mjs` | 场景 M 由「低内存档回退不执行」改成正向：跨源单舞台、执行开关开、用户卡只在那一个舞台里执行 | 同上 |
@@ -195,11 +249,18 @@
 | `stage-rpc-probe.mjs`、`c10-browser-probe.mjs`、`m7-bake-probe.mjs`、`m7-bake-node-probe.mjs`、`fixtures/online-card-boundary/*` | 能力表字段 `lowMemory` → `compact` / `lowest` | 字段改名 |
 | `lowmem-online-probe.mjs` | 文件头标〔已退役〕，断言不改 | 整支按低内存档写；接替的见文件头；它本来就在验收清单的排除表里 |
 | `c10a-demo-probe.mjs` | 文件头标第 2、2c、4 步失效，断言不改 | 那几步按低内存档写（且依赖已停产的预渲染小尺寸）；整支的入口 0.7.18 起已跑不通，要重写主干 |
-| 新 `stage-gate-probe.mjs` | S1～S20 | 第三、四步的真浏览器验收 |
+| `stage-gate-probe.mjs`（**就地改写**） | S1～S20：三道闸门、崩溃记录、护栏、气泡、查看口、最低一档、基准卡、测崩的卡、解码上限、界限搜索；从文档一开始记气泡文字；等闸门超时时把查看口写进日志；S15 加「画好的那一层看得见、有内容」 | 第三、四步的真浏览器验收。**注意**：main 上同名那支原来验的是 `server/stage-gate.mjs` 的舞台端口放行白名单（另一回事），我没留意就把它改写了；主会话已在 main 上另存为 `scripts/probes/stage-port-whitelist-probe.mjs`，合并时两支都留 |
+| 新 `scripts/probes/lib/android-ua.mjs` | 模拟安卓手机时经 CDP `Emulation.setUserAgentOverride` 一并给 `userAgentMetadata` | Puppeteer 的 `emulate` / `setUserAgent` 只改 UA 字符串，`userAgentData` 还报 Windows、非手机，在线页面按它判身份与「安卓、内存不到 8 GB」 |
+| `online-user-cards`、`online-card-exec`、`online-card-security`、`sound-ab`、`c10-cost`、`cloud-agent-ui-lib` | 模拟手机都用上 `android-ua.mjs`；前四支进页面带 `?layout=desktop`（身份为手机缺省进手机版界面，这几支看的是桌面界面的选择器） | 同上 |
+| `online-card-security-probe.mjs` 场景 N | 原因由 `single-stage` 改为 `no-stage` | 没有挂着的舞台时现在报 `no-stage`（单舞台照样执行，`single-stage` 不再是不执行的原因） |
+| `sound-ab-probe.mjs` 手机段 | 等舞台闸门、基准卡、界限搜索落定再听 | 精简模式打开项目时借可见舞台做界限搜索，遮罩挡着、预览不播 |
 
 ## 没做成的与原因
 
-（门槛跑完后补。）
+1. `stage-gate-probe` 的 S16（舞台 CPU 降速 60 倍时基准卡判跑不动）时过时不过：全量跑与单独跑一共 5 次过 2 次。不过的那几次基准卡测不出来（判「不知道」），按机制文档「测不出来不算跑不动」不进最低一档。降速 60 倍下测量的 RPC 有时等不到回包；要不要把「测量超时」也算跑不动，留给用户定（见待用户项）。
+2. `browser-stream-e2e-probe`、`online-stream-play-probe` 没比对完（见验证表）；同类探针在 main 上卡在同一处（等已停产的快照任务），推测与 main 相同，没实证。
+3. `online-export-modes-probe` 没跑（要 20 个连号端口）。
+4. 安卓、iPhone、iPad 真机没测（主会话做；做法与预期见下两节）。
 
 ## 待用户项
 
@@ -207,6 +268,8 @@
 2. `ProjectSettingsDialog.tsx`「三维渲染」那一行在在线页面上怎么显示（隐藏还是改文字）。
 3. `docs/plan/TODO.md` 里与本任务对应的那一行由主会话划掉（`docs/plan/**` 不归我改）。
 4. 真机核对（见下两节）。
+5. 基准卡测不出来（例如设备慢到测量的 RPC 超时）要不要算跑不动、进最低一档。现在按机制文档不算。
+6. `scripts/probes/stage-gate-probe.mjs` 被我改写成三道闸门的探针，main 上原来那支（舞台端口白名单）主会话已另存为 `stage-port-whitelist-probe.mjs`；验收清单要指对。
 
 ## 安卓真机测试的做法与预期（主会话做）
 
