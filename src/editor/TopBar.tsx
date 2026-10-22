@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { getActiveCollectDelegationUrl, subscribeActiveCollectDelegation } from "../ai/cloud/collectBridge";
 import { actions, getState, useStore } from "../store/project";
-import { cancelExport, exportVideo, streamExportFile, revealExport, importProjectFile } from "./io";
+import { cancelExport, exportVideo, streamExportFile, revealExport, importProjectFile, getMediaFile } from "./io";
 import { newProject, pickSaveTarget, serializeProc, writeProcToDisk, loadProc, forgetSaveTarget, PROC_EXT, PROC_FORMAT } from "./io/proc";
 import { PROCP_EXT, isProcpFile, loadProcpFile, packMissingMessage, packProcp } from "./io/procp";
 import { exportSkippedMessage } from "./io/exportSkipped";
@@ -11,6 +11,10 @@ import type { ExportMode } from "../export/cardLayers";
 import { exportGateNow } from "./media/assetTiers";
 import { awaitingUploaderMessage } from "../render/mediaTier";
 import { ensureActiveDraftId, saveDraft, setActiveDraftId } from "./io/drafts";
+import { saveProcFile, savePackedFile } from "./io/saveFlow";
+import { agentToolProbe, mediaImportProbe } from "./io/localWrites";
+import { showSaveNotice } from "./saveLock";
+import { SaveStatusLayer } from "./SaveStatusLayer";
 import { Logo } from "../ui/Logo";
 import {
   IconExport,
@@ -111,6 +115,15 @@ function Btn({
 /**
  * 顶栏:按条宽动态三档降级,包含编辑操作、外观与布局、文件导出。
  */
+/**
+ * 保存前要等的本机写入(`io/localWrites.ts`):这台设备正在导入的素材、Agent 正在跑的工具。
+ * 待提交操作(文档服务确认)和后台写入在 `waitForLocalWrites` 里另外等。
+ */
+const LOCAL_WRITE_PROBES = [
+  mediaImportProbe(() => getState().project.media, (id) => !!getMediaFile(id)),
+  agentToolProbe,
+];
+
 export function TopBar() {
   const barRef = useRef<HTMLDivElement>(null);
   const moreBtnRef = useRef<HTMLButtonElement>(null);
@@ -328,82 +341,54 @@ export function TopBar() {
   const exportIdRef = useRef<string | null>(null);
 
   /**
-   * 保存:弹「另存为」让用户选位置,同时把本地草稿更新掉。
+   * 保存:弹「另存为」让用户选位置,同时把本地草稿更新掉。流程在 `io/saveFlow.ts`。
    *
    * 顺序有讲究 —— showSaveFilePicker 要用户手势,所以它必须是这里的第一个
    * await;先去存草稿再弹窗,手势就过期了,浏览器会直接抛 SecurityError。
    * 用户点取消就整个不算保存:草稿不写、脏标记不清,和「我没保存」一致。
    */
+  /** 保存的结果说给用户(顶部那张卡片,`SaveStatusLayer`):没保存成的是 error,保存成了但有话要说的是 info */
+  const notifySave = (message: string, tone: "error" | "info" = "error") => {
+    showSaveNotice({ tone, title: tone === "error" ? "这次没有保存" : "已保存", message });
+  };
+
   const saveProject = ONLINE_BUILD ? async () => {} : async () => {
-    const fileName = `${name}${PROC_EXT}`;
-    try {
-      // 挑好落点之后、写之前:等文档服务确认完所有本地修改(语义「页面只在拿到确认之后才写」),再序列化
-      const outcome = await writeProcToDisk(async () => {
-        await settledOrExplain();
-        return serializeProc();
-      }, fileName);
-      if (outcome.kind === "cancelled") return;
-      await saveDraft(ensureActiveDraftId());
-      // 存完就不脏了,否则「首页」「新建项目」每次都要多问一句
-      actions.markSaved(fileName);
-      if (outcome.kind === "downloaded") {
-        // 这个 WebView 没有文件选择 API,至少告诉用户文件去哪了
-        alert(`当前环境不支持选择目录，已保存到浏览器的下载位置：${outcome.where}`);
-      }
-    } catch (e) {
-      alert(String((e as Error).message));
-    }
+    await saveProcFile(`${name}${PROC_EXT}`, {
+      writeProc: (produce, fileName) => writeProcToDisk(produce, fileName),
+      settle: (ms) => whenSaved(ms),
+      probes: LOCAL_WRITE_PROBES,
+      currentProject: () => getState().project,
+      serialize: () => serializeProc(),
+      saveDraft: async () => { await saveDraft(ensureActiveDraftId()); },
+      markSaved: (fileName) => actions.markSaved(fileName),
+      notify: notifySave,
+    });
   };
 
   /**
-   * 等文档服务确认所有本地修改;超时(离线、连接慢、同步已暂停)就不写,告诉用户为什么。
-   */
-  const settledOrExplain = async () => {
-    try {
-      await whenSaved(10_000);
-    } catch {
-      throw new Error("还有修改没等到文档服务确认（可能离线、连接慢，或同步已暂停），这次没有保存。等连上、处理完再保存。");
-    }
-  };
-
-  /**
-   * 打包保存:.procp = 编排 + 项目用到的素材(A1)。
+   * 打包保存:.procp = 编排 + 项目用到的素材(A1)。流程在 `io/saveFlow.ts`。
    *
    * 和保存项目同一条规矩 —— pickSaveTarget 要用户手势,所以它必须是第一个 await,
    * 装包(从本地内容库按哈希取素材)只能排在挑好落点之后。包里素材按内容哈希去重,
    * 同一份素材被几条片段引用也只有一份字节。
    */
   const savePackedProject = ONLINE_BUILD ? async () => {} : async () => {
-    const fileName = `${name}${PROCP_EXT}`;
-    let target: FileSystemFileHandle | null = null;
-    try {
-      target = await pickSaveTarget(fileName, "PromptCut 打包项目", { "application/zip": [PROCP_EXT] });
-    } catch (e) {
-      if ((e as Error)?.name === "AbortError") return; // 用户取消,不是错误
-      alert(String((e as Error).message));
-      return;
-    }
-    try {
-      await settledOrExplain();
-      // 没有哈希的老素材先补入库;补完仍进不了包的(文件真的不在了)在最后列给用户,不许悄悄漏掉
-      const { blob, missing } = await packProcp();
-      if (target) {
-        const writable = await target.createWritable();
-        await writable.write(blob);
-        await writable.close();
-      } else {
+    await savePackedFile(`${name}${PROCP_EXT}`, {
+      pick: (fileName) => pickSaveTarget(fileName, "PromptCut 打包项目", { "application/zip": [PROCP_EXT] }),
+      settle: (ms) => whenSaved(ms),
+      probes: LOCAL_WRITE_PROBES,
+      pack: () => packProcp(),
+      download: (blob, fileName) => {
         // 这个 WebView 没有文件系统访问 API,退回浏览器下载
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
         a.download = fileName;
         a.click();
         URL.revokeObjectURL(a.href);
-        alert(`当前环境不支持选择目录，已保存到浏览器的下载位置：${fileName}`);
-      }
-      if (missing.length) alert(packMissingMessage(missing));
-    } catch (e) {
-      alert(String((e as Error).message));
-    }
+      },
+      missingMessage: (missing) => packMissingMessage(missing as Parameters<typeof packMissingMessage>[0]),
+      notify: notifySave,
+    });
   };
 
   /**
@@ -818,6 +803,7 @@ export function TopBar() {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
       />
+      <SaveStatusLayer />
       <ExportDialog
         state={exportState}
         onCancel={() => {
