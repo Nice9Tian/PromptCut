@@ -137,6 +137,12 @@ function PR(id, name, v19, script, args, o = {}) {
   };
 }
 
+/** 真实网络验证:要部署到节点以后(node)/ 要真实公网(network)。脚本不跑,remoteOnly 写明在节点上怎么验(命令只列出来) */
+const REMOTE = (id, name, v19, where, how, o = {}) => ({
+  id, name, category: 'V19', level: 'network', taskRef: o.taskRef || `0.7.19 ${v19.join('、')}`, v19, where, tasks: [], remoteOnly: how,
+  ...(o.known ? { known: o.known } : {}), ...(o.covers ? { covers: o.covers } : {}),
+});
+
 /** 要人工看 / 要安装包(脚本不跑,写明怎么验) */
 const MANUAL = (id, name, v19, where, how, o = {}) => ({
   id, name, category: 'V19', level: 'local', taskRef: o.taskRef || `0.7.19 ${v19.join('、')}`, v19, where, tasks: [], manual: how, ...(o.known ? { known: o.known } : {}),
@@ -295,6 +301,25 @@ export const V19_ITEMS = [
     { account: true, optional: true, needs: ['online-build'], prereq: ['G0-4'], timeoutMin: 30,
       known: '两个舞台源写死 6341、6342(不随 --base-port 走),所以是补充项;用户 2026-10-21 指定的测试账号,截图不含密码' }),
 
+  /* ============================== 真实网络环境验收(0.7.19 部署到节点以后;照 four-stage-deploy-checklist.md 在节点上做,脚本不跑)==============================
+   * 通用规矩(verification.md「产品交互验收与真实网络环境验收」):只用测试账号、测试项目,验完删;改动前备份;模拟断线只在应用层做
+   * (浏览器 CDP 的离线模式、在服务器侧断那条 TCP),不动宿主机网络;三个服务与在线页面是同一个提交(status-agent、status-render 与页面 __PC_CODE_VERSION__ 对 <SHA>)。 */
+  REMOTE('V19-net-hosted-domain', '新的缺省托管地址 https://hosted.visuhive.com/hosted 在公网上通;旧地址读进来自动换新', ['PRE-5', 'AB-6'], 'network',
+    '部署后在公网上(不在节点本机):① curl -s -o /dev/null -w "%{http_code}" https://hosted.visuhive.com/hosted/healthz、…/hosted/hosting/healthz、…/media/healthz 都 200;openssl s_client -connect hosted.visuhive.com:443 -servername hosted.visuhive.com | openssl x509 -noout -dates 证书有效;s1.visuhive.com、s2.visuhive.com 两个舞台源同样核证书与 /editor/stage.html 200;② 0.7.19 的桌面版(隔离数据目录,不碰用户在用的那份)不手填地址,「加入别人的项目」与账号登录后新建云端项目都连得上(文档服务握手走 wss://hosted.visuhive.com/hosted/);③ 打开一份存着旧地址(<节点 IP>:8787 / :8788 或 sslip.io 名字)的测试 .proc,看项目文件与本机记录里的地址被换成新域名下的 /hosted 与 /media(协议换成 https / wss)且能连上;④ 公网上直接请求 http://<节点 IP>:8787 连不上(8787、8788 只听本机)。证据:各条命令输出、桌面版截图、换地址前后 .proc 里那一段',
+    { known: '出处:three-versions-progress.md「发版说明」托管地址一条、hosting-migration.md「2026-10-22 托管地址换成自有域名」;单测 hosted-migrate.test.mjs 已在 V19-pre-tests' }),
+  REMOTE('V19-net-multi-project', '节点上多项目渲染节点的队列次序与隔离(两个以上带用户卡的测试项目同时要画面与产流)', ['MP-3', 'MP-4', 'MP-5', 'AB-6'], 'node',
+    '部署渲染服务与 Agent 服务之后,建两个(或三个)测试账号与各自的云端测试项目,每个项目放一张把舞台涂成自己颜色的用户卡(夹具同 hosted-render-queue-probe:fixtures 里的纯色卡);① 用两个项目的云端对话几乎同时各发几次 see_frames(看画面),再让第三个项目发产流计划:看画面都先于产流出图、各项目轮流、同一项目先来先做、一个项目一轮最多连做 K 个(节点上 PROMPTCUT_RENDER_TURN,缺省 4),拿回的每张图中心颜色都是自己项目的;节点上 pm2 logs 的 look.expanded 与隔离工作进程换装记录(结束原因都是轮换)对得上;② 隔离:把越权探测卡(scripts/probes/fixtures/online-card-attacks/)放进项目甲,发计划让渲染服务渲,断言读不到项目乙的内容与素材、节点上的凭证与令牌、工作进程自己的本机接口、工作目录以外的文件(同 S3-r4 的断言,换成多项目模式下两个项目同时有活);③ 记每个请求从登记到出图的用时、换装次数(只记录)。测试账号与项目验完删',
+    { known: '本机的同一组断言是 RS18-queue(K=1)、V18-queue-probe(K=4)、V18-queue-isolation-probe(49 条);节点压力与内存另见 V18-queue-node-pressure' }),
+  REMOTE('V19-net-conflict-merge', '冲突合并窗口经公网断线重连后逐项恢复(桌面与手机,同一用户的两台设备看同一张表)', ['CM-1', 'CM-3', 'CM-4', 'CM-5', 'AB-1', 'AB-6'], 'network',
+    '换在线页面之后,对着公网地址(https://<域名>/editor/)用两个测试账号甲、乙进同一个云端测试项目:① 甲断线——在服务器侧断甲那条 WebSocket 的 TCP(或甲的页面用 CDP Network.emulateNetworkConditions offline),不动宿主机网络;甲断线期间改 c1 的属性两次、删 c2、改 c4,乙同时改 c1 同一属性、改 c2、删 c4;② 甲连回:冲突合并窗口自己打开,一级按东西、二级按属性,增删两向都标冲突,「选中无冲突项」只勾无冲突的,合并后乙那边看到的值对;③ 关窗后导航栏「冲突合并」按钮在;甲用手机仿真(或真机)同一账号进项目,冲突横条显示同一张表,在手机上处理完,桌面按钮消失;④ 断线时在线页面「导入媒体」置灰并提示「当前离线」,刷新页面后离线改动还在(浏览器本地缓存)、连回后照样逐项转进窗口。截图与每步的值写进报告;测试账号与项目验完删。本机的同一组断言是 V19-cm-probe(D1～D6)',
+    { known: '真网络才有的是:真的 nginx 与证书下的 WebSocket 断开与重连、真实时延下待合并表在文档服务与两台设备之间的推送' }),
+  REMOTE('V19-net-offline-queue', '云端 Agent 消息断网排队在真网络上:恢复后按序发出;期间别的设备发过就不发、标发送失败、重新发送', ['OQ-1', 'OQ-2', 'OQ-3', 'OQ-4', 'OQ-5', 'AB-6'], 'network',
+    '部署 Agent 服务之后,测试账号在公网在线页面打开云端测试项目的对话:① 页面用 CDP Network.emulateNetworkConditions offline(应用层断网,不动宿主机网络),发两条消息:不报错、气泡下写「等网络恢复后发出」,节点上 Agent 服务的对话记录里没有这两条;② 恢复网络,不用再点就按顺序发出,节点上记录顺序对;③ 再断网发一条,期间同一账号的第二个页面(另一台设备)在同一对话里发一条;恢复后第一条不发,气泡标「发送失败」带「重新发送」;点「重新发送」按当前状态发出;④ 断网时发一条后刷新页面,恢复后照样发出。模型用模拟提供方或真实 Key 都行(只看排队,不看回答);截图与节点上的对话记录写进报告,测试对话验完删。本机的同一组断言是 V19-oq-probe(19 条,Agent 服务是模拟的)',
+    { known: '真网络才有的是:真的 Agent 服务(账号版、一条任务一个进程)与 nginx 的 /agent/ 路由下,断开与恢复时事件流重连、排着的消息按序到达' }),
+  REMOTE('V19-net-online-gates', '公网在线页面上的三道闸门与四档气泡(真的跨源舞台 s1/s2、真实时延;等 claude/online-browser 合入并换页面后)', ['OB-3c', 'OB-3g', 'AB-6'], 'network',
+    '换成 0.7.19 的在线页面之后,电脑上的 Chrome(新的浏览器配置,本地存储全空)打开公网 /editor/ 进测试项目,地址加 ?gates=1:查看口里舞台闸门从低往高试到第三级、气泡原文对、两个舞台都在 s1/s2 跨源源上;安卓仿真(4 GB)打开停在精简模式、身份手机、不认领渲染任务;?tier=low 播放时只贴已产好的流。真机部分归 V19-ob-device',
+    { known: '依赖 claude/online-browser 合入后的在线构建;合入前这一项无从验' }),
+
   /* ============================== 每版都做的发版动作(人工)============================== */
   MANUAL('V19-release-timings', '0.7.19 发版时整套跑一遍并记 release-timings(首败复跑通过仍报告不稳定)', ['AB-3'], 'manual',
     '在线浏览器合入之后、在最终提交上:node scripts/acceptance/four-stage-acceptance.mjs --out work/four-stage/final/<时间戳> --flaky-rerun 1 --release-timings "0.7.19";另跑 --v19-map 与 --check-coverage 贴进报告;release-timings-section.md 贴进 docs/reports/release-timings.md;旧结果不替代'),
@@ -316,7 +341,7 @@ export const V19_TAGS = {
   'P-desktop-auto-node': ['OB-3b'], 'P-m7-browser': ['OB-3b', 'OB-4'],
   'P-c10-browser-a4': ['OB-4'], 'P-c10-browser-full': ['OB-4'], 'P-c10-user-card': ['OB-4'], 'P-online-user-cards': ['OB-4'], 'P-c10-ui': ['OB-4'],
   'P-online-stage-watch': ['OB-4'], 'P-online-stale-layer': ['OB-4'], 'P-online-stage-handshake': ['OB-4'], 'P-online-nav-stress': ['OB-4'], 'P-m7-node': ['OB-4'],
-  'RR-page-stream': ['OB-4', 'OB-3b'], 'S1-4': ['OB-4'], 'S1-5': ['OB-4'], 'S2-1': ['OB-4'], 'S2-2': ['OB-4'], 'S2-3': ['OB-4'], 'S2-4': ['OB-4'], 'S2-5': ['OB-4', 'OB-3b'],
+  'RR-page-stream': ['OB-4', 'OB-3b'], 'RR-stage-gate': ['OB-4'], 'S1-4': ['OB-4'], 'S1-5': ['OB-4'], 'S2-1': ['OB-4'], 'S2-2': ['OB-4'], 'S2-3': ['OB-4'], 'S2-4': ['OB-4'], 'S2-5': ['OB-4', 'OB-3b'],
   'S4-4': ['OB-4'], 'S4-6': ['OB-4'],
   'RS18-queue': ['MP-3'], 'V18-queue-probe': ['MP-3'], 'V18-queue-isolation-probe': ['MP-4'], 'V18-queue-tests': ['MP-3', 'MP-4'], 'V18-queue-node-pressure': ['MP-5', 'AB-6'],
   'V18-gap-file-association': ['CM-7', 'AB-2'],

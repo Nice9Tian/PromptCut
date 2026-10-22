@@ -457,9 +457,9 @@ const OLD_ITEMS = [
     tasks: [], covers: ['push-draw-probe.mjs'], cmd: probe('push-draw-probe', ['--port', P(0), '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 30,
   },
   {
-    id: 'RR-stage-gate', name: '舞台端口的闸:只放白名单(真编辑器、真舞台窗口)', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
-    tasks: [], covers: ['stage-gate-probe.mjs'], cmd: probe('stage-gate-probe', ['--port', P(0), '--shots', '{item}/shots']), pass: { exit: 0 }, timeoutMin: 30,
-    retiredWhen: { file: 'scripts/probes/stage-gate-probe.mjs', text: 'Page.crash', why: 'claude/online-browser 把同名探针整个改写成「舞台闸门真杀页面进程」(参数换成 --dist --base-port --only),这条命令跑不起来;新探针的项是 V19-ob-stage-gate 等。舞台端口白名单这件事合入后没有探针了(报告「要主会话改探针」第 1 条)' },
+    id: 'RR-stage-gate', name: '舞台端口的闸:只放白名单(真编辑器、真舞台窗口;安全项,不随在线浏览器合入退休)', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据);0.7.19 起每次整套都跑(主会话 2026-10-22 定)',
+    tasks: [], covers: ['stage-port-whitelist-probe.mjs'], cmd: probe('stage-port-whitelist-probe', ['--port', P(0), '--shots', '{item}/shots']), pass: { exit: 0, must: ['"fails":\\s*\\[\\]'] }, timeoutMin: 30,
+    known: '2026-10-22 主会话把 main 上原来的 stage-gate-probe.mjs 另存为 stage-port-whitelist-probe.mjs(971b35d2),因为 claude/online-browser 把原文件名就地改写成三道闸门的舞台闸门探针;两支都要跑,三道闸门那支见 V19-ob-stage-gate 等。原先是补充项,改成缺省就跑',
   },
   {
     id: 'RR-stream-origin', name: '轨道流:父页推流、舞台贴流的逐帧比像素(单卡流)', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
