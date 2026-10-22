@@ -3,6 +3,8 @@
  * 这些钩子不能证明或声称阻止外发；外链图片、字体、样式和脚本照常加载。
  */
 
+import { installScopeGuard } from "./scopeGuard.ts";
+
 /** 会开出新脚本环境的元素(小写本地名) */
 export const FRAME_TAGS: readonly string[] = Object.freeze(["iframe", "frame", "frameset", "object", "embed", "portal", "fencedframe"]);
 
@@ -36,6 +38,8 @@ export interface HardenReport {
   errors: string[];
   /** 收走的持久存储入口(`denyPersistentStorage`;诊断) */
   storageDenied?: string[];
+  /** 跨文档通道守卫收走或改掉的入口(`scopeGuard.ts`;诊断) */
+  scopeGuarded?: string[];
 }
 
 /* ------------------------------------------------------------------ *
@@ -85,7 +89,8 @@ function memoryStorage(real: Storage | null, passthrough: boolean): Storage {
  * - `indexedDB`、`caches`、旧的 `webkitRequestFileSystem*`、`openDatabase`:沿原型链整条改成 `undefined`(锁死,改不回来);
  * - 源私有文件系统 `navigator.storage.getDirectory()`、存储桶 `navigator.storageBuckets.open()`:一律拒绝。
  *
- * 窗口与 Worker 的全局对象都能用(舞台文档、声音线程)。卡片代码自己起的 Worker 管不到,见 AGENT 报告的余留风险。
+ * 窗口与 Worker 的全局对象都能用(舞台文档、声音线程)。卡片代码自己起的 Worker、`BroadcastChannel` 等跨文档通道由
+ * `scopeGuard.ts` 管(舞台加固第 6c 步装上,每个后台线程第一句也装)。同一个全局对象先后装过两边不报错。
  * `cookie` 另在 `installStageHardening` 里只读。回收走了哪些、哪些没装上。
  */
 export function denyPersistentStorage(scope: object, opts: { passthrough?: boolean } = {}): { denied: string[]; errors: string[] } {
@@ -117,6 +122,9 @@ export function denyPersistentStorage(scope: object, opts: { passthrough?: boole
     try {
       const proto = (g[ctor] as { prototype?: object } | undefined)?.prototype;
       if (!proto || typeof (proto as Record<string, unknown>)[method] !== "function") return;
+      // 线程里先装了 `scopeGuard.ts` 的引导(它排在任何卡片代码之前):已经锁死的认作已拒绝,不重复装、不报错
+      const d = Object.getOwnPropertyDescriptor(proto, method);
+      if (d && !d.configurable && !d.writable) { denied.push(`${ctor}.${method}`); return; }
       Object.defineProperty(proto, method, {
         value: function () { return Promise.reject(new TypeError("PromptCut 舞台:不能用持久存储")); },
         writable: false, configurable: false, enumerable: false,
@@ -126,6 +134,81 @@ export function denyPersistentStorage(scope: object, opts: { passthrough?: boole
   };
   refuse("StorageManager", "getDirectory");
   refuse("StorageBucketManager", "open");
+  return { denied, errors };
+}
+
+/**
+ * 只属于舞台文档(窗口)的两样跨文档状态:
+ *
+ * - `window.name`:跟着浏览上下文走,同一个 iframe 整页重载(`Preview.tsx` 原地换项目时的 `frame.src = frame.src`)后还在,
+ *   上一个项目的卡片写进去的东西下一个项目的卡片读得到。装加固时先清空真实的 `window.name`,
+ *   之后的读写只在本文档内存里(真实的一直是空串)。
+ * - `storage` 事件:同源别的文档写真实 `localStorage` 时本文档收得到(键与新旧值)。舞台源上写进真实存储的只有取档结论
+ *   (键里是内容哈希),没有路径号;仍在捕获阶段最先截住、不往下传,别的文档在写什么一律看不到。
+ * - 会话历史:`history.pushState` / `replaceState` 的状态只留在本文档内存里、不改地址(真实条目里一律是 null),
+ *   `history.back` / `forward` / `go` 不动;Navigation API(`navigation`)整个不给 —— 它的 `activation.from`、`entries()`
+ *   能读到同一个 iframe 里上一个文档的条目地址与状态。载入时地址带 `#…` 的(只可能是退回到上一个文档自己加的条目)先去掉。
+ */
+export function isolateWindowState(w: object): { denied: string[]; errors: string[] } {
+  const denied: string[] = [];
+  const errors: string[] = [];
+  const g = w as Record<string, unknown> & { addEventListener?: (t: string, f: (e: Event) => void, c: boolean) => void };
+  try {
+    let d: PropertyDescriptor | undefined;
+    for (let o: object | null = w; o && !d; o = Object.getPrototypeOf(o)) d = Object.getOwnPropertyDescriptor(o, "name");
+    if (d?.get && d.set) {
+      Reflect.apply(d.set, w, [""]);
+      let mem = "";
+      Object.defineProperty(w, "name", {
+        configurable: false, enumerable: !!d.enumerable,
+        get() { return mem; },
+        set(v: unknown) { mem = `${v as string}`; },
+      });
+      denied.push("window.name");
+    }
+  } catch (e) { errors.push(`name:${(e as Error).message}`); }
+  try {
+    if (typeof g.addEventListener === "function") {
+      g.addEventListener("storage", (e: Event) => { e.stopImmediatePropagation(); }, true);
+      denied.push("storage-event");
+    }
+  } catch (e) { errors.push(`storage-event:${(e as Error).message}`); }
+  // 会话历史:条目(地址、`history.state`、Navigation API 的状态)跟着 iframe 走,下一个文档能经 `navigation.activation.from`、
+  // `navigation.entries()`、`history.back()` 读到上一个文档留下的条目
+  try {
+    const H = (g.History as { prototype?: object } | undefined)?.prototype as Record<string, unknown> | undefined;
+    const hist = g.history as History | undefined;
+    if (H && hist) {
+      const realReplace = H.replaceState as (data: unknown, unused: string, url?: string | URL | null) => void;
+      // 本文档载入时地址上带着 `#…`(只可能是退回到上一个文档自己加的条目;编辑页给的舞台地址没有):先去掉,卡片代码看不到
+      try {
+        const loc = g.location as Location | undefined;
+        if (loc && loc.hash) Reflect.apply(realReplace, hist, [null, "", `${loc.pathname}${loc.search}`]);
+      } catch { /* 去不掉就算了 */ }
+      const clone = (g.structuredClone as ((v: unknown) => unknown) | undefined) ?? ((v: unknown) => v);
+      let state: unknown = null;
+      const lockH = (key: string, value: unknown) => {
+        if (!Object.getOwnPropertyDescriptor(H, key)) return;
+        Object.defineProperty(H, key, { value, writable: false, configurable: false, enumerable: true });
+        denied.push(`History.${key}`);
+      };
+      // 状态只在本文档内存里(照浏览器的规矩先做结构化克隆,克隆不了照样抛错);地址不改,真实条目里一律是 null
+      lockH("pushState", function pushState(data: unknown) { state = clone(data); });
+      lockH("replaceState", function replaceState(data: unknown) { state = clone(data); });
+      for (const k of ["back", "forward", "go"]) lockH(k, function () { /* 舞台不在会话历史里走动 */ });
+      const sd = Object.getOwnPropertyDescriptor(H, "state");
+      if (sd?.get) { Object.defineProperty(H, "state", { configurable: false, enumerable: !!sd.enumerable, get() { return state; } }); denied.push("History.state"); }
+    }
+  } catch (e) { errors.push(`history:${(e as Error).message}`); }
+  try {
+    let hit = false;
+    for (let o: object | null = w; o; o = Object.getPrototypeOf(o)) {
+      if (!Object.prototype.hasOwnProperty.call(o, "navigation")) continue;
+      Object.defineProperty(o, "navigation", { value: undefined, writable: false, configurable: false, enumerable: false });
+      hit = true;
+    }
+    if (hit) denied.push("navigation");
+  } catch (e) { errors.push(`navigation:${(e as Error).message}`); }
   return { denied, errors };
 }
 
@@ -348,6 +431,16 @@ export function installStageHardening(opts: { onBreach?: (kind: BreachKind) => v
   hooks += storage.denied.length;
   for (const e of storage.errors) errors.push(`storage:${e}`);
 
+  /* ---------- 6c. 跨文档通道:卡片起的后台线程、BroadcastChannel、SharedWorker、锁名、cookieStore 写入(`scopeGuard.ts`) ---------- */
+  const scoped = installScopeGuard(w);
+  hooks += scoped.denied.length;
+  for (const e of scoped.errors) errors.push(`scope:${e}`);
+
+  /* ---------- 6d. 本文档自己的 window.name、storage 事件 ---------- */
+  const own = isolateWindowState(w);
+  hooks += own.denied.length;
+  for (const e of own.errors) errors.push(`window:${e}`);
+
   /* ---------- 7. 兜底:真出现了就摘掉并上报 ---------- */
   try {
     const sweep = (node: Node) => {
@@ -373,7 +466,7 @@ export function installStageHardening(opts: { onBreach?: (kind: BreachKind) => v
     hooks++;
   } catch (e) { errors.push(`MutationObserver:${(e as Error).message}`); }
 
-  report = { installed: true, webrtcRemoved, trustedTypes, hooks, errors, storageDenied: storage.denied };
+  report = { installed: true, webrtcRemoved, trustedTypes, hooks, errors, storageDenied: storage.denied, scopeGuarded: [...scoped.denied, ...own.denied] };
   return report;
 }
 
