@@ -1,4 +1,4 @@
-import { GUEST_ID_RE, adoptGuestSession, clearGuest, guestName, loadGuest } from './guest';
+import { GUEST_ID_RE, adoptGuestSession, clearGuest, guestName, loadGuest } from './guest.ts';
 
 /** Account credentials live in RAM. Only the native vault owns desktop recovery. */
 export interface Account { id: string; name: string; email?: string | null }

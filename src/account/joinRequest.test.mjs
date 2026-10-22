@@ -248,6 +248,13 @@ function stripComments(source) {
 const accountRouteLiterals = source => [...stripComments(source).matchAll(/\/hosted\/shared\/account(?:\/[A-Za-z0-9_.~-]*)*/g)]
   .map(m => m[0].replace(/\/+$/, ''));
 const SHELL_ROUTES = ['/hosted/shared/account/create', '/hosted/shared/account/join', '/hosted/shared/account/session', '/hosted/shared/account/admin', '/hosted/shared/account/members'];
+/**
+ * 只在线页面走、桌面版一定走不到的路由（2026-10-23 加）：外壳的账号桥上**没有**它们，加一条要发新外壳
+ * （`product/platforms.md`「更新补丁换不掉外壳」），而这条路本来就只给在线浏览器。
+ * 放行的前提是「页面在桌面版上根本发不出这个请求」，所以下面另有一条守着那个 `options.online` 判断还在。
+ */
+const ONLINE_ONLY_ROUTES = ['/hosted/shared/account/guest'];
+const allowedRoute = route => SHELL_ROUTES.includes(route) || ONLINE_ONLY_ROUTES.includes(route);
 
 test('JRC-7 守门:页面代码里写到的每一条账号项目路由都在外壳的放行清单里(扫字面量,不只看测试走到的那几个函数;安全专审 F2)', () => {
   // 外壳那份清单本身:与这里的五条逐字相同(谁往外壳里加一条,这里也红,提醒要发新外壳)
@@ -256,14 +263,23 @@ test('JRC-7 守门:页面代码里写到的每一条账号项目路由都在外�
   // client.ts:页面发账号项目请求的唯一出口
   const clientRoutes = accountRouteLiterals(fs.readFileSync(new URL('./client.ts', import.meta.url), 'utf8'));
   assert.ok(clientRoutes.length >= 10, `client.ts 里应当扫到一批路由字面量,实际 ${clientRoutes.length} 个(扫法坏了也要红)`);
-  assert.deepEqual([...new Set(clientRoutes)].filter(route => !SHELL_ROUTES.includes(route)), [], 'client.ts 里有外壳不放行的路由');
+  assert.deepEqual([...new Set(clientRoutes)].filter(route => !allowedRoute(route)), [], 'client.ts 里有外壳不放行的路由');
+  // 只在线的那几条:必须真的被 `options.online` 挡住,否则它就是一条外壳不放行、桌面版又发得出的路由
+  const clientSource = fs.readFileSync(new URL('./client.ts', import.meta.url), 'utf8');
+  for (const route of ONLINE_ONLY_ROUTES) {
+    if (!clientSource.includes(route)) continue;
+    const at = clientSource.indexOf(route);
+    const before = clientSource.slice(Math.max(0, at - 600), at);
+    assert.match(before, /if \(!options\.online\) throw new AccountFailure/,
+      `${route} 只在线能走，发它之前必须先挡掉桌面版`);
+  }
   // 整个 src(测试文件除外):别处直接拼路由、绕过 client.ts 也要拦住
   const root = new URL('../', import.meta.url);
   const offenders = [];
   for (const rel of fs.readdirSync(root, { recursive: true })) {
     const file = String(rel).replace(/\\/g, '/');
     if (!/\.(ts|tsx|mjs|js)$/.test(file) || /\.test\.[a-z]+$/.test(file)) continue;
-    for (const route of accountRouteLiterals(fs.readFileSync(new URL(file, root), 'utf8'))) if (!SHELL_ROUTES.includes(route)) offenders.push(`${file}: ${route}`);
+    for (const route of accountRouteLiterals(fs.readFileSync(new URL(file, root), 'utf8'))) if (!allowedRoute(route)) offenders.push(`${file}: ${route}`);
   }
   assert.deepEqual(offenders, [], '页面代码里有外壳不放行的账号项目路由');
   // 扫法自检:注释里的不算;字符串里的、拼出来只剩前缀的都算

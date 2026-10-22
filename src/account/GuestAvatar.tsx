@@ -5,7 +5,7 @@
  * 画成圆的，和 AI 角色那个方头像（`src/editor/right/RoleAvatar.tsx`）区分开 —— 一眼能看出
  * 「这是个人，不是个角色」。描边和线条粗细照界面上那套图标：24×24 的 `viewBox`、1.6 的线宽、圆头。
  */
-import { guestAvatar, GUEST_SHAPES, guestName } from './guest';
+import { guestAvatar, GUEST_SHAPES, guestName } from './guest.ts';
 import './guestAvatar.css';
 
 export function GuestAvatar(props: { id: string; size?: number; title?: string }) {

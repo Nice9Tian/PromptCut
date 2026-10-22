@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useAccountProjects } from './useAccountProjects';
 import { OLD_SHELL_ACCOUNT_TEXT } from './desktopVault';
 import { JOIN_REQUEST_TEXT, autoJoinKey, joinRequestNotice } from './joinRequestText';
-import { GUEST_LIMITS_TEXT } from './guest';
+import { GUEST_LIMITS_TEXT } from './guest.ts';
 import { GuestChip } from './GuestAvatar';
 import './account.css';
 
