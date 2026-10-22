@@ -142,6 +142,14 @@ export function writerLabel(by: Writer | undefined, me: Me, names: DisplayNames 
   return actor.username ?? actor.userId ?? "别人";
 }
 
+/**
+ * 改密码或重设密码之后选了「退出」，文档服务撤回了旧设备在那段时间里做的修改：此刻在线的成员收到的那条气泡
+ * （`product/document-service.md`「保存与延迟退出的修改处理」，2026-10-22 用户定）。〈用户名〉是改密码的那个账号；名字取不到时退回「有成员」。
+ */
+export function rolledBackText(name: unknown): string {
+  return typeof name === "string" && name.trim() ? `${name.trim()}撤回了内容` : "有成员撤回了内容";
+}
+
 /** 项目历史序号（修改计数）给人看的文字：历史序号 N */
 export function historySeqLabel(rev: number | null | undefined): string {
   if (rev === null || rev === undefined || !Number.isFinite(rev)) return "历史序号 -";

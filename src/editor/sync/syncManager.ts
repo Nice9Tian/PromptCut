@@ -32,7 +32,8 @@ import { RecoveryCoordinator } from "../../../server/recovery/coordinator.mjs";
 import { serviceIdentity } from "../../../server/recovery/descriptor.mjs";
 // @ts-expect-error Browser-safe hosting discovery and ticket delegation.
 import { discoverRoom, relayFetch, authorizeRelayAsset } from "../../../server/hosting/client.mjs";
-import { accountNameKey, clipOfEntity, entityLabel, writerLabel, type DisplayNames, type Me } from "./labels";
+import { accountNameKey, clipOfEntity, entityLabel, rolledBackText, writerLabel, type DisplayNames, type Me } from "./labels";
+import { undoConflictPlan } from "./undoConflict";
 import { connectSharedAssets, disconnectSharedAssets, lanAssetBaseOf, receiveSharedAssetEndpoints } from "../media/assetTiers";
 import { bindCardSync, noteProjectForCardSync, detachCardSync, takeMineCard, receiveCardSyncNotice } from "./cardSync";
 import { accountCardTicket } from "./accountCardSync";
@@ -482,7 +483,12 @@ function onNotice(n: SyncNotice) {
     case "revert-remote": {
       const r = n.result;
       if (!r.skipped.length && !r.failed.length) return;
-      patch({ notice: { id: ++noticeSeq, kind: n.kind === "undo" ? (n.redo ? "redo" : "undo") : "agent", result: r, project: getState().project } });
+      // 别人在它基础上又改过的:按修改项细分,没被改过的直接撤,真冲突的进「冲突合并」窗口(2026-10-18 用户定);
+      // 提示条只留「已不存在、没法退回」的
+      const routed = r.skipped.length > 0 && r.conflict !== undefined && routeUndoConflict(r.conflict);
+      const shown = routed ? { ...r, skipped: [] } : r;
+      if (!shown.skipped.length && !shown.failed.length) return;
+      patch({ notice: { id: ++noticeSeq, kind: n.kind === "undo" ? (n.redo ? "redo" : "undo") : "agent", result: shown, project: getState().project } });
       return;
     }
     case "overwritten": {
@@ -1022,6 +1028,8 @@ function onSideMessage(msg: AnyMsg) {
       return;
     case "shared.notice":
       if (msg.event === "password-changed") pushToast("项目密码已被修改。你当前的连接不受影响，但下次进入需要新密码。", "info", 8000);
+      // 改密码后选了退出、文档服务撤回了旧设备在那段时间里的修改:此刻在线的成员各一条(不在线的不补)
+      if (msg.event === "content-rolled-back") pushToast(rolledBackText(msg.name), "info", 8000);
       // 创建者开关了托管方的服务:界面马上跟着变(紧接着还有一条刷新后的成员列表,以它为准)
       if (msg.event === "hosted-service-changed") {
         const next = applyHostedChange(view.hosted, msg.service, msg.enabled);
@@ -1215,6 +1223,26 @@ function transferOffline(link: SyncLink) {
     if (!durable && table.pendingOps) pushToast("离线修改已转进「冲突合并」，但这台设备暂时存不下来；连上文档服务前请不要关闭页面。", "warn", 10_000);
   });
   clearBrowserJournal(link);
+}
+
+/**
+ * 按撤销(含 AI 栏「撤销这一步」)遇到冲突:被挡住的那几样按修改项细分(`undoConflict.ts`)。
+ * 没被别人改过的直接撤(不进撤销栈);别人改过的进这位用户的待合并表(来源 `undo`),打开「冲突合并」窗口。
+ * 没接上待合并表(还没连过文档服务)时回 false,退回原来的提示条。
+ */
+function routeUndoConflict(conflict: NonNullable<UndoResult["conflict"]>): boolean {
+  const table = mergeTable, ds = cur?.link.ds;
+  if (!table || !ds) return false;
+  const plan = undoConflictPlan(ds.project, conflict, { batch: newBatchId(), baseRev: ds.rev, at: Date.now() },
+    { manualDuration: getState().durationManual });
+  if (plan.direct) {
+    try { ds.commitAside(plan.direct); } catch (e) { pushToast(`没撤成：${(e as Error).message}`, "warn"); }
+  }
+  if (plan.things.length) {
+    void table.add(plan.things);
+    patch({ mergeOpen: true });
+  }
+  return true;
 }
 
 export function setMergeOpen(open: boolean) {

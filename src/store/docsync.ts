@@ -163,6 +163,12 @@ export interface UndoResult {
   failed: string[];
   /** 这次撤销 / 重做提交的 opId;done 为 false 时没有 */
   opId?: string;
+  /**
+   * 因为别人后来改过而没撤的那几样(`skipped`)交给「冲突合并」窗口用的材料(2026-10-18 用户定,0.7.20 接上):
+   * `landed` 是那一步落地后的项目,`reverted` 是在它上面只撤这几样之后的项目。界面按修改项逐条比(`mergeItems.ts` 的 `diffThings`):
+   * 基准是 `landed`(期望云端仍是它)、我这边是 `reverted`。不知道那一步落地后是什么样(撤别人那一步、本页面没亲眼看到它落地)时没有。
+   */
+  conflict?: { landed: Project; reverted: Project };
 }
 
 export type SyncNotice =
@@ -251,6 +257,8 @@ interface Step {
   rev?: number;
   mergeKey?: string;
   lastAt: number;
+  /** 这一步落地后的本地副本(撤销遇到冲突时交给「冲突合并」窗口当基准;项目对象不原地改,存引用不复制) */
+  after?: Project;
 }
 
 interface RemoteWrite {
@@ -347,7 +355,7 @@ export class DocSync {
   private remoteWrites: RemoteWrite[] = [];
   private localWrites: LocalWrite[] = [];
   /** Agent 提交的 opId → 它落地的版本号与逆操作(按收到的 project.ops 在已确认副本上算) */
-  private remoteInverses = new Map<string, { rev: number; inverse: PathOp[] }>();
+  private remoteInverses = new Map<string, { rev: number; inverse: PathOp[]; after?: Project }>();
   /** rev → 应用这次远端改动之前的本地副本,给覆盖备份用 */
   private beforeRemote = new Map<number, Project>();
   /** 本页面看到落地的提交摘要(按历史序号递增;`history` 读) */
@@ -660,7 +668,7 @@ export class DocSync {
     }
     // 顺手记下这次别人提交的逆操作(AI 栏「撤销这一步」用;事件里带了 inverse 时以事件为准)。
     // 不按 actor.role 挑:本机 local 空间里 Agent 的连接眼下还是 page 身份(c65-integ 报告第 7 节),分不出来
-    this.remoteInverses.set(msg.opId, { rev: msg.rev, inverse: diffProject(r.value, this.confirmed).ops });
+    this.remoteInverses.set(msg.opId, { rev: msg.rev, inverse: diffProject(r.value, this.confirmed).ops, after: r.value });
     if (this.remoteInverses.size > REMOTE_INVERSE_KEEP) this.remoteInverses.delete(this.remoteInverses.keys().next().value!);
     this.confirmed = r.value;
     this.confirmedRev = msg.rev;
@@ -850,6 +858,15 @@ export class DocSync {
     return true;
   }
 
+  /**
+   * 撤销遇到冲突时,同一样东西里没被别人改过的那几项直接撤(0.7.20,`src/editor/sync/undoConflict.ts`):
+   * 一次普通提交,但不进撤销栈(它是刚才那次撤销的一部分);不是经 store 发起的,用 replay 作原因让接 store 的一侧写进 state。
+   */
+  commitAside(next: Project): boolean {
+    const prev = this.local;
+    return this.commitInternal(next, { undoable: false }, undefined, undefined, "replay") !== prev;
+  }
+
   /* ---------- 本地修改 ---------- */
 
   /**
@@ -918,7 +935,7 @@ export class DocSync {
     const now = this.now();
     if (target) {
       // 撤销 / 重做本身:它的逆操作进对面的栈
-      const step: Step = { opIds: [entry.opId], inverse: d.inverse, entities: undoEntitiesOf(d.ops), lastAt: now };
+      const step: Step = { opIds: [entry.opId], inverse: d.inverse, entities: undoEntitiesOf(d.ops), lastAt: now, after: r.value };
       this.stepOf.set(entry.opId, step);
       const stack = target === "undo" ? this.redoStack : this.undoStack;
       stack.push(step);
@@ -930,9 +947,10 @@ export class DocSync {
         top.inverse = [...d.inverse, ...top.inverse];
         for (const e of undoEntitiesOf(d.ops)) if (!top.entities.includes(e)) top.entities.push(e);
         top.lastAt = now;
+        top.after = r.value;
         this.stepOf.set(entry.opId, top);
       } else {
-        const step: Step = { opIds: [entry.opId], inverse: d.inverse, entities: undoEntitiesOf(d.ops), mergeKey: opts.mergeKey, lastAt: now };
+        const step: Step = { opIds: [entry.opId], inverse: d.inverse, entities: undoEntitiesOf(d.ops), mergeKey: opts.mergeKey, lastAt: now, after: r.value };
         this.stepOf.set(entry.opId, step);
         this.undoStack.push(step);
         if (this.undoStack.length > UNDO_LIMIT) this.undoStack.shift();
@@ -1073,7 +1091,9 @@ export class DocSync {
     for (const p of this.pending) {
       for (const x of undoEntitiesOf(p.ops)) for (const e of entities) if (entitiesOverlap(x, e)) blocked.set(e, mine);
     }
-    const step: Step = { opIds: [remote.opId], inverse, entities, lastAt: this.now() };
+    // 本页面亲眼看到它落地,才知道「那一步落地后」是什么样
+    const after = kept?.after;
+    const step: Step = { opIds: [remote.opId], inverse, entities, lastAt: this.now(), after };
     const result = this.applyRevert(step, blocked, undefined);
     this.emit("notice", { kind: "revert-remote", of: remote.opId, result });
     return result;
@@ -1089,6 +1109,12 @@ export class DocSync {
   /** 按冲突表撤一步:落得下的照撤;kind 为空时(撤别人那一步)结果当一次普通修改进撤销栈 */
   private applyRevert(step: Step, blocked: Map<string, Writer>, kind: "undo" | "redo" | undefined): UndoResult {
     const skipped: SkippedEntity[] = [...blocked].map(([entity, by]) => ({ entity, by }));
+    // 被挡住的那几样:在「那一步落地后」上只撤它们,交给冲突合并窗口逐项比(撤不下去就不给,界面退回提示条)
+    let conflict: UndoResult["conflict"];
+    if (blocked.size && step.after) {
+      const r = applyOps(step.after, relocateOps(step.after, step.inverse.filter((op) => blocked.has(undoEntityOfOp(op)))));
+      if (r.ok && r.value !== step.after) conflict = { landed: step.after, reverted: r.value };
+    }
     // 逆操作记的是写入当时序列住的位置(激活剪辑的 /tracks 或停放剪辑的 /cuts/@X/tracks);之后切换剪辑搬过家的,
     // 按序列 id 找到它现在住哪儿再套用,不切换激活剪辑(kernel/cutPaths.ts)
     const allowed = relocateOps(this.local, step.inverse.filter((op) => !blocked.has(undoEntityOfOp(op))));
@@ -1114,14 +1140,14 @@ export class DocSync {
     }
     if (candidate === this.local) {
       // 一处都没撤成:出栈,也不进对面的栈(c65-design.md 第 8 节裁定)
-      return { done: false, skipped, failed };
+      return { done: false, skipped, failed, ...(conflict ? { conflict } : {}) };
     }
     const undoOf = step.opIds[step.opIds.length - 1];
     const before = this.pending.length;
     // 撤别人那一步不经 setProject:以 revert-remote 发出,让接 store 的一侧写进 state(不然页面要等下一次改动才刷新)
     this.commitInternal(candidate, kind ? { undoable: false } : {}, undoOf, kind, kind ?? "revert-remote");
     const opId = this.pending.length > before ? this.pending[this.pending.length - 1].opId : undefined;
-    return { done: opId !== undefined, skipped, failed, opId };
+    return { done: opId !== undefined, skipped, failed, opId, ...(conflict ? { conflict } : {}) };
   }
 
   private pruneRemoteWrites() {
