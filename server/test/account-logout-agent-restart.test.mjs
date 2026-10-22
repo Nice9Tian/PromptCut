@@ -17,7 +17,9 @@ import WebSocket from 'ws';
 import { fileURLToPath } from 'node:url';
 import { freePorts } from './free-ports.mjs';
 import { machineCode, machineFingerprint } from '../runners/machine-id.mjs';
-import { leaseMachineDigest } from '../agent-service/conversation-control-client.mjs';
+import { createHash } from 'node:crypto';
+// 报锁用的机器摘要按规格在这里自己算（不从被测模块拿，这样修前也能跑这份测试）
+const leaseMachineDigest = () => createHash('sha256').update('promptcut-agent-lease-machine-v1|' + machineFingerprint()).digest('hex');
 import { startAccountPasswordUserFixture } from './fixtures/account-password-user-path.mjs';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
