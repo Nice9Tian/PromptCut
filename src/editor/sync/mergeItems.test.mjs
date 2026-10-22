@@ -240,3 +240,23 @@ test("MI-12 撤销冲突(0.7.20)用同一个形状:来源不同的两条并存,�
   assert.equal(clipIn(r.project, "c2").label, "c2");
   assert.equal(clipIn(r.project, "c1").opacity, 0.8);
 });
+
+test("MI-13 卡片源码:一张卡一条、二级是「源码」;总算冲突;合并不经项目 JSON,交给卡片源码同步", () => {
+  const base = project();
+  const thing = M.cardConflictThing({ key: "src/cards/user/price-tag.tsx", mine: "a\nb\nmine\n", cloud: "a\nb\ncloud1\ncloud2\n", rev: 5, at: 1, batch: "c1" });
+  assert.equal(thing.key, "offline:card:src/cards/user/price-tag.tsx");
+  const offline = M.diffThings(base, edit(base, (p) => { clipIn(p, "c1").opacity = 0.8; }), meta());
+  const table = M.mergeIntoTable(offline, [thing]);
+  const rows = M.mergeRows(base, table);
+  const card = rows.find((r) => r.key === thing.key);
+  assert.equal(card.label, "卡片源码「cards/user/price-tag.tsx」");
+  assert.deepEqual(card.props.map((p) => p.label), ["源码"]);
+  assert.equal(card.props[0].text, "源码：我这边的版本比云端现在的多 1 行、少 2 行（云端现在是别人改过的版本）");
+  assert.equal(card.conflict, true, "云端也被别人改过:总算冲突");
+  assert.equal(M.selectNonConflict(rows).has(thing.key), false, "选中无冲突项不勾它");
+  const r = M.applyMerge(base, table, M.selectNonConflict(rows, new Map([[thing.key, new Set(["source"])]])));
+  assert.deepEqual(r.external.map((x) => x.key), [thing.key], "交给卡片源码同步写回");
+  assert.equal(r.done.some((d) => d.key === thing.key), false, "写成之前不从表里拿掉");
+  assert.equal(clipIn(r.project, "c1").opacity, 0.8, "同一次合并里项目里的项照常写");
+  assert.deepEqual(M.lineDelta("x\ny", "x\ny"), { added: 0, removed: 0 });
+});

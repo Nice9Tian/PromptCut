@@ -29,7 +29,11 @@ import { getCard } from "../../kernel/registry";
 /** 待合并项从哪来:离线重连(本版),撤销冲突(0.7.20 接入) */
 export type MergeSource = "offline" | "undo";
 
-export type ThingKind = "clip" | "caption" | "settings" | "track" | "cut" | "transition" | "library";
+/**
+ * `card`:一张卡片(一个卡片源码文件)。卡片源码不在项目 JSON 里,由编辑器进程的卡片源码同步(`server/card-sync.mjs`)经内容库同步;
+ * 断网期间改过、云端也被别人改过的卡由它交过来(`cardConflictThing`),合并走它的 `takeMine`,不经 `applyMerge` 写项目。
+ */
+export type ThingKind = "clip" | "caption" | "settings" | "track" | "cut" | "transition" | "library" | "card";
 
 /** 「有没有、是什么」:null 表示这一份里没有它(JSON 里放不下 undefined) */
 export type Box = { v: unknown } | null;
@@ -153,6 +157,7 @@ export function thingKeyOf(ref: ThingRef): string {
     case "track": return `track:${ref.id}`;
     case "cut": return `cut:${ref.id}`;
     case "transition": return `tr:${ref.id}`;
+    case "card": return `card:${ref.id}`;
   }
 }
 
@@ -242,6 +247,7 @@ function propsOf(f: Found): Map<string, unknown> {
       const l = f.value as CaptionLine;
       return new Map<string, unknown>([["time", [l.start, l.end]], ["zh", l.zh], ["en", l.en]]);
     }
+    case "card": return new Map<string, unknown>([["source", f.value]]);
   }
 }
 
@@ -352,6 +358,7 @@ export function thingLabel(ref: ThingRef, value: unknown): string {
     case "cut": return named("剪辑");
     case "transition": return `转场${quoted(v && typeof v.kind === "string" ? v.kind : ref.id)}`;
     case "library": return named(LIB_KIND[ref.coll ?? ""] ?? "条目");
+    case "card": return `卡片源码${quoted(ref.id.replace(/^src\//, ""))}`;
   }
 }
 
@@ -385,6 +392,7 @@ export function propLabel(kind: ThingKind, prop: string): string {
     case "cut": return prop === "name" ? "名称" : prop;
     case "transition": return TRANSITION_PROP[prop] ?? prop;
     case "library": return prop === "name" ? "名称" : prop;
+    case "card": return "源码";
   }
 }
 
@@ -518,6 +526,7 @@ function locate(p: Obj, t: MergeThing): Found | null {
       const e = (Array.isArray(p[ref.coll ?? ""]) ? (p[ref.coll ?? ""] as Obj[]) : []).find((x) => isObj(x) && x.id === ref.id);
       return e ? { ref, value: e } : null;
     }
+    case "card": return t.base ? { ref, value: val(t.base) } : null;
   }
 }
 
@@ -581,7 +590,10 @@ export function mergeRows(project: Project, table: MergeThing[]): ThingRow[] {
       const { state, cloud: c } = propState(t, mp, cloud);
       const label = propLabel(t.ref.kind, mp.prop);
       let text: string;
-      if (t.change === "add") {
+      if (t.ref.kind === "card") {
+        const d = lineDelta(String(val(c) ?? ""), String(val(mp.mine) ?? ""));
+        text = `源码：我这边的版本比云端现在的多 ${d.added} 行、少 ${d.removed} 行（云端现在是别人改过的版本）`;
+      } else if (t.change === "add") {
         text = state === "clean" ? "我这边新增的（云端现在没有）" : state === "same" ? "我这边新增的（云端现在已经一样）" : "我这边新增的（云端现在已有另一份）";
       } else if (t.change === "delete") {
         text = state === "clean" ? "我这边删除了（云端现在未改）" : state === "same" ? "我这边删除了（云端现在也没有了）" : "我这边删除了（云端现在已被别人改过）";
@@ -619,6 +631,8 @@ export function mergeCounts(rows: ThingRow[]): { total: number; conflicts: numbe
 
 export interface ApplyResult {
   project: Project;
+  /** 不在项目 JSON 里、要由别处写的(卡片源码:编辑器进程的卡片源码同步 `takeMine`);写成了再从表里拿掉 */
+  external: { key: string; props: string[]; thing: MergeThing }[];
   /** 写进去了的(含为了它连带并进来的序列、剪辑、素材);从表里拿掉 */
   done: { key: string; props: string[] }[];
   /** 没写成的及原因;留在表里 */
@@ -672,6 +686,7 @@ export function applyMerge(project: Project, table: MergeThing[], selection: Map
   const p = structuredClone(project) as unknown as Obj;
   const done = new Map<string, Set<string>>();
   const failed: ApplyResult["failed"] = [];
+  const external: ApplyResult["external"] = [];
   const mark = (key: string, props: string[]) => {
     let s = done.get(key);
     if (!s) done.set(key, (s = new Set()));
@@ -828,6 +843,7 @@ export function applyMerge(project: Project, table: MergeThing[], selection: Map
     const t = byKey.get(key);
     if (!t || !props.size) continue;
     if (done.has(key) && t.change !== "modify") continue; // 已经作为连带并进来了
+    if (t.ref.kind === "card") { external.push({ key, props: [...props], thing: t }); continue; }
     try {
       if (t.change === "add") {
         writeThing(t, val(t.mine) as Obj);
@@ -860,7 +876,42 @@ export function applyMerge(project: Project, table: MergeThing[], selection: Map
       for (const x of t.change === "modify" ? t.props.filter((y) => props.has(y.prop)) : t.props) failed.push({ key, prop: x.prop, reason: e.message });
     }
   }
-  return { project: p as unknown as Project, done: [...done].map(([key, s]) => ({ key, props: [...s] })), failed };
+  return { project: p as unknown as Project, done: [...done].map(([key, s]) => ({ key, props: [...s] })), failed, external };
+}
+
+/** 两份文本按行比:我这边比对方多几行、少几行(冲突窗口里卡片源码那一句用;太长时按行的多重集合估) */
+const NL = "\n";
+export function lineDelta(from: string, to: string): { added: number; removed: number } {
+  const a = from.split(NL), b = to.split(NL);
+  if (a.length * b.length > 4_000_000) {
+    const count = new Map<string, number>();
+    for (const l of a) count.set(l, (count.get(l) ?? 0) + 1);
+    let common = 0;
+    for (const l of b) { const n = count.get(l) ?? 0; if (n > 0) { common++; count.set(l, n - 1); } }
+    return { added: b.length - common, removed: a.length - common };
+  }
+  let prev = new Uint32Array(b.length + 1);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = new Uint32Array(b.length + 1);
+    for (let j = 1; j <= b.length; j++) cur[j] = a[i - 1] === b[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1]);
+    prev = cur;
+  }
+  const lcs = prev[b.length];
+  return { added: b.length - lcs, removed: a.length - lcs };
+}
+
+/**
+ * 一张卡的冲突(卡片源码同步在断网重连时交过来的:本机改过、云端也被别人改过)→ 待合并表里的一条。
+ * 一级是这张卡(源码文件),二级是「源码」;`base` 记云端在冲突那一刻的版本(本机已经装上它),`mine` 是我这边的。
+ */
+export function cardConflictThing(o: { key: string; mine: string; cloud: string; rev: number; at: number; batch: string; source?: MergeSource }): MergeThing {
+  const ref: ThingRef = { kind: "card", id: o.key };
+  const source = o.source ?? "offline";
+  return {
+    key: `${source}:${thingKeyOf(ref)}`, source, batch: o.batch, baseRev: o.rev, at: o.at, ref, change: "modify",
+    label: thingLabel(ref, null), base: { v: o.cloud }, mine: { v: o.mine },
+    props: [{ prop: "source", base: null, mine: { v: o.mine } }],
+  };
 }
 
 /** 从表里拿掉这些二级项;一样东西的二级项拿光了,这一条也拿掉 */

@@ -34,7 +34,7 @@ import { serviceIdentity } from "../../../server/recovery/descriptor.mjs";
 import { discoverRoom, relayFetch, authorizeRelayAsset } from "../../../server/hosting/client.mjs";
 import { accountNameKey, clipOfEntity, entityLabel, writerLabel, type DisplayNames, type Me } from "./labels";
 import { connectSharedAssets, disconnectSharedAssets, lanAssetBaseOf, receiveSharedAssetEndpoints } from "../media/assetTiers";
-import { bindCardSync, noteProjectForCardSync, detachCardSync } from "./cardSync";
+import { bindCardSync, noteProjectForCardSync, detachCardSync, takeMineCard } from "./cardSync";
 import { accountCardTicket } from "./accountCardSync";
 import { createAccountLinkLife } from "./accountLinkLife";
 import { bindAgentSide, releaseAgentSide } from "./agentSideBinding";
@@ -61,7 +61,7 @@ import { AccountFailure, accountConnectionProtocols, projectLink } from "../../a
 import { createOnlineBackups, type OnlineBackups } from "./onlineBackups";
 import { ACCOUNT_MOVE_TEXT, createAttemptStore } from "./accountMove";
 import { nextRecovery, RECOVERED_SHOW_MS, type OfflineStore } from "./onlineStatus";
-import { applyMerge, selectionList, staleSelections, type Box, type MergeThing, type Selection } from "./mergeItems";
+import { applyMerge, cardConflictThing, selectionList, staleSelections, type Box, type MergeThing, type Selection } from "./mergeItems";
 import { MergeTable } from "./mergeTable";
 import { offlineThings } from "./offlineTransfer";
 import { cacheKey, defaultStore } from "./offlineCache";
@@ -578,6 +578,14 @@ const cardSyncHooks = {
   toast: (text: string, tone: Toast["tone"], ms?: number) => pushToast(text, tone, ms),
   who: (actor: Record<string, unknown> | null | undefined) =>
     actor ? writerLabel({ actor, session: typeof actor.session === "string" ? actor.session : undefined }, me(), displayNames()) : "别人",
+  // 断网期间改过、云端也被别人改过的卡:一张卡一条进「冲突合并」(本机已换成云端的版本,我的版本在表里,另有备份)
+  conflict: (c: { key: string; mine: string; cloud: string; rev: number }) => {
+    const table = mergeTable;
+    if (!table) return false;
+    void table.add([cardConflictThing({ key: c.key, mine: c.mine, cloud: c.cloud, rev: c.rev, at: Date.now(), batch: newBatchId() })]);
+    patch({ mergeOpen: true });
+    return true;
+  },
 };
 
 /**
@@ -1226,6 +1234,8 @@ export function mergeSelected(sel: Selection, seen: Map<string, Box>): MergeOutc
     if (kept.size) chosen.set(key, kept);
   }
   const r = applyMerge(ds.project, things, chosen);
+  // 卡片源码:交给编辑器进程照我这边的装回并传上去,成了再从表里拿掉(异步;结果另给一句气泡)
+  if (r.external.length) void mergeCards(r.external);
   if (r.done.length) {
     try {
       ds.mergeOffline(r.project, ds.rev);
@@ -1235,10 +1245,19 @@ export function mergeSelected(sel: Selection, seen: Map<string, Box>): MergeOutc
     void table.remove(r.done);
   }
   const n = r.done.reduce((k, d) => k + (chosen.get(d.key)?.size ? d.props.filter((p) => chosen.get(d.key)!.has(p)).length : 0), 0);
-  const parts = [n ? `已合并 ${n} 项。` : "没有合并任何项。"];
+  const parts = [n ? `已合并 ${n} 项。` : r.external.length ? "" : "没有合并任何项。"];
+  if (r.external.length) parts.push(`${r.external.length} 张卡片的源码正在照你这边写回去。`);
   if (stale.length) parts.push(`${stale.length} 项在窗口打开后又被别人改过，这次没有合并，请看过现在的值再决定。`);
   if (r.failed.length) parts.push(`${r.failed.length} 项没合并成：${[...new Set(r.failed.map((f) => f.reason))].join("；")}。`);
   return { ok: r.failed.length === 0 && stale.length === 0, message: parts.join(""), stale };
+}
+
+async function mergeCards(list: { key: string; props: string[]; thing: MergeThing }[]) {
+  for (const x of list) {
+    const r = await takeMineCard(x.thing.ref.id, String(x.thing.mine?.v ?? ""));
+    if (r.ok) void mergeTable?.remove([{ key: x.key, props: x.props }]);
+    else pushToast(`卡片 ${x.thing.ref.id.replace(/^src\//, "")} 没写回去:${r.error ?? ""}`, "warn", 10_000);
+  }
 }
 
 /** 「删除选中」:从待合并表里拿掉,云端保持现状;断网时也能删(连上后再交给文档服务) */

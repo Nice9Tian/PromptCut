@@ -557,7 +557,11 @@ export async function loadCardSync() {
         backup: async (rel, body) => { await host.backup({ key: rel, body }); return `backup/${++backups}/${rel}`; },
       },
       connect: () => fakeContentEndpoint(content),
-      notify: (e) => { if (e?.type === 'overwritten') host.notify({ type: 'card-overwritten', key: e.key, rev: e.rev }); },
+      // 断网期间改过、云端也改过的卡(2026-10-22 起进「冲突合并」)是 `conflict` 事件,映射成 `card-conflict`
+      notify: (e) => {
+        if (e?.type === 'overwritten') host.notify({ type: 'card-overwritten', key: e.key, rev: e.rev });
+        else if (e?.type === 'conflict') host.notify({ type: 'card-conflict', key: e.key, rev: e.rev, mine: e.mine, cloud: e.cloud });
+      },
     });
     for (const n of ['saved', 'bind', 'idle']) assert.equal(typeof s?.[n], 'function', `createCardSync 的实例要有 ${n}`);
     return {

@@ -30,6 +30,11 @@ export interface CardSyncHooks {
   toast: (text: string, tone: "info" | "warn", ms?: number) => void;
   /** 写入身份 → 显示名(「你」「Agent 对话 2」「bob」) */
   who: (actor: Record<string, unknown> | null | undefined) => string;
+  /**
+   * 断网期间改过、云端也被别人改过的一张卡(编辑器进程的同步在重连对账时交过来):放进「冲突合并」(`syncManager.ts`)。
+   * 回 false 表示没放进去(没有待合并表),退回原来的覆盖提示。
+   */
+  conflict?: (c: { key: string; mine: string; cloud: string; rev: number; backup?: string }) => boolean;
 }
 
 interface Binding {
@@ -159,9 +164,26 @@ function onNotice(d: Record<string, unknown>) {
     case "rejected":
       h?.toast(`卡片 ${file} 没同步上:${String(d.error ?? "")}`, "warn", 10_000);
       return;
+    case "conflict": {
+      afterSyncedInstall();
+      const ok = typeof d.key === "string" && typeof d.mine === "string" && typeof d.cloud === "string"
+        && !!h?.conflict?.({ key: d.key, mine: d.mine, cloud: d.cloud, rev: Number(d.rev) || 0, ...(typeof d.backup === "string" ? { backup: d.backup } : {}) });
+      if (!ok) h?.toast(`你断网时对卡片 ${file} 的改动和 ${h?.who(d.actor as Record<string, unknown>) ?? "别人"} 的改动冲突。已换成云端的版本，你的版本已备份到 ${String(d.backup ?? "(没有备份)")}。`, "warn", 10_000);
+      return;
+    }
     default:
       return;
   }
+}
+
+/**
+ * 「冲突合并」里对一张卡点了「合并」:交给编辑器进程照我这边的源码装回本机并传上去(`server/card-sync.mjs` 的 takeMine)。
+ * 在线构建里没有编辑器进程,回不支持(在线页面里不会出现卡片的冲突项:卡片源码同步只在桌面版跑)。
+ */
+export async function takeMineCard(key: string, source: string): Promise<{ ok: boolean; error?: string }> {
+  if (ONLINE_BUILD) return { ok: false, error: "在线页面不能改卡片源码" };
+  const j = await post("/api/cards/sync/take-mine", { key, source });
+  return j?.ok ? { ok: true } : { ok: false, error: typeof j?.error === "string" ? j.error : "编辑器进程没有回应" };
 }
 
 async function onTicket(d: Record<string, unknown>) {

@@ -1701,6 +1701,20 @@ export default function vitePluginCards(): Plugin[] {
           sendJson(res, 200, { ok: true });
         });
       });
+      // 「冲突合并」里对一张卡点了「合并」:照我这边的源码装回本机并传上去(`card-sync.mjs` 的 takeMine;页面一侧 `src/editor/sync/cardSync.ts`)
+      server.middlewares.use('/api/cards/sync/take-mine', (req, res) => {
+        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
+        if (!originOk(req as any)) return sendJson(res, 403, { ok: false, error: 'Origin rejected' });
+        if (fromStage(req, res)) return;
+        let body = '';
+        req.on('data', (c) => { body += c; if (body.length > MAX_SOURCE_BYTES * 2) req.destroy(); });
+        req.on('end', () => {
+          let data: any = {};
+          try { data = JSON.parse(body || '{}'); } catch { return sendJson(res, 400, { ok: false, error: '请求体不是 JSON' }); }
+          if (!cardSync) return sendJson(res, 409, { ok: false, error: '卡片源码同步没开' });
+          void cardSync.takeMine(String(data?.key ?? ''), data?.source).then((r: { ok: boolean; error?: string }) => sendJson(res, r.ok ? 200 : 400, r));
+        });
+      });
       server.middlewares.use('/api/cards/sync/status', (req, res) => {
         if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
         res.setHeader('Cache-Control', 'no-store');
