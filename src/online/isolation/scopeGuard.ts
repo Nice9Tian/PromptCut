@@ -214,7 +214,9 @@ export function guardStageScope(scope: object, config: ScopeGuardConfig): ScopeG
     const OrigWorker = g.Worker as (new (url: string, opts?: unknown) => object) | undefined;
     const origCreate = URLC ? getOwnPropertyDescriptor(URLC, "createObjectURL")?.value : undefined;
     const origRevoke = URLC ? getOwnPropertyDescriptor(URLC, "revokeObjectURL")?.value : undefined;
-    if (typeof OrigWorker === "function") {
+    if (typeof OrigWorker === "function" && (OrigWorker as unknown as Record<symbol, unknown>)[MARK] === true) {
+      denied.push("Worker"); // 这个全局对象已经装过(再装一遍不重复包)
+    } else if (typeof OrigWorker === "function") {
       if (!URLC || typeof origCreate !== "function" || typeof origRevoke !== "function" || typeof BlobC !== "function") {
         // 包不了就不给起线程
         removeGlobal("Worker");
