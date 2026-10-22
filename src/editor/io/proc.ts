@@ -116,15 +116,35 @@ export function serializeProc(thumbnail: string | null = null): string {
   return JSON.stringify(doc, null, 2);
 }
 
+/** 收预渲染快照的时限(毫秒) */
+export const FRAME_ARCHIVE_TIMEOUT_MS = 2500;
+
+/**
+ * 把渲染这边已经做完的预渲染快照收进 `.proc` 文本(保存前等本机的「渲染」写完,`docs/semantics/mechanism/document-service.md`
+ * 「保存基准与修改状态检查」)。快照是可以丢的缓存:没有、坏了都不能挡住保存,所以收不到就照原文存;
+ * 但**等到时限还没收到**(`timedOut`)要告诉用户这次文件里没带快照,不静默放过。
+ */
+export async function collectFrameSnapshots(text: string): Promise<{ text: string; timedOut: boolean }> {
+  let doc: ProcFile;
+  try {
+    doc = JSON.parse(text) as ProcFile;
+  } catch { return { text, timedOut: false }; }
+  if (doc?.format !== PROC_FORMAT) return { text, timedOut: false };
+  // 时限看信号本身:frameRequest 会把出错包一层(名字没了),请求之前对齐数据镜像那一步也不吃信号,所以再和时限赛跑一次
+  const signal = AbortSignal.timeout(FRAME_ARCHIVE_TIMEOUT_MS);
+  const timeUp = new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+  try {
+    const result = await Promise.race([frameRequest("archive", doc.project, {}, signal), timeUp]);
+    doc.snapshots = result.snapshots;
+    return { text: JSON.stringify(doc, null, 2), timedOut: false };
+  } catch {
+    return { text, timedOut: signal.aborted };
+  }
+}
+
 /** Collect whatever B has completed. Missing/corrupt caches must never prevent saving the project. */
 export async function withFrameSnapshots(text: string): Promise<string> {
-  try {
-    const doc = JSON.parse(text) as ProcFile;
-    if (doc.format !== PROC_FORMAT) return text;
-    const result = await frameRequest("archive", doc.project, {}, AbortSignal.timeout(2500));
-    doc.snapshots = result.snapshots;
-    return JSON.stringify(doc, null, 2);
-  } catch { return text; }
+  return (await collectFrameSnapshots(text)).text;
 }
 
 export interface ParseProcOptions {
@@ -257,7 +277,8 @@ export function forgetSaveTarget(): void {
 onGoneConversion(() => forgetSaveTarget());
 
 export type SaveOutcome =
-  | { kind: "saved"; where: string }
+  /** `snapshotsSkipped`:等预渲染快照到了时限,这次文件里没带快照(项目内容是完整的) */
+  | { kind: "saved"; where: string; snapshotsSkipped?: boolean }
   /** 用户在「另存为」对话框里点了取消 */
   | { kind: "cancelled" }
   /** 这个 WebView 没有文件系统访问 API,只能退回浏览器下载 */
@@ -304,9 +325,9 @@ export async function writeProcToDisk(
     }
   }
 
-  const text = await withFrameSnapshots(await produce());
+  const { text, timedOut } = await collectFrameSnapshots(await produce());
   const writable = await saveTarget.createWritable();
   await writable.write(text);
   await writable.close();
-  return { kind: "saved", where: saveTarget.name };
+  return { kind: "saved", where: saveTarget.name, ...(timedOut ? { snapshotsSkipped: true } : {}) };
 }

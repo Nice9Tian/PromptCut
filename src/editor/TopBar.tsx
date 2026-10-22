@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { getActiveCollectDelegationUrl, subscribeActiveCollectDelegation } from "../ai/cloud/collectBridge";
 import { actions, getState, useStore } from "../store/project";
-import { cancelExport, exportVideo, streamExportFile, revealExport, importProjectFile } from "./io";
+import { cancelExport, exportVideo, streamExportFile, revealExport, importProjectFile, getMediaFile } from "./io";
 import { newProject, pickSaveTarget, serializeProc, writeProcToDisk, loadProc, forgetSaveTarget, PROC_EXT, PROC_FORMAT } from "./io/proc";
 import { PROCP_EXT, isProcpFile, loadProcpFile, packMissingMessage, packProcp } from "./io/procp";
 import { exportSkippedMessage } from "./io/exportSkipped";
@@ -12,6 +12,7 @@ import { exportGateNow } from "./media/assetTiers";
 import { awaitingUploaderMessage } from "../render/mediaTier";
 import { ensureActiveDraftId, saveDraft, setActiveDraftId } from "./io/drafts";
 import { saveProcFile, savePackedFile } from "./io/saveFlow";
+import { agentToolProbe, mediaImportProbe } from "./io/localWrites";
 import { showSaveNotice } from "./saveLock";
 import { SaveStatusLayer } from "./SaveStatusLayer";
 import { Logo } from "../ui/Logo";
@@ -114,6 +115,15 @@ function Btn({
 /**
  * 顶栏:按条宽动态三档降级,包含编辑操作、外观与布局、文件导出。
  */
+/**
+ * 保存前要等的本机写入(`io/localWrites.ts`):这台设备正在导入的素材、Agent 正在跑的工具。
+ * 待提交操作(文档服务确认)和后台写入在 `waitForLocalWrites` 里另外等。
+ */
+const LOCAL_WRITE_PROBES = [
+  mediaImportProbe(() => getState().project.media, (id) => !!getMediaFile(id)),
+  agentToolProbe,
+];
+
 export function TopBar() {
   const barRef = useRef<HTMLDivElement>(null);
   const moreBtnRef = useRef<HTMLButtonElement>(null);
@@ -346,6 +356,8 @@ export function TopBar() {
     await saveProcFile(`${name}${PROC_EXT}`, {
       writeProc: (produce, fileName) => writeProcToDisk(produce, fileName),
       settle: (ms) => whenSaved(ms),
+      probes: LOCAL_WRITE_PROBES,
+      currentProject: () => getState().project,
       serialize: () => serializeProc(),
       saveDraft: async () => { await saveDraft(ensureActiveDraftId()); },
       markSaved: (fileName) => actions.markSaved(fileName),
@@ -364,6 +376,7 @@ export function TopBar() {
     await savePackedFile(`${name}${PROCP_EXT}`, {
       pick: (fileName) => pickSaveTarget(fileName, "PromptCut 打包项目", { "application/zip": [PROCP_EXT] }),
       settle: (ms) => whenSaved(ms),
+      probes: LOCAL_WRITE_PROBES,
       pack: () => packProcp(),
       download: (blob, fileName) => {
         // 这个 WebView 没有文件系统访问 API,退回浏览器下载

@@ -1,16 +1,23 @@
 /**
  * 顶栏「保存项目」「打包保存」的流程(从 `TopBar.tsx` 搬出来,好在 node 里测;界面只管按钮和提示)。
+ * 语义:`docs/semantics/mechanism/document-service.md`「保存基准与修改状态检查」——
+ * 「保存暂时禁用前台编辑，等待本机写完；失败不覆盖上次有效保存，并恢复编辑」。
  *
  * 两条规矩照旧:
  *   - 「另存为」要用户手势,挑落点必须是点击后的第一个 await;
  *   - 用户在「另存为」里点取消就整个不算保存:草稿不写、脏标记不清。
  *
- * 依赖都从参数进来(`SaveDeps`),缺省接真东西的那一份在 TopBar 里拼。
+ * 顺序:挑落点 → 上锁(`../saveLock.ts`,前台编辑暂停)→ 等本机写完(`localWrites.ts`,到时限没完就不写、说明在等什么)
+ * → 序列化 → 写盘(`proc.ts`:收预渲染快照、写临时副本,出错丢掉临时副本,原文件不动)→ 草稿、脏标记 → 解锁。
+ * 结束(成功、超时、失败)都解锁、恢复编辑。
  *
- * 挑好落点之后上锁(`../saveLock.ts`:前台编辑暂停),到保存结束(成功、超时、失败)解锁、恢复编辑。
+ * 依赖都从参数进来(`SaveDeps`),缺省接真东西的那一份在 TopBar 里拼。
  */
 import type { SaveOutcome } from "./proc";
 import { beginSaveLock, isSaveLocked, type SaveKind, type SaveLock } from "../saveLock";
+import { LOCAL_WRITES_TIMEOUT_MS, waitForLocalWrites, type LocalWriteProbe } from "./localWrites";
+
+export { SETTLE_TIMEOUT_TEXT } from "./localWrites";
 
 export interface PackResultLike {
   blob: Blob;
@@ -22,6 +29,12 @@ export interface SaveDeps {
   writeProc(produce: () => Promise<string>, fileName: string): Promise<SaveOutcome>;
   /** 等文档服务确认完所有本地修改,超时抛错(即 syncManager 的 `whenSaved`) */
   settle(timeoutMs: number): Promise<void>;
+  /** 其余几样本机写入(素材导入、本机 Agent……),`localWrites.ts`;不给就只等文档服务确认与后台写入停下 */
+  probes?: readonly LocalWriteProbe[];
+  /** 等本机写完的总时限,缺省 `LOCAL_WRITES_TIMEOUT_MS`(测试用) */
+  waitTimeoutMs?: number;
+  /** 当前项目(对象身份):序列化之后项目又被本机改了,就不能标「已保存」 */
+  currentProject?(): unknown;
   /** 当前项目 → `.proc` 文本 */
   serialize(): string;
   /** 本地草稿跟着更新 */
@@ -32,30 +45,27 @@ export interface SaveDeps {
   notify(message: string, tone?: "error" | "info"): void;
 }
 
-export interface PackDeps extends Omit<SaveDeps, "writeProc" | "serialize" | "saveDraft" | "markSaved"> {
+export interface PackDeps extends Omit<SaveDeps, "writeProc" | "serialize" | "saveDraft" | "markSaved" | "currentProject"> {
   /** 挑 `.procp` 的落点;没有文件系统访问 API 时回 null(退回浏览器下载)。用户取消抛 AbortError */
   pick(fileName: string): Promise<FileSystemFileHandle | null>;
   /** 装包 */
   pack(): Promise<PackResultLike>;
+  /** 写进挑好的落点(`proc.ts` 的 `writeToHandle`:出错丢掉临时副本,原文件不动);不给就直接用句柄写 */
+  writeHandle?(handle: FileSystemFileHandle, data: Blob): Promise<void>;
   /** 没有落点时退回浏览器下载 */
   download(blob: Blob, fileName: string): void;
   /** 包里缺了哪些素材的那句话 */
   missingMessage(missing: readonly unknown[]): string;
 }
 
-/** 等文档服务确认的上限(毫秒) */
-export const SETTLE_TIMEOUT_MS = 10_000;
-
-export const SETTLE_TIMEOUT_TEXT = "还有修改没等到文档服务确认（可能离线、连接慢，或同步已暂停），这次没有保存。等连上、处理完再保存。";
-
-/** 等文档服务确认所有本地修改;超时(离线、连接慢、同步已暂停)就不写,告诉用户为什么 */
-async function settledOrExplain(deps: Pick<SaveDeps, "settle">): Promise<void> {
-  try {
-    await deps.settle(SETTLE_TIMEOUT_MS);
-  } catch {
-    throw new Error(SETTLE_TIMEOUT_TEXT);
-  }
+/** 写盘那一步出错时的说法:原来的文件没动 */
+export function writeFailedText(reason: string): string {
+  return `写文件时出错：${reason}\n原来的文件没有改动（上一次保存的内容还在），可以继续编辑后再保存。`;
 }
+
+export const CHANGED_DURING_SAVE_TEXT = "保存期间项目又被本机改了（Agent 或后台任务）。文件里是保存开始那一刻的内容，之后的修改还没保存。";
+
+export const SNAPSHOTS_SKIPPED_TEXT = "预渲染快照这次没来得及收进文件（渲染服务没有及时应答）。项目内容已完整保存，重新打开后会重新预渲染。";
 
 /** `busy`:上一次保存还没结束,这一次不另起 */
 export type SaveResult = "saved" | "downloaded" | "cancelled" | "failed" | "busy";
@@ -75,34 +85,62 @@ function lockFor(box: LockBox, kind: SaveKind): SaveLock {
   return lock;
 }
 
+/** 等本机写完;到时限没完抛错(说法里列出在等什么) */
+async function waitLocal(deps: Pick<SaveDeps, "settle" | "probes" | "waitTimeoutMs">, lock: SaveLock): Promise<void> {
+  await waitForLocalWrites({
+    settle: (ms) => deps.settle(ms),
+    probes: deps.probes ?? [],
+    timeoutMs: deps.waitTimeoutMs ?? LOCAL_WRITES_TIMEOUT_MS,
+    onWaiting: (labels) => lock.waiting(labels),
+  });
+}
+
 /** 保存 `.proc` */
 export async function saveProcFile(fileName: string, deps: SaveDeps): Promise<SaveResult> {
   if (isSaveLocked()) return "busy";
   const box: LockBox = { lock: null };
+  let serialized: unknown = undefined;
   try {
-    // 挑好落点之后上锁;写之前等文档服务确认完所有本地修改(语义「页面只在拿到确认之后才写」),再序列化
     const outcome = await deps.writeProc(async () => {
       const lock = lockFor(box, "proc");
-      await settledOrExplain(deps);
+      await waitLocal(deps, lock);
       lock.writing();
+      serialized = deps.currentProject?.();
       return deps.serialize();
     }, fileName);
     if (outcome.kind === "cancelled") return "cancelled";
     await deps.saveDraft();
-    // 存完就不脏了,否则「首页」「新建项目」每次都要多问一句
-    deps.markSaved(fileName);
+    const infos: string[] = [];
+    // 存完就不脏了,否则「首页」「新建项目」每次都要多问一句。但序列化之后项目又被本机改了(Agent、后台任务),
+    // 文件里没有那几笔:不能标「已保存」
+    if (deps.currentProject && deps.currentProject() !== serialized) infos.push(CHANGED_DURING_SAVE_TEXT);
+    else deps.markSaved(fileName);
     if (outcome.kind === "downloaded") {
       // 这个 WebView 没有文件选择 API,至少告诉用户文件去哪了
-      deps.notify(`当前环境不支持选择目录，已保存到浏览器的下载位置：${outcome.where}`, "info");
-      return "downloaded";
+      infos.unshift(`当前环境不支持选择目录，已保存到浏览器的下载位置：${outcome.where}`);
+    } else if (outcome.snapshotsSkipped) {
+      infos.push(SNAPSHOTS_SKIPPED_TEXT);
     }
-    return "saved";
+    if (infos.length) deps.notify(infos.join("\n\n"), "info");
+    return outcome.kind === "downloaded" ? "downloaded" : "saved";
   } catch (e) {
     if (e instanceof SaveBusy) return "busy";
     deps.notify(String((e as Error).message));
     return "failed";
   } finally {
     box.lock?.end();
+  }
+}
+
+/** 没有 `writeHandle` 时的写法(测试用):写临时副本,出错丢掉 */
+async function writeHandleDirect(handle: FileSystemFileHandle, data: Blob): Promise<void> {
+  const writable = await handle.createWritable();
+  try {
+    await writable.write(data);
+    await writable.close();
+  } catch (e) {
+    try { await writable.abort(); } catch { /* 已经出错的流 abort 也可能抛 */ }
+    throw new Error(writeFailedText(String((e as Error)?.message ?? e)));
   }
 }
 
@@ -124,7 +162,7 @@ export async function savePackedFile(fileName: string, deps: PackDeps): Promise<
   const box: LockBox = { lock: null };
   try {
     const lock = lockFor(box, "procp");
-    await settledOrExplain(deps);
+    await waitLocal(deps, lock);
     lock.writing();
     // 没有哈希的老素材先补入库;补完仍进不了包的(文件真的不在了)在最后列给用户,不许悄悄漏掉
     const { blob, missing } = await deps.pack();
@@ -132,9 +170,7 @@ export async function savePackedFile(fileName: string, deps: PackDeps): Promise<
     // 保存成了但要告诉用户的几件事合成一张卡片说(以前是接连两个 alert)
     const infos: string[] = [];
     if (target) {
-      const writable = await target.createWritable();
-      await writable.write(blob);
-      await writable.close();
+      await (deps.writeHandle ?? writeHandleDirect)(target, blob);
     } else {
       deps.download(blob, fileName);
       infos.push(`当前环境不支持选择目录，已保存到浏览器的下载位置：${fileName}`);

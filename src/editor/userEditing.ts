@@ -50,6 +50,8 @@ const tracker = createEditingTracker({ send });
 let agentToolDepth = 0;
 export function beginAgentTool() { agentToolDepth += 1; }
 export function endAgentTool() { agentToolDepth = Math.max(0, agentToolDepth - 1); }
+/** 现在有没有 Agent 让页面执行的工具正在跑(保存要等它写完,`io/localWrites.ts`) */
+export function agentToolRunning(): boolean { return agentToolDepth > 0; }
 
 /** 两份项目之间,这几个片段里哪些换了对象(不可变更新:改过的片段一定是新对象) */
 function changedClips(prev: Project, next: Project, ids: readonly string[]): string[] {

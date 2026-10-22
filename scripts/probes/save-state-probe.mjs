@@ -46,6 +46,17 @@ const check = (name, ok, extra = {}) => {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * 在页面里拿到编辑器自己用的那份 `userEditing.ts` 模块(mcpExecutor 让 Agent 工具开始 / 结束用的就是它)。
+ * 开发服务器改过这个文件之后,页面里的引用带 `?t=` 时间戳;直接 import 不带时间戳的地址会拿到另一份实例。
+ */
+const AGENT_TOOL = (op) => `(async () => {
+  const urls = performance.getEntriesByType('resource').map((e) => e.name).filter((u) => u.includes('/src/editor/userEditing.ts'));
+  const ue = await import(urls[urls.length - 1] || '/src/editor/userEditing.ts');
+  ue.${op}();
+  return urls[urls.length - 1] || null;
+})()`;
+
 async function waitFor(page, fn, arg, timeout = 30000) {
   return page.waitForFunction(fn, { timeout, polling: 100 }, arg);
 }
@@ -55,6 +66,8 @@ async function openEditor(browser) {
   const page = await browser.newPage();
   await page.setViewport({ width: 1440, height: 900 });
   page.on('dialog', (d) => { console.log(JSON.stringify({ dialog: d.message() })); void d.dismiss(); });
+  // 编辑器开发版一次载入上千个模块,缺省 250 条的资源计时记不下;找 userEditing.ts 的实际地址要靠它(见 AGENT_TOOL)
+  await page.evaluateOnNewDocument(() => performance.setResourceTimingBufferSize(20000));
   await page.goto(`${origin}/?editor`, { waitUntil: 'domcontentloaded' });
   await waitFor(page, () => !!window.__pcStore && !!document.querySelector('.pc-proj-btn'), null, 60000);
   // 页面接上本机文档服务时会整份载入一次(清撤销栈):等它接完再开始改
@@ -240,11 +253,12 @@ async function phaseTimeout(browser) {
   const tracks0 = await trackCount(page);
   await addTrack(page, '超时序列');
   // 本机 Agent 有一个工具调用开始了、一直没结束(和 mcpExecutor 用的是同一个模块实例)
-  await page.evaluate(async () => { const ue = await import('/src/editor/userEditing.ts'); ue.beginAgentTool(); });
+  const moduleUrl = await page.evaluate(AGENT_TOOL('beginAgentTool'));
+  check('timeout.precondition-agent-module', !!moduleUrl, { moduleUrl });
   const createBefore = await page.evaluate(() => window.__saveProbe.createCalls);
   const t0 = Date.now();
   await clickSave(page);
-  await waitFor(page, () => !!document.querySelector('[data-pc="save-lock-waiting"]'), null, 15000);
+  await waitFor(page, () => !!document.querySelector('[data-pc="save-lock-waiting"]'), null, 15000).catch(() => {});
   const waitingText = await page.evaluate(() => document.querySelector('[data-pc="save-lock-waiting"]')?.textContent ?? '');
   check('timeout.waiting-shown', waitingText.includes('Agent'), { waitingText });
   await page.screenshot({ path: path.join(outDir, '3-waiting.png') });
@@ -253,10 +267,10 @@ async function phaseTimeout(browser) {
   await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control');
   await sleep(150);
   check('timeout.blocked-while-waiting', (await trackCount(page)) === tracks0 + 1, { tracks: await trackCount(page), tracks0 });
-  await waitFor(page, () => !!document.querySelector('[data-pc="save-notice"]'), null, 30000);
+  await waitFor(page, () => !!document.querySelector('[data-pc="save-notice"]'), null, 30000).catch(() => {});
   const elapsed = Date.now() - t0;
   const notice = await page.evaluate(() => { const el = document.querySelector('[data-pc="save-notice"]'); return { tone: el?.getAttribute('data-tone'), text: el?.textContent ?? '' }; });
-  check('timeout.notice', notice.tone === 'error' && notice.text.includes('Agent') && notice.text.includes('没有保存'), { notice, elapsedMs: elapsed });
+  check('timeout.notice', notice.tone === 'error' && notice.text.includes('Agent') && notice.text.includes('没有保存') && notice.text.includes('原来的文件没有改动'), { notice, elapsedMs: elapsed });
   await page.screenshot({ path: path.join(outDir, '4-timeout.png') });
   const createAfter = await page.evaluate(() => window.__saveProbe.createCalls);
   const afterText = await page.evaluate((n) => window.__opfsText(n), fname);
@@ -266,7 +280,7 @@ async function phaseTimeout(browser) {
   await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control');
   await sleep(200);
   check('timeout.edit-restored', (await trackCount(page)) === tracks0, { tracks: await trackCount(page), tracks0 });
-  await page.evaluate(async () => { const ue = await import('/src/editor/userEditing.ts'); ue.endAgentTool(); });
+  await page.evaluate(AGENT_TOOL('endAgentTool'));
   await page.close();
 }
 

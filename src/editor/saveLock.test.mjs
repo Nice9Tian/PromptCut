@@ -141,7 +141,8 @@ test("等确认超时(不写文件)之后恢复编辑", async () => {
   let timeUp;
   const h = heldDeps({ settle: () => new Promise((_, reject) => { timeUp = () => reject(new Error("timeout")); }) });
   const saving = saveProcFile("a.proc", h.deps);
-  await tick();
+  // 先等它走到「等文档服务确认」那一步(前面还要等后台写入停下来)
+  while (!timeUp) await new Promise((r) => setTimeout(r, 20));
   try {
     fire("keydown", { key: "Delete" });
     assert.equal(getState().project.name, "改过一次", "等的时候也改不动");
