@@ -282,7 +282,8 @@ async function scenario(A, B, C) {
   await enteredEditor(pageA, '再开直达地址进项目');
   check(await inEditor(pageA), '2-已登录时打开直达地址直接进项目');
 
-  // 3 没登录的乙打开分享链接
+  // 3 没登录的乙打开分享链接。新项目一开始没有链接令牌,创建者「作废并重新生成项目链接」之后才有(`server/account/authority.mjs` 的 regen-link)
+  check((await adminAs(await A.editorToken(), projectId, { op: 'regen-link' })).status === 200, '3-创建者重新生成了项目链接');
   const token = await linkTokenOf(A, projectId);
   const share = `/editor/s/${projectId}/${token}`;
   const ctxB = await newContext();
