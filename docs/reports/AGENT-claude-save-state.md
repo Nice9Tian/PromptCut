@@ -155,3 +155,11 @@ summary 8 项过 5
 
 截图：`out/save-state-shots/5-write-failed.png`（写失败提示）。
 
+## 越界与意外（请先看）
+
+1. **改了清单外的一个已有文件**：`src/editor/userEditing.ts` 加了两行，导出 `agentToolRunning()`（原来的计数 `agentToolDepth` 是私有的，没有读的口子）。「本机 Agent 写完了没有」只有它能准确回答；不加就只能退而用 Agent 标签页的 `busy`（整轮对话都算忙，而且 `AiPanel.tsx` 卸载时不复位，可能永远卡在忙，保存就永远超时）。纯新增、不改原有行为。不接受的话，块二里「本机 Agent」那一样要换判据。
+2. **新建了一个清单外的探针**：`scripts/probes/save-state-probe.mjs`。它是这三块的真页面测试，用法写在文件头；`scripts/acceptance/**` 没碰。
+3. `src/editor/sync/syncManager.ts` 最终没改：`whenSaved` 原样当「待提交操作」那一样的判据用。
+4. **意外：公共 port.json 被我的开发服务器写过一次。** 第一次在 5960 起编辑器时没设 `PROMPTCUT_NO_PORT_FILE=1`，它在 13:53:57 把 `%TEMP%\promptcut\port.json` 改成指向 5960（桌面版的会话靠这个文件找「用户正在用的实例」）。发现后：结束了这个服务器（只结束了它自己起的进程树），确认文件里的 pid 是它的之后删掉了这个文件，再带 `PROMPTCUT_NO_PORT_FILE=1` 重起。**被覆盖前的内容不知道，没法还原**；当时 5190 没有在监听，也没有桌面版在跑（查了 5xxx 的监听端口），所以它原来多半就是一份过期记录。用户下次起桌面版或 `npm run dev` 会重新写。
+5. 开发服务器自己起的预渲染子服务挑了一个空闲端口（5821），在分配的 5960～5969 之外；这是编辑器自带的行为（`server/vite-plugin-prerender.ts` 的 `freePort()`），没有办法指定，记在这里。
+
