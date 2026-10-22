@@ -1,0 +1,25 @@
+/*
+ * 官网首页那层背景光（`BrandGlow.tsx`）的样式。
+ *
+ * 单独一个文件、由组件自己 import，理由同 `brandCanvas.css`：`start.css` 这会儿归另一个会话。
+ */
+
+.ps-brand-glow {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/*
+ * 起不来 WebGL2 时的兜底：直接把官网首页那段 CSS 抄过来
+ * （VisuHive 仓库 `site/assets/home.css` 的 `body`）。两团光的数值和 `BrandGlow.tsx` 里 LOOK 的
+ * 默认值是同一组；LOOK 调过之后这里对不上也没关系，兜底本来就只求「像」，不求逐像素一致。
+ */
+.ps-brand-glow--css {
+  background:
+    radial-gradient(1200px 700px at 15% -10%, color-mix(in srgb, var(--ui-accent) 14%, transparent), transparent 60%),
+    radial-gradient(900px 600px at 100% 40%, color-mix(in srgb, var(--ui-accent) 8%, transparent), transparent 60%),
+    var(--ui-bg);
+}

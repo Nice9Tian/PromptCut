@@ -6,9 +6,10 @@ import { useEffect, useState } from "react";
 import { useAccountProjects } from "../account/useAccountProjects";
 import { JOIN_REQUEST_TEXT, autoJoinKey, joinRequestNotice } from "../account/joinRequestText";
 import { LogoMark } from "../ui/Logo";
-import { BrandCanvas } from "../start/BrandCanvas";
+import { BrandGlow } from "../start/BrandGlow";
 import { Icon } from "./icons";
 import { Sheet } from "./ui";
+import "./mobileLogin.css";
 
 export function MobileStart({ onEnterEditor }: { onEnterEditor: () => void }) {
   const ap = useAccountProjects({ online: true, onEnterEditor });
@@ -38,7 +39,8 @@ export function MobileStart({ onEnterEditor }: { onEnterEditor: () => void }) {
         上面压一道暗化,登录块再浮在一张毛玻璃卡片上 —— 这样表单被衬托出来,不会糊在画面里。
         登录之后这一层就不渲染了,项目列表该是什么样还是什么样。
       */}
-      {!account && <div className="ps-m-login-bg" aria-hidden="true"><BrandCanvas /></div>}
+      {/* 背景：官网首页那层光的渲染器版（用户 2026-10-23 定，换掉了原来那块流动的极光） */}
+      {!account && <div className="ps-m-login-bg" aria-hidden="true"><BrandGlow /></div>}
       <div className="topbar">
         <div className="logo"><LogoMark size={18} /><span>Prompt<b>Cut</b></span></div>
         {account && <span className="chip accent" data-pcm="account-chip"><i className="dot" /> {account.name}</span>}
@@ -47,7 +49,7 @@ export function MobileStart({ onEnterEditor }: { onEnterEditor: () => void }) {
       <div className="home-body">
         {error && <div className="err" role="alert" data-pcm="home-error">{error}</div>}
         {!account ? (
-          <form data-pcm="login" className="ps-m-login-card" onSubmit={(e) => { e.preventDefault(); void perform(async () => { await ap.login(name, password, remember); setPassword(""); }); }}>
+          <form data-pcm="login" className="ps-m-login-form" onSubmit={(e) => { e.preventDefault(); void perform(async () => { await ap.login(name, password, remember); setPassword(""); }); }}>
             <div className="ps-m-login-head">
               <h2 className="sec">登录账号</h2>
               <span className="ps-m-login-sub">网站账号和官网通用。</span>
