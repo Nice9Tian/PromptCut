@@ -795,6 +795,12 @@ async function phonePhase({ newPage, join, clipsOf, audioLog, audioLogSince, exp
   const M = await newPage('手机', { mobile: true });
   await join(M, 'mobile');
   await until('手机看到片段', async () => (await clipsOf(M)).some((c) => c.id === fresh), 30_000);
+  // 精简模式只有一个舞台:打开项目时借可见舞台做界限搜索(加载遮罩挡着,预览不播),等它和基准卡都落定再听
+  await until('手机的舞台闸门、基准卡、界限搜索都落定', () => M.evaluate(() => {
+    const g = window.__pcGates?.();
+    const cs = window.__pcCostSearch?.();
+    return !!g && g.tier?.gate === 'done' && g.tier.benchmark !== 'pending' && !document.querySelector('[data-pc="cost-search-gate"]') && !!cs && !cs.running && !!cs.outcome;
+  }), 120_000);
   const env = await M.evaluate(async (id) => {
     const p = window.__pcStore.getState().project, clip = p.tracks.flatMap((t) => t.clips).find((c) => c.id === id);
     const s0 = window.__pcSoundJudge.stats();

@@ -617,7 +617,8 @@ try {
   });
   if (ONLY.includes('L')) await offScenario('L 旧 nginx:没有策略头、没有 /media-s/(新页面先上、nginx 没改)', 'L', { policy: 'legacy' }, {}, { reason: 'not-isolated', dual: true, report: 'meta-only', noTicketLeak: true });
   if (ONLY.includes('S')) await offScenario('S 托管方关掉总开关(运行配置 onlineCardExec: false)', 'S', { policy: 'full', onlineCardExec: false }, {}, { reason: 'switch-off', dual: true, noTicketLeak: true });
-  if (ONLY.includes('N')) await offScenario('N 没有舞台源(读不到运行配置;放本机、没有 nginx 子域的部署)', 'N', { policy: 'legacy', runtimeConfig: false }, {}, { reason: 'single-stage', dual: false, noStage: true });
+  // N:原因原来报 single-stage,2026-10-22 起没有挂着的舞台时报 no-stage(`stageIsolation.ts`;单舞台照样执行,不再是不执行的原因)
+  if (ONLY.includes('N')) await offScenario('N 没有舞台源(读不到运行配置;放本机、没有 nginx 子域的部署)', 'N', { policy: 'legacy', runtimeConfig: false }, {}, { reason: 'no-stage', dual: false, noStage: true });
   /* M 模拟手机(安卓、4 GB):舞台闸门停在第一级,只有一个跨源舞台;卡片代码照样只在那一个隔离舞台里执行,编辑页面不执行 */
   if (ONLY.includes('M')) await withProxy({ policy: 'full' }, async () => {
     console.log('\n== M 模拟手机(精简模式,只有一个跨源舞台)');
