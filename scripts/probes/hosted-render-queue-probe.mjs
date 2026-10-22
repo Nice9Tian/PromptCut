@@ -23,9 +23,10 @@
  * Q3a 不让哪个项目占着：甲出完图空着，丙发了产流计划，马上换装丙（不等五分钟），甲那一轮结束原因是轮换。
  * 丙在产流时，甲要两帧、乙要两帧（甲先登记），乙另登记一条又撤回：
  *   Q2  看画面先于产流：丙做完手里那一个就让，四帧全部出完之前不再装丙；
- *   Q1  各项目轮流、项目内先来先做：出图次序 乙-1 → 甲-2 → 乙-2 → 甲-3（甲刚出过一帧，乙先）；
+ *   Q1  各项目轮流、项目内先来先做、一轮最多连做 `--turn` 个（缺省渲染服务的缺省）：甲刚出过一帧，乙先；K=1 时 乙-1 → 甲-2 → 乙-2 → 甲-3，
+ *       K≥2 时 乙-1 → 乙-2 → 甲-2 → 甲-3；
  *   Q4  每一帧颜色都是它自己项目的，都由隔离工作进程出，调用方只是在等；
- *   Q3  看画面这一段里每次换装都是排第一的换成别的项目触发（结束原因都是轮换），甲/乙交替装了四轮；
+ *   Q3  看画面这一段里每次换装都是排第一的换成别的项目触发（结束原因都是轮换），装的次序与 Q1 一致（K=1 四轮，K≥2 两轮）；
  *   Q1b 任何一拍都没有同时装两个项目；撤回的那一条不留在队列里。
  * Q5 重启后排着的请求还在
  *   Q5a 一个项目的请求排着（它没装着）时把管理进程连同工作进程整棵树强行结束：盘上队列目录里留着这条请求。
@@ -54,7 +55,7 @@ import { killTree } from '../../server/hosted-render/worker.mjs';
 import { createSharedProject, buildAuthProtocols } from '../../server/auth/client.mjs';
 import { readServiceKeyFile } from '../../server/auth/service-identity.mjs';
 import { clipsPlanTaskOf } from '../../server/render-queue/messages.mjs';
-import { LOOK_ERRORS } from '../../server/hosted-render/look.mjs';
+import { LOOK_ERRORS, LOOK_DEFAULTS } from '../../server/hosted-render/look.mjs';
 import { createLookClient } from '../../server/agent-service/look-client.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -67,6 +68,22 @@ const KEEP = flag('--keep-temp');
 const VERBOSE = flag('--verbose');
 const MEM_LOW = String(arg('--mem-low', '256M'));
 const IDLE_MS = Number(arg('--idle-ms', 300_000));
+/** 一个项目一轮最多连做几个（`PROMPTCUT_RENDER_TURN`）；缺省用渲染服务的缺省 */
+const TURN = Number(arg('--turn', LOOK_DEFAULTS.turnRequests)) || LOOK_DEFAULTS.turnRequests;
+/** 两个项目各排着几个、谁先：按「各项目轮流、一轮最多连做 TURN 个」算出该有的出图次序与依次装的项目 */
+function expectedTurns(queues, first) {
+  const q = Object.fromEntries(Object.entries(queues).map(([k, v]) => [k, [...v]]));
+  const order = [], loads = [];
+  let cur = first;
+  while (Object.values(q).some((v) => v.length)) {
+    if (!q[cur].length) { cur = Object.keys(q).find((k) => q[k].length); continue; }
+    loads.push(cur);
+    order.push(...q[cur].splice(0, TURN));
+    const others = Object.keys(q).filter((k) => k !== cur && q[k].length);
+    if (others.length) cur = others[0];
+  }
+  return { order, loads };
+}
 const CORES = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length;
 const SCALE = Number(arg('--time-scale', CORES <= 4 ? 2 : 1)) || 1;
 const T = (ms) => Math.round(ms * SCALE);
@@ -198,6 +215,7 @@ function startSupervisor(extraEnv = {}) {
     PROMPTCUT_RENDER_LOOK_SERVICES: hostedPaths(HOSTED_DATA).servicesFile,
     PROMPTCUT_RENDER_STREAMS: '1',
     PROMPTCUT_RENDER_ISO_IDLE_MS: String(IDLE_MS),
+    PROMPTCUT_RENDER_TURN: String(TURN),
     PROMPTCUT_NO_PORT_FILE: '1',
     ...extraEnv,
   });
@@ -345,12 +363,13 @@ async function main() {
   say('look-phase', { doneOrder, startsL, stopsL });
   check('Q2', '看画面先于产流：丙正在产流时甲、乙要画面——丙做完手里那一个就让，看画面的四帧全部出完之前不再装丙', results.every((r) => r?.ok === true) && !startsL.includes('丙') && stopsL.some((x) => x === '丙:rotated'),
     { startsDuringLooks: startsL, stopsDuringLooks: stopsL });
-  check('Q1', '各项目轮流、项目内先来先做：甲刚出过一帧，先出乙-1；之后甲、乙交替（出图次序 乙-1 → 甲-2 → 乙-2 → 甲-3）', JSON.stringify(doneOrder) === JSON.stringify(['乙-1', '甲-2', '乙-2', '甲-3']),
-    { doneOrder, ms: results.map((r) => r && `${r.label}:${r.ms}`) });
+  const want = expectedTurns({ 甲: ['甲-2', '甲-3'], 乙: ['乙-1', '乙-2'] }, '乙');
+  check('Q1', `各项目轮流、项目内先来先做、一轮最多连做 ${TURN} 个：甲刚出过一帧，乙先；出图次序 ${want.order.join(' → ')}`, JSON.stringify(doneOrder) === JSON.stringify(want.order),
+    { turn: TURN, doneOrder, want: want.order, ms: results.map((r) => r && `${r.label}:${r.ms}`) });
   check('Q4', '每一帧颜色都是它自己项目的（页面里执行的是自己项目的卡），都由隔离工作进程出；调用方从头到尾只是在等、没收到错误', results.every((r) => r && r.ok === true && near(r.rgb, r.project === '甲' ? jia.rgb : yi.rgb))
     && supLogs.slice(markL).filter((l) => l.event === 'look.done' && l.state === 'done').every((l) => l.worker === 'isolated'),
     { rgb: results.map((r) => r && `${r.label}:${r.rgb}`), errors: results.map((r) => r?.error).filter(Boolean) });
-  check('Q3', '不让哪个项目占着：看画面这一段里每次换装都是「排第一的换成别的项目」触发（结束原因都是轮换，没有一次是空闲满时长），装了 甲/乙 交替四轮', stopsL.every((x) => x.endsWith(':rotated')) && JSON.stringify(startsL) === JSON.stringify(['乙', '甲', '乙', '甲']),
+  check('Q3', `不让哪个项目占着：看画面这一段里每次换装都是「排第一的换成别的项目」触发（结束原因都是轮换，没有一次是空闲满时长），依次装 ${want.loads.join('、')}`, stopsL.every((x) => x.endsWith(':rotated')) && JSON.stringify(startsL) === JSON.stringify(want.loads),
     { startsDuringLooks: startsL, stopsDuringLooks: stopsL });
   check('Q1b', '隔离：等待期间任何一拍都没有同时装两个项目；撤回的那一条不留在队列里', multiL === 0 && !!bx.error && windowL.length > 0,
     { ticks: windowL.length, multiProjectTicks: multiL, cancelled: (await status()).look?.queue?.cancelled, cancelError: bx.error });

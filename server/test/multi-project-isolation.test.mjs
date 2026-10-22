@@ -27,12 +27,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const rid = (n) => `mpi-${String(n).padStart(4, '0')}-abcdefghijkl`;
 
 /** 看画面的队列 + 隔离工作进程的编排，接在一起跑；工作进程是记账的替身 */
-function rig() {
+function rig({ turn = 1 } = {}) {
   const calls = [];
   let key = null;
   let gen = 0;
   const iso = createIsolation({
-    nodeIdOf: (p) => `iso/${p}`, cacheMs: 60_000, drainMs: 5000,
+    nodeIdOf: (p) => `iso/${p}`, cacheMs: 60_000, drainMs: 5000, turnTasks: turn,
     runner: {
       async prepare(p) { calls.push(`prepare:${p.slice(3, 4)}`); gen += 1; key = `iso-key-${p.slice(3, 4)}-${gen}`; },
       start(p) { calls.push(`start:${p.slice(3, 4)}`); },
@@ -63,7 +63,7 @@ function rig() {
       await sleep(15);
       return { status: 200, json: async () => ({ ok: true }) };
     },
-    limits: { pollMs: 5, cardWaitMs: 50 },
+    limits: { pollMs: 5, cardWaitMs: 50, turnRequests: turn },
   });
   const directory = [PA, PB].map((projectId, i) => ({ projectId, enabled: true, active: true, members: true, since: i }));
   let stop = false;
@@ -86,8 +86,8 @@ function rig() {
   };
 }
 
-test('MPI1 两个带用户卡的项目交错要画面：轮流出图；每个请求只转给正装着它自己项目的隔离工作进程；换项目先结束并清空上一轮', async () => {
-  const r = rig();
+test('MPI1 两个带用户卡的项目交错要画面（一轮一个，K=1）：轮流出图；每个请求只转给正装着它自己项目的隔离工作进程；换项目先结束并清空上一轮', async () => {
+  const r = rig({ turn: 1 });
   try {
     const plan = [[PA, 1], [PA, 2], [PA, 3], [PB, 1], [PB, 2]];
     for (const [i, [p, n]] of plan.entries()) assert.equal((await r.submit(p, n, i)).status, 202);
@@ -185,7 +185,7 @@ test('MPI4 换装时的两种退出：排空中工作进程自己退了算轮换
     resident: () => ({ port: 1, key: 'r', running: true, node: () => null }),
     iso: () => ({ enabled: true, port: 2, key: null, current: null, report: null, lastRun }),
     fetch: async () => { throw new Error('不该转出'); },
-    limits: { pollMs: 5, retries: 0 },
+    limits: { pollMs: 5, retries: 0, isoRetries: 0 },
   });
   try {
     await look.handle({ auth: 'agent', bodyText: JSON.stringify({ projectId: PA, path: '/api/vision/snapshot', body: { project: { id: PA, tracks: [] }, t: 0 }, cards: CARDS, requestId: rid(90) }) });
@@ -197,4 +197,18 @@ test('MPI4 换装时的两种退出：排空中工作进程自己退了算轮换
     const q = await look.poll({ auth: 'agent', bodyText: JSON.stringify({ requestId: rid(90), waitMs: 0 }) });
     assert.equal(q.body.look, 'iso-failed', '真是为它起的一轮没起成（没出过图就没了）：照旧算');
   } finally { look.close(); }
+});
+
+test('MPI5 一轮最多连做 K 个（那一轮开始时已经排着的、它自己的）：K=2 时 甲甲 乙乙 甲；后来的不插进这一轮；每个请求照旧只转给装着自己项目的那一轮', async () => {
+  const r = rig({ turn: 2 });
+  try {
+    const plan = [[PA, 1], [PA, 2], [PA, 3], [PB, 1], [PB, 2]];
+    for (const [i, [p, n]] of plan.entries()) assert.equal((await r.submit(p, n, i)).status, 202);
+    for (let i = 0; i < plan.length; i += 1) assert.equal((await r.poll(i)).status, 200);
+    const order = r.sent.map((s) => `${s.project.slice(3, 4)}${s.n}`);
+    console.log('[MPI5] K=2 出图次序', order.join(' → '), '｜装的次序', r.calls.filter((c) => c.startsWith('prepare:')).map((c) => c.slice(8)).join(' → '));
+    assert.deepEqual(order, ['a1', 'a2', 'b1', 'b2', 'a3']);
+    assert.deepEqual(r.calls.filter((c) => c.startsWith('prepare:')).map((c) => c.slice(8)), ['a', 'b', 'a'], '换了两次（K=1 要换四次）');
+    for (const s of r.sent) assert.equal(s.loaded, s.project);
+  } finally { await r.close(); }
 });

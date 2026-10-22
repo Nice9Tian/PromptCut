@@ -181,8 +181,8 @@ test('HR39 路由：没有卡的走常驻；有卡的只走这一轮正是它的
   // 这台节点没开用户卡的隔离：带卡的项目看不了
   k.state.iso = { ...k.state.iso, enabled: false };
   assert.equal((await k.ask(k.snap(P1, { cards }))).body.look, 'iso-off');
-  // 为它起过又没起成、重试也用完了：不干等到时限（重试的次数在 hosted-render-queue.test.mjs 里验）
-  const noRetry = lookKit({ limits: { retries: 0 } });
+  // 为它起过又没起成、重试也用完了：不干等到时限（隔离工作进程没起成的重试次数是 isoRetries，与出图的 retries 分开）
+  const noRetry = lookKit({ limits: { retries: 0, isoRetries: 0 } });
   noRetry.state.iso = { enabled: true, port: 7003, key: null, current: null, report: null, lastRun: { projectId: P1, reason: 'oom', at: Date.now() + 1000 } };
   const t0 = Date.now();
   assert.equal((await noRetry.ask(noRetry.snap(P1, { cards, timeoutMs: 3000 }))).body.look, 'iso-failed');

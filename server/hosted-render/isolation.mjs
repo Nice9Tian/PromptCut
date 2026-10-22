@@ -44,6 +44,11 @@ export const ISOLATION_DEFAULTS = Object.freeze({
   START_TIMEOUT_MS: 300_000,
   /** 一轮下来一个任务都没认领到（等着的任务它做不了）：同一批任务在这段时间内不再为它起隔离工作进程 */
   RETRY_IDLE_MS: 10 * 60_000,
+  /**
+   * 产流时一个项目一轮最多连做几个任务（那一轮开始时就排着的）再让给别的项目；与看画面的 `turnRequests` 同一个数
+   * （`look.mjs` 的 `LOOK_DEFAULTS`）。〔裁，三级：见 AGENT-claude-multi-project-render.md「吞吐」〕
+   */
+  TURN_TASKS: 4,
 });
 
 /** 隔离工作进程的节点 id（与常驻工作进程的 `hosted-render:…` 区分开，两条连接可以同时在一个项目里） */
@@ -102,7 +107,9 @@ export function createIsolation({
   runner, nodeIdOf, now = Date.now, log = () => {},
   cacheMs: cacheIn = undefined, idleMs = undefined, drainMs = ISOLATION_DEFAULTS.DRAIN_MS,
   startTimeoutMs = ISOLATION_DEFAULTS.START_TIMEOUT_MS, retryIdleMs = ISOLATION_DEFAULTS.RETRY_IDLE_MS,
+  turnTasks = ISOLATION_DEFAULTS.TURN_TASKS,
 } = {}) {
+  const turnCap = Math.max(1, Math.floor(Number(turnTasks) || 1));
   const cacheMs = cacheIn ?? idleMs ?? ISOLATION_DEFAULTS.CACHE_MS;
   /**
    * @type {null | { projectId, members, phase: 'preparing'|'starting'|'running'|'draining'|'stopping', startedAt, readyAt, lastBusyAt, drainAt,
@@ -142,14 +149,17 @@ export function createIsolation({
     if (look) return look;
     const streams = list.filter((c) => c.look !== true);
     if (!streams.length) return null;
-    // 装着的项目还没做到一个产流任务：先做完它这一个
-    if (current && current.served === 0 && streams.some((c) => c.projectId === current.projectId)) return streams.find((c) => c.projectId === current.projectId);
+    // 装着的项目这一轮还没做满（那一轮开始时排着的、最多 turnTasks 个）：接着做它的
+    const mine = current ? streams.find((c) => c.projectId === current.projectId) : null;
+    if (mine && current.served < Math.min(turnCap, Math.max(1, current.turnPending ?? 1))) return mine;
     const ordered = orderByPolicy(streams.map((c, i) => ({ ...c, kind: 'stream', seq: i })), rotation);
     return ordered[0] ?? null;
   }
 
   function begin(c) {
-    current = { projectId: c.projectId, members: c.members, phase: 'preparing', startedAt: now(), readyAt: null, lastBusyAt: null, drainAt: null, worked: false, pendingKey: c.pendingKey, claimed: 0, served: 0, why: null };
+    current = { projectId: c.projectId, members: c.members, phase: 'preparing', startedAt: now(), readyAt: null, lastBusyAt: null, drainAt: null, worked: false, pendingKey: c.pendingKey, claimed: 0, served: 0, why: null,
+      // 这一轮开始时它排着几个产流任务（一轮最多连做 min(这个数, turnTasks) 个）
+      turnPending: Number(c.pending) || 0 };
     runs += 1;
     log('isolation.start', { projectId: c.projectId, pending: c.pending, look: c.look === true, run: runs });
     const mine = current;

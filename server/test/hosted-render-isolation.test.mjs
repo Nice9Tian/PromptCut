@@ -412,3 +412,25 @@ test('HR28 页面请求闸：Node 一侧的调用照旧放行；编辑器的 Vit
     assert.equal(gate({ url, method, headers: page('same-origin') }).reason, 'api-not-allowed', `${method} ${url}`);
   }
 });
+
+test('HR23 产流一轮最多连做 K 个（那一轮开始时排着的）：K=2、三个项目各排着很多时依次装 A B C A，每轮做两个；只排着一个的做一个就换', async () => {
+  const r = isoRig({ turnTasks: 2 });
+  const all = () => [r.cand('pA', { since: 1, pending: 9 }), r.cand('pB', { since: 2, pending: 9 }), r.cand('pC', { since: 3, pending: 1 })];
+  const served = [];
+  for (let round = 0; round < 4; round += 1) {
+    r.iso.tick({ candidates: all() });
+    await r.flush();
+    const p = r.iso.current.projectId;
+    let n = 0;
+    r.iso.tick({ candidates: all(), report: r.report(p) });
+    while (r.iso.current.phase === 'running' && n < 5) {
+      n += 1;
+      r.iso.tick({ candidates: all(), report: r.report(p, { held: ['t'], claimed: n }) });
+    }
+    served.push(`${p}×${n}`);
+    r.iso.tick({ candidates: all(), report: r.report(p, { claimed: n }) });
+    await r.flush();
+  }
+  console.log('[HR23-K] K=2 依次装与每轮做的个数', served.join(' → '));
+  assert.deepEqual(served, ['pA×2', 'pB×2', 'pC×1', 'pA×2']);
+});

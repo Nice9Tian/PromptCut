@@ -102,6 +102,12 @@ export const LOOK_DEFAULTS = Object.freeze({
    * 出完图之后再算 15 秒有需求，之后隔离工作进程照「没人排队留作缓存」办（`isolation.mjs`）
    */
   holdMs: 15_000,
+  /**
+   * 要隔离工作进程出的请求，一个项目一轮最多连做几个（那一轮开始时就已经排着的、它自己的请求），再让给别的项目。
+   * 「各项目轮流」指项目之间轮流，不是一轮只准做一个；隔离环境换一次项目要整轮重起工作进程（几十秒），一轮只做一个时两个项目交替
+   * 要画面就每个请求都换一次。〔裁，三级：主会话 2026-10-22 定方向，数按实测定，见 AGENT-claude-multi-project-render.md「吞吐」〕
+   */
+  turnRequests: 4,
   /** 等常驻工作进程报出这个项目、报出它带没带卡，最多多久 */
   settleMs: 20_000,
   /** 隔离工作进程就绪之后，等要的那几份卡装到要的版本，最多再等多久；到点照渲并在结果里注明 */
@@ -271,8 +277,19 @@ export function createLook({
   let syncSeq = 0;
   /** 看画面这一类的轮流记账（多项目模式：各项目轮流） */
   const rotation = createRotation();
-  /** 排着的请求按多项目模式的次序 */
-  const ordered = () => orderByPolicy(requests.queued().map((e) => ({ e, projectId: e.projectId, kind: 'look', seq: e.seq })), rotation).map((x) => x.e);
+  /**
+   * 这一轮（隔离工作进程装着的那个项目）还可以接着做的请求：那一轮开始时就已经排着的、它自己的、最多 `turnRequests` 个。
+   * `{ projectId, ids: Set<请求 id> }`；做完、撤回、换了项目就清掉
+   */
+  let turn = null;
+  /** 排着的请求按多项目模式的次序；这一轮还没做完的排在最前（项目之间照旧轮流，见 `turnRequests`） */
+  const ordered = () => {
+    const base = orderByPolicy(requests.queued().map((e) => ({ e, projectId: e.projectId, kind: 'look', seq: e.seq })), rotation).map((x) => x.e);
+    if (!turn) return base;
+    const mine = base.filter((e) => turn.ids.has(e.id));
+    if (!mine.length) { turn = null; return base; }
+    return [...mine, ...base.filter((e) => !turn.ids.has(e.id))];
+  };
   /** 排在它前面的还有几个（在做的那个也算）；它不在排队回 0 */
   const positionOf = (e) => {
     if (e.state !== 'queued') return 0;
@@ -332,7 +349,9 @@ export function createLook({
       if (!s.current && s.lastRun && s.lastRun.projectId === projectId && s.lastRun.at >= e.isoSince && s.lastRun.worked !== true && ['prepare-failed', 'start-timeout', 'oom', 'exit'].includes(s.lastRun.reason)) {
         e.attempts += 1;
         stats.retried += 1;
-        const maxIsoRetries = e.retries ?? (limitsIn.retries !== undefined ? limitsIn.retries : (limitsIn.isoRetries ?? limits.isoRetries ?? 3));
+        // 隔离工作进程没起成的重试次数与「出图一次不重试」分开（`isoRetries`）。原来这里先取了出图的 `retries`（生产是 0），
+        // 等于工作进程一没起成就把这个项目排着的请求全部结掉；多项目模式换装频繁，碰上的机会多，按 `isoRetries` 算
+        const maxIsoRetries = Number.isInteger(limits.isoRetries) ? limits.isoRetries : 3;
         if (e.attempts > maxIsoRetries) return { fail: fail(503, 'iso-failed') };
         e.isoSince = s.lastRun.at + 1;
         e.baseSince = null;
@@ -387,6 +406,15 @@ export function createLook({
     requests.start(e);
     // 这个项目出了一个请求：在看画面这一类里排到最后（各项目轮流）
     rotation.served('look', projectId);
+    // 隔离工作进程上的一轮：换到这个项目时记下这一轮可以连做的请求（它自己此刻排着的、先来的，连这一个最多 turnRequests 个）
+    if (target.worker === 'isolated') {
+      if (!turn || turn.projectId !== projectId) {
+        const k = Math.max(1, Math.floor(Number(limits.turnRequests) || 1));
+        const more = requests.queued().filter((x) => x.projectId === projectId && x.needIso === true && x.id !== e.id).sort((a, b) => a.seq - b.seq).slice(0, k - 1);
+        turn = { projectId, ids: new Set(more.map((x) => x.id)) };
+        if (more.length) log('look.turn', { projectId, more: more.length, k });
+      } else turn.ids.delete(e.id);
+    }
     current = { id: e.id, projectId, worker: target.worker, since: now(), abort };
     // 只加载用到的：按这个请求要的帧展开（认不出的接口原样转发）
     let sendBody = e.body;

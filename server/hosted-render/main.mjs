@@ -26,6 +26,7 @@
  *   PROMPTCUT_RENDER_USER_CARDS       isolated（缺省）| off。isolated：内容库里有卡片源码的项目由按项目隔离的工作进程做（契约第 7.5 节）；
  *                                     off：不起隔离工作进程，含用户卡的任务渲染服务不认领（常驻工作进程两种取值下都不同步卡）
  *   PROMPTCUT_RENDER_ISO_PORT         隔离工作进程的端口（另占 +1、+2），缺省 PROMPTCUT_RENDER_PORT + 10。它的数据目录是 <PROMPTCUT_RENDER_DATA>/iso
+ *   PROMPTCUT_RENDER_TURN             隔离工作进程上一个项目一轮最多连做几个请求（看画面）或任务（产流）再让给别的项目，1～64，缺省见 look.mjs 的 turnRequests
  *   PROMPTCUT_RENDER_ISO_IDLE_MS      没人排队时隔离工作进程装着的项目留作缓存多久（缺省 300000，五分钟；多项目模式下别的项目一排上就不等它，见 isolation.mjs）
  *   PROMPTCUT_RENDER_LOOK             on（缺省）| off。看画面的口子（契约第 8a 节，`look.mjs`）：云端 Agent 服务凭服务身份向本进程要一帧画面。
  *                                     off：这条路整个不在（回 404），云端 Agent 的看画面工具回「这次没看成」
@@ -102,6 +103,7 @@ export function renderServiceConfig(env = process.env) {
     isoPort: intOf(env.PROMPTCUT_RENDER_ISO_PORT, Math.min(65533, intOf(env.PROMPTCUT_RENDER_PORT, 5400, 1, 65533) + 10), 1, 65533),
     isoDataDir: path.join(path.resolve(env.PROMPTCUT_RENDER_DATA || '/var/lib/promptcut/render'), 'iso'),
     isoIdleMs: intOf(env.PROMPTCUT_RENDER_ISO_IDLE_MS, ISOLATION_DEFAULTS.CACHE_MS, 1000, 3_600_000),
+    turn: intOf(env.PROMPTCUT_RENDER_TURN, LOOK_DEFAULTS.turnRequests, 1, 64),
     statusPort: intOf(env.PROMPTCUT_RENDER_STATUS_PORT, 5399, 0, 65535),
     maxConcurrent: intOf(env.PROMPTCUT_RENDER_MAX_CONCURRENT, LIMIT_DEFAULTS.maxConcurrent, 1, 4),
     maxProjects: intOf(env.PROMPTCUT_RENDER_MAX_PROJECTS, LIMIT_DEFAULTS.maxProjects, 1, 1000),
@@ -379,6 +381,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const isolation = !isoEnabled ? null : createIsolation({
     nodeIdOf: (projectId) => isoNodeIdFor(key.instanceId, projectId),
     cacheMs: config.isoIdleMs,
+    turnTasks: config.turn,
     log: isoLog,
     runner: {
       async prepare() {
@@ -480,7 +483,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     enabled: config.look === 'on',
     verify: createLookVerifier({ registry: lookRegistry }),
     requests: lookRequests,
-    limits: { attemptMs: config.lookAttemptMs, retries: config.lookRetries, maxQueueMs: config.lookMaxQueueMs, orphanMs: config.lookOrphanMs },
+    limits: { attemptMs: config.lookAttemptMs, retries: config.lookRetries, maxQueueMs: config.lookMaxQueueMs, orphanMs: config.lookOrphanMs, turnRequests: config.turn },
     project: (projectId) => directory.get(projectId),
     // 刚起来、目录清单还没拿到：接回来的请求先排着（这时「目录里没有」不等于项目不在了）
     directoryReady: () => directory.status().syncedAt !== null,
