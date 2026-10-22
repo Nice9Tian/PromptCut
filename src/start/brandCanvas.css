@@ -34,4 +34,6 @@
  */
 .ps-login > section.ps-login-art {
   background: var(--bg-canvas);
+  /* 去掉左右两块之间那条竖线(用户 2026-10-23 定):画面本来就是渐隐过去的,再画一条线把它切断 */
+  border-right: 0;
 }

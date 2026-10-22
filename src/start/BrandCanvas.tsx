@@ -27,6 +27,11 @@ const LOOK = {
   speed: 0.025,
   /** 噪声尺度:大了碎,小了只剩一道平滑的渐变,看不出形 */
   scale: 0.9,
+  /**
+   * 纹理的参考尺寸(CSS 像素)。纹理按屏幕像素锚定,不随这一块缩放 ——
+   * 这个数定「多少像素算一个单位」,改它等于整体放大缩小;窗口变大只会露出更多
+   */
+  refPx: 460,
   /** 纵向压扁的倍数(<1 = 纹理在竖直方向拉长):参考图里那种「帘子」靠它 */
   yStretch: 0.9,
   /** 冷暖分界大概在横向哪个位置(0 左 1 右) */
@@ -127,6 +132,7 @@ uniform vec3  uCool;
 uniform vec3  uWarm;
 uniform float uScale, uYStretch, uSplit, uFalloff, uBlend, uMixWarp, uStreak, uGrain;
 uniform float uAxis, uSeeThrough, uFadeEdge;
+uniform float uRefPx, uPxScale;
 uniform float uWarpA, uWarpB, uGamma, uGain, uFloor, uRoll, uSat;
 uniform float uStripeN, uStripeSkew, uFrostBlur, uFrost, uMilky, uEdge;
 uniform float uGrainSize, uGrainJitter, uGrainSoft;
@@ -177,8 +183,21 @@ float fbm(vec2 p) {
 
 void main() {
   vec2 uv = gl_FragCoord.xy / uRes;
-  // 按长宽比拉一下,竖着的面板里纹理才不会被压扁;再把纵向压一道,让纹理在竖直方向拉长
-  vec2 p = vec2(uv.x * (uRes.x / uRes.y), uv.y * uYStretch) * uScale;
+
+  /*
+   * 纹理锚在**屏幕像素**上,不随这一块的大小缩放(用户 2026-10-23 定):
+   * 窗口拉宽拉高只是「露出更多」,不是把同一张图拉长。
+   *
+   * 原点取 split 那条线(构图的骨架)和纵向中线 —— 所以不管这一块多宽,冷暖交界附近的纹理
+   * 永远是同一副样子,变化只发生在两头。
+   *
+   * 先把 gl_FragCoord 换算回 CSS 像素(内部渲染按 uPxScale 打了折),这样纹理的粗细
+   * 在高分屏和普通屏上一致;uRefPx 是参考尺寸,改它等于整体放大缩小。
+   */
+  vec2 cssPx = gl_FragCoord.xy / max(0.0001, uPxScale);
+  vec2 anchor = vec2(uSplit * uRes.x, 0.5 * uRes.y) / max(0.0001, uPxScale);
+  vec2 p = (cssPx - anchor) / max(1.0, uRefPx) * uScale;
+  p.y *= uYStretch;
   float t = uTime;
 
   // 域扭曲两道:第一道把坐标推开,第二道拿推开的结果再推一次。
@@ -206,7 +225,8 @@ void main() {
    * 原来那套每帧重算(hash 里带了时间),看着就是满屏闪(用户 2026-10-23 指出)。
    * 粗粒靠把屏幕坐标按 uGrainSize 量化:一格一个随机数,格子越大颗粒越粗。
    */
-  vec2 gco = gl_FragCoord.xy / max(1.0, uGrainSize);
+  // 颗粒同样按 CSS 像素算,不然高分屏上会变细
+  vec2 gco = cssPx / max(1.0, uGrainSize);
   float gn1 = grainNoise(gco, uGrainSoft);
   float gn2 = grainNoise(gco + 71.3, uGrainSoft);
 
@@ -374,6 +394,7 @@ export function BrandCanvas(): JSX.Element {
     const uRes = at("uRes");
     const uTime = at("uTime");
     const uCool = at("uCool");
+    const uPxScale = at("uPxScale");
 
     // 一次性的那些:画面参数不随帧变,设一遍就够
     gl.uniform3f(at("uWarm"), ...hexToRgb(LOOK.warm, [0.886, 0.451, 0.122]));
@@ -386,6 +407,7 @@ export function BrandCanvas(): JSX.Element {
     gl.uniform1f(at("uAxis"), LOOK.axis);
     gl.uniform1f(at("uSeeThrough"), LOOK.seeThrough);
     gl.uniform1f(at("uFadeEdge"), LOOK.fadeEdge);
+    gl.uniform1f(at("uRefPx"), LOOK.refPx);
     gl.uniform1f(at("uStreak"), LOOK.streak);
     gl.uniform1f(at("uGrain"), LOOK.grain);
     gl.uniform1f(at("uWarpA"), LOOK.warpA);
@@ -423,6 +445,8 @@ export function BrandCanvas(): JSX.Element {
         gl.viewport(0, 0, w, h);
       }
       gl.uniform2f(uRes, canvas.width, canvas.height);
+      // 内部像素 / CSS 像素:着色器拿它把坐标换算回 CSS 像素,纹理和颗粒才不会在高分屏上变细
+      gl.uniform1f(uPxScale, s);
     };
 
     const draw = () => {
