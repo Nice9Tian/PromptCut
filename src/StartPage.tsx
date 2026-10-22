@@ -24,6 +24,7 @@ import { getVoiceConfig } from "./ai/voice";
 import { JoinForm } from "./editor/sync/JoinForm";
 import { STORAGE_EVENT, takeStorageRequest } from "./ui/WindowTitleBar";
 import { AccountProjects } from "./account/AccountProjects";
+import { OnlineStart } from "./start/OnlineStart";
 
 /** 字节数写成人看的样子。导出产物、预渲染缓存动辄几十 GB,所以到 G 为止 */
 function humanSize(bytes: number): string {
@@ -81,16 +82,12 @@ function JoinSection(props: { onEnterEditor: () => void }): JSX.Element {
   );
 }
 
+/**
+ * 在线浏览器(电脑身份)的首屏整页换成 `src/start/`:没登录是登录页,登录了是带左侧项目栏的开始页。
+ * 原来这里只摆一块账号表单(`AccountProjects`),桌面开始页仍在用它,所以那个组件不动。
+ */
 function OnlineStartPage(props: { onEnterEditor: () => void }): JSX.Element {
-  return (
-    <div className="sp">
-      <header className="sp-bar">
-        <Logo size={22} />
-        <span className="sp-bar-spacer" />
-      </header>
-      <main className="sp-main"><AccountProjects online onEnterEditor={props.onEnterEditor} /></main>
-    </div>
-  );
+  return <OnlineStart onEnterEditor={props.onEnterEditor} />;
 }
 
 export const StartPage: (props: { onEnterEditor: () => void }) => JSX.Element = ONLINE_BUILD ? OnlineStartPage : DesktopStartPage;

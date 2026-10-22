@@ -1,0 +1,498 @@
+/*
+ * 在线浏览器(电脑身份)的开始页与登录页。用的是皮肤那套变量(`src/skins/skins.css` 把 --ui-* 接成
+ * --bg-canvas / --ink / --accent 这些),所以换皮肤、深浅色都跟着走,这一页里不写死任何颜色。
+ *
+ * 类名前缀 `ps-`(page start),和桌面开始页的 `sp-` 分开:两页并存,桌面版那一页不动。
+ */
+
+.ps {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  background: var(--bg-canvas);
+  color: var(--ink);
+  font-family: var(--font-sans);
+}
+
+/* ── 左侧栏:全部项目 ───────────────────────────── */
+.ps-side {
+  flex: 0 0 248px;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--hairline);
+  background: var(--bg-panel);
+}
+.ps-side-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px 10px;
+}
+.ps-side-brand { font-size: 14px; font-weight: 600; letter-spacing: 0.01em; }
+
+.ps-side-new {
+  flex: 0 0 auto;
+  margin: 2px 12px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--on-accent);
+  background: var(--ui-accent-grad, linear-gradient(100deg, var(--accent), color-mix(in srgb, var(--accent) 10%, #7b5cff)));
+}
+.ps-side-new:hover { filter: brightness(1.06); }
+.ps-side-new:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+.ps-search {
+  flex: 0 0 auto;
+  margin: 0 12px 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--fill-subtle);
+}
+.ps-search:focus-within { border-color: var(--accent); }
+.ps-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+.ps-search input::placeholder { color: var(--ink-faint); }
+
+.ps-side-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 8px 12px;
+}
+.ps-side-group { margin-bottom: 10px; }
+.ps-side-label {
+  padding: 6px 8px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--ink-faint);
+}
+
+/* 侧栏的一行:文件夹、项目、「全部项目」共用 */
+.ps-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.ps-row:hover { background: var(--fill-hover); }
+.ps-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ps-row[aria-current="true"] { background: var(--ui-accent-soft, var(--fill-subtle)); color: var(--accent); font-weight: 600; }
+.ps-row-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ps-row-count { flex: 0 0 auto; font-size: 11px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.ps-row-caret { flex: 0 0 auto; display: grid; place-items: center; width: 14px; color: var(--ink-muted); transition: transform 120ms; }
+.ps-row-caret[data-open="true"] { transform: rotate(90deg); }
+.ps-row-icon { flex: 0 0 auto; display: grid; place-items: center; width: 16px; color: var(--ink-muted); }
+.ps-row[aria-current="true"] .ps-row-icon { color: var(--accent); }
+
+/* 文件夹里的项目行,比文件夹缩进一层 */
+.ps-row.is-child { padding-left: 29px; font-size: 12px; color: var(--ink-muted); }
+.ps-row.is-child:hover { color: var(--ink); }
+
+.ps-side-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--hairline);
+}
+.ps-side-foot .ps-row-name { font-size: 12px; }
+.ps-side-foot .ps-muted { font-size: 11px; }
+
+/* 账号头像:色相由账号名哈希,和 AI 角色头像(src/editor/right/RoleAvatar.tsx)同一路子,不配图片 */
+.ps-avatar {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--hairline-strong);
+  font-size: 12px;
+  font-weight: 600;
+  user-select: none;
+}
+
+/* ── 主区 ─────────────────────────────────────── */
+.ps-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.ps-topbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 20px;
+}
+.ps-body {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 28px 40px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+}
+
+.ps-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 34px 0 10px;
+  text-align: center;
+}
+.ps-hero-kicker { font-size: 12px; letter-spacing: 0.08em; color: var(--ink-muted); }
+.ps-hero-title { margin: 0; font-size: 30px; line-height: 1.25; font-weight: 650; letter-spacing: -0.01em; }
+.ps-hero-sub { font-size: 13px; color: var(--ink-muted); }
+
+/* ── 发一句话建项目 ───────────────────────────── */
+.ps-prompt {
+  width: 100%;
+  max-width: 760px;
+  margin: 14px auto 0;
+  padding: 12px 14px 8px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 14px;
+  background: var(--bg-panel);
+  box-sizing: border-box;
+}
+.ps-prompt:focus-within { border-color: var(--accent); }
+.ps-prompt-input {
+  display: block;
+  width: 100%;
+  min-height: 58px;
+  max-height: 180px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  resize: none;
+  outline: none;
+}
+.ps-prompt-input::placeholder { color: var(--ink-faint); }
+.ps-prompt-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.ps-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-muted);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ps-chip:hover { border-color: var(--hairline-strong); color: var(--ink); }
+.ps-chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.ps-prompt-send {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  color: var(--on-accent);
+  background: var(--accent);
+}
+.ps-prompt-send:disabled { opacity: 0.4; cursor: default; }
+.ps-prompt-send:not(:disabled):hover { filter: brightness(1.08); }
+.ps-prompt-note {
+  max-width: 760px;
+  margin: 8px auto 0;
+  font-size: 12px;
+  color: var(--ink-faint);
+  text-align: center;
+}
+
+/* ── 项目缩略图那一排 ─────────────────────────── */
+.ps-rail { margin-top: 28px; }
+.ps-rail-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.ps-rail-title { margin: 0; font-size: 14px; font-weight: 600; }
+.ps-rail-spacer { flex: 1 1 auto; }
+.ps-page-at { font-size: 12px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.ps-page-btn {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--hairline);
+  border-radius: 7px;
+  background: var(--fill-subtle);
+  color: var(--ink);
+  font-family: inherit;
+  cursor: pointer;
+}
+.ps-page-btn:hover:not(:disabled) { border-color: var(--hairline-strong); }
+.ps-page-btn:disabled { opacity: 0.35; cursor: default; }
+
+.ps-strip {
+  display: flex;
+  gap: 12px;
+  overflow: hidden;
+}
+.ps-tile {
+  flex: 0 0 196px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ps-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 12px; }
+
+/* 缩略图外框是固定 16:9;项目自己的画幅按比例套在里面,所以一排高度齐平又看得出竖屏方屏 */
+.ps-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--fill-subtle);
+  display: grid;
+  place-items: center;
+}
+.ps-tile:hover .ps-frame { border-color: var(--hairline-strong); }
+.ps-shot {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+.ps-badge {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.ps-tile-name {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ps-tile-meta { font-size: 11px; color: var(--ink-faint); }
+
+/* 第一格:Create A New */
+.ps-tile-new .ps-frame {
+  border-style: dashed;
+  border-color: var(--hairline-strong);
+  background: transparent;
+  gap: 6px;
+  grid-auto-flow: row;
+  align-content: center;
+}
+.ps-tile-new:hover .ps-frame { border-color: var(--accent); color: var(--accent); }
+.ps-tile-new-plus { font-size: 24px; line-height: 1; }
+.ps-tile-new-text { font-size: 12px; font-weight: 600; }
+
+.ps-empty {
+  padding: 28px;
+  border: 1px dashed var(--hairline);
+  border-radius: 10px;
+  color: var(--ink-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.ps-muted { font-size: 12px; color: var(--ink-muted); }
+.ps-ghost-btn {
+  padding: 5px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 7px;
+  background: var(--fill-subtle);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ps-ghost-btn:hover:not(:disabled) { border-color: var(--hairline-strong); }
+.ps-ghost-btn:disabled { opacity: 0.55; cursor: default; }
+.ps-link {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: none;
+}
+.ps-link:hover { text-decoration: underline; }
+
+/* ── 登录页 ───────────────────────────────────── */
+.ps-login {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  background: var(--bg-canvas);
+  color: var(--ink);
+  font-family: var(--font-sans);
+}
+/* 左边一整块品牌色,右边表单:浏览器里第一眼就和桌面版是同一套调性 */
+.ps-login-art {
+  flex: 1 1 46%;
+  min-width: 0;
+  display: none;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 40px;
+  color: var(--on-accent);
+  background: var(--ui-accent-grad, linear-gradient(145deg, var(--accent), color-mix(in srgb, var(--accent) 10%, #7b5cff)));
+}
+@media (min-width: 900px) { .ps-login-art { display: flex; } }
+.ps-login-art-title { margin: 0; font-size: 26px; font-weight: 650; line-height: 1.35; }
+.ps-login-art-sub { margin: 10px 0 0; font-size: 14px; opacity: 0.88; max-width: 34ch; line-height: 1.7; }
+.ps-login-art-foot { font-size: 12px; opacity: 0.8; }
+
+.ps-login-panel {
+  flex: 1 1 54%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 24px;
+  overflow-y: auto;
+}
+.ps-login-form {
+  width: 100%;
+  max-width: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ps-login-head { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
+.ps-login-title { margin: 0; font-size: 20px; font-weight: 650; }
+.ps-field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--ink-muted); }
+.ps-field input {
+  padding: 9px 11px;
+  border: 1px solid var(--hairline);
+  border-radius: 9px;
+  background: var(--bg-panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+.ps-field input:focus { border-color: var(--accent); }
+.ps-check { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-muted); cursor: pointer; }
+.ps-primary-btn {
+  margin-top: 4px;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 9px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--on-accent);
+  background: var(--accent);
+}
+.ps-primary-btn:hover:not(:disabled) { filter: brightness(1.08); }
+.ps-primary-btn:disabled { opacity: 0.5; cursor: default; }
+.ps-login-alt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+.ps-login-sep {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 0;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.ps-login-sep::before,
+.ps-login-sep::after { content: ""; flex: 1 1 auto; height: 1px; background: var(--hairline); }
+.ps-login-note {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--ink-faint);
+}
+
+/* 窄窗口:侧栏收起来,主区自己滚 */
+@media (max-width: 860px) {
+  .ps-side { flex-basis: 200px; }
+  .ps-body { padding: 0 16px 32px; }
+  .ps-hero-title { font-size: 24px; }
+}
