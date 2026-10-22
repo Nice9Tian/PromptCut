@@ -2,6 +2,7 @@ import type { Project } from "../../kernel/project";
 // @ts-expect-error Browser-safe format validation, also used by the server.
 import { parseCollaboration } from "../../../server/recovery/descriptor.mjs";
 import { convertGoneProject, type GoneProof } from "./cloudGone";
+import { verifiedBase, type CloudSnapshot } from "./cloudSnapshot";
 // @ts-expect-error Browser-safe proof verification
 import { queryGone } from "../../../server/recovery/gone-proof.mjs";
 
@@ -87,6 +88,12 @@ export interface CloudProjectAssociation {
   origin?: string;
   savedRev: number;
   savedAt: string;
+  /**
+   * 固定非本机快照(`cloudSnapshot.ts`):另存那一刻文档服务确认过的那一版(基准内容)与它的哈希。
+   * 老文件没有;读回时哈希对不上的丢掉(当没有),都照旧能打开。
+   */
+  base?: Project;
+  baseSha256?: string;
 }
 
 export function parseCloudAssociation(value: unknown): CloudProjectAssociation | null {
@@ -102,6 +109,7 @@ export function parseCloudAssociation(value: unknown): CloudProjectAssociation |
     origin: typeof v.origin === "string" ? v.origin : v.docServiceUrl,
     savedRev,
     savedAt,
+    ...(verifiedBase(v) ? { base: v.base as Project, baseSha256: v.baseSha256 as string } : {}),
   };
 }
 
@@ -126,6 +134,18 @@ export function currentCloudAssociation(): CloudProjectAssociation | null {
 
 export function setCloudAssociation(value: CloudProjectAssociation | null) {
   activeCloudAssoc = value;
+}
+
+/**
+ * 另存时取「当下连着的这个云端项目」的确认副本与序号(`syncManager.ts` 装上);没连着这个项目回 null,
+ * 另存就沿用文件里原来的基准(`cloudSnapshot.ts` 的 `snapshotForSave`)。
+ */
+let cloudSnapshotGetter: ((projectId: string) => CloudSnapshot | null) | null = null;
+export function setCloudSnapshotGetter(getter: ((projectId: string) => CloudSnapshot | null) | null) {
+  cloudSnapshotGetter = getter;
+}
+export function currentCloudSnapshot(projectId: string): CloudSnapshot | null {
+  return cloudSnapshotGetter ? cloudSnapshotGetter(projectId) : null;
 }
 
 let realtimeRevGetter: (() => number | null) | null = null;
@@ -158,9 +178,12 @@ export async function handleCloudAssociationReopen(
     cloudProject?: Project;
     toast?: (msg: string, tone?: "info" | "warn", duration?: number) => void;
     openAsLocal?: (p: Project) => void;
-    enterProject?: (options: any) => Promise<void>;
+    /**
+     * 连回云端项目并处理文件里的修改;回 `"pending-merge"` 表示云端在另存之后被别人改过、修改进了「冲突合并」(没直接提交)。
+     */
+    enterProject?: (options: any) => Promise<void | "pending-merge">;
   } = {},
-): Promise<{ status: "opened" | "merged" | "converted" | "login-required" | "forbidden"; project?: Project }> {
+): Promise<{ status: "opened" | "merged" | "pending-merge" | "converted" | "login-required" | "forbidden"; project?: Project }> {
   const toast = options.toast ?? (() => {});
   // 1. 规则 1：未登录
   let account = options.account;
@@ -239,9 +262,10 @@ export async function handleCloudAssociationReopen(
     (options.cloudProject && JSON.stringify(project) !== JSON.stringify(options.cloudProject))
   );
 
+  let outcome: void | "pending-merge" = undefined;
   if (options.enterProject && client) {
     try {
-      await options.enterProject({
+      outcome = await options.enterProject({
         client,
         origin: assoc.origin || assoc.docServiceUrl,
         projectId: assoc.projectId,
@@ -257,6 +281,11 @@ export async function handleCloudAssociationReopen(
   }
 
   if (isOfflineModified) {
+    if (outcome === "pending-merge") {
+      // 另存之后云端被别人改过:修改按另存时的基准逐项比出来放进「冲突合并」,不直接盖上去
+      toast("已连回云端项目。另存之后云端有别人的改动，你的修改已放进「冲突合并」，可以逐项合并。", "info", 8000);
+      return { status: "pending-merge", project };
+    }
     toast("已连回云端项目，离线修改已合并同步。", "info", 6000);
     return { status: "merged", project };
   }

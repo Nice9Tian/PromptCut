@@ -20,6 +20,9 @@
  *     - 本机没改过（`cur` 与 `rec.hash` 相同）→ 装上；
  *     - 本机改过、服务上也改过 → 最后写的赢：先把本机那份备份，再装服务上的，并给覆盖提示；
  *     - 本机那份就是自己上次写上去的（`rec.mine`），现在被别人覆盖 → 同样先备份再装，并提示（B2、B3：被覆盖方要知道）。
+ *     - **断网期间的改动**（连上后对账时才看到：同步过的卡本机在那之后改过、服务上也更新了）→ 不按「最后写的赢」：先备份本机那份、装上服务上的，
+ *       发一条 `conflict`（带我这边与云端两份源码），页面把它放进「冲突合并」窗口（一张卡一条），由用户选「合并」（照我这边，`takeMine`）
+ *       或「删除选中」（保留云端现状）。语义 `workflow/editing.md`「撤销、重做」，`product/document-service.md`「冲突」（2026-10-22 用户定）。
  * - 自己写的那一次在频道里回来时（`actor.session` 是本实例的），`previousActor` 是别人的就提示「你覆盖了 X」（覆盖方要知道）。
  * - 同一个键有上传在途时，这个键的变化等上传回包之后再处理：先回包的那一版号就是自己的，旧的变化直接丢掉，
  *   免得把别人更早的一版错当成「服务上更新了」。
@@ -348,6 +351,9 @@ export function createCardSync({
     }
     const mineOverwritten = !!(cur !== null && rec?.mine && curHash === rec.hash);
     const overwritten = localChanged || mineOverwritten;
+    // 断网(或没开着)期间的改动:连上后对账时看到本机在上次同步之后改过、服务上也更新了 → 进「冲突合并」,不按最后写的赢悄悄换掉。
+    // 只认同步过的卡(`rec` 在):第一次打开项目时本机碰巧有同名的卡,照旧按覆盖办
+    const conflict = !readOnly && fromList && !!rec && localChanged && cur !== null;
     let backup = null;
     if (overwritten) {
       try {
@@ -374,9 +380,10 @@ export function createCardSync({
     }
     binding.ledger.set(rel, { rev, hash: serverHash, mine: false });
     binding.ledger.unmark(rel);
-    say('cards.sync.installed', { key: rel, rev, overwritten, backup });
+    say('cards.sync.installed', { key: rel, rev, overwritten, backup, conflict });
     emit({ type: 'installed', key: rel, rev, actor, fresh: cur === null, ...(overwritten ? { backup } : {}) });
-    if (overwritten) emit({ type: 'overwritten', key: rel, rev, actor, previousActor, backup });
+    if (conflict) emit({ type: 'conflict', key: rel, rev, actor, backup, mine: normalizeSource(cur), cloud: normalizeSource(got.body) });
+    else if (overwritten) emit({ type: 'overwritten', key: rel, rev, actor, previousActor, backup });
   }
 
   /* ---------------- 写：上传 ---------------- */
@@ -423,6 +430,16 @@ export function createCardSync({
 
   async function flushPending(binding) {
     for (const rel of binding.ledger.pending().sort()) await upload(binding, rel, { reason: 'pending' });
+  }
+
+  function saved(rel) {
+    if (readOnly || !isSyncablePath(rel)) return false;
+    const binding = b;
+    if (!binding) return false;
+    binding.ledger.mark(rel);
+    if (!binding.local) binding.keys.add(rel);
+    if (binding.connected) enqueue(binding, () => upload(binding, rel, { reason: 'saved' }));
+    return true;
   }
 
   /* ---------------- 对外 ---------------- */
@@ -484,13 +501,23 @@ export function createCardSync({
      * 不在同步范围里的路径忽略；没绑时只记不传（下次绑上同一个空间时补传）。
      */
     saved(rel) {
-      if (readOnly || !isSyncablePath(rel)) return false;
-      const binding = b;
-      if (!binding) return false;
-      binding.ledger.mark(rel);
-      if (!binding.local) binding.keys.add(rel);
-      if (binding.connected) enqueue(binding, () => upload(binding, rel, { reason: 'saved' }));
-      return true;
+      return saved(rel);
+    },
+
+    /**
+     * 「冲突合并」里对一张卡点了「合并」：照我这边的源码装回本机（同一套审查、写文件、热更新），再当一次本机保存传上去。
+     * 回 `{ ok, error? }`。装不上（审查不过）不传。
+     */
+    async takeMine(rel, source) {
+      if (readOnly) return { ok: false, error: '只读的同步实例不改卡' };
+      if (!isSyncablePath(rel) || typeof source !== 'string') return { ok: false, error: '不是可同步的卡片文件' };
+      let res;
+      try { res = await files.install(rel, normalizeSource(source), { rev: null }); }
+      catch (err) { res = { ok: false, error: String(err?.message ?? err) }; }
+      if (!res?.ok) return { ok: false, error: res?.error ?? '装不上' };
+      saved(rel);
+      say('cards.sync.take-mine', { key: rel });
+      return { ok: true };
     },
 
     /** 等手上的活（对账、上传、装卡）都做完；测试与诊断用 */

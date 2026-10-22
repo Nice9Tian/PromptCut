@@ -114,7 +114,9 @@ test('C66-T8-04 本机没改过、服务上的 cardRev 更新了 → 装新版�
   await b3.close();
 });
 
-test('C66-T8-05 本机改过（没同步出去）、服务上也改过 → 后写的赢：先备份本机那份，再装服务上的，给覆盖提示', async () => {
+// 2026-10-22 用户定(`workflow/editing.md`「撤销、重做」、`product/document-service.md`「冲突」):断网期间的改动与云端冲突时进「冲突合并」,
+// 一张卡一条。原来「后写的赢 + 覆盖提示」改成:先备份本机那份、装上服务上的,发 conflict(带两份源码)交给冲突合并窗口(conflict-merge 报告)
+test('C66-T8-05 本机改过（没同步出去）、服务上也改过 → 先备份本机那份，再装服务上的，交给冲突合并（带两份源码）', async () => {
   const create = await loadCardSync();
   const svc = fakeContentService();
   const sf = stateFile();
@@ -134,8 +136,12 @@ test('C66-T8-05 本机改过（没同步出去）、服务上也改过 → 后�
   assert.ok(bi >= 0, '本机那份要备份');
   assert.equal(host.events[bi].body, src('B-local'), '备份的是本机改过的那份');
   assert.ok(bi < ii, '先备份、再装');
-  assert.equal(host.events[ii].body, src('A-remote'), '装的是服务上的（后写的赢）');
-  assert.ok(ofType(host, 'notify').some((e) => e.key === USER), '给出覆盖提示');
+  assert.equal(host.events[ii].body, src('A-remote'), '本机先换成服务上的（我的在冲突合并里）');
+  const c = ofType(host, 'notify').find((e) => e.key === USER);
+  assert.ok(c, '给出提示');
+  assert.equal(c.notifyType, 'card-conflict', '是冲突(进冲突合并),不是「被覆盖」');
+  assert.equal(c.mine, src('B-local'));
+  assert.equal(c.cloud, src('A-remote'));
   await b2.close();
 });
 

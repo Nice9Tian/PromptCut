@@ -374,3 +374,41 @@ test('T8-7 本机写过的那一版被别人随后改掉(不是同时改):装别
   // B 的 v3 被 C 覆盖 → B 备份并提示
   await waitFor(() => B.notices.find((n) => n.type === 'overwritten'), 5000, 'B 的覆盖提示');
 });
+
+test('T8-8 断网期间改过、云端也被别人改过的卡:不按最后写的赢,发 conflict(带两份源码)交给冲突合并;「合并」照我这边写回、传上去', async (t) => {
+  const doc = await startDoc(t);
+  const A = editor(t, 'a');
+  const B = editor(t, 'b');
+  A.write(USER_KEY, cardSource('v1'));
+  A.bindShared(doc, 'p8', [USER_KEY]);
+  await waitFor(() => A.sync.status().connected, 3000, 'A 连上');
+  await A.sync.idle();
+  B.bindShared(doc, 'p8');
+  await waitFor(() => /v1/.test(B.read(USER_KEY) ?? ''), 5000, 'B 同步到 v1');
+  await B.sync.idle();
+  // A 断开期间改了这张卡;B 同时在线改了它
+  A.sync.unbind('offline');
+  A.write(USER_KEY, cardSource('A-offline'));
+  B.save(USER_KEY, cardSource('B-online'));
+  await waitFor(async () => /B-online/.test((await peek(doc, 'card-source', USER_KEY)).body), 5000, 'B 的版本落地');
+  // A 连回
+  A.bindShared(doc, 'p8', [USER_KEY]);
+  const c = await waitFor(() => A.notices.find((n) => n.type === 'conflict'), 5000, 'A 收到 conflict');
+  await A.sync.idle();
+  assert.equal(c.key, USER_KEY);
+  assert.match(c.mine, /A-offline/, '带我这边的源码');
+  assert.match(c.cloud, /B-online/, '带云端的源码');
+  assert.ok(c.backup && fs.existsSync(path.join(A.root, c.backup)), '本机那份另有备份');
+  assert.equal(A.notices.some((n) => n.type === 'overwritten'), false, '不再按最后写的赢说「被覆盖」');
+  assert.match(A.read(USER_KEY), /B-online/, '本机先换成云端的版本(我的在冲突合并里)');
+  assert.match((await peek(doc, 'card-source', USER_KEY)).body, /B-online/, '我的没被悄悄传上去');
+  // 「合并」:照我这边写回、传上去,B 装上
+  const r = await A.sync.takeMine(USER_KEY, c.mine);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  await waitFor(async () => /A-offline/.test((await peek(doc, 'card-source', USER_KEY)).body), 5000, '我的版本传上去');
+  await waitFor(() => /A-offline/.test(B.read(USER_KEY) ?? ''), 5000, 'B 装上我的版本');
+  // 审查不过的源码:不写、不传
+  const bad = await A.sync.takeMine(USER_KEY, 'not a card');
+  assert.equal(bad.ok, false);
+  // 「删除选中」= 什么都不做:云端现状保留(上面已核过)
+});
