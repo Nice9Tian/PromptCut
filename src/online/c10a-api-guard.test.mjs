@@ -90,6 +90,42 @@ test('account website calls pass only in the top editor; stages, unknown account
   } finally { globalThis.window = originalWindow; }
 });
 
+test('the project direct address and share link are the same top editor page: account calls pass there, stage and malformed paths stay blocked', async () => {
+  const { installApiGuard, apiPathOf } = await import('./apiGuard.ts');
+  const originalWindow = globalThis.window;
+  const id = `sp_${'a'.repeat(26)}`, token = 'AbCdEfGhIjKlMnOpQrStUv';
+  function context(href, embedded = false) {
+    const passed = [], window = { fetch:async (input, init) => { passed.push({ input, init }); return new Response('{}'); } };
+    window.self = window; window.top = embedded ? {} : window; globalThis.window = window;
+    installApiGuard({ href, base:'/editor/' }); return { window, passed };
+  }
+  try {
+    for (const href of [`https://h.example/editor/p/${id}`, `https://h.example/editor/p/${id}?nosetup=1`, `https://h.example/editor/s/${id}/${token}`]) {
+      const page = context(href);
+      await page.window.fetch('/api/account/me', { credentials:'same-origin' });
+      await page.window.fetch('/api/account/editor/session', { method:'POST', credentials:'same-origin' });
+      assert.equal(page.passed.length, 2, href);
+      await assert.rejects(page.window.fetch('/api/docservice/device'), href);
+      await assert.rejects(page.window.fetch('api/x'), `relative api on ${href}`);
+      assert.equal(page.passed.length, 2, href);
+    }
+    for (const [href, embedded] of [[`https://h.example/editor/p/${id}?stage=1`, false], [`https://h.example/editor/p/${id}`, true],
+      [`https://h.example/editor/p/${id}/extra`, false], ['https://h.example/editor/p/short', false], [`https://h.example/editor/x/${id}`, false],
+      [`https://h.example/editor/s/${id}/bad.token`, false]]) {
+      const page = context(href, embedded);
+      await assert.rejects(page.window.fetch('/api/account/me', { credentials:'same-origin' }), href);
+      assert.deepEqual(page.passed, [], href);
+    }
+    // 相对地址 `api/x` 在项目地址页面上同样算 `/api/*`
+    assert.equal(apiPathOf('api/x', { href:`https://h.example/editor/p/${id}`, base:'/editor/' }), '/editor/p/api/x');
+    assert.equal(apiPathOf('api/x', { href:`https://h.example/editor/s/${id}/${token}`, base:'/editor/' }), `/editor/s/${id}/api/x`);
+    assert.equal(apiPathOf('api/x', { href:`https://h.example/editor/p/${id}/`, base:'/editor/' }), `/editor/p/${id}/api/x`);
+    assert.equal(apiPathOf('api/x', { href:`https://h.example/editor/s/${id}/${token}/`, base:'/editor/' }), `/editor/s/${id}/${token}/api/x`);
+    assert.equal(apiPathOf('assets/a.js', { href:`https://h.example/editor/p/${id}`, base:'/editor/' }), null);
+    assert.equal(apiPathOf('/editor/p/apiary', { href:`https://h.example/editor/`, base:'/editor/' }), null);
+  } finally { globalThis.window = originalWindow; }
+});
+
 test('project members permits only exact top-editor same-origin POST omit; stage, method, suffix and non-fetch channels reject', async () => {
   const { installApiGuard } = await import('./apiGuard.ts');
   const original = globalThis.window;

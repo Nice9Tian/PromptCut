@@ -1,5 +1,5 @@
 /** Account credentials live in RAM. Only the native vault owns desktop recovery. */
-import { PROJECT_ID_RE, projectPath, readProjectAddress, sharePath } from './projectAddress.ts';
+import { PROJECT_ID_RE, projectPath, readProjectAddress, sharePath } from '../online/projectAddress.ts';
 export interface Account { id: string; name: string; email?: string | null }
 export interface EditorLogin { account: Account; loginId: string; accessToken: string; accessExpiresAt: number }
 export interface ProjectSession {

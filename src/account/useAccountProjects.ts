@@ -6,7 +6,7 @@ import { AccountFailure, createAccountClient, linkTokenFromLink, projectIdFromLi
 import { desktopAccountBridge, isDesktopShellTooOld } from './desktopVault';
 import { createRequestIds } from './requestIds';
 import { enterOrAskPassword } from './entryFlow';
-import { projectPath, readProjectAddress, type ProjectAddress } from './projectAddress';
+import { projectPath, readProjectAddress, type ProjectAddress } from '../online/projectAddress';
 
 /** 编辑器页的根路径:在线构建是 `/editor/`,桌面是 `/` */
 const PAGE_BASE = (typeof import.meta.env !== 'undefined' && import.meta.env.BASE_URL) || '/';
