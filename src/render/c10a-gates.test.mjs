@@ -2,7 +2,7 @@
  * C10a 能力闸：最低一档下素材只拉小尺寸（`docs/plan/c10a-contract.md` 第 8 节「素材只拉小尺寸」，第 12 节「能力闸」）。
  * 跑：node --experimental-test-module-mocks --test src/render/c10a-gates.test.mjs
  *
- * 最低一档怎么告诉 `mediaTier.ts`：`opts.smallOnly === true`（原假设 K3 的 `opts.lowMemory`，2026-10-22 随最低一档撤销改名）。
+ * 最低一档怎么告诉 `mediaTier.ts`：`opts.smallOnly === true`（原假设 K3 的 `opts.lowMemory`，2026-10-22 随低内存档撤销改名）。
  * `src/online/onlineTier.ts` 不在时整组 skip。可播性模块换成桩，记下有没有去探原尺寸（探测要拉原尺寸的首帧）。
  *
  * 只用视频素材：C6.6 只给视频做素材小尺寸（`c66-design.md` 第 2 节），图片、音频在最低一档怎么办契约没写，

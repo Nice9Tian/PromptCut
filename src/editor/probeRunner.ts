@@ -253,7 +253,7 @@ function planJobs(project: Project, costs: CardCostRecord[], device: string): Pr
 /* ------------------------------------------------------------------ 端点 */
 
 /**
- * 成本记录存在哪(C10 契约第 3 节):桌面运行环境是编辑器进程的 `GET / PUT /api/data/costs`;在线普通档由 `Preview` 换成
+ * 成本记录存在哪(C10 契约第 3 节):桌面运行环境是编辑器进程的 `GET / PUT /api/data/costs`;在线双舞台由 `Preview` 换成
  * 页面内快照库 L2 的 `costs` 表(`src/online/l2Costs.ts`,`mode=build`,关掉再开不重测)。
  * `forwardFrames`:探针帧要不要转发给预渲染进程(在线页面没有预渲染进程,不转发)。
  */

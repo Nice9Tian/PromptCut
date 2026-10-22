@@ -9,7 +9,7 @@
  * + 仿 nginx 的代理 `lib/hosted-proxy.mjs`(带全套策略头的隔离摆法)+ 在线构建。
  *
  * 做法:创建者一侧**不起桌面编辑器**(证明没有任何预渲染产物时也画得出来),替创建者把卡片源码 `content.put` 进内容库,
- * 把一段纯色视频与一段短 WAV 传进素材服务;在线普通档的成员页加入这个协作项目,时间轴上摆好:
+ * 把一段纯色视频与一段短 WAV 传进素材服务;在线页面(电脑,两个舞台)的成员页加入这个协作项目,时间轴上摆好:
  *   用户画面卡 `oce-visual`、用户有声卡(画面组件加 `audio()`)`oce-sound`、带相对导入的用户卡 `oce-rel`
  *   (引同目录的 `./oce-rel-helper`、页面自带的 `../native/hud`、`./oce-rel.css`)、带视频输入源的素材效果卡 `oce-invert`、
  *   纯合成的音频素材效果卡 `oce-tone`、读素材采样的音频素材效果卡 `oce-sample`,另有故意很慢的用户卡 `oce-slow`、
@@ -39,7 +39,9 @@
  * E10 导出:同步卡的画面要渲染节点逐帧渲(2026-10-13 起在线导出不再取每张卡存好的 HTML 快照)。另开一个只有一张同步画面卡的项目,没有渲染节点:在线逐帧导出
  *     (`exportVideoBrowser`)停在等待、提示「没有渲染节点在线」、不开导出页、编辑页面里没有卡片模块的顶层记号。有渲染节点时「导出页不执行卡片代码、贴节点渲的位图」
  *     在 `online-export-modes-probe.mjs` 里核。
- * E9 手机低内存档(仿手机)按现有规则走:运行状态 `low-memory`、参数面板说明「低内存档」、两个文档里都没有执行卡片代码的记号,没有预渲染结果的卡显示图标。
+ * E9 模拟手机(安卓、内存 4 GB):舞台闸门停在第一级(精简模式,只有一个跨源舞台),同步卡照样在那一个舞台里执行:运行状态 `ready`、
+ *    编辑页面(顶层文档)里没有卡片模块的记号、那一个舞台里有,画面卡在舞台里是活的。原来这一段核「低内存档不运行用户卡」(运行状态
+ *    `low-memory`、参数面板说明低内存档);那一档 2026-10-07 撤销、2026-10-22 从代码里去掉(`mechanism/platforms.md` 的「运行状态」)。
  *
  * 耗时只记录,不当通过条件(verification.md「耗时只记录,不当闸门」):E8 换成新版的用时写进 TIMINGS 行;等待时限只为防卡死。不打印令牌、口令(输出里的票据形状串一律抹掉)。
  */
@@ -369,7 +371,7 @@ async function openMember(browser, tag, { mobile = false, name = NAME, projectId
   await until(`${tag} 页面认出同步来的卡`, () => page.evaluate((ids) => { const c = window.__pcCardSources?.()?.cards ?? []; return ids.every((id) => c.some((x) => x.id === id)); }, cardIds), 60_000, 500);
   const stageFrames = () => page.frames().filter((f) => /[?&]stage=1/.test(f.url()) && !f.detached);
   const run = () => page.evaluate((ids) => { const d = window.__pcCardExecDiag?.(); return d ? { available: d.available, visual: d.visual, run: Object.fromEntries(ids.map((id) => [id, d.run?.[id] ?? null])), graph: Object.fromEntries(Object.entries(d.stages).map(([k, v]) => [k, v.graph])) } : null; }, CARD_IDS).catch(() => null);
-  /** 可见舞台(两台里此刻可见的那个;低内存档只有一个) */
+  /** 可见舞台(两台里此刻可见的那个;只有一个舞台时就是它) */
   const visibleStage = async () => {
     const frames = stageFrames();
     for (const f of frames) {
@@ -531,7 +533,7 @@ const markersIn = async (m) => {
 try {
   const ONLY_E10 = process.env.OCE_ONLY === 'E10'; // 排障用:只跑 E10
   if (!ONLY_E10) {
-  /* ============================================================ 真显卡的普通档页面 */
+  /* ============================================================ 真显卡的电脑页面 */
   const b1 = await launch();
   summary.chrome = await b1.version();
   console.log('\n== E1 前提');
@@ -804,23 +806,24 @@ try {
   await G.close();
   await b2.close().catch(() => {});
 
-  /* ============================================================ 低内存档 */
-  console.log('\n== E9 手机低内存档(仿手机)');
+  /* ============================================================ 模拟手机(精简模式;原「低内存档」) */
+  console.log('\n== E9 模拟手机(精简模式,只有一个舞台)');
   const b3 = await launch();
   const P = await openMember(b3, 'P', { mobile: true });
-  const lm = await until('P 运行状态落定为 low-memory', async () => { const d = await P.run(); return d?.run['oce-visual']?.state === 'low-memory' ? d : null; }, 120_000, 500);
-  check('E9 低内存档:同步卡的运行状态是 low-memory(现有规则:这台设备不运行用户卡与素材效果卡的代码)', !!lm && ['oce-visual', 'oce-rel', 'oce-invert'].every((id) => lm.run[id]?.state === 'low-memory'), lm?.run);
-  summary.panel.lowmem = await P.panelNote(V.v);
-  check('E9 参数面板说明「低内存档,不运行用户卡与素材效果卡的代码」', /低内存档/.test(summary.panel.lowmem ?? ''), summary.panel.lowmem);
+  const lm = await until('P 的同步卡运行状态落定为 ready', async () => { const d = await P.run(); return ['oce-visual', 'oce-rel', 'oce-invert'].every((id) => d?.run[id]?.state === 'ready') ? d : null; }, 180_000, 500) ?? await P.run();
+  check('E9 模拟手机:同步卡的运行状态是 ready(单舞台同样跨源隔离、同样执行)', !!lm && ['oce-visual', 'oce-rel', 'oce-invert'].every((id) => lm.run[id]?.state === 'ready'), lm?.run);
+  const tierP = await P.page.evaluate(() => { const d = window.__pcPreviewDiag?.(); return d ? { single: d.single, lowest: d.lowest, reached: d.tier?.reached ?? null, identity: d.tier?.identity ?? null } : null; });
+  check('E9 模拟手机:停在第一级(精简模式,只有一个舞台),身份是手机', tierP?.single === true && tierP?.lowest === false && tierP?.reached === 1 && tierP?.identity === 'phone', tierP);
+  summary.panel.phone = await P.panelNote(V.v);
+  check('E9 模拟手机:参数面板里没有「低内存档」的说明', !/低内存/.test(summary.panel.phone ?? ''), summary.panel.phone);
   await P.page.evaluate(() => window.__pcStore.actions.seek(1));
-  await sleep(4000);
-  const mm = await markersIn(P);
-  check('E9 低内存档的任何文档里都没有执行卡片代码的记号', mm.top === null && mm.stages.every((n) => n === null), mm);
-  const ps = await P.stageState([V.v, V.rel], PROBES);
-  check('E9 低内存档里没有预渲染结果的同步卡显示沙漏(等渲染节点),没有活 DOM,没有「本地 PC 辅助渲染」', [V.v, V.rel].every((id) => ps?.[id]?.placeholderShown && ps[id].reason === 'awaiting' && !ps[id].live && !(ps[id].shownText ?? '').includes(UNSUPPORTED)), ps);
-  summary.lowmem = { run: lm?.run ?? null, markers: mm };
-  await P.shot('e9-lowmem');
-  check('E9 低内存档没有页面错误', P.pageErrors.length === 0, P.pageErrors.slice(0, 3));
+  const mm = await until('模拟手机那一个舞台里执行了卡片代码', async () => { const m = await markersIn(P); return m.stages.some((n) => typeof n === 'number' && n > 0) ? m : null; }, 60_000, 500) ?? await markersIn(P);
+  check('E9 模拟手机:卡片代码只在那一个隔离舞台里执行(顶层文档没有记号,舞台里有)', mm.top === null && mm.stages.length === 1 && mm.stages.every((n) => typeof n === 'number' && n > 0), mm);
+  const ps = await until('模拟手机舞台里画面卡是活的', async () => { const s = await P.stageState([V.v], PROBES); return s?.[V.v]?.live ? s : null; }, 60_000, 500) ?? await P.stageState([V.v], PROBES);
+  check('E9 模拟手机:画面卡在舞台里活渲,没有「本地 PC 辅助渲染」', ps?.[V.v]?.live && !(ps[V.v].shownText ?? '').includes(UNSUPPORTED), ps);
+  summary.phone = { run: lm?.run ?? null, markers: mm, tier: tierP };
+  await P.shot('e9-phone');
+  check('E9 模拟手机没有页面错误', P.pageErrors.length === 0, P.pageErrors.slice(0, 3));
   await P.close();
   }
 } catch (e) {

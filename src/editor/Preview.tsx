@@ -236,7 +236,7 @@ export function Preview(props: { variant?: "mobile" } = {}) {
   const frameARef = useRef<HTMLIFrameElement>(null);
   const frameBRef = useRef<HTMLIFrameElement>(null);
   /*
-   * 在线普通档的两个舞台(C10 契约第 2 节):舞台源来自运行配置(页面载入时取,`src/online/boot.ts`),握手失败退回同源单舞台。
+   * 在线双舞台的两个舞台(C10 契约第 2 节):舞台源来自运行配置(页面载入时取,`src/online/boot.ts`),握手失败退回同源单舞台。
    * 状态变了要重渲(`dualStage()` 读的是这一份)。运行配置还没取完时先不挂舞台 iframe,免得先按同源挂上、再换源重载一次。
    */
   const onlineStages = useSyncExternalStore(subscribeOnlineStages, onlineStageState, onlineStageState);

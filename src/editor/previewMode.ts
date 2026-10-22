@@ -87,7 +87,7 @@ export function dualStage(): boolean {
 }
 
 /**
- * 在线普通档首次握手的过渡期(`stageHandshake.ts` 的 `interim`)已撤销（2026-10-14 用户定：所有舞台一律跨源隔离，撤掉退回同源单舞台的路）。
+ * 在线双舞台首次握手的过渡期(`stageHandshake.ts` 的 `interim`)已撤销（2026-10-14 用户定：所有舞台一律跨源隔离，撤掉退回同源单舞台的路）。
  * 直接返回 false。
  */
 export function interimStage(): boolean {

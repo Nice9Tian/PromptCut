@@ -1,5 +1,5 @@
 /**
- * 在线普通档播放时的「按拍换快照」预算(C10 契约 `docs/plan/c10-contract.md` 第 6 节、第 18 节第 1 条;
+ * 在线双舞台播放时的「按拍换快照」预算(C10 契约 `docs/plan/c10-contract.md` 第 6 节、第 18 节第 1 条;
  * 语义 `product/rendering.md`「兜底顺序」、`product/platforms.md`「在线浏览器模式」)。
  *
  * 在线页面没有预渲染进程,也就没有轨道流:重层每拍换一次 HTML 快照。换一次快照的成本计入每拍预算,

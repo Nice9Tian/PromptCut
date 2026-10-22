@@ -4,7 +4,7 @@
  * 绝不连真正的托管端。
  *
  *   npx vite build --mode online --outDir <在线构建目录>
- *   node scripts/probes/sound-ab-probe.mjs --dist <在线构建目录> [--out <目录>] [--phases desktop,online,lowmem]
+ *   node scripts/probes/sound-ab-probe.mjs --dist <在线构建目录> [--out <目录>] [--phases desktop,online,phone]
  *        [--desktop-port 5783] [--site-port 5780] [--doc-port 8786] [--asset-port 8787]
  *
  * 端口:桌面 dev server 占 --desktop-port 起连号三个;在线站点占 --site-port 起连号三个(编辑器页 + 两个舞台的源);
@@ -27,7 +27,7 @@
  *      没做完的没有任何记录;素材条数 = 有产物的片段数;之后项目不再变;
  *   D5 故意让一段生成失败(参数越界):导出失败,错误信息里有那个片段的名字与 id,导出任务没开出来。
  *
- * 在线普通档(第 5 条与第 4 条的在线一半,`online`):
+ * 在线页面(第 5 条与第 4 条的在线一半,`online`):
  *   O1 测量不出声:判定一段还没测过的声音时,测量确实做了(记录 16 块),期间没有新建音频上下文、没有元素开始播放、
  *      没有新建可播放地址、没有声源启动,页面上没有在播的媒体元素;
  *   O2 没有任何现成声音产物时听得到:内置有声卡(未生成)、提示音与键盘声(素材服务里没有它们的文件)在预览里播放,
@@ -39,10 +39,11 @@
  *   O7 在线生成中取消:导出取消,没做完的没有记录;
  *   O8 在线故意让一段生成失败:导出失败并指出片段。
  *
- * 在线低内存档(`lowmem`,手机仿真):
- *   L1 不测、不合成:未生成的有声卡预览不出声、提示里写明低内存档;
+ * 手机仿真(`phone`;原来叫 `lowmem`,看「低内存档不测、不合成」。那一档 2026-10-07 撤销、2026-10-22 从代码里去掉,
+ * 手机、iPad 和电脑走同一套规则,见 `docs/semantics/mechanism/rendering.md`「有声动效卡」;这一段改成核「手机不再被预先禁用」):
+ *   L1 照常测、照常判:未生成的有声卡的判定不回「低内存档」(`low-memory`),这台设备照电脑的规矩测量(测量次数加了);
  *   L2 已同步的产物照常播;
- *   L3 导出开始时缺声音:失败并指出片段;声音齐全时导出成功且有声。
+ *   L3 导出开始时缺声音:和电脑一样先生成再导出(进度里有 sound 阶段),成片有声。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
 import fs from 'node:fs';
@@ -67,7 +68,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const RUN = Date.now().toString(36) + randomBytes(2).toString('hex');
 const OUT = path.resolve(arg('--out', path.join(os.tmpdir(), `pc-sound-ab-${RUN}`)));
 const DIST = path.resolve(arg('--dist', path.join(ROOT, 'dist-online')));
-const PHASES = new Set(arg('--phases', 'desktop,online,lowmem').split(','));
+const PHASES = new Set(arg('--phases', 'desktop,online,phone').split(','));
 const DESKTOP_PORT = Number(arg('--desktop-port', 5783));
 const SITE_PORT = Number(arg('--site-port', 5780));
 const PORTS = { editor: SITE_PORT, stageA: SITE_PORT + 1, stageB: SITE_PORT + 2, doc: Number(arg('--doc-port', 8786)), asset: Number(arg('--asset-port', 8787)) };
@@ -245,7 +246,7 @@ const cleanups = [];
 let exitCode = 1;
 try {
   if (PHASES.has('desktop')) await desktopPhase();
-  if (PHASES.has('online') || PHASES.has('lowmem')) await onlinePhases();
+  if (PHASES.has('online') || PHASES.has('phone')) await onlinePhases();
   const failed = results.filter((r) => !r.ok);
   console.log(JSON.stringify({ summary: { checks: results.length, passed: results.length - failed.length, fails: failed.map((r) => r.check), out: OUT, phases: [...PHASES] } }));
   exitCode = failed.length ? 1 : 0;
@@ -467,7 +468,7 @@ async function onlinePhases() {
     const seeded = await ask({ type: 'project.op', projectId: shared.projectId, opId: randomBytes(16).toString('base64url'), ops: [{ op: 'set', path: '', value: body }] });
     check('在线:共享项目建好并写进一份空项目(托管组合在本机)', !!shared.projectId && !/error|reject/i.test(String(seeded?.type ?? '')), { type: seeded?.type, rev: seeded?.rev ?? null });
     /*
-     * 探针里没有渲染节点。在线普通档导出前要核对「重卡的预渲染原尺寸齐不齐」:没有层表时页面把分派表里判重的片段都算缺
+     * 探针里没有渲染节点。在线页面导出前要核对「重卡的预渲染原尺寸齐不齐」:没有层表时页面把分派表里判重的片段都算缺
      * (素材段、还没测过的卡都在里面),会一直等渲染节点。这里替渲染节点写一张空的层表(= 没有哪一层要用预渲染原尺寸),
      * 画面由导出页逐帧活渲 —— 这个探针验的是声音,画面只用按帧直接算的内置卡。
      */
@@ -544,7 +545,7 @@ async function onlinePhases() {
   }, cancelAt);
 
   if (PHASES.has('online')) {
-    log('在线普通档:甲加入');
+    log('在线页面:甲加入');
     const A = await newPage('甲');
     await join(A, 'alice');
     const env = await A.evaluate(() => ({ online: window.__pcOnlinePage === true, device: window.__pcSoundJudge.device(), stats: window.__pcSoundJudge.stats() }));
@@ -555,7 +556,7 @@ async function onlinePhases() {
       const { actions, getState } = window.__pcStore;
       const sound = await window.__pcIo.sound();
       actions.setProjectMeta({ width: 640, height: 360, fps: 30 });
-      // 总时长跟着内容走:先放一张 6 秒的卡把时间轴撑开。用静音的 av-pulse(按帧直接算的轻卡):在线普通档导出时判重的卡要等渲染节点的
+      // 总时长跟着内容走:先放一张 6 秒的卡把时间轴撑开。用静音的 av-pulse(按帧直接算的轻卡):在线页面导出时判重的卡要等渲染节点的
       // 预渲染原尺寸,这个探针里没有渲染节点,画面只放判轻的卡
       const base = actions.addCardClip('av-pulse', 0, { duration: 6, params: { frequency: 300, gain: 0.5, duration: 0.3 } });
       actions.setClipMuted(base.id, true);
@@ -653,7 +654,7 @@ async function onlinePhases() {
     check('O3 再问同一段声音:复用记录,不重测', reuse.reused === true && reuse.measuredDelta === 0, reuse);
 
     /* ---- O6 在线直接导出(先于判重的场景:此刻三段声音都要生成) */
-    log('在线普通档:直接导出');
+    log('在线页面:直接导出');
     const exported = await exportOnline(A);
     const soundSteps = exported.progress.filter((p) => p[0] === 'sound');
     const firstRender = exported.progress.findIndex((p) => p[0] !== 'sound'), lastSound = exported.progress.map((p) => p[0]).lastIndexOf('sound');
@@ -678,7 +679,7 @@ async function onlinePhases() {
     check('O6 有了有效产物之后预览改用产物(素材服务的地址),不再用浏览器合成的那份', audible(heardProduct) && heardProduct.source === 'url', brief(heardProduct));
 
     /* ---- O4 / O5 判重 */
-    log('在线普通档:判重');
+    log('在线页面:判重');
     const heavy = await A.evaluate(async () => {
       const { actions, getState } = window.__pcStore;
       const added = actions.addCardClip('av-pulse', 4.2, { duration: 0.6, params: { frequency: 440, gain: 0.6, duration: 0.3 } });
@@ -698,7 +699,7 @@ async function onlinePhases() {
     const heavyExport = await exportOnline(A);
     check('O4 判重、没有产物:导出失败并指出片段', heavyExport.ok === false && !heavyExport.cancelled && heavyExport.clipId === heavy.id && heavyExport.message.includes(heavy.id) && /判重/.test(heavyExport.message), { message: heavyExport.message });
 
-    log('在线普通档:乙加入,替甲判重的那段生成产物');
+    log('在线页面:乙加入,替甲判重的那段生成产物');
     const B = await newPage('乙');
     await join(B, 'bob');
     await until('乙看到那段声音', async () => (await clipsOf(B)).some((c) => c.id === heavy.id), 30_000);
@@ -726,7 +727,7 @@ async function onlinePhases() {
     await B.close();
 
     /* ---- O7 在线生成中取消 */
-    log('在线普通档:生成中取消');
+    log('在线页面:生成中取消');
     const cancelSetup = await A.evaluate(() => {
       const { actions } = window.__pcStore;
       const ids = [];
@@ -756,21 +757,21 @@ async function onlinePhases() {
     const failed = await exportOnline(A);
     check('O8 在线一段生成失败:导出失败并指出片段与原因', failed.ok === false && !failed.cancelled && failed.clipId === bad && failed.message.includes(bad) && /片段「.+」/.test(failed.message) && /frequency/.test(failed.message), { message: failed.message, bad });
     await A.evaluate((id) => window.__pcStore.actions.removeClip?.(id), bad);
-    check('在线普通档:页面没有报错', A.errors.length === 0, { errors: A.errors.slice(0, 5) });
-    if (!PHASES.has('lowmem')) await A.close();
+    check('在线页面:页面没有报错', A.errors.length === 0, { errors: A.errors.slice(0, 5) });
+    if (!PHASES.has('phone')) await A.close();
     else A.keep = true;
 
-    if (PHASES.has('lowmem')) await lowmemPhase({ newPage, join, clipsOf, audioLog, audioLogSince, exportOnline, A, known: { pulse: made.pulse, heavy: heavy.id } });
-  } else if (PHASES.has('lowmem')) {
-    await lowmemPhase({ newPage, join, clipsOf, audioLog, audioLogSince, exportOnline, A: null, known: null });
+    if (PHASES.has('phone')) await phonePhase({ newPage, join, clipsOf, audioLog, audioLogSince, exportOnline, A, known: { pulse: made.pulse, heavy: heavy.id } });
+  } else if (PHASES.has('phone')) {
+    await phonePhase({ newPage, join, clipsOf, audioLog, audioLogSince, exportOnline, A: null, known: null });
   }
   await browser.close();
 }
 
-/* ================================================================== 在线低内存档 */
-async function lowmemPhase({ newPage, join, clipsOf, audioLog, audioLogSince, exportOnline, A, known }) {
-  log('在线低内存档:手机仿真加入');
-  // 没有普通档那一步时自己先摆一段有产物的声音
+/* ================================================================== 手机仿真(原「在线低内存档」) */
+async function phonePhase({ newPage, join, clipsOf, audioLog, audioLogSince, exportOnline, A, known }) {
+  log('手机仿真:加入');
+  // 没有在线页面那一步时自己先摆一段有产物的声音
   let seeded = known;
   let helper = A;
   if (!helper) {
@@ -797,24 +798,15 @@ async function lowmemPhase({ newPage, join, clipsOf, audioLog, audioLogSince, ex
     const d = await (await window.__pcIo.sound()).decideClipSound(p, clip);
     return { synth: d.synth, reason: d.reason ?? null, message: d.message ?? null, stats0: s0, stats1: window.__pcSoundJudge.stats(), mem: navigator.deviceMemory, touch: navigator.maxTouchPoints };
   }, fresh);
-  check('L1 低内存档:不测、不合成(判定直接回「低内存档」,测量次数不变)', env.synth === false && env.reason === 'low-memory' && env.stats1.measured === env.stats0.measured, env);
-  const logBefore = await audioLog(M);
-  const silent = await listen(M, { at: 7.05, ms: 400, clipId: fresh });
-  const silentLog = await audioLogSince(M, logBefore);
-  check('L1 低内存档:未生成的有声卡预览不出声,没有新建可播放地址,提示里写明原因', !silent.playing && !silentLog.some((e) => e.kind === 'createObjectURL') && silent.status.some((t) => /低内存档/.test(t)), { ...brief(silent), log: silentLog });
-  await M.screenshot({ path: path.join(OUT, 'L1-lowmem-hint.png') });
+  check('L1 手机仿真:照常测、照常判(不再回「低内存档」,测量次数加了)', env.reason !== 'low-memory' && env.stats1.measured > env.stats0.measured && !/低内存/.test(env.message ?? ''), env);
   const product = await listen(M, { at: 0.5, ms: 400, clipId: seeded.pulse });
-  check('L2 低内存档:已经同步的声音产物照常播(素材服务的地址)', audible(product) && product.source === 'url', brief(product));
-  const missing = await exportOnline(M);
-  check('L3 低内存档:导出开始时缺声音,失败并指出片段(不在这台设备上合成)', missing.ok === false && !missing.cancelled && missing.clipId === fresh && /低内存档/.test(missing.message), { message: missing.message });
-  await helper.evaluate(async (id) => { await (await window.__pcIo.sound()).generateCardAudio(id); }, fresh);
-  await until('补上的产物同步到手机', async () => (await clipsOf(M)).find((c) => c.id === fresh)?.hasAudio, 30_000);
+  check('L2 手机仿真:已经同步的声音产物照常播(素材服务的地址)', audible(product) && product.source === 'url', brief(product));
   const ok = await exportOnline(M);
-  check('L3 低内存档:声音齐全时导出成功,不出现生成阶段', ok.ok && !ok.progress.some((p) => p[0] === 'sound'), { ok: ok.ok, message: ok.message, bytes: ok.bytes });
+  check('L3 手机仿真:导出开始时缺声音,和电脑一样先生成再导出(进度里有 sound 阶段)', ok.ok && ok.progress.some((p) => p[0] === 'sound'), { ok: ok.ok, message: ok.message, bytes: ok.bytes });
   if (ok.ok) {
-    const mp4 = path.join(OUT, 'L3-lowmem-export.mp4');
+    const mp4 = path.join(OUT, 'L3-phone-export.mp4');
     fs.writeFileSync(mp4, Buffer.from(ok.base64, 'base64'));
-    auditMp4('L3 低内存档成片', mp4, [{ id: '有声卡 880 Hz', at: 0.5, dur: 0.3 }, { id: '补上的有声卡 610 Hz', at: 7.0, dur: 0.3, hz: 610, notHz: 880 }]);
+    auditMp4('L3 手机仿真成片', mp4, [{ id: '有声卡 880 Hz', at: 0.5, dur: 0.3 }, { id: '手机上生成的有声卡 610 Hz', at: 7.0, dur: 0.3, hz: 610, notHz: 880 }]);
   }
-  check('在线低内存档:页面没有报错', M.errors.length === 0, { errors: M.errors.slice(0, 5) });
+  check('手机仿真:页面没有报错', M.errors.length === 0, { errors: M.errors.slice(0, 5) });
 }

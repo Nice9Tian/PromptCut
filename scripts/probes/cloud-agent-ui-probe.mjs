@@ -28,7 +28,8 @@
  *       账号模式下这一段现在不通(云端 Agent 回「发起方不在线」,页面没收到要它执行的请求),先单独成一段,免得它拖死别的断言;见报告「发现的产品问题」;
  *   O2  停止:点「停止」后这一轮停下、回复里没有脚本里停之后才会说的话;
  *   O4  另一个浏览器上下文(没有本地存储)以同一个账号登录、从项目列表进同一个项目:历史列表的「云端」一组里有刚才的对话,点开找回完整过程;
- *   O6  手机仿真(低内存档)仍是占位,没有云端 AI 栏、没有发往 /agent/ 的请求。
+ *   O6  手机仿真进了项目,不再是「低内存档」的占位(`online-agent-off`):AI 栏不分身份(`product/platforms.md`「AI 栏」,2026-10-07 用户定;
+ *       2026-10-22 从代码里去掉按档换占位)。手机版界面上 AI 栏怎么摆归 `src/mobile/`,这里只核占位不在了。
  *
  * 没搬过来的(原来的断言依赖旧入口的夹具:房间号加口令的共享项目、可掐事件流的代理、可注入的在场状态,或桌面版的页面;记在
  * `docs/reports/AGENT-v18-runner-list.md`「老项逐条判」):O3 事件流掐断后重连补齐、O5 出错与创建者关开关、O7 成员计数与离线 Agent、
@@ -366,7 +367,7 @@ try {
     }
     await ctxB.close().catch(() => {});
 
-    /* ---- O6:手机仿真仍是占位(第二个账号加入同一个项目链接,手机环境) */
+    /* ---- O6:手机仿真不再是低内存档的占位(第二个账号加入同一个项目链接,手机环境) */
     const ctxM = await browser.createBrowserContext();
     const Mo = await newPage(ctxM, { mobile: true });
     Mo.setDefaultTimeout(TIMEOUT);
@@ -377,9 +378,8 @@ try {
     await Mo.waitForSelector('[data-pc="cloud-agent-consent"]', { visible: true, timeout: 8000 }).then(() => consent(Mo)).catch(() => {});
     await sleep(3000);
     const mob = await P(Mo, () => ({ placeholder: !!document.querySelector('[data-pc="online-agent-off"]'), panel: !!document.querySelector('[data-pc="cloud-ai-panel"]'), editor: !!window.__pcStore, text: document.querySelector('[data-pc="online-agent-off"]')?.textContent?.trim().slice(0, 60) ?? null }));
-    check('O6:手机仿真(低内存档)进了项目,仍是占位,没有云端 AI 栏', mob.editor && mob.placeholder && !mob.panel, mob);
-    check('O6:手机仿真没有发往 /agent/ 的请求', agentReqs(Mo).length === agentBefore, { mobAgentReq: agentReqs(Mo).length - agentBefore });
-    await shot(Mo, 'O6-mobile-placeholder');
+    check('O6:手机仿真进了项目,没有「低内存档」的占位(AI 栏不分身份)', mob.editor && !mob.placeholder, { ...mob, mobAgentReq: agentReqs(Mo).length - agentBefore });
+    await shot(Mo, 'O6-mobile');
     await ctxM.close().catch(() => {});
     }
     await ctxA.close().catch(() => {});

@@ -1,5 +1,5 @@
 /**
- * 在线普通档的两个舞台(C10 契约 `docs/plan/c10-contract.md` 第 2 节;语义 `mechanism/rendering.md`「舞台」:舞台有两个)。
+ * 在线双舞台的两个舞台(C10 契约 `docs/plan/c10-contract.md` 第 2 节;语义 `mechanism/rendering.md`「舞台」:舞台有两个)。
  *
  * - **舞台源**:两个舞台 A、B 各用一个源,与编辑器页同站跨源,三方的响应都带 `Origin-Agent-Cluster: ?1`(nginx 或本机代理加)。
  *   页面从运行配置 `/editor/runtime-config.json` 取舞台源(`scripts/remote/docservice.mjs deploy-hosted --stage-origins` 写进去):

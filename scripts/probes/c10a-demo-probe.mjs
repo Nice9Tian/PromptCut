@@ -1,4 +1,11 @@
 /**
+ * 〔第 2、2c、4 步已失效,2026-10-22〕这几步的手机段按「低内存档」写(进入提示、播放时一律贴预渲染小尺寸、停下追一帧限时 5 秒、
+ * 为弱设备补发预渲染任务 `__pcBackfill`、`__pcLowMemSearch`):那一档 2026-10-07 撤销、0.7.19 从代码里去掉;
+ * 预渲染小尺寸也已停用(只留轨道流)。整支探针的入口(加入表单、邀请码)在 0.7.18 起就跑不通
+ * (`scripts/acceptance/v18-manifest.mjs` 的 STALE_OLD_ENTRY 里 X-c10a-demo-local),要用得重写主干,这里不就地改断言。
+ * 接替手机那几步的:`page-stream-probe.mjs --only mobile`(模拟手机,精简模式)、`--only lowest`(最低一档)、
+ * `stage-gate-probe.mjs`(三道闸门)。
+ *
  * C10a 验收的演示探针(契约 `docs/plan/c10a-contract.md` 第 12 节「本机替身跑 demo」「低内存档逐帧导出一段」)。
  * 复用 `online-join-probe.mjs`(托管组合、nginx 形状的代理、加入表单、重新生成邀请码)、`lowmem-online-probe.mjs`
  * (手机仿真、请求记录、逐帧导出)、`c66-t9-probe.mjs`(创建者兼渲染节点、重卡片段的人工钉死、plan 落定)的做法。

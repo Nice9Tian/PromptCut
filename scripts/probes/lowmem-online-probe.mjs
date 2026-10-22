@@ -1,4 +1,11 @@
 /**
+ * 〔已退役,2026-10-22〕这支探针整个按「低内存档」写:手机仿真自动判成低内存档、设备设置「显示档」、进入提示、只贴预渲染小尺寸、
+ * 停下追一帧限时 5 秒。那一档 2026-10-07 撤销、0.7.19 从代码里去掉(`docs/semantics/product/platforms.md`「在线浏览器」),
+ * 下面的断言照旧跑必然不过,留着只作历史。接替它的:最低一档(播放时不即时渲染、停下逐层追一帧不设时限)见
+ * `stage-gate-probe.mjs` 的 S15 与 `page-stream-probe.mjs --only lowest`;模拟手机(精简模式)见 `page-stream-probe.mjs --only mobile`;
+ * 浏览器逐帧导出见 `online-export-modes-probe.mjs`、`lowmem-export-compare.mjs`。它本来也不在验收清单里
+ * (`scripts/acceptance/four-stage-manifest.mjs` 的 EXCLUDED_PROBE_FILES)。
+ *
  * 在线页面的低内存档探针(`docs/plan/c10a-contract.md` 第 8、8.1、9、11.1 节):Chrome 移动端仿真(手机视口、触屏、
  * `deviceMemory: 4`)打开**在线构建的编辑页**,看能力闸、单舞台 live 预览、按清单拉预渲染小尺寸、逐帧导出。
  *

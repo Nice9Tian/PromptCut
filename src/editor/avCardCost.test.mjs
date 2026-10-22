@@ -4,7 +4,7 @@
  *
  *   AVC-01 `clipCostNodes` / `clipCostIndex`:片段自己的素材效果卡节点只在调用方说算时才当成本身份节点;键与预渲染进程按输出节点算的
  *          `costKey` 相同;图里的节点不动(不写 `clipId`,预渲染结果的键不变);不给 `ownNode` 与以前逐字相同
- *   AVC-02 `clipIdentityOf`:有声动效卡(就地合成的节点、物化过的节点)有身份、有声明的帧模式、有能力表;桌面与在线普通档都如此;
+ *   AVC-02 `clipIdentityOf`:有声动效卡(就地合成的节点、物化过的节点)有身份、有声明的帧模式、有能力表;桌面与在线双舞台都如此;
  *          画面由 `card()` 出的素材效果卡、只有 `audio()` 的音频素材效果卡照旧没有
  *   AVC-03 分派:没有成本记录时按声明兜底(`direct` 判轻;别的在测完之前判重),记录到了按记录判 —— 判轻就不在预渲染集合里
  *   AVC-04 测量:有声动效卡第一次出现就测一次(只测这一张),测量期间不调它的 `audio()`;记录写进去之后分派表判轻;
@@ -131,7 +131,7 @@ test("AVC-01 clipCostNodes / clipCostIndex:片段自己的素材效果卡节点�
   assert.equal(old.identityKeys.p, index.identityKeys.p, "普通卡的键不受影响");
 });
 
-test("AVC-02 clipIdentityOf:有声动效卡有身份、帧模式、能力表(桌面与在线普通档);card() 素材效果卡与音频素材效果卡照旧没有", () => {
+test("AVC-02 clipIdentityOf:有声动效卡有身份、帧模式、能力表(桌面与在线双舞台);card() 素材效果卡与音频素材效果卡照旧没有", () => {
   setup();
   const p = project();
   try {
