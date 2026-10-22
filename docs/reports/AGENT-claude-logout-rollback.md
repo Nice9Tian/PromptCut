@@ -151,7 +151,34 @@ VisuHive 全量 node --test account/test/*.test.mjs   ℹ tests 118  ℹ pass 10
 
 ## 五、门槛
 
-（见第七节，全量跑完补）
+门槛按协调方转达的用户新定（2026-10-22）：合入前只跑改动影响到的测试，全量挪到 0.7.20 发版前一次做。账号后端两个环境变量指向 VisuHive 的 `claude/logout-rollback` worktree（新测试依赖它的撤回证明与上报口；指向 VisuHive main 时 RB、LR-E1 会红，见第三节）。
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 类型检查 | `npx tsc -b --force` | 退出码 0，输出为空（最终代码上） |
+| 受影响测试 | `npm test -- <105 个文件>`（清单见下） | 退出码 0；日志 103,520 字节；**750 条，750 过、0 失败、0 取消、0 跳过** |
+| 构建 | `npm run build` | 退出码 0（`✓ built`） |
+| 在线构建 | `npx vite build --mode online` | 退出码 0（探针用） |
+| 探针 | `PROMPTCUT_NO_PORT_FILE=1 node scripts/probes/logout-rollback-probe.mjs --status …` | 退出码 0，`ok: true`、`fails: []`（第四节） |
+| VisuHive | `node --test account/test/*.test.mjs` | 118 条，108 过、0 失败、10 跳过（原本就跳过） |
+
+受影响测试的选法：引用了我改过的模块（`server/account/{authority,client,logout-confirmer,password-order,logout-rollback}.mjs`、`server/docservice/operation-wiring.mjs`、`server/docservice/modules/project.mjs`、`server/hosted/{doc-assembly,combo}.mjs`、`src/store/docsync.ts`、`src/editor/sync/{labels,syncManager,undoConflict}.ts`）或改过的夹具（`password-order-fixture`、`operation-wiring-fixture`、`fixtures/account-password-user-path`）的全部测试文件，加上 `src/editor/sync/*.test.mjs`、`src/mobile/*.test.mjs`、`password-order-counterexamples`、`pending-merge`。105 个文件：
+
+`accept-018-files-account-fixture` `account-assembly-accepted-client` `account-assembly-central` `account-assembly-fence-transaction` `account-create-policy` `account-executor-assembly-mtls` `account-hosted-option` `account-hosted-wiring` `account-join-requests` `account-ledger-read-cache` `account-logout-agent-restart` `account-logout-confirmation` `account-logout-rollback` `account-logout-timeout` `account-member-projection` `account-op-resend` `account-password-user-path` `account-projects-ledger` `account-projects-provider` `account-revocation-notification` `account-runner-wiring` `account-task-worker-child` `account-v2-deploy-config` `account-worker-control-https` `agent-c65-duration` `agent-c65-pagestate` `agent-live-selection` `agent-read-closed-prune` `agent-read-control-transport` `agent-read-control` `agent-run-scope-doc` `agent-runner-ack-recovery` `agent-worker-registration-mtls` `agent-worker-settlement-client` `asset-doc-client` `asset-run-mtls` `asset-wiring-integration` `c65b-undo` `cloud-queue-http` `cloud-run-assets-central-history` `cloud-run-assets-central-mount` `cloud-run-assets-central-private-tls` `cloud-run-assets-central-tls` `cloud-run-assets-current-vertical-tls` `conversation-delete-http` `docservice-events` `docservice-pending` `docservice-project-ops` `gone-trust-source` `hosted-render-capacity` `hosted-render-identity` `ht3-equivalence` `invite-impl` `legacy-gone-proof` `local-origin` `logout-rollback-plan` `logout-rollback` `move-guard` `multi-agent-presence` `operation-wiring-core` `operation-wiring-crash` `password-order-core` `password-order-counterexamples` `password-order-crash` `pending-merge` `reopen-hosting` `reopen-relocation-files` `reopen-relocation-transfer` `reopen-relocation` `run-asset-transport-tls-worker` `run-assets-observer` `run-authority-core` `run-authority-operation` `sp-hosting`（以上在 `server/test/`）；`src/editor/fields/fields` `src/editor/io/localWrites` `src/editor/io/mediaSharedSync` `src/editor/sync/` 下全部 24 个 `src/mobile/` 下 3 个 `src/store/{docsync,docsyncCutUndo,docsyncEditor,docsyncStore,reopenRecovery}`。
+
+**这一组没覆盖到、发版前全量要特别看的范围**：
+- 通过 `server/hosted/combo.mjs` 间接起整套托管组合、但不在上面清单里的测试（按文件名 grep 只认直接引用；经别的夹具间接起组合的，例如部分 `accept-018-*`、`c10-*`、`render-*` 端到端用例）。
+- 只经 `src/store/project`（不直接引用 `docsync.ts`）走到撤销栈的编辑器测试（`src/editor/**` 其余部分、`src/store/actions` 相关）。
+- `scripts/probes/` 里用 `lib/mobile-env.mjs` 的其它探针（`mobile-ui-probe`、`mobile-business-probe`、`conflict-merge-probe`）：改动只是多给出两个字段，没跑。
+
+**改之前跑过的两遍全量**（新门槛之前，留作记录，不再追究）：两遍都是 7655 条、日志约 92.2 万字节、有汇总行；各有 1 条失败，都不在我改到的范围里，单跑都过：
+
+| 遍 | 满载失败 | 单跑复核 |
+|---|---|---|
+| 第一遍 | `server/test/reopen-hosting.test.mjs`「真实中继 restricted」：`TypeError: Cannot read properties of null (reading 'expiresAt')` | 单跑两次：3/3 过、3/3 过 |
+| 第二遍 | `server/test/cloud-agent-egress.test.mjs` CA-EGRESS-08：`http://127.0.0.1:8443/` 期望 `port` 实得 `blocked-address` | 单跑两次：14/14 过、14/14 过 |
+
+第三遍按协调方要求中途停掉，停掉后清理了它留下的、命令行在本 worktree 下的测试子进程（只动了本 worktree 路径下的）。
 
 ## 六、要你补的语义（不由我改）
 
@@ -164,4 +191,8 @@ VisuHive 全量 node --test account/test/*.test.mjs   ℹ tests 118  ℹ pass 10
 
 ## 七、没做成的及原因
 
-（见门槛结果）
+- **全量 `npm test`**：按用户新定挪到发版前，没有一遍干净的全量（见第五节）。
+- **气泡截图不是从真的改密退出触发的**：截图环境的口令共享项目没有这条路，原因与替代证据见第四节。
+- **「退出和修改处理进度分别表达」**：没有单独的撤回进度显示（撤回结果随「设备已退出」一起出现），见第六节第 4 条。
+- **部署顺序是硬约束**：PromptCut 文档服务不能早于 VisuHive 账号后端上线，见第一节末。没有做「旧账号后端时跳过撤回」的降级，因为那样会把该撤的修改静默留下。
+- 真实网络环境验收没做（不部署就不跑，`verification.md`）。
