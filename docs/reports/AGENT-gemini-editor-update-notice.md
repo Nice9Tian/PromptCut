@@ -101,3 +101,69 @@
 
 - agy 在沙盒里只写得了 manager 给了精确写权限的文件：`tsc -b` 写不了 `tsconfig.tsbuildinfo`（它改用 `tsc --noEmit` 自查）；Git Bash 起不来，DEP-4/6/7 在沙盒里跳过；探针在沙盒里跑不了（在线构建要写允许范围外的临时文件，Chrome 装在用户目录下）。所以第 2 节的结果都由 manager 在沙盒外跑。
 - 端口只用了 6410（探针）与 6412（manager 截图）；没起 dev server；没有结束不是自己启动的进程。
+---
+
+## 审查（Opus 高思考档，2026-10-23）
+
+审查范围：`git diff 55525690..ea4f606f` 的 11 个文件，对照 `product/platforms.md`「新版本提示」与 `mechanism/platforms.md`「新版本提示」「换代保留」。修复都提交在本分支，没有推送、没有合并；语义文件没改。
+
+### 审查结论（按严重程度）
+
+| # | 严重程度 | 位置（审查时的提交 `ea4f606f`） | 问题 | 处理 |
+|---|---|---|---|---|
+| 1 | 高 | `server/hosted-render/main.mjs:160` `editorHasCodeVersion` | 递归扫在线页面目录下所有 `.js`/`.html`，`assets/` 里现在留着前 3 代的脚本：渲染服务停在这 3 代里的旧版本时也被判「一致」，`render.code-mismatch` 不报，它发的任务一个也认领不了却没人知道 | 已修 `7074ccc7` |
+| 2 | 中 | `server/hosted/deploy.mjs:190～191` | 同一份构建再换一次（部署重跑、只为补运行配置再跑一次）也顺延清单：重跑一次挤掉一代，重跑三次只剩本代，开着旧页面的人按需加载就取不到 | 已修 `88d5f2de` |
+| 3 | 中 | `server/hosted/deploy.mjs:196～199` | 换代停在 `mv editor editor.prev` 与 `mv .incoming-editor editor` 之间（断线、被杀）时，下次部署第一行 `rm -rf editor.prev` 把整个旧版连同前几代删掉，且这次没有 `editor/assets` 可补 | 已修 `88d5f2de`：没有 `editor` 而有 `editor.prev` 时先挪回来 |
+| 4 | 中 | `src/editor/sync/updateNotice.css:8～10` | 只靠 `left: 50%` 定位，收缩适配宽度最多半个视口：390 宽手机上第一步折成两行（195 px 宽），第二步的提示语一字一行（截图见下） | 已修 `44f7fb21` |
+| 5 | 中 | 同上，`bottom: 72px` | 手机版编辑器里提示条正压在子导航「图片 / 音频 / 卡片」三个按钮上（量到的：提示条下面是 `sub-image`、`sub-audio`、`sub-cut`、`sub-card`） | 已修 `44f7fb21` |
+| 6 | 低 | `src/editor/sync/UpdateNotice.tsx:51` | 点「仍要刷新」后浏览器自己的离开确认（`SyncOverlays.tsx` 的 `beforeunload`）又问一遍（实测改前 `forceDialogs: ["beforeunload"]`） | 已修 `59e14d9e` |
+| 7 | 低 | `src/online/updateCheck.test.mjs` | 没测「服务端退回本页版本时提示撤下」（报告 1.2 节写了这条行为，测试没覆盖） | 已补 UPD-08 `1a2b98a7` |
+| 8 | 低 | `scripts/probes/update-notice-probe.mjs` | 探针只在 1280 宽量过，第 4 条那种折行测不出来；退回版本也没测 | 已补 U3b、U6 `946a4c95`（U6 对改前的构建确实不过：文字高 35 px、宽 195 px） |
+
+其余看过、没发现问题的：`updateCheck.ts` 的计时、前后台、单飞、`stop()` 后在途请求不改状态、开发构建不查；`version.json` 插件只挂在线构建、值与 `__PC_CODE_VERSION__` 同源；nginx 的 `location /editor/` 对 `version.json` 回 `no-store`；`mountUpdateNotice` 对舞台入口、`?stage`、`?export`、`?audioMix` 不挂不取（探针 U5）；`src/online/updateCheck.ts` 不引 `src/editor/`（`src/layering.test.mjs` 的 `online` 一行守着）；换代脚本的引号、缺清单当空、`.gz` 随原文件补、`set -euo pipefail` 下 `kept=$((kept + 1))` 不会因为 0 退出。
+
+### 修了什么
+
+- **`7074ccc7` 渲染服务比对代码版本**：`editorHasCodeVersion` 先读 `editor/version.json` 的 `codeVersion`（只有本代），是 64 位十六进制串就只认它；没有这个文件、读不了或内容不像代码版本（旧的在线构建）才退回原来的扫描。`compareCodeVersions` 与 `render.code-mismatch` 其余不变。HR19 补断言：`assets/` 里有旧代脚本含本进程版本、`version.json` 是别的版本时判 `different`；坏的、空的、没有 `version.json` 都退回扫描。
+- **`88d5f2de` 换代脚本**：新旧两份 `.assets-own` 一字不差（同一份构建）时不算新的一代——旧 `assets/` 原样全留、`.assets-own.1/.2` 原样带过去；只剩 `editor.prev` 时先挪回 `editor`。加 DEP-9（换 4 代后同一份构建再换两次，前 3 代还在、清单不动；下一代照常淘汰最早的；模拟停在两次换名之间后再部署，前 3 代照常保留）。
+- **`59e14d9e` 只问一次**：新模块 `src/editor/sync/leavePrompt.ts`（`allowNextLeave` / `takeLeaveAllowance`，放行一次、3 秒内有效）。「仍要刷新」先 `allowNextLeave()` 再 `location.reload()`；`SyncOverlays.tsx` 的 `beforeunload` 里第一行 `if (takeLeaveAllowance()) return;`（改动只有这一行和一行 import）。
+- **`44f7fb21` 宽度与手机位置**：`.pc-update-notice` 加 `width: max-content`、`box-sizing: border-box`、`flex-wrap: wrap`：一行放得下就一行，放不下时按钮换到下一行。手机版编辑器（`body:has(.pcm [data-pcm="editor"])`）里提示条改放顶栏正下方（`top: 安全区 + 48px`），顶栏的 `margin-bottom` 让出提示条的实际高度（`UpdateNotice.tsx` 用 `ResizeObserver` 把高度写到根元素的 `--pc-update-notice-h`，提示条撤下时去掉）；预览、时间轴、Agent 对话整体下移，什么都不盖。手机开始页没有顶栏，照旧在底部（那里是空白）。桌面界面位置不变。只改了 `updateNotice.css` 与 `UpdateNotice.tsx`，没动 `src/mobile/` 的样式。
+- **`1a2b98a7`** UPD-08；**`946a4c95`** 探针 U3b、U6。
+
+### 故意没改的（及原因）
+
+- **离线常驻提示 `.pc-offline-unsent` 也有第 4 条的折行**（`src/editor/sync/sync.css:774` 起，同样的 `left: 50%` 定位）：手机宽度上折成两行，手机版编辑器里还压在底部分页栏上（它 `pointer-events: none`，不挡点按，只挡视线）。`sync.css` 不在本任务可改的文件里，留给主会话；修法同本条：`width: max-content; box-sizing: border-box`。
+- **桌面界面提示条压在时间轴的「新建序列」拖放区一角**（1600×900 时量到：下面是 `new-track-zone`）：不压按钮，只是那一小块拖不进东西；底部居中是原设计，没有更好的空位，没改。
+- **`scripts/remote/docservice.mjs:47` 的文件头还写「旧版 assets/ 保留一代」**，`docs/plan/four-stage-deploy-checklist.md:128`、`docs/plan/c10a-contract.md:77` 也是一代的说法：不在可改清单里，请主会话顺手改成「前 3 代」。
+- **第二步与「只问一次」没有进提交的探针**：产品构建里造不出「离线且改动只在本页」（要浏览器日志写失败），我用一次性看图脚本在 `vite --mode online` 开发服务（6411）里核的：动态引入页面自己的 `syncManager.ts`，把视图改成离线、2 条未确认、`offlineStore: "page"`，再用页面自己那份 React 把真的 `SyncOverlays` 挂上来。这种做法依赖开发服务的模块路径，不适合放进长期探针。
+- **探针还没登记进验收清单**（`scripts/acceptance/*-manifest.mjs`）：不在可改清单里，同实现方报告第 3 节。
+
+### 对语义的意见（没改语义文件）
+
+- **代码版本不随依赖与构建配置变**：`version.json` 的值是 `frameCode`（哈希 `src/` 下的源码与几个渲染文件），只升级依赖（`package-lock.json`）或只改 `vite.config.ts` 时页面的打包文件变了、代码版本不变，开着的旧页面不会收到提示。旧页面靠「换代保留」照常能用，所以不是故障，但「换了新版本就提示」在这种发版上不成立。要覆盖它，三级可以改成「版本文件写本代入口脚本的文件名（带内容哈希）」或「代码版本 + 入口文件名」；这要改 `mechanism/platforms.md`「新版本提示」那一句，请主会话定。
+
+### 验证
+
+- `npx tsc -b --force`：退出码 0，零输出（HEAD `946a4c95` 之前最后一次源码改动后跑，之后只改了测试与探针）。
+- 改动涉及的测试：`node scripts/test-suite.mjs server/test/hosted-render-service.test.mjs server/test/deploy-editor.test.mjs server/test/c10-deploy-stage-origins.test.mjs server/test/sp-hosting.test.mjs src/online/updateCheck.test.mjs src/layering.test.mjs server/test/port-file.test.mjs src/editor/sync/*.test.mjs src/mobile/*.test.mjs` → `ℹ tests 288 / pass 288 / fail 0`，退出码 0。DEP-1～9、UPD-01～08、HR19 都在里面。
+- 探针 `node scripts/probes/update-notice-probe.mjs`（端口 6410）：`ok: true`，`visibility: "tab-switch"`，U0、U1、U2、U3、U3b、U4、U5、U6 全过，`reqCounts = { indexHtml: 6, fallback: 6, versionJson: 5 }`，U6 量到文字高 18 px、条宽 222 px、左 84 / 右 306（视口 390）。拿改前的构建（`--dist` 指向改 CSS 之前出的在线构建）再跑：只有 U6 不过（文字高 35 px、宽 195 px），说明 U6 测得出第 4 条。
+- 全量 `npm test`（设了 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT`、`PROMPTCUT_PASSWORD_ORDER_MODULE`，单独一条命令，HEAD `946a4c95`）：
+
+  ```
+  ℹ tests 7688
+  ℹ suites 0
+  ℹ pass 7673
+  ℹ fail 0
+  ℹ cancelled 0
+  ℹ skipped 15
+  ℹ todo 0
+  ℹ duration_ms 199101.9322
+  ✓ npm test 最终结果：零失败
+  ```
+
+  比实现方那次多 2 个（DEP-9、UPD-08）；没有失败，不用单独重跑。
+- 看图（无头 Chrome，仓库的 puppeteer；截图在会话临时目录，未入库）：
+  - 真的项目里（本机托管组合 + 仿 nginx 代理 + 在线构建，`scripts/probes/lib/mobile-env.mjs`，端口 6414～6418）：改前手机版编辑器（375×812）提示条两行、压在子导航的图片 / 音频 / 卡片按钮上；改后在顶栏正下方一行，缩略预览、时间轴、Agent 三页下面都只有编辑器底色，内容整体下移（时间轴页顶栏底 44 px、下一块从 90 px 起）。桌面编辑器（1600×900）改前改后一样：底部居中一行。
+  - 第二步（开发服务 6411，见上「故意没改的」第四条的造法）：改前 390 宽时提示语一字一行、条高 224 px；改后提示语一行、按钮换到第二行，条宽 358、高 62。桌面 1280 宽一行（472×38），和离线常驻提示上下排开不重叠。
+  - 只问一次：改前点「仍要刷新」浏览器弹了一次 `beforeunload`；改后点「仍要刷新」页面直接刷新、不弹；同样的离线未提交状态下普通刷新照旧弹一次 `beforeunload`。
+- 端口只用了 6410（探针）、6411～6413（在线开发服务）、6414～6418（本机托管组合与代理）；开发服务、托管组合、Chrome 都是我起的、用完收掉；没碰 5190～5192，没有结束别人的进程。测试在 worktree 里留下的普通 `node_modules/`（只有 `.vite` 缓存）与 `data/`（只有 `auth`）核过没有 junction / 重解析点后删掉。
