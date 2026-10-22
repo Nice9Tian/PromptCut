@@ -1,0 +1,159 @@
+/**
+ * 游客主体：没有网站账号的人在云端的那一个身份（2026-10-23 用户定）。
+ *
+ * 和账号的区别只有两条，别的地方一律按同一套走（同一个权限判断、同一套票据、同一份成员名单）：
+ *
+ * 1. **谁签发、谁核对**：账号的访问令牌由 VisuHive 账号服务签发、文档服务拿去问它（`client.mjs` 的 `verify`）；
+ *    游客令牌由文档服务**自己**签发、自己核对，不问账号服务。所以账号服务不认识游客，也不必认识。
+ * 2. **能做的事有限**：自己建的项目最多一个、素材最多三条每条 100 MB、三天清理；进别人的项目一律只读。
+ *    前两条在这里，只读在 `authority.mjs` 的 `joinProject`（游客入别人的名单时按 `'r'` 落账）。
+ *
+ * 令牌是**持有即身份**的东西：编号由服务端随机生成，不收页面报上来的编号，否则谁都能自称是别人。
+ * 页面把令牌存在自己那一侧（`src/account/guest.ts`），续期时把旧的交回来换一张新的；过期了就换一个新身份。
+ * 形状照连接票据那一套（`server/auth/delegation.mjs`）：`g1.<base64url(JSON)>.<base64url(HMAC-SHA256)>`，
+ * 先验签名再采信字段。令牌原文不进日志、不进错误信息。
+ */
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { accountError } from './client.mjs';
+
+/** 游客编号：`gst_` + 24 位十六进制。和账号编号 `acc_` + 24 位同形状，成员名单、权限判断里当一类键用 */
+export const GUEST_ID_RE = /^gst_[0-9a-f]{24}$/;
+export const isGuestId = value => typeof value === 'string' && GUEST_ID_RE.test(value);
+
+/** 令牌的前缀。和 `v1.`（连接票据、委托）岔开，拿错了一眼就看得出 */
+const GUEST_TOKEN_PREFIX = 'g1';
+/** 跟着连接票据那一套，允许 30 秒时钟偏差 */
+const CLOCK_SKEW_MS = 30_000;
+/** 令牌最长多少字节：超过的连解都不解，免得拿超大串去喂哈希 */
+const MAX_TOKEN_LENGTH = 1024;
+
+/**
+ * 游客的限额（三级机制的数，2026-10-23 用户定）。要改只改这里：
+ *   projects    自己能建几个项目
+ *   assets      能传几条素材
+ *   assetBytes  一条素材最大多少字节
+ *   ttlMs       建起来多久之后清理（项目和素材一起清）
+ *   tokenTtlMs  一张令牌多久过期。比 ttlMs 短，页面在这期间续期；过了就换一个新身份
+ */
+export const GUEST_LIMITS = Object.freeze({
+  projects: 1,
+  assets: 3,
+  assetBytes: 100 * 1024 * 1024,
+  ttlMs: 3 * 24 * 60 * 60 * 1000,
+  tokenTtlMs: 24 * 60 * 60 * 1000,
+});
+
+const b64url = buffer => Buffer.from(buffer).toString('base64url');
+const unb64url = text => Buffer.from(text, 'base64url');
+const hmac = (key, data) => createHmac('sha256', key).update(data, 'utf8').digest();
+
+/** 随机一个游客编号。只有服务端生成，不收页面报上来的 */
+export const newGuestId = () => 'gst_' + randomBytes(12).toString('hex');
+
+/**
+ * 签一张游客令牌。
+ * @param {object} options
+ * @param {Buffer|string} options.key HMAC 密钥（`guestKey`，由部署方给，和票据密钥各一份）
+ * @param {string} [options.guestId] 续期时传旧编号接着用；不传就随机一个新的
+ * @param {number} options.at 现在是什么时候（毫秒）
+ * @param {number} [options.ttlMs] 有效期，缺省 `GUEST_LIMITS.tokenTtlMs`
+ * @returns {{ token: string, guestId: string, issuedAt: number, expiresAt: number }}
+ */
+export function signGuestToken({ key, guestId, at, ttlMs = GUEST_LIMITS.tokenTtlMs }) {
+  if (!key) throw accountError(503, 'guest-configuration');
+  if (!Number.isSafeInteger(at)) throw accountError(503, 'guest-configuration');
+  const id = guestId === undefined ? newGuestId() : guestId;
+  if (!isGuestId(id)) throw accountError(400, 'invalid-guest');
+  const payload = { v: 1, k: 'gst', g: id, iat: at, exp: at + ttlMs };
+  const body = `${GUEST_TOKEN_PREFIX}.${b64url(JSON.stringify(payload))}`;
+  return { token: `${body}.${b64url(hmac(key, body))}`, guestId: id, issuedAt: payload.iat, expiresAt: payload.exp };
+}
+
+/** 这串看着像不像游客令牌。只看前缀，用来决定「问账号服务还是自己验」，不代表它有效 */
+export const looksLikeGuestToken = token =>
+  typeof token === 'string' && token.length <= MAX_TOKEN_LENGTH && token.startsWith(`${GUEST_TOKEN_PREFIX}.`);
+
+/**
+ * 核一张游客令牌：先验签名，再采信里面的字段。
+ * @returns {{ guestId: string, issuedAt: number, expiresAt: number } | null} 不合格一律回 null，不说是哪里不合格
+ */
+export function readGuestToken(token, { key, at }) {
+  if (!looksLikeGuestToken(token) || !key || !Number.isSafeInteger(at)) return null;
+  const cut = token.lastIndexOf('.');
+  if (cut <= GUEST_TOKEN_PREFIX.length) return null;
+  const body = token.slice(0, cut);
+  let given;
+  try { given = unb64url(token.slice(cut + 1)); } catch { return null; }
+  const want = hmac(key, body);
+  if (given.length !== want.length || !timingSafeEqual(given, want)) return null;
+  let payload;
+  try { payload = JSON.parse(unb64url(body.slice(GUEST_TOKEN_PREFIX.length + 1)).toString('utf8')); } catch { return null; }
+  if (payload?.v !== 1 || payload.k !== 'gst' || !isGuestId(payload.g)) return null;
+  if (!Number.isSafeInteger(payload.iat) || !Number.isSafeInteger(payload.exp) || payload.exp <= payload.iat) return null;
+  if (at > payload.exp + CLOCK_SKEW_MS) return null;
+  return { guestId: payload.g, issuedAt: payload.iat, expiresAt: payload.exp };
+}
+
+/**
+ * 令牌核过之后，摆成 `authority.mjs` 里主体该有的样子。字段名和账号主体一一对应，
+ * 下游（`authorizePrincipal`、`checkAccess`、票据签发）不用区分这是账号还是游客。
+ *
+ * - `accountId` 就是游客编号，成员名单、禁入表都用它当键；
+ * - `loginId` 带 `guest:` 前缀，和账号的登录号不会撞，撤销表（`revokedLogins`）照样按它查；
+ * - `accountEventSeq` 恒为 0：游客不在账号服务的事件流里，不能让它把文档服务卡在「等账号事件」上。
+ */
+export function guestPrincipal({ guestId, issuedAt, expiresAt }) {
+  return {
+    guest: true,
+    accountId: guestId,
+    accountName: null,
+    loginId: `guest:${guestId}`,
+    credentialId: `guest:${guestId}:${issuedAt}`,
+    loginGeneration: 1,
+    accountEventSeq: 0,
+    expiresAt,
+  };
+}
+
+/**
+ * 「谁能建、能建几个」里游客那一条，挂到 `createAccountAuthority` 的 `createPolicy.canCreate` 上
+ * （口子的说明见 `authority.mjs` 的 `checkCreateProject`）。账号那一侧原样放行，由 `maxProjectsPerAccount` 管。
+ *
+ * @param {(args: object) => unknown} [next] 账号那一侧原来的判断，有就接着问它
+ */
+export function guestCreatePolicy(next) {
+  return args => {
+    if (isGuestId(args?.accountId) && (args?.ownedCount ?? 0) >= GUEST_LIMITS.projects) return { code: 'guest-project-limit' };
+    return typeof next === 'function' ? next(args) : true;
+  };
+}
+
+/**
+ * 这条素材收不收：游客只能传 `GUEST_LIMITS.assets` 条，每条不超过 `assetBytes`。
+ * 账号不受这两条限制，直接放行。
+ *
+ * @param {object} args
+ * @param {string} args.accountId 谁在传
+ * @param {number} args.bytes 这一条多大
+ * @param {number} args.storedCount 他已经存着几条
+ * @returns {{ ok: true } | { ok: false, code: string }}
+ */
+export function checkGuestAsset({ accountId, bytes, storedCount }) {
+  if (!isGuestId(accountId)) return { ok: true };
+  if (!Number.isSafeInteger(bytes) || bytes < 0) return { ok: false, code: 'invalid-asset' };
+  if (bytes > GUEST_LIMITS.assetBytes) return { ok: false, code: 'guest-asset-too-large' };
+  if ((storedCount ?? 0) >= GUEST_LIMITS.assets) return { ok: false, code: 'guest-asset-limit' };
+  return { ok: true };
+}
+
+/** 这个游客建的东西该清了没有（三天）。`createdAt` 是落账时刻 */
+export const guestExpired = (createdAt, at, ttlMs = GUEST_LIMITS.ttlMs) =>
+  Number.isSafeInteger(createdAt) && Number.isSafeInteger(at) && at - createdAt >= ttlMs;
+
+/** 人话的错误文案。页面照 `accountErrorText` 那张表显示，这里给服务端日志和测试对照用 */
+export const GUEST_ERROR_TEXT = Object.freeze({
+  'guest-project-limit': `游客只能建 ${GUEST_LIMITS.projects} 个项目。`,
+  'guest-asset-limit': `游客最多上传 ${GUEST_LIMITS.assets} 条素材。`,
+  'guest-asset-too-large': `游客上传的每条素材不能超过 ${GUEST_LIMITS.assetBytes / 1024 / 1024} MB。`,
+  'guest-read-only': '游客在别人的项目里只能查看。',
+});
