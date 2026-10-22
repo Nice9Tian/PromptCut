@@ -6,7 +6,7 @@
  */
 
 /** 清单里允许的类别(显示顺序) */
-export const CATEGORIES = ['G0', 'G0-R', '探针', '第一段', '第二段', '第三段', '第四段', 'V18'];
+export const CATEGORIES = ['G0', 'G0-R', '探针', '第一段', '第二段', '第三段', '第四段', 'V18', 'V19'];
 
 /** 一项的最终判定。时间数字不参与判定(只记录),所以没有「参考」一档;remote = 真实网络验证的项,脚本不跑 */
 export const VERDICTS = ['pass', 'fail', 'flaky', 'manual', 'remote', 'missing', 'blocked', 'skipped', 'na', 'waiting'];
@@ -46,7 +46,7 @@ export function parseArgs(argv) {
     flakyRerun: 0, devPort: 5690, devMainPort: 5693, json: false, checkCoverage: false, help: false,
     keepMainWorktree: false, includeOptional: false, dryRun: false, matrix: false, portShift: 0,
     level: null, releaseTimings: null, timingsFrom: null, machineName: null,
-    rows: false, rowsFrom: null, rowsMap: false, v18PortBase: null, noOptional: false,
+    rows: false, rowsFrom: null, rowsMap: false, v18PortBase: null, noOptional: false, v19Map: false,
   };
   const need = (i, name) => {
     const v = argv[i + 1];
@@ -68,6 +68,7 @@ export function parseArgs(argv) {
       case '--rows': o.rows = true; break;
       case '--no-optional': o.noOptional = true; break;
       case '--rows-map': o.rowsMap = true; break;
+      case '--v19-map': o.v19Map = true; break;
       case '--rows-from': o.rowsFrom = need(i, a); i++; break;
       case '--v18-port-base': {
         const n = Number(need(i, a));
@@ -127,7 +128,8 @@ export const USAGE = `用法:node scripts/acceptance/four-stage-acceptance.mjs [
   --no-optional           --only 点到类别或通配时也不带 optional 的项(0.7.18 里端口写死、要备依赖的探针标了 optional;--only V18 --no-optional = 本机缺省能跑的全部)
   --keep-main-worktree    结束时不删 main 基准 worktree
   --check-coverage        守门(发版前由主会话跑;单测不拦它,免得别的分支新加探针就让全量变红):① scripts/probes/ 下每个探针要登记(covers)或写明排除原因;② 0.7.18 的 38 行每行至少有一项;③ 清单项引用的
-                          测试文件、探针脚本要在仓库里(标了「等分支合入」的单列);④ 全量测试的跳过名单没有失效。有问题退出码 1
+                          测试文件、探针脚本要在仓库里(标了「等分支合入」的单列);④ 全量测试的跳过名单没有失效;⑤ 0.7.19 的要求表
+                          每条至少有一项、项里指到的要求都在表里。有问题退出码 1
   --dry-run               只打印将要跑哪些项与命令,不执行
   --release-timings <版本> 跑完后按这次的结果出一节发版耗时记录(版本与提交、机器配置、各项耗时),写到 <out>/release-timings-section.md 并打印;贴进 docs/reports/release-timings.md
   --timings-from <文件>   不跑任何项,直接用已有的 results.json 出那一节(配 --release-timings)
@@ -137,6 +139,7 @@ export const USAGE = `用法:node scripts/acceptance/four-stage-acceptance.mjs [
                           有项没跑而其余通过是「未跑」(并列出没跑的项),没跑不会被算成通过
   --rows-from <文件>      不跑任何项,用已有的 results.json 出结论表(同 --rows 的输出;可加 --out 指定写到哪)
   --rows-map              不跑任何项,打印 38 行各由哪些清单项覆盖、每项在哪能跑
+  --v19-map               不跑任何项,打印 0.7.19 的要求表(V19_REQS)每条由哪些清单项支撑、每项在哪能跑(等哪条分支合入、合入后是否不适用)
   --v18-port-base <端口>  0.7.18 各项用的端口段起点(缺省 28990,连着约 60 个;另一台机器或别的会话分到别的段时改)
   --matrix                打印两份任务书的每一条编号验收由哪些项覆盖(R<n> 任务书一、C<n> 任务书二完成条件、U<n> 用户体验验收)后退出
   --json                  --list 时输出 JSON`;
@@ -144,7 +147,7 @@ export const USAGE = `用法:node scripts/acceptance/four-stage-acceptance.mjs [
 /**
  * 校验清单(数据)。返回错误字符串数组,空数组表示合格。
  */
-export function validateManifest(items, { rowIds = null } = {}) {
+export function validateManifest(items, { rowIds = null, v19Ids = null } = {}) {
   const errs = [];
   if (!Array.isArray(items) || !items.length) return ['清单为空'];
   const seen = new Set();
@@ -222,8 +225,58 @@ export function validateManifest(items, { rowIds = null } = {}) {
     if (it.covers !== undefined && !(Array.isArray(it.covers) && it.covers.every((c) => typeof c === 'string'))) errs.push(`${at}:covers 要字符串数组`);
     if (it.parallel !== undefined && typeof it.parallel !== 'boolean') errs.push(`${at}:parallel 要布尔`);
     if (it.parallel && !it.steps) errs.push(`${at}:parallel 只用于 steps`);
+    if (it.retiredWhen !== undefined) {
+      const r = it.retiredWhen;
+      const byMissing = r && typeof r.missing === 'string' && r.missing.trim();
+      const byText = r && typeof r.file === 'string' && typeof r.text === 'string' && r.text.trim();
+      if (!r || typeof r !== 'object' || !(typeof r.why === 'string' && r.why.trim())) errs.push(`${at}:retiredWhen 要写 why(合入后为什么不适用)`);
+      else if (!!byMissing === !!byText) errs.push(`${at}:retiredWhen 要 { missing: 文件 } 或 { file, text } 二选一`);
+      if (it.notApplicable) errs.push(`${at}:已经 notApplicable 的项不用再写 retiredWhen`);
+    }
+    if (it.v19 !== undefined) {
+      if (!(Array.isArray(it.v19) && it.v19.length && it.v19.every((x) => typeof x === 'string'))) errs.push(`${at}:v19 要非空字符串数组(0.7.19 要求表的编号)`);
+      else if (v19Ids) for (const r of it.v19) if (!v19Ids.has(r)) errs.push(`${at}:v19 里的 ${r} 不是 0.7.19 要求表里的任何一条`);
+    }
+    if (it.category === 'V19' && !(it.v19 && it.v19.length)) errs.push(`${at}:V19 类的项要写 v19(指到 0.7.19 要求表)`);
   });
   return errs;
+}
+
+/**
+ * 「合入后不适用」:某条分支合入后这一项失去意义(retiredWhen 的标记出现)时返回依据,否则 null。
+ * 标记二选一:{ missing: 文件 }(这个文件没了)或 { file, text }(这个文件里出现了这段字)。read(file) 读不到回 null。
+ */
+export function retiredReason(item, { exists, read }) {
+  const r = item.retiredWhen;
+  if (!r) return null;
+  if (r.missing) return exists(r.missing) ? null : `合入后不适用(${r.missing} 已经没了):${r.why}`;
+  const have = read(r.file);
+  return have != null && have.includes(r.text) ? `合入后不适用(${r.file} 里已有「${r.text}」):${r.why}` : null;
+}
+
+/**
+ * 0.7.19 要求表的覆盖:每条要求至少有一项(v19 指到它),项里指到的要求都在表里。
+ */
+export function v19Coverage(reqs, items) {
+  const ids = new Set(reqs.map((r) => r.id));
+  const uncovered = reqs.filter((r) => !items.some((it) => (it.v19 || []).includes(r.id))).map((r) => r.id);
+  const unknown = [];
+  for (const it of items) for (const r of it.v19 || []) if (!ids.has(r)) unknown.push({ item: it.id, req: r });
+  return { uncovered, unknown };
+}
+
+/** --v19-map 的文本:每条要求由哪些项支撑、各项现在在哪能跑 */
+export function v19MapText(reqs, items) {
+  const lines = [];
+  let group = null;
+  for (const r of reqs) {
+    if (r.group !== group) { group = r.group; lines.push('', `## ${group}`); }
+    const mine = items.filter((it) => (it.v19 || []).includes(r.id));
+    lines.push(`${r.id.padEnd(12)} ${r.name}  ←${r.source}`);
+    if (!mine.length) lines.push(`${' '.repeat(13)}(没有清单项!)`);
+    for (const it of mine) lines.push(`${' '.repeat(13)}${it.id.padEnd(26)} ${WHERE_LABEL[whereOf(it)]}${it.waitFor ? ':' + it.waitFor : ''}${it.retiredWhen ? '(某分支合入后不适用)' : ''}${it.optional ? '(补充)' : ''}`);
+  }
+  return lines.join('\n').trimStart();
 }
 
 /** 通配:只认 *,其它按字面 */
@@ -441,6 +494,8 @@ export function describeItem(item) {
   if (item.realModel) flags.push('真实模型');
   if (item.manual) flags.push('人工');
   if (item.optional) flags.push('补充');
+  if (item.retiredWhen) flags.push('某分支合入后不适用');
+  if (item.v19?.length) flags.push(`0.7.19 ${item.v19.join('、')}`);
   if ((item.needs || []).length) flags.push('需要:' + item.needs.join('+'));
   return flags;
 }
@@ -468,6 +523,7 @@ export function listText(items) {
       else if (it.remoteOnly) lines.push(`${' '.repeat(15)}在节点上:${it.remoteOnly}`);
       else lines.push(`${' '.repeat(15)}$ ${commandText(it)}${it.cwd === 'main' ? '  (cwd=main 基准树)' : ''}`);
       lines.push(`${' '.repeat(15)}标准:${passText(it)}${it.timingNote ? `  只记录的耗时:${it.timingNote}` : ''}  ←${it.taskRef}`);
+      if (it.retiredWhen) lines.push(`${' '.repeat(15)}合入后不适用(${it.retiredWhen.missing ? it.retiredWhen.missing + ' 没了时' : it.retiredWhen.file + ' 里出现「' + it.retiredWhen.text + '」时'}):${it.retiredWhen.why}`);
       if (it.known) lines.push(`${' '.repeat(15)}已知:${it.known}`);
     }
   }

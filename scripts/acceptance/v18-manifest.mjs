@@ -192,14 +192,17 @@ export const V18_ITEMS = [
   T('V18-queue-tests', '单节点排队与看画面:排队、重启不丢、背压、容量、隔离、取消与失败兜底、授权;账号模式看画面接线', ['RS18-queue', 'RS-common'],
     ['server/test/hosted-render-queue.test.mjs', 'server/test/hosted-render-memory.test.mjs', 'server/test/hosted-render-capacity.test.mjs', 'server/test/hosted-render-isolation.test.mjs', 'server/test/hosted-render-look.test.mjs',
       'server/test/hosted-render-usercards.test.mjs', 'server/test/cloud-agent-look.test.mjs', 'server/test/accept-018-rest-queue-account-look.test.mjs'], { timeoutMin: 30, known: 'hosted-render-queue 的 RQ7 在全量里偶发(计时相关),单独重跑' }),
-  PR('V18-queue-probe', '云端排队探针(10-16 按轮占用:一轮结束立即让位,无需等 5 分钟)', ['RS18-queue', 'RS-common'], 'hosted-render-queue-probe', ['--base-port', port(0), '--doc-port', port(9), '--asset-port', port(10), '--idle-ms', '20000'],
-    { timeoutMin: 40, must: ['"fails":\\s*\\[\\]'], known: '14 条检查;按轮占用下甲一轮结束约 1 秒即让位给乙' }),
-  PR('V18-queue-probe-prod', '云端排队探针(生产版:空闲满五分钟才关掉装着的项目)', ['RS18-queue'], 'hosted-render-queue-probe', ['--base-port', port(0), '--doc-port', port(9), '--asset-port', port(10)],
-    { optional: true, timeoutMin: 60, covers: [], must: ['"realIdle":\\s*true', '"fails":\\s*\\[\\]'], known: '整趟十几分钟以上,缺省不跑;--include-optional 或 --only V18-queue-probe-prod' }),
+  PR('V18-queue-probe', '云端排队探针,多项目模式缺省 K=4(0.7.19 取代 10-16 的按轮占用:看画面先于产流、各项目轮流、项目内先来先做、一轮最多连做 K 个、不让哪个项目占着、重启不丢、产流不丢)', ['RS18-queue', 'RS-common'], 'hosted-render-queue-probe', ['--base-port', port(0), '--doc-port', port(9), '--asset-port', port(10)],
+    { timeoutMin: 40, must: ['"fails":\\s*\\[\\]'], known: '13 条检查(Q1～Q8);空闲缓存用生产的 5 分钟(多项目模式下换装不等它);K=1 的分支见 RS18-queue;子 Agent 2026-10-22 实跑 13/13(--time-scale 3,机器慢时可加)' }),
+  {
+    id: 'V18-queue-probe-prod', name: '云端排队探针(生产版:空闲满五分钟才关掉装着的项目)', category: 'V18', level: 'local', taskRef: `${MAP} RS18-queue`, rows: ['RS18-queue'], where: 'na', tasks: [],
+    notApplicable: '0.7.19 起不适用:多项目渲染节点取代按轮占用,别的项目一排上就换装、不等空闲(hosted-render-queue-probe.mjs 文件头「下面几条断言换装都发生在远早于它的时候」),空闲时长只管没人排队时的缓存,长短两种跑出的断言相同;V18-queue-probe 已改用生产的 5 分钟',
+    was: { cmd: probe('hosted-render-queue-probe', ['--base-port', port(0), '--doc-port', port(9), '--asset-port', port(10)]) },
+  },
   PR('V18-queue-isolation-probe', '渲染隔离探针(越权探测卡,49 项)', ['RS-common', 'RS18-queue'], 'hosted-render-isolation-probe', ['--base-port', port(0), '--doc-port', port(9), '--asset-port', port(10)],
     { timeoutMin: 40, must: ['"fails":\\s*\\[\\]'] }),
   REMOTE('V18-queue-node-pressure', '真实内存/磁盘压力与 16 GB 节点上的表现;三版本共同回归的度量记录(机器、帧数、素材复杂度、并发、缓存、内存、最终提交、起止点、分位数、>5 分钟尾部原因)', ['RS18-queue', 'RS-common'], 'node',
-    '在最终提交加节点(8 核 16 GB)上重跑 RS18 各组并记数;探针只有 6 次样本,算不出分位数;RS-common 在最终提交上没跑出结果之前不计通过'),
+    '在最终提交加节点(8 核 16 GB)上重跑 RS18 各组并记数;探针只有 6 次样本,算不出分位数;RS-common 在最终提交上没跑出结果之前不计通过。0.7.19 起按多项目模式验:两个以上都带用户卡的测试项目同时要画面与产流,看不让哪个项目占着(换装都由排第一的项目变了触发)、一轮最多连做 K 个(PROMPTCUT_RENDER_TURN,缺省 4)、没人排队时缓存 5 分钟(PROMPTCUT_RENDER_ISO_IDLE_MS)、内存吃紧时的背压;记每个项目从登记到出图的用时与换装次数(只记录)'),
   T('V18-local-first', '本地取帧四级先后(10-16 3.1 节 RS18-local:成员桌面版 > 电脑浏览器 > 托管渲染服务 > 手机浏览器;保持播放头、离线/超时退回云端、停止撤回、版本切换丢弃迟到结果)', ['RS18-local', 'RS-common'],
     ['server/test/cloud-agent-look.test.mjs']),
   T('V18-chats', '50 个对话的删除与清干净:删后重建/重开、删后立刻让出名额、谁能删、有任务在跑先强制结束再删、满额提示、被删通知、账本与 Agent 一侧各处查不到文字、移出成员时清私有对话、对话数实时更新的轮询规矩', ['RS18-chat'],
@@ -235,8 +238,8 @@ export const V18_ITEMS = [
     { account: true, needs: ['online-build'], prereq: ['G0-4'], timeoutMin: 30, known: '端口写死 28640～28658,不随 --v18-port-base 走;分支已合入 main,按文件头 --dist 指在线构建;多步要等令牌到期,整趟十几分钟' }),
   PR('V18-logout-text-probe', '改密选退出的官网页面原文:问句、两个按钮、「正在退出已登录设备」「设备已退出」,素材服务停着时超时的失败文案', ['2.1-5'], 'account-logout-text-probe',
     ['--site-root', `${VISU}/site`, '--out', '{item}', '--port-base', port(20)], { account: true, timeoutMin: 20, known: '要环境变量指到带退出确认时限的那一版 VisuHive;失败退出码 1' }),
-  PR('V18-move-probe', '账号办法「搬到云端」端到端(桌面版两个编辑器:本地项目一遍、协作房间一遍、搬的时候又改了、关了以后断)', ['2.1-6', '2.1-7'], 'account-move-probe', ['--out', '{item}'],
-    { account: true, timeoutMin: 60, known: '端口写死 28950～28999(夹具 28950～28956、云端 Agent 入口 28957、编辑器 28960 与 28965),不随 --v18-port-base 走;--only local,room 可只跑一遍;行号(2.1-6、2.1-7)是按「搬」的内容归的,拿不准' }),
+  PR('V18-move-probe', '账号办法「搬到云端」端到端(桌面版两个编辑器:本地项目一遍、协作房间一遍、搬的时候又改了、关了以后断;0.7.19 起加「放弃这次搬迁」〔裁〕H04 一段)', ['2.1-6', '2.1-7'], 'account-move-probe', ['--out', '{item}'],
+    { account: true, timeoutMin: 60, known: '端口写死 28950～28999(夹具 28950～28956、云端 Agent 入口 28957、编辑器 28960 与 28965),不随 --v18-port-base 走;缺省四段都跑(--only local,room,resume,abandon 可挑);行号(2.1-6、2.1-7)是按「搬」的内容归的,拿不准' }),
   REMOTE('V18-account-tools-perms-linux', '主服务与任务进程两个系统用户之间的文件权限自检(用量流水可读、浏览器数据清理记号)', ['2.1-13', '2.3-4'], 'node',
     '要 Linux、以 root 跑:sudo node scripts/probes/account-tools-perms-linux.mjs [--tmp <目录>] [--repo <检出根>];末行 PASS n/n(全过是 26/26),其他平台退出码 2',
     { covers: ['account-tools-perms-linux.mjs'] }),
@@ -297,8 +300,8 @@ export const V18_ITEMS = [
     'ls server/hosted/deploy | grep agent;grep -n "2b. Agent" docs/plan/hosting-migration.md(这两样现在就在);注意 Agent 端口模板里仍是 8790(设计裁定说 8791),account-v2-install-plan.mjs 里没有 Agent;docs/local.md 不入库、含密钥,部署后由主会话记'),
   MANUAL('V18-report', '写总报告含〔裁〕清单;播报后停下,列出每项结果、没过或没做的项与原因、补丁信息(路径、大小、SHA-256、来源提交)、要用户做的事', ['2.3-13'], 'manual',
     '各块报告里的〔裁〕汇总(grep -c "〔裁" docs/reports/AGENT-v18-*.md);补丁信息见 V18-installer-build;发版时在最终提交上给每行重新下结论(账号任务书「逐项验收」表头:旧记录不能顶替)'),
-  NA('V18-na-offline-conflict', '暂时离线改动与冲突(提示落后并询问是否发送;可视化选择冲突;不静默覆盖;幂等且离线内容不丢)', ['2.1-10'], '账号任务书第 186 行与「各版本必须做」表:暂时离线改动确认与可视化冲突处理归 0.7.19,不是 0.7.18 的验收'),
-  NA('V18-na-save-state', '保存与修改状态检查(暂停前台编辑、等本机写完、保存哈希+时间+版本/基准;失败可恢复编辑)', ['2.1-11'], '账号任务书第 186 行与「各版本必须做」表:保存状态记录归 0.7.19,不是 0.7.18 的验收'),
+  NA('V18-na-offline-conflict', '暂时离线改动与冲突(提示落后并询问是否发送;可视化选择冲突;不静默覆盖;幂等且离线内容不丢)', ['2.1-10'], '账号任务书第 186 行与「各版本必须做」表:暂时离线改动确认与可视化冲突处理归 0.7.19,不是 0.7.18 的验收;0.7.19 的验收见 V19-cm-probe、V19-cm-tests(要求 AB-1)'),
+  NA('V18-na-save-state', '保存与修改状态检查(暂停前台编辑、等本机写完、保存哈希+时间+版本/基准;失败可恢复编辑)', ['2.1-11'], '账号任务书第 186 行与「各版本必须做」表:保存状态记录归 0.7.19,不是 0.7.18 的验收;0.7.19 的验收见 V19-cm-tests 的 CS-01～06 与 V19-save-state(要求 AB-2)'),
 
   /* ---- 全量测试里被无声跳过的一条:起 dev server 设好变量把它跑一遍 ---- */
   {
@@ -348,23 +351,31 @@ export const OLD_ITEM_ROWS = {
  * 在线构建的开始页现在只有账号登录,没有这个表单)。能改成账号入口的已改(S4-4);改不了的在这里写明,运行器把它们记成「不适用」。
  * id → 原因。验证记录见 docs/reports/AGENT-v18-runner-list.md「老项逐条判」。
  */
-const JOIN_FORM = '在线构建的开始页现在只有账号登录,探针进项目要等 [data-pc="join-form"](房间号加口令的加入表单)、等不到(2026-10-13 在 main 上用 0.7.18 的端口段实跑确认:日志里是等 join-form 超时或探针自己把它记成失败)。改成走账号入口要把项目的创建者也换成账号项目,不是只改进项目那一步';
 export const STALE_OLD_ENTRY = {
-  'P-c10-browser-a4': 'c10-browser-probe 的成员一半凭 #invite=<邀请码> 进在线页面(第 1512 行等 join-invite-project),开始页上已没有这个控件;创建者一半(桌面 dev server 本机建项目、层表)实跑能走完(318 秒后 step0.done),后面 A1～A5 全靠「创建者桌面节点把层产到同一个共享房间、成员页读」,账号项目只能由在线页面或 Rust 壳账号保管建,所以不是改进项目一步的事,要重写探针主干;它验的是渲染一带(在线普通档:长任务 0、首次打开在遮罩下测完、成本记录、层表与环境指纹、换帧占位、独立渲染主机认领),渲染重构合入后在账号模式下重搭。codex/018-browser-doc-read 修的是 main 里已不存在的强化版探针,不合',
-  'P-c10-browser-full': '同 P-c10-browser-a4(c10-browser-probe 的成员一半进不去)',
-  'P-c10-user-card': '同 P-c10-browser-a4(c10-browser-probe 的成员一半进不去)',
-  'P-online-user-cards': JOIN_FORM, 'P-c10-ui': JOIN_FORM, 'P-online-stage-watch': JOIN_FORM, 'P-online-stage-handshake': JOIN_FORM, 'P-online-nav-stress': JOIN_FORM,
-  'S1-5': JOIN_FORM + ';桌面一半(导出自动生成)能过,在线一半进不去', 'S2-1': JOIN_FORM, 'S2-2': JOIN_FORM, 'S2-3': JOIN_FORM, 'S2-4': JOIN_FORM, 'S2-5': JOIN_FORM,
   'X-online-join': '这支探针就是测在线开始页的「加入别人的项目」表单(join-form、邀请码),开始页上已经没有(只读代码判定,没实跑;可选项)',
-  'X-c10a-demo-local': '走 join-form 加入本机替身的项目(c10a-demo-probe 里 7 处用到);只读代码判定,没实跑;可选项',
-  'S1-4': '声音预览探针的在线一半凭邀请码进在线页面(等 [data-pc="join-invite-project"]),开始页上已没有这个控件;2026-10-13 在 main 上实跑:62 条检查里桌面一半都过,唯一的失败是等 join-invite-project 超时(桌面一半的证据另由 S1-1～S1-3 与探针本身的桌面段覆盖,在线一半现在没人验)',
-  'S4-6': '界面版「关掉软件照常运转」探针的在线一半用 joinOnline(cloud-agent-ui-lib.mjs)等 join-form 进项目(第 233 行)。2026-10-13 在 main 上实跑:桌面发起那一半的检查能过(它仍然跑在已退役的口令式房间本机组合上),200 秒时限内没走到在线那一步,所以「必然失败」是读代码加这半段实跑得出的;账号入口下的同一件事(发任务后关掉软件照常运转)要搭账号模式的两个页面加关闭发起方,未做',
+  'X-c10a-demo-local': '入口 2026-10-17 已改走会话恢复(8b09add4),但 claude/online-browser 在文件头标明第 2、2c、4 步按低内存档与已停产的预渲染小尺寸写,0.7.19 撤档后失效,整支要重写主干(2026-10-22 盘查;可选项)',
 };
 
 /**
- * 老项补充说明(写进小结的「已知」):2026-10-13 在 0.7.18 的端口段里实跑过、结论不是「旧入口已废」的。
+ * 2026-10-13 记成「旧入口已废」、2026-10-17 由 gemini/v18-online-probes(8b09add4)改走会话恢复入口后恢复成可跑的老项(2026-10-22 0.7.19 盘查恢复)。
+ * 证据:docs/reports/AGENT-v18-online-probes.md 第 2 节(专属端口段 20040～20059 实跑,退出码 0)。原先的不适用依据留在这里作记录。
+ */
+const MIGRATED = '2026-10-17 改走会话恢复入口(8b09add4,resumeRecord + plantResume),原「旧入口已废」撤销';
+const MIGRATED_RUN = (what) => `${MIGRATED};当时实跑 ${what}`;
+const MIGRATED_NORUN = `${MIGRATED};迁移后没有实跑记录,0.7.19 整套第一次跑时如不过,先看入口`;
+
+/**
+ * 老项补充说明(写进小结的「已知」):2026-10-13 在 0.7.18 的端口段里实跑过、结论不是「旧入口已废」的;以及 8b09add4 迁移后恢复的老项。
  */
 export const OLD_ITEM_KNOWN = {
+  'S1-4': MIGRATED_RUN('--mode online 86 条全过(online + online-live)'),
+  'S1-5': MIGRATED_RUN('73/73 过(desktop + online + lowmem)'),
+  'S2-1': MIGRATED_RUN('116 条全过(A/B/G/C/L/S/N/M;claude/online-browser 合入后场景 M 改成正向:跨源单舞台照样执行)'),
+  'S2-2': MIGRATED_RUN('60 条全过(E1～E10;合入后 E9 改成模拟手机单舞台照样执行)'),
+  'S2-3': MIGRATED_RUN('18 条全过'), 'S2-4': MIGRATED_RUN('19 条全过'), 'S2-5': MIGRATED_RUN('--strict 全过'),
+  'P-online-stage-watch': MIGRATED_RUN('W1～W4 全过'), 'P-online-stage-handshake': MIGRATED_RUN('S1～S4 全过'), 'P-online-nav-stress': MIGRATED_RUN('--iters 3 全过(清单跑 200 次)'),
+  'P-c10-browser-a4': MIGRATED_NORUN, 'P-c10-browser-full': MIGRATED_NORUN, 'P-c10-user-card': MIGRATED_NORUN,
+  'S4-6': `${MIGRATED_NORUN}(cloud-agent-ui-lib.mjs 的 joinOnline 改成 lookupProject + resumeRecord)`,
   'P-online-stale-layer': '2026-10-13 在 main 上实跑:能进项目(不走 join-form),6 条断言不过(静置后 u 仍贴着旧层、改参数后…),原因没查,不是入口问题;属渲染一带',
   'P-m7-node': '2026-10-13 在 main 上实跑:到 node.ready(页面作为渲染节点就绪)后 200 秒时限内没跑完,没判结论;不走 join-form',
   'P-desktop-auto-node': '2026-10-13 在 main 上实跑:桌面页面测量测完后 200 秒时限内没跑完,没判结论',

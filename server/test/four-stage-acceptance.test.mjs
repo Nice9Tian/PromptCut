@@ -152,8 +152,8 @@ test('FSA-07 清单里记耗时的项都写了记什么;每项都标了级别;�
     if (it.manual) assert.ok(!it.cmd && !it.steps, it.id);
   }
   assert.ok(ITEMS.filter((i) => i.timing === 'record').length >= 14);
-  // 老清单(0.7.17 以前四段)的真实网络验证 16 项不变;0.7.18 的项(category V18)另算
-  assert.equal(ITEMS.filter((i) => i.level === 'network' && i.category !== 'V18').length, 16);
+  // 老清单(0.7.17 以前四段)的真实网络验证 16 项不变;0.7.18、0.7.19 的项(category V18、V19)另算
+  assert.equal(ITEMS.filter((i) => i.level === 'network' && !['V18', 'V19'].includes(i.category)).length, 16);
   // 运行器没有「待笔记本复核」这一档判定
   assert.ok(!VERDICTS.some((v) => v.startsWith('ref-')));
   assert.deepEqual([...DONE_VERDICTS], ['pass', 'na']); // na = 写死的「不适用」,续跑时不用重跑
@@ -361,7 +361,7 @@ test('FSA-26 selectItems 按级别:缺省 all;local 不含真实网络验证的�
   // 真清单:本地验证 104 项里可跑的缺省项都不带 remoteOnly
   assert.ok(selectItems(ITEMS, { level: 'local' }).every((i) => !i.remoteOnly));
   assert.equal(selectItems(ITEMS, { level: 'network', includeOptional: true }).length, ITEMS.filter((i) => levelOf(i) === 'network').length);
-  assert.equal(selectItems(ITEMS, { level: 'network', includeOptional: true }).filter((i) => i.category !== 'V18').length, 16);
+  assert.equal(selectItems(ITEMS, { level: 'network', includeOptional: true }).filter((i) => !['V18', 'V19'].includes(i.category)).length, 16);
 });
 
 test('FSA-27 releaseTimingsSection:版本与提交、机器配置、各项用时、探针量的耗时;放大过的数字不进记录', () => {

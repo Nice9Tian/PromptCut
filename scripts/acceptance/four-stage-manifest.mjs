@@ -20,6 +20,7 @@
  *   known                  已知的失败或不稳定(写进小结,不改判定)
  *   optional               补充项:缺省不跑,--include-optional 或 --only 点名才跑
  *   covers                 这一项覆盖 scripts/probes/ 下的哪些文件(--check-coverage 用)
+ *   v19 / retiredWhen      0.7.19 起:支撑 0.7.19 要求表(V19_REQS)哪几条 / 某条分支合入后不适用的标记,见 v19-manifest.mjs 文件头
  *
  * 端口:共享 dev server 5690～5692,main 基准树的 dev server 5693～5695;探针自己起的东西也在 5690～5699;文档服务 / 素材服务 8760～8769;
  * 探针自己限定端口段的照它的(multi-agent 5840～5859、skill-mcp 5880～5899)。串行跑,每项结束后它的进程都清掉。
@@ -28,8 +29,9 @@
 import '../lib/no-user-dirs.mjs'; // 清单里写着会起编辑器与导出的命令;按 no-user-dirs.test.mjs 的规矩,第一个 import 摘掉外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
 import { V18_ITEMS, G0_2_SKIPS, OLD_ITEM_ROWS, STALE_OLD_ENTRY, V18_EXCLUDED, V, OLD_ITEM_KNOWN } from './v18-manifest.mjs';
 import { V18_ROWS } from './v18-rows.mjs';
+import { V19_ITEMS, V19_REQS, V19_TAGS, V19_EXCLUDED } from './v19-manifest.mjs';
 import { whereOf } from './acceptance-lib.mjs';
-export { V18_ROWS as ROWS, G0_2_SKIPS };
+export { V18_ROWS as ROWS, G0_2_SKIPS, V19_REQS };
 
 const node = 'node';
 const probe = (name, args = []) => [node, `scripts/probes/${name}.mjs`, ...args];
@@ -42,6 +44,7 @@ const P = (n = 0) => String(V + n); // 渲染附加项的端口:挂在 0.7.18 �
 /** 不在整套里的探针文件与原因(--check-coverage 对照) */
 export const EXCLUDED_PROBE_FILES = {
   ...V18_EXCLUDED,
+  ...V19_EXCLUDED,
   // 公共件与工具,不单独跑
   'asset-lan-discover.mjs': '公共件(局域网发现),单测在 server/test',
   'claim-gate-judge.mjs': '认领闸探针的判定函数,单测直接测',
@@ -60,8 +63,8 @@ export const EXCLUDED_PROBE_FILES = {
   'pixelmap-gl-harness.html': '探针的页面夹具',
   'placeholder-harness.html': '探针的页面夹具',
   'render-queue-proxy.mjs': '队列探针用的 TCP 代理,被 render-queue-e2e 与 card-sync-probe 用',
-  'lowmem-online-probe.mjs': '要带在线模式编译期常量(VITE_PC_ONLINE=1)另起 dev server、再配远程素材服务,低内存档规则由 sound-ab、online-user-cards、c10-cost 三个探针的低内存档段覆盖',
-  'c65-editor-probe.mjs': 'C6.5 页面一侧同步 / 撤销 / 离线 / 共享项目的点一遍探针(历史),要先手工起托管端并分阶段(local、shared、lan),主流程由 c10-ui、online-join 等覆盖',
+  'lowmem-online-probe.mjs': '整支按低内存档写;0.7.19 撤销低内存档,claude/online-browser 在文件头标〔已退役〕(断言不改);接替的是 stage-gate-probe(V19-ob-*)与 page-stream-probe 的 lowest、mobile 两场。原先还要带在线模式编译期常量另起 dev server、再配远程素材服务',
+  'c65-editor-probe.mjs': 'C6.5 页面一侧同步 / 撤销 / 离线 / 共享项目的点一遍探针(历史),要先手工起托管端并分阶段(local、shared、lan);C 段 2026-10-22 已随冲突合并窗口改成逐项(1d07f323),冲突合并的主流程由 V19-cm-probe、V19-mobile-ui 覆盖',
   'm8-e-probe.mjs': 'M8 跨机编排探针,要第二台机器(笔记本),不在本机整套里',
   'm8-migrate-probe.mjs': 'M8 换机迁移演练,由主会话照迁移步骤做',
   'm8-outbound-probe.mjs': 'M8 只能出网的节点一侧,跨机',
@@ -109,7 +112,6 @@ export const EXCLUDED_PROBE_FILES = {
   'video-source-cadence-stress.mjs': '节奏探针的压力版(连跑若干遍),由 --flaky-rerun 的思路覆盖',
   'preview-3d-playback.mjs': '3D 页播放回归探针(历史)',
   'particles-paused-probe.mjs': '粒子卡暂停探针(历史)',
-  'playback-probe.mjs': 'R5 播放与追帧探针(历史)',
   'reveal-probe.mjs': 'R7 露出舞台探针(历史)',
   'probe-gate-probe.mjs': 'R4b 加载遮罩探针(历史)',
   'stage-content-probe.mjs': 'R3 舞台内容探针(历史)',
@@ -138,7 +140,7 @@ export const EXCLUDED_PROBE_FILES = {
   'reopen-installed-query.ps1': '协作重开专项',
   'reopen-installed-state.mjs': '协作重开专项',
   'reopen-installed.mjs': '协作重开专项',
-  'reopen-matrix.mjs': '协作重开专项',
+  'reopen-matrix.mjs': '协作重开专项;2026-10-22 随冲突合并窗口改了 5 处断言(1d07f323),但 reopen-e2e.mjs --matrix 在 main 上更早的「member first authentication」一步就失败(原有失败,错误逐字相同),这 5 处没验过,见 docs/plan/TODO.md',
   'reopen-native-association.mjs': '协作重开专项',
   'reopen-native-fixture.mjs': '协作重开专项',
   'reopen-native-process-watch.ps1': '协作重开专项',
@@ -162,8 +164,6 @@ export const EXCLUDED_PROBE_FILES = {
   'cloud-agent-isolation-tools.mjs': '第四段隔离探针里「工具」的几组,由 cloud-agent-isolation-probe(S4-2)调,不单独跑',
   'probe-timings.mjs': '探针共用的耗时记录件(耗时只记录,不当闸门),单测在 server/test/probe-timings.test.mjs',
   // 已交付、能在本机独立跑、但还没有进整套清单的验收探针:要不要加成清单项等用户定(见 docs/reports/REPORT-verification-rework.md「看到了但没有自己定的」)
-  'hosted-render-queue-probe.mjs': '第三段托管方渲染服务「云端排队与按轮占用」验收探针（14 条，验证按轮占用与超时）',
-  'hosted-render-isolation-probe.mjs': '第三段「越权探测卡」隔离验收探针(49 条),清单里还没有对应的项,待用户定是否加入',
   'hosted-render-node-side-check.mjs': '第三段同步文件预检的对照实验(回答缺口在不在,故意不经过预检),清单里还没有对应的项,待用户定是否加入',
   'cloud-agent-look-probe.mjs': '第四段云端 Agent「看画面」端到端探针,清单里还没有对应的项,待用户定是否加入',
   'cloud-agent-sound-probe.mjs': '第四段云端 Agent「声音」端到端探针,清单里还没有对应的项,待用户定是否加入',
@@ -288,13 +288,13 @@ const OLD_ITEMS = [
   /* ============================== 探针:主计划第 7、8 节点名与上一次整套(a45)跑过的 ============================== */
   // —— 在线构建一组 ——
   {
-    id: 'P-c10-browser-a4', name: 'C10 在线普通档 A1～A4(不导视频)', category: '探针', level: 'local', taskRef: '主计划第 7 节 C10;任务书一 第 17 条(原有探针不退步)',
+    id: 'P-c10-browser-a4', name: 'C10 在线双舞台(电脑浏览器,原称在线普通档)A1～A4(不导视频)', category: '探针', level: 'local', taskRef: '主计划第 7 节 C10;任务书一 第 17 条(原有探针不退步)',
     tasks: ['R17'], needs: ['online-build'], covers: ['c10-browser-probe.mjs'], prereq: ['G0-4'],
     cmd: probe('c10-browser-probe', ['--only-a4', '--no-video', '--base-port', B, '--dist', '{dist}']), pass: { exit: 0 },
     timing: 'record', timingNote: '各步用时;A1「播放 10 秒主文档长任务 0」照旧是通过条件', timeoutMin: 30,
   },
   {
-    id: 'P-c10-browser-full', name: 'C10 在线普通档完整版 A1～A5', category: '探针', level: 'local', taskRef: '主计划第 7 节 C10',
+    id: 'P-c10-browser-full', name: 'C10 在线双舞台(电脑浏览器)完整版 A1～A5', category: '探针', level: 'local', taskRef: '主计划第 7 节 C10',
     tasks: ['R17'], needs: ['online-build'], covers: ['c10-browser-probe.mjs'], prereq: ['G0-4'],
     cmd: probe('c10-browser-probe', ['--base-port', B, '--dist', '{dist}']), pass: { exit: 0 },
     timing: 'record', timingNote: '各步用时(含 A5 独立渲染主机一步);A1 主文档长任务 0 照旧是通过条件', timeoutMin: 45,
@@ -310,14 +310,14 @@ const OLD_ITEMS = [
     id: 'P-online-user-cards', name: '在线用户卡探针', category: '探针', level: 'local', taskRef: '任务书一 第 17 条(online-user-cards-probe 仍过)',
     tasks: ['R17'], needs: ['online-build'], covers: ['online-user-cards-probe.mjs'], prereq: ['G0-4'],
     cmd: probe('online-user-cards-probe', ['--dist', '{dist}', '--base-port', B, '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 30,
-    known: 'main 上不过:探针建的项目是空的,在线页面加入空项目被拒;修复在第二段分支上',
+    known: '2026-10-17 改走会话恢复入口(8b09add4),当时实跑 ok:true(普通档、切项目测量门、低内存档全过);claude/online-browser 把模拟手机那一段改成看清单计划、核 __pcBackfill 已不存在(合入后按新断言)',
     timing: 'record', timingNote: '用户卡测完到最后一拍还停在快照的用时(原门槛 ≤ 3 秒)',
   },
   {
     id: 'P-c10-ui', name: 'C10 界面探针(徽标、断线重连、用户卡贴层)', category: '探针', level: 'local', taskRef: '主计划第 7 节 C10;任务书一 第 17 条',
     tasks: ['R17'], needs: ['online-build'], covers: ['c10-ui-probe.mjs'], prereq: ['G0-4'],
     cmd: probe('c10-ui-probe', ['--dist', '{dist}', '--out', '{item}', '--proxy-port', B, '--doc-port', DOC(0), '--asset-port', DOC(1), '--proxy2-port', '5693']), pass: { exit: 0 }, timeoutMin: 30,
-    known: 'main 上不过:同上(空项目加入被拒)',
+    known: '2026-10-17 改走会话恢复入口(8b09add4),当时实跑 ok:true(A6、A7、A8 全过)',
   },
   {
     id: 'P-online-stage-watch', name: '在线舞台看守(握手后又断)', category: '探针', level: 'local', taskRef: '主计划第 7 节 C10',
@@ -457,8 +457,9 @@ const OLD_ITEMS = [
     tasks: [], covers: ['push-draw-probe.mjs'], cmd: probe('push-draw-probe', ['--port', P(0), '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 30,
   },
   {
-    id: 'RR-stage-gate', name: '舞台端口的闸:只放白名单(真编辑器、真舞台窗口)', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
-    tasks: [], covers: ['stage-gate-probe.mjs'], cmd: probe('stage-gate-probe', ['--port', P(0), '--shots', '{item}/shots']), pass: { exit: 0 }, timeoutMin: 30,
+    id: 'RR-stage-gate', name: '舞台端口的闸:只放白名单(真编辑器、真舞台窗口;安全项,不随在线浏览器合入退休)', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据);0.7.19 起每次整套都跑(主会话 2026-10-22 定)',
+    tasks: [], covers: ['stage-port-whitelist-probe.mjs'], cmd: probe('stage-port-whitelist-probe', ['--port', P(0), '--shots', '{item}/shots']), pass: { exit: 0, must: ['"fails":\\s*\\[\\]'] }, timeoutMin: 30,
+    known: '2026-10-22 主会话把 main 上原来的 stage-gate-probe.mjs 另存为 stage-port-whitelist-probe.mjs(971b35d2),因为 claude/online-browser 把原文件名就地改写成三道闸门的舞台闸门探针;两支都要跑,三道闸门那支见 V19-ob-stage-gate 等。原先是补充项,改成缺省就跑',
   },
   {
     id: 'RR-stream-origin', name: '轨道流:父页推流、舞台贴流的逐帧比像素(单卡流)', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
@@ -525,7 +526,7 @@ const OLD_ITEMS = [
     tasks: [], needs: ['online-build'], prereq: ['G0-4'], covers: ['online-export-modes-probe.mjs'], cmd: probe('online-export-modes-probe', ['--dist', '{dist}', '--base-port', P(0), '--out', '{item}/o', '--shots', '{item}/shots']), pass: { exit: 0 }, timeoutMin: 30,
   },
   {
-    id: 'RR-page-stream', name: '在线页面贴轨道流(solo / splitter / desk / mask / slow / lowmem 六场)', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
+    id: 'RR-page-stream', name: '在线页面贴轨道流(solo / splitter / desk / mask / slow / lowmem 六场;claude/online-browser 合入后 lowmem 场改名 lowest(最低一档,?tier=low)、mobile 场改核精简模式与身份手机)', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
     tasks: [], needs: ['online-build'], prereq: ['G0-4'], covers: ['page-stream-probe.mjs'], cmd: probe('page-stream-probe', ['--dist', '{dist}', '--base-port', P(0), '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 30,
   },
   {
@@ -545,8 +546,9 @@ const OLD_ITEMS = [
   },
   {
     id: 'X-c10-cost', name: '低内存档完整规则(成本、判轻判重)', category: '探针', level: 'local', taskRef: '主计划第 7 节 C10 其余', optional: true,
-    tasks: [], needs: ['online-build'], covers: ['c10-cost-probe.mjs'], prereq: ['G0-4'],
-    cmd: probe('c10-cost-probe', ['--dist', '{dist}', '--port', B, '--proxy-port', '5693', '--doc-port', DOC(0), '--asset-port', DOC(1), '--debug-port', '5697', '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 40,
+    tasks: [], covers: ['c10-cost-probe.mjs'],
+    notApplicable: '2026-10-22 起不适用(0.7.19 盘查):① 探针的成员一半还凭 #invite= 等 [data-pc="join-invite-project"](第 417～418 行),在线开始页 0.7.18 起没有这个控件,8b09add4 迁移在线探针时没迁它;② 它验的低内存档规则随 0.7.19 撤档撤销(claude/online-browser 把第 4 步改成单舞台界限搜索,入口照旧跑不通)。单舞台界限搜索由 V19-ob-instant-gate(S20)与 V19-ob-tests(costSearch)接替',
+    was: { cmd: probe('c10-cost-probe', ['--dist', '{dist}', '--port', B, '--proxy-port', '5693', '--doc-port', DOC(0), '--asset-port', DOC(1), '--debug-port', '5697', '--out', '{item}']) },
   },
   {
     id: 'X-c10a-online', name: 'C10a 在线页面静态形状(不请求 /api/*)', category: '探针', level: 'local', taskRef: '主计划第 7 节 C10a', optional: true,
@@ -586,10 +588,12 @@ const OLD_ITEMS = [
   },
   {
     id: 'X-small-tier', name: '预渲染小尺寸(渲染节点一侧)', category: '探针', level: 'local', taskRef: '主计划第 7 节 C10a(小尺寸)', optional: true,
-    tasks: [], needs: ['dev'], covers: ['small-tier-probe.mjs'], cmd: probe('small-tier-probe', ['--origin', '{dev.origin}', '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 20,
+    tasks: [], covers: ['small-tier-probe.mjs'],
+    notApplicable: '预渲染小尺寸已停产(product/rendering.md 第 44 行:从每张卡的快照缩出来的,快照 2026-10-13 作废以后停产;预渲染结果只有按项目分辨率的轨道流一档)。探针断言的正是「每个 <帧>.html 旁有 <帧>.small.webp」',
+    was: { cmd: probe('small-tier-probe', ['--origin', '{dev.origin}', '--out', '{item}']) },
   },
   {
-    id: 'X-lowmem-export-compare', name: '低内存档逐帧导出与桌面导出逐帧比', category: '探针', level: 'local', taskRef: '主计划第 7 节 C10a(低内存档导出)', optional: true,
+    id: 'X-lowmem-export-compare', name: '在线浏览器逐帧导出与桌面导出逐帧比(探针文件名是旧的,和低内存档无关)', category: '探针', level: 'local', taskRef: '主计划第 7 节 C10a(浏览器导出与桌面导出逐帧比)', optional: true,
     tasks: [], needs: ['dev'], covers: ['lowmem-export-compare.mjs'], cmd: probe('lowmem-export-compare', ['--origin', '{dev.origin}', '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 30,
   },
   {
@@ -620,7 +624,7 @@ const OLD_ITEMS = [
     timing: 'record', timingNote: 'P2 暂停到停声的用时(原门槛 ≤ 300 ms);对齐阈值(ALIGN_SEC 0.15 s、占比 ≥ 90%)这次保留为通过条件、待用户定', timeoutMin: 40,
   },
   {
-    id: 'S1-5', name: '声音 A、B:导出自动生成与在线合成(桌面、在线普通档、低内存档)', category: '第一段', level: 'local', taskRef: '任务书一 第 4、5 条(决定 A、B)',
+    id: 'S1-5', name: '声音 A、B:导出自动生成与在线合成(桌面、在线双舞台、低内存档;claude/online-browser 合入后低内存档段改成手机段:不再回 low-memory、照常测量、导出时先生成再导出)', category: '第一段', level: 'local', taskRef: '任务书一 第 4、5 条(决定 A、B)',
     tasks: ['R4', 'R5'], needs: ['online-build'], covers: ['sound-ab-probe.mjs'], prereq: ['G0-4'],
     cmd: probe('sound-ab-probe', ['--dist', '{dist}', '--out', '{item}', '--desktop-port', B, '--site-port', '5693', '--doc-port', DOC(0), '--asset-port', DOC(1)]), pass: { exit: 0 }, timeoutMin: 40,
   },
@@ -651,12 +655,13 @@ const OLD_ITEMS = [
     tasks: ['R9'], manual: '不在新节点上,但只能在完整验收通过之后做:见 docs/plan/four-stage-deploy-checklist.md「合入 main 之前」「版本号与补丁」;产物路径、大小、SHA-256 贴进总报告',
   },
   {
-    id: 'S1-r2', name: '声音:新节点在线页面换成 0.7.18 同一提交', category: '第一段', level: 'network', taskRef: '任务书一 第 10 条',
-    tasks: ['R10'], remoteOnly: '只能在新节点上验:换静态页面(先备份)、三个源的主脚本相同、内嵌代码版本与桌面 0.7.18 一致、无头打开无页面错误;见 four-stage-deploy-checklist.md「换在线页面」',
+    id: 'S1-r2', name: '新节点在线页面换成发版的同一提交(0.7.19 起含手机版的生产只读检查)', category: '第一段', level: 'network', taskRef: '任务书一 第 10 条;0.7.19 手机版(mobile-online-task.md M7 前一半)',
+    tasks: ['R10'], covers: ['mobile-prod-check.mjs'],
+    remoteOnly: '只能在新节点上验:换静态页面(先备份)、三个源的主脚本相同、内嵌代码版本与桌面发版版本一致、无头打开无页面错误;见 four-stage-deploy-checklist.md「换在线页面」。换完再跑 node scripts/probes/mobile-prod-check.mjs --origin https://<域名> --out <新临时目录>(只读、不登录:安卓仿真进手机版开始页无横向溢出、桌面仿真不下载手机版分块、两边页面错误 0、4xx/5xx 0)',
   },
   {
     id: 'S1-r3', name: '声音:新节点上的在线合成与在线导出', category: '第一段', level: 'network', taskRef: '任务书一 第 4、5 条(留到最后的新节点实测)',
-    tasks: ['R4', 'R5'], remoteOnly: '只能在新节点上验:对着新节点的在线页面跑 sound-ab-probe 的在线段思路(无头打开、创建者放云端项目、在线普通档合成与导出);见 four-stage-deploy-checklist.md「换在线页面之后的实测」',
+    tasks: ['R4', 'R5'], remoteOnly: '只能在新节点上验:对着新节点的在线页面跑 sound-ab-probe 的在线段思路(无头打开、创建者放云端项目、在线双舞台的电脑浏览器合成与导出;0.7.19 撤档后手机也照常合成,再用安卓仿真打开一次);见 four-stage-deploy-checklist.md「换在线页面之后的实测」',
   },
 
   /* ============================== 第二段:在线执行用户卡与素材效果卡 ============================== */
@@ -724,6 +729,7 @@ const OLD_ITEMS = [
   {
     id: 'S2-m2', name: '第二段:手机低内存档的表现', category: '第二段', level: 'local', taskRef: '任务书一 第 15 条末句(低内存档按现有规则、表现写清楚)',
     tasks: ['R15'], manual: '由 online-user-cards-probe 的低内存档断言与 S2-2 的「低内存档」一行覆盖;读报告里「低内存档」一节确认写清了表现',
+    retiredWhen: { missing: 'src/online/lowMemory.ts', why: '0.7.19 撤销低内存档(claude/online-browser 删了 lowMemory.ts);手机的表现改由 V19-ob-stage-gate 的 S10(安卓 4 GB 停在精简模式、身份手机)与 RR-page-stream 的 mobile 场验,用户卡在模拟手机单舞台照样执行由 S2-2 的 E9、S2-1 的场景 M 验' },
   },
   {
     id: 'S2-m3', name: '第二段:合入、0.7.19(统一为 0.7.18)、补丁、release', category: '第二段', level: 'local', taskRef: '任务书一 第 19 条前半;「做法与验收节奏」统一版本号',
@@ -753,9 +759,11 @@ const OLD_ITEMS = [
     pass: { exit: 0, metrics: { fail: 'ℹ fail (\\d+)' }, limits: { fail: { eq: 0 } } }, timeoutMin: 15,
   },
   {
-    id: 'RS18-queue', name: '云端排队与按轮占用（单节点排队，甲一轮收尾立即让给排队的乙，一次三分钟不重试）', category: '第三段', level: 'local', taskRef: 'RS18-queue 单节点排队与按轮占用（10-16 用户改定）',
+    id: 'RS18-queue', name: '云端排队,多项目模式 K=1(看画面先于产流、各项目轮流、项目内先来先做、一轮只做一个就换:乙-1 → 甲-2 → 乙-2 → 甲-3;重启不丢、产流不丢、一次三分钟不重试)', category: '第三段', level: 'local',
+    taskRef: 'RS18-queue 单节点排队(10-16 用户改定);0.7.19 多项目渲染节点取代按轮占用(product/rendering.md「渲染服务的两种模式」)',
     tasks: ['R20', 'R21', 'R23'], covers: ['hosted-render-queue-probe.mjs'], requires: ['scripts/probes/hosted-render-queue-probe.mjs'],
-    cmd: probe('hosted-render-queue-probe', ['--base-port', B, '--doc-port', DOC(0), '--asset-port', DOC(1)]), pass: { exit: 0 }, timeoutMin: 30,
+    cmd: probe('hosted-render-queue-probe', ['--base-port', B, '--doc-port', DOC(0), '--asset-port', DOC(1), '--turn', '1']), pass: { exit: 0, must: ['"fails":\\s*\\[\\]'] }, timeoutMin: 40,
+    known: '探针 2026-10-22 已改成按多项目模式验(13 条,Q1～Q8);缺省 K=4 的那一遍是 V18-queue-probe,这一项专验 K=1 的分支,两项不重复;机器慢时加 --time-scale(子 Agent 用的是 3)',
   },
   {
     id: 'S3-m1', name: '第三段:设计与契约、语义与迁移文档', category: '第三段', level: 'local', taskRef: '任务书一 第 20、24 条',
@@ -766,11 +774,11 @@ const OLD_ITEMS = [
     tasks: ['R22'], remoteOnly: '只能在新节点上做:见 four-stage-deploy-checklist.md「部署渲染服务」;等写入停止再重启托管服务,重启前后核对各项目版本号不变并记中断时长',
   },
   {
-    id: 'S3-r2', name: '新节点实测:低内存档预渲染重试被云节点认领、产物贴上', category: '第三段', level: 'network', taskRef: '任务书一 第 23 条第 1 点',
-    tasks: ['R23'], remoteOnly: '只能在新节点上验:手机仿真(c10-browser-probe --site 的低内存档思路 / lowmem-online-probe)打开含重卡的测试项目,看渲染服务认领与贴上;测试房间与凭证验完删',
+    id: 'S3-r2', name: '新节点实测:手机打开含重卡的项目,重卡由云节点产流、页面贴上(0.7.19 起手机身份不认领,原「低内存档预渲染重试」随撤档撤销)', category: '第三段', level: 'network', taskRef: '任务书一 第 23 条第 1 点;0.7.19 撤销低内存档(online-browser-task.md)',
+    tasks: ['R23'], remoteOnly: '只能在新节点上验:安卓仿真(UA + userAgentData.mobile、375×812,同 lib/mobile-env.mjs 的 phone)打开含重卡的测试项目,地址加 ?gates=1 看身份是手机、停在精简模式;看清单计划里重卡的流任务由托管渲染服务认领、产流、页面贴上(手机页面自己不认领);再加 ?tier=low 看最低一档播放时只贴已产好的;测试房间与凭证验完删。lowmem-online-probe 已退役不再用',
   },
   {
-    id: 'S3-r3', name: '新节点实测:在线普通档判重的层交给云节点渲', category: '第三段', level: 'network', taskRef: '任务书一 第 23 条第 2 点',
+    id: 'S3-r3', name: '新节点实测:在线双舞台(电脑浏览器)判重的层交给云节点渲', category: '第三段', level: 'network', taskRef: '任务书一 第 23 条第 2 点',
     tasks: ['R23'], remoteOnly: '只能在新节点上验:c10-browser-probe --site <新节点地址> --no-host(不起外部主机,看云节点接活)',
   },
   {
@@ -814,7 +822,7 @@ const OLD_ITEMS = [
     timing: 'record', timingNote: 'E1 发起方不在线时读选区的工具回话的用时(原门槛 < 500 ms)',
   },
   {
-    id: 'S4-4', name: '云端 AI 栏(在线宽屏,走账号入口:登录、新建云端项目、开开关、发消息、停止、重开找回;手机占位)', category: '第四段', level: 'local', taskRef: '任务书二 第 5、6 条(界面部分);0.7.18 起改走账号入口',
+    id: 'S4-4', name: '云端 AI 栏(在线宽屏,走账号入口:登录、新建云端项目、开开关、发消息、停止、重开找回;手机一步在 claude/online-browser 合入前核低内存档占位,合入后核「不再是占位」)', category: '第四段', level: 'local', taskRef: '任务书二 第 5、6 条(界面部分);0.7.18 起改走账号入口',
     tasks: ['C5', 'C6'], needs: ['online-build'], prereq: ['G0-4'], covers: ['cloud-agent-ui-probe.mjs'], requires: ['scripts/probes/cloud-agent-ui-probe.mjs'],
     requiresEnv: ['PROMPTCUT_ACCOUNT_PROVIDER_ROOT', 'PROMPTCUT_PASSWORD_ORDER_MODULE'], where: 'local',
     // 端口:0.7.18 的端口段(起点 PC_V18_PORT_BASE,缺省 28990)里第 13 个起连着 45 个(+13～+57)
@@ -909,12 +917,14 @@ const OLD_ITEMS = [
 ];
 
 /**
- * 总清单 = 老清单(0.7.17 以前四段)+ 0.7.18 的项(v18-manifest.mjs)。老项补上 38 行的行号(OLD_ITEM_ROWS)和「在哪能跑」;
- * 走老入口(在线页面的房间号加口令)的、在 main 上必然跑不通的老项,按 STALE_OLD_ENTRY 记成「不适用」(留着原命令作记录)。
+ * 总清单 = 老清单(0.7.17 以前四段)+ 0.7.18 的项(v18-manifest.mjs)+ 0.7.19 的项(v19-manifest.mjs)。老项补上 38 行的行号(OLD_ITEM_ROWS)和「在哪能跑」;
+ * 走老入口(在线页面的房间号加口令)的、在 main 上必然跑不通的老项,按 STALE_OLD_ENTRY 记成「不适用」(留着原命令作记录);
+ * 支撑 0.7.19 要求的老项按 V19_TAGS 补上 v19。
  */
-export const ITEMS = [...OLD_ITEMS, ...V18_ITEMS].map((it) => {
+export const ITEMS = [...OLD_ITEMS, ...V18_ITEMS, ...V19_ITEMS].map((it) => {
   let out = it;
   if (OLD_ITEM_ROWS[it.id]) out = { ...out, rows: [...new Set([...(out.rows || []), ...OLD_ITEM_ROWS[it.id]])] };
+  if (V19_TAGS[it.id]) out = { ...out, v19: [...new Set([...(out.v19 || []), ...V19_TAGS[it.id]])] };
   if (OLD_ITEM_KNOWN[it.id]) out = { ...out, known: [out.known, OLD_ITEM_KNOWN[it.id]].filter(Boolean).join(';') };
   if (STALE_OLD_ENTRY[it.id]) {
     const { cmd, steps, parallel, needs, prereq, pass, timing, timingNote, timeoutMin, idleKillMin, retryOnIdle, requires, requiresText, env, ...rest } = out;

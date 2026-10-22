@@ -7,6 +7,7 @@
  *        [--release-timings "<版本>"] [--machine-name <名字>]
  *   node scripts/acceptance/four-stage-acceptance.mjs --timings-from <results.json> --release-timings "<版本>"
  *   node scripts/acceptance/four-stage-acceptance.mjs --check-coverage
+ *   node scripts/acceptance/four-stage-acceptance.mjs --v19-map
  *
  * 清单是数据(`four-stage-manifest.mjs`):每项有编号、名字、级别、类别、命令、工作目录、前置服务、通过标准、
  * 记哪些耗时、对应任务书哪一条。选项见 `--help`。
@@ -53,7 +54,7 @@ import { REPO, killTree, portFree, tripleFree, viteBin, waitHttp, startDevServer
 import {
   parseArgs, USAGE, validateManifest, selectItems, planResume, expandCmd, expandPlaceholders, judge, combineAttempts,
   listText, summaryText, commandText, describeItem, coverageReport, DONE_VERDICTS, matrixText, shiftPorts,
-  levelOf, LEVEL_LABEL, releaseTimingsSection,
+  levelOf, LEVEL_LABEL, releaseTimingsSection, retiredReason, v19Coverage, v19MapText,
 } from './acceptance-lib.mjs';
 import { rowTable, rowsMarkdown, rowsText, rowsMapText, v18CoverageCheck, skipListProblems, tableCounts } from './v18-table.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -66,8 +67,11 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 // 清单模块可以用环境变量 PC_ACCEPTANCE_MANIFEST 换成别的(单测用一份假清单跑真的子进程流程)
 const MANIFEST_FILE = process.env.PC_ACCEPTANCE_MANIFEST ? path.resolve(process.env.PC_ACCEPTANCE_MANIFEST) : path.join(HERE, 'four-stage-manifest.mjs');
-const { ITEMS, EXCLUDED_PROBE_FILES = {}, TASK_ACCEPTANCE = { R: [], C: [], U: [], N: [] }, ROWS = [], G0_2_SKIPS = [] } = await import(pathToFileURL(MANIFEST_FILE).href);
+const { ITEMS, EXCLUDED_PROBE_FILES = {}, TASK_ACCEPTANCE = { R: [], C: [], U: [], N: [] }, ROWS = [], G0_2_SKIPS = [], V19_REQS = [] } = await import(pathToFileURL(MANIFEST_FILE).href);
 const ROW_IDS = new Set(ROWS.map((r) => r.id));
+const V19_IDS = new Set(V19_REQS.map((r) => r.id));
+/** 读仓库里的一个文件(retiredWhen 的标记用);读不到回 null */
+const readRepoFile = (f) => { try { return fs.readFileSync(path.join(REPO, f), 'utf8'); } catch { return null; } };
 
 /* ------------------------------------------------------------------ 小工具 */
 
@@ -343,7 +347,7 @@ async function main() {
   try { opts = parseArgs(process.argv.slice(2)); } catch (e) { console.error(e.message + '\n\n' + USAGE); process.exit(2); }
   if (opts.help) { console.log(USAGE); return 0; }
 
-  const errs = validateManifest(ITEMS, { rowIds: ROWS.length ? ROW_IDS : null });
+  const errs = validateManifest(ITEMS, { rowIds: ROWS.length ? ROW_IDS : null, v19Ids: V19_REQS.length ? V19_IDS : null });
   if (errs.length) { console.error('清单不合格:\n  ' + errs.join('\n  ')); return 2; }
 
   if (opts.list) {
@@ -363,6 +367,11 @@ async function main() {
   }
   if (opts.matrix) {
     console.log(matrixText(ITEMS, { '任务书一 sound-online-render-task.md 编号验收': TASK_ACCEPTANCE.R, '任务书二 cloud-agent-task.md 完成条件': TASK_ACCEPTANCE.C, '任务书二「用户体验验收」六条': TASK_ACCEPTANCE.U, '任务书二 2026-10-07 更新带来的编号(J 工具范围、K 诊断报告、第 4 条新增三条、第 8 条真实模型三样)': TASK_ACCEPTANCE.N }));
+    return 0;
+  }
+  if (opts.v19Map) {
+    if (!V19_REQS.length) { console.error('这份清单没有 0.7.19 的要求表(V19_REQS)'); return 2; }
+    console.log(v19MapText(V19_REQS, ITEMS));
     return 0;
   }
   if (opts.rowsMap) {
@@ -410,6 +419,16 @@ async function main() {
       const sp = skipListProblems([...new Map(ITEMS.flatMap((it) => it.pass?.skipAllow || []).map((a) => [a.name, a])).values()]);
       console.log(`\n④ 全量测试的跳过名单(G0-2):${G0_2_SKIPS.length} 条;${sp.length ? '有问题:\n  ' + sp.join('\n  ') : '每条都写了名字、所在文件、原因'}`);
       if (sp.length) bad++;
+    }
+    if (V19_REQS.length) {
+      const c19 = v19Coverage(V19_REQS, ITEMS);
+      console.log(`\n⑤ 0.7.19 的要求 ${V19_REQS.length} 条:${c19.uncovered.length ? `这 ${c19.uncovered.length} 条没有任何清单项:${c19.uncovered.join('、')}` : '每条至少有一项'}`);
+      if (c19.unknown.length) console.log(`清单项指到不存在的要求:${c19.unknown.map((x) => `${x.item}→${x.req}`).join('、')}`);
+      if (c19.uncovered.length || c19.unknown.length) bad++;
+      const waits = ITEMS.filter((it) => it.v19 && it.waitFor);
+      const retire = ITEMS.filter((it) => it.retiredWhen);
+      const nowRetired = retire.filter((it) => retiredReason(it, { exists: (f) => fs.existsSync(path.join(REPO, f)), read: readRepoFile }));
+      console.log(`其中等分支合入的 ${waits.length} 项(${[...new Set(waits.map((it) => it.waitFor))].join('、')});某分支合入后不适用的 ${retire.length} 项,本检出上已经不适用 ${nowRetired.length} 项`);
     }
     console.log(bad ? `\n守门:不过(${bad} 类有问题)` : '\n守门:通过');
     return bad ? 1 : 0;
@@ -472,7 +491,10 @@ async function main() {
 
   if (opts.dryRun) {
     console.log(`将跑 ${plan.run.length} 项(续跑跳过 ${plan.skip.length} 项),输出目录 ${out}`);
-    for (const it of plan.run) console.log(`${it.id}\t${it.name}\t${it.manual ? '[人工]' : it.remoteOnly ? '[在节点上做]' : commandText(it)}`);
+    for (const it of plan.run) {
+      const retired = retiredReason(it, { exists: (f) => fs.existsSync(path.join(REPO, f)), read: readRepoFile });
+      console.log(`${it.id}\t${it.name}\t${it.notApplicable || retired ? '[不适用]' : it.manual ? '[人工]' : it.remoteOnly ? '[在节点上做]' : commandText(it)}`);
+    }
     return 0;
   }
 
@@ -504,6 +526,8 @@ async function main() {
       cmd: commandText(item) || null, flags: describeItem(item),
     };
     if (item.notApplicable) return { ...rec, verdict: 'na', reasons: [item.notApplicable], logs: [] };
+    const retired = retiredReason(item, { exists: (f) => fs.existsSync(path.join(REPO, f)), read: readRepoFile });
+    if (retired) return { ...rec, verdict: 'na', reasons: [retired], logs: [] };
     if (item.manual) return { ...rec, verdict: 'manual', reasons: [item.manual], logs: [] };
     if (item.remoteOnly) return { ...rec, verdict: 'remote', reasons: [item.remoteOnly], logs: [] };
     const missing = (item.requires || []).filter((f) => !fs.existsSync(path.join(REPO, f)));
