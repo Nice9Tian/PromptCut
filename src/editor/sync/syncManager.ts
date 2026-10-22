@@ -34,7 +34,7 @@ import { serviceIdentity } from "../../../server/recovery/descriptor.mjs";
 import { discoverRoom, relayFetch, authorizeRelayAsset } from "../../../server/hosting/client.mjs";
 import { accountNameKey, clipOfEntity, entityLabel, writerLabel, type DisplayNames, type Me } from "./labels";
 import { connectSharedAssets, disconnectSharedAssets, lanAssetBaseOf, receiveSharedAssetEndpoints } from "../media/assetTiers";
-import { bindCardSync, noteProjectForCardSync, detachCardSync, takeMineCard } from "./cardSync";
+import { bindCardSync, noteProjectForCardSync, detachCardSync, takeMineCard, receiveCardSyncNotice } from "./cardSync";
 import { accountCardTicket } from "./accountCardSync";
 import { createAccountLinkLife } from "./accountLinkLife";
 import { bindAgentSide, releaseAgentSide } from "./agentSideBinding";
@@ -1080,6 +1080,10 @@ if (typeof window !== "undefined" && import.meta.env?.DEV) {
     /** 账号云端项目:这条连接能用到什么时候、换过几次会话(`accountLinkLife.ts`) */
     accountLife: () => cur?.accountLife?.() ?? null,
     events: () => eventRecordList(),
+    /** 交一条卡片源码同步的提示给页面(和编辑器进程经 HMR 送来的同一条路;冲突合并里卡片那一行的验收用) */
+    cardNotice: (n: Record<string, unknown>) => receiveCardSyncNotice(n),
+    /** 待合并表现在的样子 */
+    mergeThings: () => view.merge.things,
   };
 }
 

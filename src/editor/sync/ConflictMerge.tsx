@@ -46,7 +46,7 @@ function ThingItem(props: { row: ThingRow; m: ReturnType<typeof useConflictMerge
         <button type="button" className="pc-merge-expand" aria-expanded={open} title={open ? "收起" : "展开各项"} onClick={() => setOpen((v) => !v)}>
           {open ? "▾" : "▸"}
         </button>
-        <span className="pc-merge-label">{row.label}</span>
+        <span className="pc-merge-label" title={row.label}>{row.label}</span>
         <span className="pc-merge-kind">{row.changeText}</span>
         <span className={`pc-merge-chip${row.conflict ? " is-conflict" : ""}`}>{row.conflict ? "有冲突" : "无冲突"}</span>
         <span className="pc-merge-n">{row.props.length} 项</span>

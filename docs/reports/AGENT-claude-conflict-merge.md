@@ -158,7 +158,7 @@
 - **越出清单的一处**：`server/vite-plugin-cards.ts` 加了 `/api/cards/sync/take-mine` 这一个端点（约 15 行，照同文件其它 `/api/cards/sync/*` 的写法：只收 POST、核 Origin、拒舞台来的请求）。它不在授权清单里、也不在禁区里；不加的话页面没有路子让编辑器进程照我这边写回一张卡（`/api/cards/edit` 要卡片 id 且只认整卡闭包，部件文件对不上）。页面这边在在线构建里剪掉（`ONLINE_BUILD`），在线页面不出现卡片冲突项（卡片源码同步只在桌面版跑）。
 - **测试**：`server/test/card-sync.test.mjs` 新增 T8-8（A 断开时改卡、B 在线改同一张 → A 连回收到 `conflict`、本机换成云端、我的没被悄悄传上去、有备份、没有「被覆盖」提示；`takeMine` 之后服务上是我的、B 装上；审查不过的源码不写不传），T8-0～8 全过；`mergeItems.test.mjs` MI-13（卡片一条、文字、总算冲突、「选中无冲突项」不勾它、合并交给外部且同一次合并里项目项照常写）。
 - **因此改的旧断言**：`server/test/c66-cards.test.mjs` 的 C66-T8-05 原断言「本机改过（没同步出去）、服务上也改过 → 后写的赢 + 覆盖提示」。2026-10-22 用户定这种情形进「冲突合并」，改成「先备份、再装服务上的、发 conflict（带两份源码）」；`c66-kit.mjs` 把 `conflict` 事件映射成 `card-conflict`。备份先于装、装的是服务上的版本这两条断言保留。
-- **没做到的**：在线浏览器里卡片源码不走这条同步（在线页面没有编辑器进程），不涉及；没在真界面里截卡片冲突的图（桌面两编辑器 + 卡片同步的组合探针没有现成的，单测与对着真文档服务的 T8-8 覆盖了规则）。
+- **没做到的**：在线浏览器里卡片源码不走这条同步（在线页面没有编辑器进程），不涉及。真界面截图已补，见第十一节。
 
 ### 三、四支旧探针（授权改）— 提交 1d07f323
 
@@ -167,7 +167,7 @@
 | `scripts/probes/c65-editor-probe.mjs` 离线段 | 等 `[data-pc=offline-dialog]` → 等 `[data-pc=conflict-merge]`；断言「断网期间项目有新改动」「你有 3 步…」→ 断言窗口里有那一段、二级写着「「离线2」…云端现在是 「B5-离线」」；「关掉后顶栏『同步已暂停』、点它重开」→「关掉后顶栏『冲突合并』按钮、点它重开」；「不要了」→ 全勾 + 删除选中；「加进去」→ 全勾 + 合并。三份摘要一致、c5 / c7 结果的断言不变 | 旧对话框没了（整份处理换成逐项）；「同步已暂停」只在算不出基准的退路里出现 | 跑了 `--phases local`（本分支编辑器起在 5890，数据目录在临时目录）：**21/21 过**，截图 `out/probe-c65/conflict-merge-window.png`、`conflict-merge-button.png`。shared / lan 阶段要托管组合，没跑（不碰离线段） |
 | `scripts/probes/c10-ui-probe.mjs` A7 第 1 轮 | 常驻提示断言改成新文案（口令房间 → 「只在这个页面里」那句）；等离线对话框 → 等冲突合并窗口，并断言列着离线改的那一段；「不要了」+「当场给下载备份的气泡」+「下载出 offline-discard JSON」→ 全勾 + 删除选中、断言回到云端现状、不自动下载、关闭按钮变「完成」；offline-discard 备份改在同步面板「备份 N」里核能下载 | 旧对话框没了；转表时那一下整批回退不再弹「已丢弃」气泡（内容在待合并表里，整批备份照旧静默留在本页内存） | 跑了（端口 5890～5897）：我改的检查全过；**唯一失败**是「A7 点置灰的入口不发请求」（舞台子域的 `/media-s/…` 请求）。我把 main `ca4fc432` 的源码用 `git archive` 拉到 `out/base-src` 另建在线构建、同一探针同一端口跑：**同一项同样失败**（还多两个 `stage.html` 请求）——是 main 原有的，与本分支无关 |
 | `scripts/probes/mobile-ui-probe.mjs` C 段 | 点「处理」点不着时直接点元素（进项目的气泡盖住它）；「删除选中」前先断言它没勾时是灰的，再勾上一级、删；断言关闭按钮变「完成」后点掉，再核横条收起 | 面板从整份「删除全部」换成逐项勾选：没勾时「删除选中」是灰的 | 跑了（5890～5897）：**fails: []**；C 段 `bar`「1 处改动待合并，其中 1 处有冲突」、`dropBeforeSelect: true`、`closeText: 完成`、横条收起 |
-| `scripts/probes/reopen-matrix.mjs` 两段 | 「等 paused + 等离线对话框 + 点加进去 / 不要了」→ 等冲突合并窗口、断言「项目设置」那一条同时写着我离线改的名字与主机改的名字、本机先回到云端现状、全勾 + 合并 / 删除选中；主机看到我的名字、本地备份目录里有 offline-discard 那两条断言不变 | 同上；离线批次转表后 DocSync 只停一下就回到云端，`status === 'paused'` 等不到 | **没跑**：它由 `reopen-e2e.mjs --matrix` 起，编辑器端口写死 5203（主会话的 dev-test，禁止碰）、5206、5209、5215，每个再占 +1、+2，同时还要托管组合的端口，我的 5890～5899 装不下。要跑得给它一组端口，或由主会话跑 |
+| `scripts/probes/reopen-matrix.mjs` 两段（逐处见第十一节三） | 「等 paused + 等离线对话框 + 点加进去 / 不要了」→ 等冲突合并窗口、断言「项目设置」那一条同时写着我离线改的名字与主机改的名字、本机先回到云端现状、全勾 + 合并 / 删除选中；主机看到我的名字、本地备份目录里有 offline-discard 那两条断言不变 | 同上；离线批次转表后 DocSync 只停一下就回到云端，`status === 'paused'` 等不到 | **没跑、由主会话跑**：它由 `reopen-e2e.mjs --matrix` 起，编辑器端口写死 5203（主会话的 dev-test，禁止碰）、5206、5209、5215，每个再占 +1、+2，同时还要托管组合的端口，我的 5890～5899 装不下。要跑得给它一组端口，或由主会话跑 |
 
 ### 四、离线横幅文案〔裁：2026-10-22 主会话，二级〕— 提交 63e0e244
 
@@ -209,3 +209,46 @@
 ### 七、跑探针时看到的一处，交主会话定
 
 - c10-ui 探针里断网时只挪了一个片段，窗口里却出现两条：那一段，和「项目设置」（二级「时长」）。原因是总时长跟着片段自动变（`duration` 是项目顶层字段，不进撤销栈但进项目 JSON）。它是真实的改动、合并它也无害，但用户会觉得「我没改设置」。可选：把跟着内容自动变的 `duration` 从「项目设置」里排除（合并片段后它会照常自动跟上）。我没改，等主会话定。
+
+## 十一、第三轮（主会话 2026-10-22 的裁定与两件收尾）
+
+### 一、「项目设置」里不列跟着算出来的值〔裁：2026-10-22 主会话，三级〕— 提交 8ad68cc7
+
+原则：这张表只列用户直接改的东西，不列由别的东西算出来的值。去掉的（`src/editor/sync/mergeItems.ts` 的 `DERIVED_PROPS`）：
+
+| 在哪 | 去掉的属性 | 为什么算「算出来的」 |
+|---|---|---|
+| 项目设置 | `duration`（时长） | 总时长缺省等于内容末尾、跟着片段走（`kernel/duration.ts`）；用户手动截断的值不落盘，只在编辑器状态 `durationManual` 里，项目 JSON 里的 `duration` 永远是按规则算出的结果。挪一个片段它就变 |
+| 素材 | `pending` `tiers` `hash` `ext` `size` `duration` `width` `height` `url` `path` | 导入、入库、上传、补元数据时由系统写（「素材元数据回填」那类不进撤销栈的提交），用户没直接编辑过。素材的新增、删除照列，改名（`name`）照列 |
+| 片段 | `cardAudio` `embeddedAudio` | 带声音的动效卡生成的声音产物与它的能力标记，由生成流程维护，用户不直接改 |
+
+项目设置里剩下的（名称、宽高、帧率、主题、三维视角、渲染路线、创造力等级、风格）都是用户在项目设置里直接设的，照列。
+
+合并之后总时长照规则跟着内容末尾重算（`applyMerge` 收 `manualDuration`，`syncManager` 从编辑器状态给，手动截断着的照截断），不会留下旧值。测试 MI-14：挪一个片段 + 系统回填素材元数据 + 生成卡片声音产物 → 表里只有那一段的「时间」；素材改名照列；合并后总时长 11、手动截断 10.5 时为 10.5。`mergeItems` 14/14、`src/editor/sync/*.test.mjs` 197/197 过。
+
+请主会话写进语义时标〔裁〕。
+
+### 二、卡片源码冲突的界面截图
+
+- 探针 `scripts/probes/card-conflict-probe.mjs`（端口 5890～5892 起本分支的编辑器、5896 起进程内文档服务；数据目录都在临时目录）：
+  1. 真的卡片源码同步：两份「编辑器进程」（临时项目根、真实装卡与备份）对着文档服务，甲断开期间改一张用户卡、乙在线改同一张 → 甲连回时同步发出 `conflict`（带两份源码，`mineHas` / `cloudHas` 都对）；
+  2. 把这条提示交给页面——和编辑器进程经 HMR 送来的是同一个入口（`cardSync.ts` 新导出的 `receiveCardSyncNotice`，开发模式经 `__pcSyncTest.cardNotice`）；这一跳是探针替编辑器进程转交的，因为同一个仓库根起两台编辑器会共用 `src/cards/user/`，造不出两边不同的卡；
+  3. 窗口里：一级「卡片源码「cards/user/price-tag.tsx」 修改 有冲突 1 项」，二级「源码：我这边的版本比云端现在的多 3 行、少 1 行（云端现在是别人改过的版本） 冲突」；顶栏「冲突合并 1」；「选中无冲突项」不勾它；勾上 →「删除选中」→「完成」。页面没有报错。结果 `ok: true`、`fails: []`。
+  4. 不点「合并」：那会让这台编辑器把卡写进本仓库的 `src/cards/user/`。「合并」的规则由 `server/test/card-sync.test.mjs` T8-8 对着真文档服务覆盖。
+- 截图：`out/conflict-merge/desktop-7-card-conflict.png`（窗口里那张卡的一行与「源码」二级，背后是编辑器、顶栏有「冲突合并 1」）、`out/conflict-merge/desktop-8-card-conflict-cleared.png`（删除选中后「全部处理完了」）。
+- 顺手：窗口里一级名字过长会省略，加了悬停显示全名（`title`）。
+
+### 三、`reopen-matrix` 的改动（已提交，提交 1d07f323；由主会话跑）
+
+`scripts/probes/reopen-matrix.mjs` 里改了这几处，都在「离线修改」两段：
+
+1. **删掉 `paused()`**（原来等 `getSyncView().status === 'paused'`），换成 `mergeWindow()`（等 `[data-pc="conflict-merge"]`）。原因：离线批次被拒后会当场逐项转进待合并表、DocSync 回到云端现状，`paused` 只停一瞬，等不到。
+2. **新增 `mergeAll(button)`**：勾上全部一级勾选框（`[data-pc="merge-thing-check"]`），点 `merge-apply`（合并）或 `merge-delete`（删除选中），等关闭按钮变「完成」后点掉。原因：整份「加进去 / 不要了」换成逐项勾选。
+3. **「offline edit survives real member process stop and conflict replay UI」段**：
+   - `await paused(); await member.waitForSelector('[data-pc="offline-dialog"]')` → `await mergeWindow()`（原因同 1）；
+   - 原断言「本机项目名仍是 `matrix-offline-replay`」改成：窗口里 `offline:settings` 这一条同时写着 `matrix-offline-replay`（我离线改的）与 `matrix-remote-replay`（主机改的），且**本机项目名是 `matrix-remote-replay`**。原因：转表后本机先回到云端现状，我的修改在窗口里；
+   - 点「加进去（可能会盖掉他们刚改的地方）」→ `mergeAll('merge-apply')`。之后「主机看到 `matrix-offline-replay`」「已保存」的断言不变。
+4. **「conflict discard UI retains a real local backup」段**：
+   - `await paused(); await member.waitForSelector('[data-pc="offline-dialog"]')` → `await mergeWindow()`；
+   - 点「不要了，用现在的最新版本」→ `mergeAll('merge-delete')`。之后「成员看到 `matrix-remote-discard`」「本地备份目录里有 `offline-discard`、项目名 `matrix-offline-discard`、批次非空」的断言不变——转表时那一下整批回退在桌面版照旧静默写本地备份。
+5. 截图名 `matrix-conflict-replay`、`matrix-conflict-discard` 不变，内容换成冲突合并窗口。

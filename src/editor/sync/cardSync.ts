@@ -143,6 +143,11 @@ const nameOf = (key: unknown) => {
   return s.replace(/^src\//, "");
 };
 
+/** 编辑器进程送来的一条提示(HMR `pc:card-sync` 的 notice);开发模式的验收钩子也走这里 */
+export function receiveCardSyncNotice(d: Record<string, unknown>): void {
+  onNotice(d);
+}
+
 function onNotice(d: Record<string, unknown>) {
   const h = hooks;
   const file = nameOf(d.key);
