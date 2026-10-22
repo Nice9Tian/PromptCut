@@ -36,6 +36,16 @@ const LOOK = {
    * =1 就是普通插值,中间不会暗
    */
   falloff: 1.5,
+  /**
+   * **两色融合的范围**(用户 2026-10-23 要的那个旋钮):过渡带有多宽。
+   * 0 = 一条硬边,两边各自为政;1 = 整块都在过渡,到处都是混出来的颜色
+   */
+  blend: 0.45,
+  /**
+   * 噪声把冷暖的分界推得多乱。大了之后橘黄会伸进青的那一侧、青也会探进橘黄那边,
+   * 两色互相咬合 —— 这是「融合」的另一半,光把过渡带拉宽只会得到一条平直的渐变
+   */
+  mixWarp: 0.25,
   /** 细竖条纹的强弱(参考海报右半边那些细线) */
   streak: 0.0,
   /** 条纹毛玻璃:一屏放几条 */
@@ -92,7 +102,7 @@ uniform vec2  uRes;
 uniform float uTime;
 uniform vec3  uCool;
 uniform vec3  uWarm;
-uniform float uScale, uYStretch, uSplit, uFalloff, uStreak, uGrain;
+uniform float uScale, uYStretch, uSplit, uFalloff, uBlend, uMixWarp, uStreak, uGrain;
 uniform float uWarpA, uWarpB, uGamma, uGain, uFloor, uRoll, uSat;
 uniform float uStripeN, uStripeSkew, uFrostBlur, uFrost, uMilky, uEdge;
 uniform float uGrainSize, uGrainJitter;
@@ -170,8 +180,11 @@ void main() {
 
   // 冷暖的分界大体是一条竖线,只让噪声轻轻推一下 —— 推多了两边就互相咬进去,
   // 参考图是「左冷右暖、中间一道暗」,不是搅在一起
-  float split = uSplit + (r.x - 0.5) * 0.10;
-  float m = smoothstep(split - 0.20, split + 0.20, uv.x);
+  // 分界被噪声推着走:uMixWarp 越大,两色互相咬合得越深
+  float split = uSplit + (r.x - 0.5) * uMixWarp;
+  // 过渡带的半宽:uBlend 从「一条硬边」一路开到「整块都在过渡」
+  float halfW = mix(0.02, 0.85, clamp(uBlend, 0.0, 1.0));
+  float m = smoothstep(split - halfW, split + halfW, uv.x);
 
   // 中间那片深色**不是画上去的**:两种光各自从自己那一侧往外衰减,中间谁都不强,
   // 加起来就暗、而且去饱和 —— 参考图里蓝和橘黄混成深色就是这么来的(用户 2026-10-23 指出)。
@@ -302,6 +315,8 @@ export function BrandCanvas(): JSX.Element {
     gl.uniform1f(at("uYStretch"), LOOK.yStretch);
     gl.uniform1f(at("uSplit"), LOOK.split);
     gl.uniform1f(at("uFalloff"), LOOK.falloff);
+    gl.uniform1f(at("uBlend"), LOOK.blend);
+    gl.uniform1f(at("uMixWarp"), LOOK.mixWarp);
     gl.uniform1f(at("uStreak"), LOOK.streak);
     gl.uniform1f(at("uGrain"), LOOK.grain);
     gl.uniform1f(at("uWarpA"), LOOK.warpA);
