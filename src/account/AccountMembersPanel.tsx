@@ -149,8 +149,8 @@ export function AccountMembersPanel() {
           <div className="pc-members-row-main"><span className="pc-members-name">{row.accountName ?? row.accountId}</span></div>
           <small className="pc-account-member-id">{row.accountId} · {requestedAtText(row.createdAt)}</small>
           <div className="pc-account-request-actions">
-            <button type="button" data-pc="account-join-approve" disabled={busy || !!attempt} onClick={() => { void decide('approve-join', row); }}>{JOIN_REQUEST_TEXT.approve}</button>
-            <button type="button" data-pc="account-join-reject" disabled={busy || !!attempt} onClick={() => { void decide('reject-join', row); }}>{JOIN_REQUEST_TEXT.reject}</button>
+            <button type="button" className="pc-account-request-approve" data-pc="account-join-approve" disabled={busy || !!attempt} onClick={() => { void decide('approve-join', row); }}>{JOIN_REQUEST_TEXT.approve}</button>
+            <button type="button" className="pc-account-request-reject" data-pc="account-join-reject" disabled={busy || !!attempt} onClick={() => { void decide('reject-join', row); }}>{JOIN_REQUEST_TEXT.reject}</button>
           </div>
         </div>)}
         <div className="pc-members-sep" />
