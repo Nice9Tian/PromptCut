@@ -462,3 +462,46 @@ test('静态回归守卫：nginx 舞台站点 /media-s/<sid>/media/<hash> 与 st
     assert.doesNotMatch(line, /\bVary\b/i, `stage-headers 片段不得设置 Vary: ${line}`);
   }
 });
+
+test('项目素材缓存头 (f)：局域网、本机项目用的旧模式（没有 projectAccess，凭 Bearer 票据或回环）读 media 不回长期缓存头、不带 Vary: Authorization', async (t) => {
+  const out = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-asset-cache-legacy-'));
+  const { asset } = await compileAssetModules(out);
+  const tickets = {
+    verify(ticket) {
+      if (ticket === 'L-rw') return { ok: true, access: 'rw', projectId: 'L', userId: 'u' };
+      if (ticket === 'L-r') return { ok: true, access: 'r', projectId: 'L', userId: 'u' };
+      return { ok: false, reason: 'unknown' };
+    },
+  };
+  let trusted = false;
+  const mw = asset.assetServiceMiddleware(out, { tickets, isTrusted: () => trusted, pullArtifact: null, pxEvict: null });
+  const server = http.createServer((req, res) => { void mw(req, res, () => { res.statusCode = 404; res.end('no route'); }); });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  t.after(async () => {
+    server.closeAllConnections?.();
+    await new Promise((resolve) => server.close(resolve));
+    await fs.rm(out, { recursive: true, force: true });
+  });
+
+  await upload(base, 'L-rw', 'media', bytes, hash);
+  const url = `${base}/api/asset/media/${hash}`;
+  const notLong = (res, label) => {
+    assert.notEqual(res.headers.get('cache-control'), LONG_CACHE, label);
+    assert.ok(!String(res.headers.get('cache-control') ?? '').includes('immutable'), label);
+    assert.notEqual(res.headers.get('vary'), 'Authorization', label);
+  };
+  for (const isTrusted of [false, true]) {
+    trusted = isTrusted;
+    for (const [label, init, status] of [
+      ['GET', { headers: bearer('L-r') }, 200],
+      ['Range', { headers: bearer('L-r', { Range: 'bytes=2-9' }) }, 206],
+      ['HEAD', { method: 'HEAD', headers: bearer('L-r') }, 200],
+    ]) {
+      const res = await fetch(url, init);
+      assert.equal(res.status, status, `旧模式 ${isTrusted ? '回环' : 'Bearer'} ${label}`);
+      notLong(res, `旧模式 ${isTrusted ? '回环' : 'Bearer'} ${label}`);
+      await res.arrayBuffer();
+    }
+  }
+});
