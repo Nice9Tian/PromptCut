@@ -28,9 +28,9 @@ const LOOK = {
   /** 噪声尺度:大了碎,小了只剩一道平滑的渐变,看不出形 */
   scale: 0.9,
   /** 纵向压扁的倍数(<1 = 纹理在竖直方向拉长):参考图里那种「帘子」靠它 */
-  yStretch: 0.86,
+  yStretch: 0.9,
   /** 冷暖分界大概在横向哪个位置(0 左 1 右) */
-  split: 0.5,
+  split: 0.48,
   /**
    * 冷暖各自的衰减次方。>1 时中间两边都弱 → 自然变暗变灰(参考图中间那片深色就是这么来的);
    * =1 就是普通插值,中间不会暗
@@ -45,27 +45,27 @@ const LOOK = {
    * 噪声把冷暖的分界推得多乱。大了之后橘黄会伸进青的那一侧、青也会探进橘黄那边,
    * 两色互相咬合 —— 这是「融合」的另一半,光把过渡带拉宽只会得到一条平直的渐变
    */
-  mixWarp: 0.25,
+  mixWarp: 0.8,
   /** 细竖条纹的强弱(参考海报右半边那些细线) */
   streak: 0.0,
   /** 条纹毛玻璃:一屏放几条 */
   stripeN: 2.0,
   /** 条纹的倾斜(0 = 正竖直;照上一版 CSS 的 104° 略微斜一点) */
-  stripeSkew: -1.5,
+  stripeSkew: 0.0,
   /** 磨砂的模糊半径(噪声坐标里的距离):越大越糊 */
-  frostBlur: 1.2,
+  frostBlur: 0.68,
   /** 磨砂条和清条的对比 */
-  frost: 0.36,
+  frost: 1.0,
   /** 磨砂面的乳白(散射):玻璃磨过的那面会亮一点 */
   milky: 0.25,
   /** 清条与磨砂条交界那道细高光(玻璃的棱) */
-  edge: 0.028,
+  edge: 0.056,
   /** 颗粒的强弱 */
-  grain: 0.065,
+  grain: 0.125,
   /** 颗粒多粗:一格几个像素(内部分辨率下算),格子越大颗粒越粗 */
-  grainSize: 2.5,
+  grainSize: 1.0,
   /** 颗粒参与折射的程度:磨砂玻璃靠表面微小凹凸把光打散,这个数就是「凹凸有多乱」 */
-  grainJitter: 0.9,
+  grainJitter: 0.0,
   /** 两道域扭曲各推多远 */
   warpA: 4.0,
   warpB: 4.2,
@@ -78,13 +78,31 @@ const LOOK = {
   /** 高光滚落:越大越早压住,防止冲成霓虹 */
   roll: 0.8,
   /** 饱和度:1 不变,大于 1 更浓 */
-  sat: 1.28,
+  sat: 1.38,
   /** 内部分辨率的倍率:0.6 表示按 CSS 尺寸的六成渲染再拉大 */
   resScale: 0.6,
-  /** 暖侧的颜色(参考图里的琥珀);冷侧取主题色 */
-  warm: [0.886, 0.451, 0.122] as [number, number, number],
+  /**
+   * 冷侧颜色。空串 = 跟着软件主题色 `--ui-accent` 走(换皮肤会变);
+   * 想钉死就填十六进制,比如 "#00DBDB"
+   */
+  cool: "",
+  /** 暖侧颜色(参考图里的琥珀) */
+  warm: "#E2731F",
   /** 主题色读不到时的兜底 */
   coolFallback: [0.0, 0.859, 0.859] as [number, number, number],
+  /**
+   * 分色的方向:0 = 横向(左冷右暖),1 = 纵向(上冷下暖)。
+   * 用户 2026-10-23 想要的「黄从下面进、蓝从上面进」就是把它拉到 1
+   */
+  axis: 0,
+  /**
+   * **背景以 alpha 的形式进来**(用户 2026-10-23 定的做法):暗的地方让画布透明,
+   * 透出页面本身的底色,而不是在着色器里画一层假的背景色 —— 这样换皮肤、改底色都不用动这儿,
+   * 透出来的永远是真的那个背景。0 = 不透(和原来一样),1 = 暗处全透
+   */
+  seeThrough: 0.55,
+  /** 再沿右边缘淡出到透明的宽度(0 = 不淡出),配合上面那条做「右侧是背景色」的格局 */
+  fadeEdge: 0.0,
 };
 
 const VERT = `#version 300 es
@@ -103,6 +121,7 @@ uniform float uTime;
 uniform vec3  uCool;
 uniform vec3  uWarm;
 uniform float uScale, uYStretch, uSplit, uFalloff, uBlend, uMixWarp, uStreak, uGrain;
+uniform float uAxis, uSeeThrough, uFadeEdge;
 uniform float uWarpA, uWarpB, uGamma, uGain, uFloor, uRoll, uSat;
 uniform float uStripeN, uStripeSkew, uFrostBlur, uFrost, uMilky, uEdge;
 uniform float uGrainSize, uGrainJitter;
@@ -180,11 +199,14 @@ void main() {
 
   // 冷暖的分界大体是一条竖线,只让噪声轻轻推一下 —— 推多了两边就互相咬进去,
   // 参考图是「左冷右暖、中间一道暗」,不是搅在一起
+  // 分色沿哪个方向:uAxis=0 横着分(左冷右暖),=1 竖着分(上冷下暖)。
+  // 竖着分时用 1-uv.y,让「上面」是冷色
+  float axisC = mix(uv.x, 1.0 - uv.y, clamp(uAxis, 0.0, 1.0));
   // 分界被噪声推着走:uMixWarp 越大,两色互相咬合得越深
   float split = uSplit + (r.x - 0.5) * uMixWarp;
   // 过渡带的半宽:uBlend 从「一条硬边」一路开到「整块都在过渡」
   float halfW = mix(0.02, 0.85, clamp(uBlend, 0.0, 1.0));
-  float m = smoothstep(split - halfW, split + halfW, uv.x);
+  float m = smoothstep(split - halfW, split + halfW, axisC);
 
   // 中间那片深色**不是画上去的**:两种光各自从自己那一侧往外衰减,中间谁都不强,
   // 加起来就暗、而且去饱和 —— 参考图里蓝和橘黄混成深色就是这么来的(用户 2026-10-23 指出)。
@@ -217,8 +239,25 @@ void main() {
   // 叠加的那一层颗粒同样不动,而且磨砂条上更明显 —— 它是玻璃的一部分,不是蒙在画面上的胶片颗粒
   col += (gn1 - 0.5) * uGrain * (0.3 + 0.7 * frost);
 
-  fragColor = vec4(max(col, 0.0), 1.0);
+  /*
+   * 背景以 alpha 的形式进来(用户 2026-10-23 定):暗的地方把画布放透明,透出页面真实的底色,
+   * 而不是在这里画一层假的背景色。好处是换皮肤、改底色都不用动着色器 —— 透出来的永远是真的那个。
+   * 亮的地方不透,所以颜色该浓的地方照样浓。
+   */
+  float a = 1.0 - uSeeThrough * (1.0 - smoothstep(0.0, 0.55, lum));
+  // 再沿右边缘淡出(uFadeEdge=0 时基本不起作用):配合上面那条做「右侧是背景色」的格局
+  if (uFadeEdge > 0.001) a *= 1.0 - smoothstep(1.0 - uFadeEdge, 1.0, uv.x);
+
+  fragColor = vec4(max(col, 0.0), clamp(a, 0.0, 1.0));
 }`;
+
+/** 十六进制 → 0..1 的 RGB */
+function hexToRgb(hex: string, fallback: [number, number, number]): [number, number, number] {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return fallback;
+  const n = parseInt(m[1], 16);
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
 
 /** 把一个 CSS 变量解析成 0..1 的 RGB。读不到就用兜底 —— 变量可能是 color-mix(),所以让浏览器自己算 */
 function readColor(name: string, fallback: [number, number, number]): [number, number, number] {
@@ -270,7 +309,9 @@ export function BrandCanvas(): JSX.Element {
     if (!canvas) return;
 
     const gl = canvas.getContext("webgl2", {
-      alpha: false,
+      // 要透出页面底色,所以画布必须带 alpha;不要预乘 —— 着色器里输出的是直通的 alpha
+      alpha: true,
+      premultipliedAlpha: false,
       antialias: false,
       depth: false,
       stencil: false,
@@ -310,13 +351,16 @@ export function BrandCanvas(): JSX.Element {
     const uCool = at("uCool");
 
     // 一次性的那些:画面参数不随帧变,设一遍就够
-    gl.uniform3f(at("uWarm"), ...LOOK.warm);
+    gl.uniform3f(at("uWarm"), ...hexToRgb(LOOK.warm, [0.886, 0.451, 0.122]));
     gl.uniform1f(at("uScale"), LOOK.scale);
     gl.uniform1f(at("uYStretch"), LOOK.yStretch);
     gl.uniform1f(at("uSplit"), LOOK.split);
     gl.uniform1f(at("uFalloff"), LOOK.falloff);
     gl.uniform1f(at("uBlend"), LOOK.blend);
     gl.uniform1f(at("uMixWarp"), LOOK.mixWarp);
+    gl.uniform1f(at("uAxis"), LOOK.axis);
+    gl.uniform1f(at("uSeeThrough"), LOOK.seeThrough);
+    gl.uniform1f(at("uFadeEdge"), LOOK.fadeEdge);
     gl.uniform1f(at("uStreak"), LOOK.streak);
     gl.uniform1f(at("uGrain"), LOOK.grain);
     gl.uniform1f(at("uWarpA"), LOOK.warpA);
@@ -358,7 +402,10 @@ export function BrandCanvas(): JSX.Element {
     const draw = () => {
       resize();
       // 换皮肤、改强调色都要跟着变。每半秒重读一次就够,不必每帧都读
-      if (frames % 30 === 0) gl.uniform3f(uCool, ...readColor("--ui-accent", LOOK.coolFallback));
+      // 冷侧:LOOK.cool 填了就用填的,没填就跟着主题色走(每半秒重读一次,换皮肤会变)
+      if (frames % 30 === 0) {
+        gl.uniform3f(uCool, ...(LOOK.cool ? hexToRgb(LOOK.cool, LOOK.coolFallback) : readColor("--ui-accent", LOOK.coolFallback)));
+      }
       gl.uniform1f(uTime, still ? 0 : ((performance.now() - started) / 1000) * LOOK.speed);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       frames++;
