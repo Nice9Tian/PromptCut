@@ -1,6 +1,6 @@
 import { loadProc, serializeProc, forgetSaveTarget, withFrameSnapshots } from "./proc";
 import { acquireDraftLock, releaseDraftLock } from "./procLock";
-import { isViewOnly } from "./viewOnly";
+import { isViewOnly, viewOnlyReason, viewOnlyText } from "./viewOnly";
 import { actions } from "../../store/project";
 import type { Project } from "../../kernel/project";
 import { onGoneConversion } from "../sync/recoveryAssociation";
@@ -38,7 +38,7 @@ export function newDraftId(): string {
 
 export async function saveDraft(id: string, thumbnail: string | null = null): Promise<DraftInfo> {
   // 只读查看的页面在这里就停住,不用等服务端拒了再报错 —— 报错文案也更像人话
-  if (isViewOnly()) throw new Error("这是只读查看模式,改不了这个项目");
+  if (isViewOnly()) throw new Error(viewOnlyText());
   await (await import("../sync/syncManager")).whenSaved();
   return json<DraftInfo>(
     await fetch(`/api/projects/${encodeURIComponent(id)}`, {
@@ -71,7 +71,7 @@ export async function openDraft(id: string): Promise<Project> {
 }
 
 export async function deleteDraft(id: string): Promise<void> {
-  if (isViewOnly()) throw new Error("这是只读查看模式,删不了这个项目");
+  if (isViewOnly()) throw new Error(viewOnlyReason() === "read-only-member" ? "你在这个项目里只能查看，删不了它。" : "这是只读查看模式,删不了这个项目");
   // 和 saveDraft 一样要带 owner 头:删也是写,无头实例上的写闸认的是这个头。
   // 漏了的话,实例**自己的**页面点删除会被自己的闸拦下。
   await json(await fetch(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" }));
