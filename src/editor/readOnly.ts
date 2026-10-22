@@ -16,21 +16,40 @@
  * 组件里用 `useReadOnly()`（权限变化时重渲）；不在组件里的处理函数用 `readOnlyCore.ts` 的 `memberReadOnlyNow()`。
  * 禁用的控件挂 `ro.why` 当悬停说明——那一句永远是 `viewOnlyText()`，各处不自己编。
  */
-import { useSync } from "./sync/syncManager";
+import { useSyncExternalStore } from "react";
 import { memberReadOnlyNow, readOnlyState, type ReadOnlyState } from "./readOnlyCore";
 
 export { memberReadOnlyNow, readOnlyState, blockedByReadOnly, type ReadOnlyState } from "./readOnlyCore";
 
-/**
- * 组件里读只读状态。权限是 `syncManager` 进 / 退项目时拨的（`setProjectAccess`），
- * 它每次更新同步状态都会通知订阅方，所以这里订阅同步状态、读出来的是布尔值，权限不变就不重渲。
+/*
+ * 权限是 `syncManager` 进 / 退项目时拨的（`setProjectAccess`），它每次更新同步状态都会通知订阅方。
+ * 这里**按需**载入同步管理再订阅它，不静态引用：时间轴、左栏这些组件会被 Node 单测载入，而同步管理一路引到
+ * `src/online/mode.ts`（Node 里没有 `import.meta.env`），静态引用会让守门测试（`online/modeImportGuard.test.mjs`）判红。
+ * 订阅落地之前权限可能已经变过，所以落地后通知一次，让读到旧值的组件重新算（值没变的不会重渲）。
  */
-export function useReadOnly(): ReadOnlyState {
-  const locked = useSync(() => memberReadOnlyNow());
-  return readOnlyState(locked);
+const listeners = new Set<() => void>();
+let attach: Promise<void> | null = null;
+const notify = () => { for (const l of [...listeners]) l(); };
+
+function attachToSync(): void {
+  if (attach) return;
+  attach = import("./sync/syncManager")
+    .then((m) => { m.subscribeSync(notify); notify(); })
+    .catch(() => { attach = null; });
 }
 
-/** 只要布尔值的地方 */
+function subscribe(l: () => void): () => void {
+  listeners.add(l);
+  attachToSync();
+  return () => { listeners.delete(l); };
+}
+
+/** 只要布尔值的地方（读出来的是布尔值，权限不变就不重渲） */
 export function useMemberReadOnly(): boolean {
-  return useSync(() => memberReadOnlyNow());
+  return useSyncExternalStore(subscribe, memberReadOnlyNow, memberReadOnlyNow);
+}
+
+/** 组件里读只读状态：`locked` 是否锁着，`why` 置灰说明，`title(own)` 悬停说明 */
+export function useReadOnly(): ReadOnlyState {
+  return readOnlyState(useMemberReadOnly());
 }

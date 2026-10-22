@@ -45,3 +45,10 @@ html[data-pc-readonly="member"] .pc-lib-strip.is-readonly {
   opacity: 0.55;
   cursor: not-allowed;
 }
+
+/* 桌面版标题栏菜单里会改项目的命令（撤销、重做、保存项目）：不用 disabled（桌面产物里菜单项恒不置灰，有构建守门测试），
+   用 aria-disabled + 压暗；点了什么也不做（顶栏的命令接收处同样拦） */
+html[data-pc-readonly="member"] .pc-titlebar-menu-item[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

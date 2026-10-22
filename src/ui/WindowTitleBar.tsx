@@ -239,9 +239,10 @@ function DesktopTitleBar(): JSX.Element {
                       role="menuitem"
                       className="pc-titlebar-menu-item"
                       data-pc={item.command ? `titlebar-${item.command}` : undefined}
-                      disabled={(ONLINE_BUILD && !!item.desktopOnly) || (!!item.command && READONLY_COMMANDS.has(item.command) && readOnlyNow())}
+                      disabled={ONLINE_BUILD && !!item.desktopOnly}
+                      aria-disabled={item.command && READONLY_COMMANDS.has(item.command) && readOnlyNow() ? true : undefined}
                       title={ONLINE_BUILD && item.desktopOnly ? onlineUnsupported(item.desktopOnly) : item.command && READONLY_COMMANDS.has(item.command) && readOnlyNow() ? readOnlyWhy() : undefined}
-                      onClick={() => { if (!(ONLINE_BUILD && item.desktopOnly)) choose(item.command); }}
+                      onClick={() => { if (!(ONLINE_BUILD && item.desktopOnly) && !(item.command && READONLY_COMMANDS.has(item.command) && readOnlyNow())) choose(item.command); }}
                     >
                       <span>{item.label}</span>
                       {item.shortcut && <kbd>{item.shortcut}</kbd>}

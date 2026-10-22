@@ -177,7 +177,7 @@ test("RR7 序列行头：只读时静音 / 隐藏 / 锁定三个按钮禁用，�
   }
 });
 
-test("RR8 Agent 输入区：只读时编辑框、发送、附件禁用，占位和悬停是那一句、没有引导；停止不能点；读写照旧", async () => {
+test("RR8 Agent 输入区：只读时编辑框、发送、附件禁用，占位和悬停是那一句、没有引导；停止不能点；读写照旧（只读由面板通过 readOnly 传进来）", async () => {
   const { Composer } = await load("./right/chat/Composer.tsx", {
     "../ModelBar": { ModelBar: () => null },
     "../../../ui/icons": { IconPaperclip: () => null },
@@ -192,7 +192,8 @@ test("RR8 Agent 输入区：只读时编辑框、发送、附件禁用，占位�
     providers: [{ id: "claude", available: true, label: "Claude Code" }], onSetProvider() {}, config: null,
     menu: { workflowRoles: [], onRunWorkflow() {}, canDiagnose: false, onOpenDiagnostics() {}, onNewChat() {} }, guide: "input",
   };
-  const ro = await under("r", () => html(Composer, base));
+  const roProps = { readOnly: true, readOnlyReason: WHY_MEMBER };
+  const ro = await under("r", () => html(Composer, { ...base, ...roProps }));
   assert.match(tag(ro, 'data-pc="ai-input"'), /disabled/);
   assert.ok(tag(ro, 'data-pc="ai-input"').includes(`placeholder="${WHY_MEMBER}"`));
   assert.match(tag(ro, 'data-pc="ai-send"'), /disabled/);
@@ -201,7 +202,7 @@ test("RR8 Agent 输入区：只读时编辑框、发送、附件禁用，占位�
   assert.match(tag(ro, 'data-pc="ai-new-chat"'), /disabled/, "新对话要给 Agent 发话，也不给");
   assert.match(tag(ro, 'data-pc="ai-auto-workflow"'), /disabled/);
   assert.doesNotMatch(ro, /data-pc-guide/, "没有引导输入的脉动");
-  const running = await under("r", () => html(Composer, { ...base, streaming: true, text: "hi" }));
+  const running = await under("r", () => html(Composer, { ...base, ...roProps, streaming: true, text: "hi" }));
   assert.match(tag(running, 'data-pc="ai-stop"'), /disabled/, "不能停别人的任务");
   assert.match(tag(running, 'data-pc="ai-enqueue"'), /disabled/);
   const rw = await under("rw", () => html(Composer, base));
@@ -211,6 +212,6 @@ test("RR8 Agent 输入区：只读时编辑框、发送、附件禁用，占位�
   const ob = await under("observe", () => html(Composer, base));
   assert.doesNotMatch(tag(ob, 'data-pc="ai-input"'), /disabled/, "?observe 不并进来");
   // 已有的「这个对话没有读取权限」那一条原因仍然优先，不被只读这句盖掉
-  const revoked = await under("r", () => html(Composer, { ...base, disabled: true, disabledReason: "当前账号已无法读取这个对话" }));
+  const revoked = await under("r", () => html(Composer, { ...base, ...roProps, disabled: true, disabledReason: "当前账号已无法读取这个对话" }));
   assert.ok(tag(revoked, 'data-pc="ai-input"').includes('placeholder="当前账号已无法读取这个对话"'));
 });

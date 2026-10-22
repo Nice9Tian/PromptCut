@@ -5,7 +5,6 @@ import type { AiProvider, ChatAttachment, ProviderInfo, PublicAiConfig } from ".
 import type { Role } from "../../../ai/roles";
 import { attachIcon } from "./attachIcon";
 import { usePopover } from "./usePopover";
-import { useReadOnly } from "../../readOnly";
 import {
   COMPOSER_MAX_RATIO,
   COMPOSER_MIN_H,
@@ -100,6 +99,14 @@ export interface ComposerProps {
   /** 禁用输入框与发送按钮（如当前对话已无读取权限） */
   disabled?: boolean;
   disabledReason?: string;
+  /**
+   * 这个项目只给了只读权限（游客，`editor/readOnly.ts`）：不能给 Agent 发消息，也不能停别人的任务；
+   * 一键配特效、新对话置灰，没有引导输入的脉动。对话历史照常读。`readOnlyReason` 是置灰说明（`viewOnlyText()` 那一句），
+   * 由面板（AiPanel / CloudAiPanel）读出来传进来：这里不自己订阅权限，输入区的渲染不依赖同步管理。
+   * 和 `disabled` 并存时，「对话没有读取权限」那一条原因优先。
+   */
+  readOnly?: boolean;
+  readOnlyReason?: string;
 }
 
 function providerLabel(p: ProviderInfo): string {
@@ -107,11 +114,11 @@ function providerLabel(p: ProviderInfo): string {
 }
 
 /** 工具条上的「✦」菜单 */
-function ComposerMenu(props: ComposerMenuProps & { streaming: boolean }) {
+function ComposerMenu(props: ComposerMenuProps & { streaming: boolean; readOnly?: boolean; readOnlyReason?: string }) {
   const { workflowRoles, onRunWorkflow, canDiagnose, onOpenDiagnostics, onNewChat, streaming, cloudMode } = props;
   const pop = usePopover();
   // 这个项目只给了只读权限(游客):一键配特效、新对话都是要给 Agent 发话,置灰;诊断报告只读对话内容,照常
-  const ro = useReadOnly();
+  const ro = { locked: !!props.readOnly, why: props.readOnlyReason ?? "", title: (own?: string) => (props.readOnly ? props.readOnlyReason : own) };
   /** 点了一项就收起菜单 */
   const pick = (fn: () => void) => () => {
     pop.setOpen(false);
@@ -293,15 +300,16 @@ export function Composer(props: ComposerProps) {
     guide: guideProp = null,
     disabled: disabledProp = false,
     disabledReason: disabledReasonProp,
+    readOnly = false,
+    readOnlyReason = "",
   } = props;
   // 这个项目只给了只读权限(游客):不能给 Agent 发消息(也不能停别人的任务)。对话历史照常读,输入区整个置灰,说明是 viewOnlyText()。
   // 已有的「对话无读取权限」那一条原因优先(那是另一回事)
-  const ro = useReadOnly();
-  const disabled = disabledProp || ro.locked;
-  const disabledReason = disabledProp ? disabledReasonProp : ro.locked ? ro.why : disabledReasonProp;
-  const guide = ro.locked ? null : guideProp;
-  const canStop = canStopProp && !ro.locked;
-  const stopDisabledReason = ro.locked ? ro.why : stopReasonProp;
+  const disabled = disabledProp || readOnly;
+  const disabledReason = disabledProp ? disabledReasonProp : readOnly ? readOnlyReason : disabledReasonProp;
+  const guide = readOnly ? null : guideProp;
+  const canStop = canStopProp && !readOnly;
+  const stopDisabledReason = readOnly ? readOnlyReason : stopReasonProp;
   const cloudOn = !!cloud?.selected;
   /** 附件条上的动词:本机是「导入」,云端是传到云节点的「上传」 */
   const verb = cloudOn ? "上传" : "导入";
@@ -383,7 +391,7 @@ export function Composer(props: ComposerProps) {
           >
             <IconPaperclip size={16} />
           </button>
-          <ComposerMenu {...menu} cloudMode={cloudOn} streaming={streaming} />
+          <ComposerMenu {...menu} cloudMode={cloudOn} streaming={streaming} readOnly={readOnly} readOnlyReason={readOnlyReason} />
           {/* 当前用哪个驱动是这一页的身份,再窄也留在工具条上 */}
           <select
             className="ai-bar-select ai-provider-select"

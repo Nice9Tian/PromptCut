@@ -339,6 +339,16 @@ try {
   await shot(page, 'ro-settings.png');
   await page.keyboard.press('Escape');
   await sleep(300);
+  // 桌面版标题栏菜单(这个构建里也画出来):编辑 → 撤销 / 重做、文件 → 保存项目 置灰,说明是那一句
+  const titlebar = {};
+  for (const [menu, cmds] of [['编辑', ['undo', 'redo']], ['文件', ['save-project', 'export-video']]]) {
+    await page.evaluate((menu) => [...document.querySelectorAll('.pc-titlebar-menu-button')].find((b) => b.textContent.trim() === menu).click(), menu);
+    await sleep(250);
+    for (const c of cmds) titlebar[c] = await page.evaluate((c) => { const b = document.querySelector(`[data-pc="titlebar-${c}"]`); return b ? { d: b.getAttribute('aria-disabled') === 'true', t: b.title } : null; }, c);
+    await page.keyboard.press('Escape');
+    await sleep(150);
+  }
+  check('R7.titlebar-menu', titlebar.undo?.d && titlebar.undo.t === why && titlebar.redo?.d && titlebar['save-project']?.d && titlebar['save-project'].t === why && titlebar['export-video'] && !titlebar['export-video'].d, { titlebar });
   await shot(page, 'ro-full.png');
 
   /* ── R9 切回读写 ── */
