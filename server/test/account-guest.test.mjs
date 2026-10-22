@@ -108,13 +108,24 @@ test('建项目：游客只能建一个，账号不受这一条影响', () => {
     e => e.code === 'nope');
 });
 
-test('传素材：三条封顶，每条 100 MB 封顶，账号不受限', () => {
+test('传素材：视频原件三条封顶，每一条源文件 100 MB 封顶，不算数的只查尺寸，账号不受限', () => {
   const guest = newGuestId(), account = 'acc_' + 'a'.repeat(24);
   const ok = { ok: true };
-  assert.deepEqual(checkGuestAsset({ accountId: guest, bytes: 1, storedCount: 0 }), ok);
-  assert.deepEqual(checkGuestAsset({ accountId: guest, bytes: GUEST_LIMITS.assetBytes, storedCount: GUEST_LIMITS.assets - 1 }), ok, '正好到线该收');
-  assert.deepEqual(checkGuestAsset({ accountId: guest, bytes: GUEST_LIMITS.assetBytes + 1, storedCount: 0 }),
-    { ok: false, code: 'guest-asset-too-large' });
+  assert.deepEqual(checkGuestAsset({ accountId: guest, bytes: 1, countsAsVideo: true, storedVideos: 0 }), ok);
+  assert.deepEqual(checkGuestAsset({ accountId: guest, bytes: GUEST_LIMITS.assetBytes, countsAsVideo: true, storedVideos: GUEST_LIMITS.videos - 1 }), ok, '正好到线该收');
+  assert.deepEqual(checkGuestAsset({ accountId: guest, bytes: GUEST_LIMITS.assetBytes + 1, countsAsVideo: true, storedVideos: 0 }),
+    { ok: false, code: 'guest-file-too-large' });
+  assert.deepEqual(checkGuestAsset({ accountId: guest, bytes: 1, countsAsVideo: true, storedVideos: GUEST_LIMITS.videos }),
+    { ok: false, code: 'guest-video-limit' });
+  // 不算数的（图片、音频、小档）：存了多少条视频都不管，只查尺寸
+  assert.deepEqual(checkGuestAsset({ accountId: guest, bytes: 1, countsAsVideo: false, storedVideos: 1000 }), ok);
+  assert.deepEqual(checkGuestAsset({ accountId: guest, bytes: GUEST_LIMITS.assetBytes + 1, countsAsVideo: false }),
+    { ok: false, code: 'guest-file-too-large' });
+  assert.deepEqual(checkGuestAsset({ accountId: guest, bytes: -1 }), { ok: false, code: 'invalid-asset' });
+  assert.deepEqual(checkGuestAsset({ accountId: account, bytes: GUEST_LIMITS.assetBytes * 10, countsAsVideo: true, storedVideos: 1000 }), ok);
+  assert.equal(GUEST_LIMITS.videos, 3);
+  assert.equal(GUEST_LIMITS.assetBytes, 100 * 1024 * 1024);
+});
   assert.deepEqual(checkGuestAsset({ accountId: guest, bytes: 1, storedCount: GUEST_LIMITS.assets }),
     { ok: false, code: 'guest-asset-limit' });
   assert.deepEqual(checkGuestAsset({ accountId: guest, bytes: -1, storedCount: 0 }), { ok: false, code: 'invalid-asset' });
