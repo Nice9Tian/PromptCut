@@ -558,7 +558,8 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
           for (const member of body.members) {
             if (!accountIdOK(member?.accountId) || !['r', 'rw'].includes(member.access) || next[member.accountId]) reject(400, 'invalid-members');
             if (p.bans[member.accountId]) reject(403, 'banned');
-            next[member.accountId] = { access: member.access, joinedAt: p.members[member.accountId]?.joinedAt ?? null };
+            // 游客一律只读:名单里写了读写也归一成 r,免得名单上显示的和实际能做的两样
+            next[member.accountId] = { access: isGuestId(member.accountId) ? 'r' : member.access, joinedAt: p.members[member.accountId]?.joinedAt ?? null };
           }
           for (const [id, old] of Object.entries(p.members)) if (!next[id] || (old.access === 'rw' && next[id].access === 'r')) affected.push(id);
           p.members = next;
@@ -751,7 +752,8 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
         if (p.members[body.accountId]) reject(409, 'already-member');
         if (decision === 'approved') {
           p.joinRequests = withoutJoinRequest(p.joinRequests, body.accountId);
-          p.members[body.accountId] = { access: 'rw', joinedAt: now(),
+          // 游客通过申请进来也是只读(`permission` 那一条),落账就记 r,名单上看到的和实际能做的一致
+          p.members[body.accountId] = { access: isGuestId(body.accountId) ? 'r' : 'rw', joinedAt: now(),
             ...(record.accountName ? { accountNameAtJoin: record.accountName } : {}), joinRequestId: record.id };
           p.accessRevision = ++state.revision;
           approved = true;

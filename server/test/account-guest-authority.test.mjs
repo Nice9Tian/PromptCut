@@ -189,3 +189,27 @@ test('领令牌：不带旧的就给新身份，带着没过期的旧令牌就�
   const noKey = await open(t, { key: null });
   assert.throws(() => noKey.authority.issueGuest(null), e => e.code === 'guest-unavailable' && e.status === 503);
 });
+
+test('名单上显示的和实际能做的一致：通过申请、创建者改名单，游客都落账成 r', async t => {
+  const { authority, ledger, create } = await open(t);
+  const owned = await create(A);
+  const g = guest(), g2 = guest();
+  // 创建者关掉「知道链接就能进」,游客发申请、创建者通过
+  const rev = (await authority.authorizePrincipal({ accessToken: A }, { projectId: owned.projectId })).accessRevision;
+  await authority.adminProject({ accessToken: A }, { projectId: owned.projectId, op: 'set-entry', allowLinkJoin: false,
+    expectedAccessRevision: rev, requestId: 'entry-1' });
+  const sent = await authority.joinRequest({ accessToken: g.token }, { projectId: owned.projectId, joinRequest: 'send', requestId: 'jr-1' });
+  await authority.decideJoinRequest({ accessToken: A }, { projectId: owned.projectId, op: 'approve-join',
+    accountId: g.guestId, joinRequestId: ledger.read().projects[owned.projectId].joinRequests[g.guestId].id, requestId: 'dec-1' });
+  assert.equal(sent.joinRequest.state, 'pending');
+  assert.equal(ledger.read().projects[owned.projectId].members[g.guestId].access, 'r', '通过申请进来的游客该记 r');
+
+  // 创建者直接改名单,给游客写 rw:也归一成 r
+  const rev2 = (await authority.authorizePrincipal({ accessToken: A }, { projectId: owned.projectId })).accessRevision;
+  await authority.adminProject({ accessToken: A }, { projectId: owned.projectId, op: 'set-list',
+    members: [{ accountId: g.guestId, access: 'rw' }, { accountId: g2.guestId, access: 'rw' }],
+    expectedAccessRevision: rev2, requestId: 'list-1' });
+  const members = ledger.read().projects[owned.projectId].members;
+  assert.equal(members[g.guestId].access, 'r');
+  assert.equal(members[g2.guestId].access, 'r');
+});
