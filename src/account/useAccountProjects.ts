@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createEmptyProject } from '../kernel/project';
 import { setActiveDraftId } from '../editor/io/drafts';
 import { ensureDevice, enterAccountProject } from '../editor/sync/syncManager';
-import { AccountFailure, createAccountClient, projectIdFromLink, projectLink, JOIN_REQUEST_POLL_MS, type Account, type CloudAccountClient, type JoinRequestStatus, type ProjectLists } from './client';
+import { AccountFailure, createAccountClient, projectIdFromLink, projectLink, JOIN_REQUEST_POLL_MS, type Account, type CloudAccountClient, type GuestLogin, type JoinRequestStatus, type ProjectLists } from './client';
 import { desktopAccountBridge, isDesktopShellTooOld } from './desktopVault';
 import { createRequestIds } from './requestIds';
 import { enterOrAskPassword } from './entryFlow';
@@ -34,6 +34,8 @@ export function useAccountProjects({ online, onEnterEditor }: { online: boolean;
   const [origin, setOrigin] = useState(online ? location.origin : 'https://visuhive.com');
   const client = useRef<CloudAccountClient | null>(null);
   const [account, setAccount] = useState<Account | null>(null), [busy, setBusy] = useState(true), [error, setError] = useState('');
+  /** 以游客身份进来时的那一个身份（2026-10-23 用户定）；不是游客就是 null */
+  const [guest, setGuest] = useState<GuestLogin | null>(null);
   /** 桌面外壳太老(0.2.8 以前的外壳打了补丁)没有账号桥:入口不报错,只说明要装完整安装包 */
   const [shellOld, setShellOld] = useState(false);
   const [link, setLink] = useState(() => {
@@ -50,7 +52,9 @@ export function useAccountProjects({ online, onEnterEditor }: { online: boolean;
   const [request, setRequest] = useState<JoinRequestStatus | null>(null);
   /** 「发送申请」的请求号:没收到回包再点沿用原来的,收到结论就丢掉(`requestIds.ts`,与成员浮层、重开文件那条提示共用) */
   const sendIds = useRef(createRequestIds());
-  async function refreshLists() { if (!online || !client.current) return;
+  // 游客没有网站账号,「我创建的 / 我加入的」是向官网要的(`/api/account/projects`),问了只会被 401 挡回来。
+  // 他自己建的那一个项目靠本机记着的项目链接回去(开始页那一栏),不走列表
+  async function refreshLists() { if (!online || !client.current || client.current.guest) return;
     setListError(''); try { setLists(await client.current.lists()); } catch (e) { setLists(null); if (isDesktopShellTooOld(e)) setShellOld(true); else setListError(e instanceof Error ? e.message : '项目列表暂时不可用。'); } }
   useEffect(() => { let alive = true;
     void (async () => { const device = await ensureDevice(); if (!alive) return;
@@ -91,6 +95,12 @@ export function useAccountProjects({ online, onEnterEditor }: { online: boolean;
     setAccount(current); loginAttempt.current = null; await refreshLists();
   }
   async function logout() { await client.current!.logout(); setAccount(null); setLists(null); clearRequest(); }
+  /** 以游客身份进来：本机记着的那一张交回去续期（还是同一个人），没有就领一个新身份 */
+  async function enterAsGuest() { setGuest(await client.current!.enterAsGuest()); }
+  /** 「换一个」：不交旧令牌，服务端给个新的 */
+  async function newGuest() { setGuest(await client.current!.newGuest()); }
+  /** 不当游客了（去登录账号）。本机那一份一并清掉 */
+  function leaveGuest() { client.current?.leaveGuest(); setGuest(null); setLists(null); clearRequest(); }
   async function create(projectName: string) {
     const c = client.current!;
     if (createAttempt.current?.name !== projectName) createAttempt.current = { name: projectName, requestId: crypto.randomUUID(), initial: createEmptyProject(projectName) };
@@ -153,6 +163,7 @@ export function useAccountProjects({ online, onEnterEditor }: { online: boolean;
   // 读到申请被通过(`member`):马上重取项目列表,这个项目当场出现在「我加入的」里(设了二级密码、还没输的也在,从那里点进去先问密码)
   useEffect(() => { if (request?.state === 'member') void refreshLists(); }, [request?.state, request?.projectId]); // eslint-disable-line react-hooks/exhaustive-deps
   return { origin, account, busy, error, setError, shellOld, link, setLink, lists, listError, refreshLists, perform, enter, open, login, logout, create, join,
+    guest, enterAsGuest, newGuest, leaveGuest,
     request, sendRequest, clearRequest,
     projectLink: (projectId: string) => projectLink(origin, projectId) };
 }

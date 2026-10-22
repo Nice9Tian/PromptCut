@@ -8,8 +8,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   GUEST_ID_RE, GUEST_SHAPES, GUEST_STORAGE_KEY,
+  GUEST_LIMITS, GUEST_LIMITS_TEXT,
   adoptGuestSession, clearGuest, ensureGuest, guestAvatar, guestFrom, guestName, isGuestId, loadGuest, newGuestId, resetGuest,
 } from './guest.ts';
+import { GUEST_LIMITS as SERVER_LIMITS } from '../../server/account/guest.mjs';
 
 /** 假的 localStorage。`throwOn` 里点名的方法一调就抛，用来演无痕窗口 */
 function fakeStore(throwOn = []) {
@@ -144,4 +146,15 @@ test('存档里令牌坏了只丢令牌，编号还认：人还是那个人，�
   assert.equal(got?.id, id);
   assert.equal(got?.token, undefined);
   assert.equal(got?.expiresAt, undefined);
+});
+
+test('界面上说的限额和服务端真正拦的那几个数对得上', () => {
+  // 两边各写一份是为了「进来之前先讲清楚」,但数一旦对不上,界面就在骗人。说了算的永远是服务端
+  assert.equal(GUEST_LIMITS.projects, SERVER_LIMITS.projects);
+  assert.equal(GUEST_LIMITS.assets, SERVER_LIMITS.assets);
+  assert.equal(GUEST_LIMITS.assetMB * 1024 * 1024, SERVER_LIMITS.assetBytes);
+  assert.equal(GUEST_LIMITS.ttlDays * 24 * 60 * 60 * 1000, SERVER_LIMITS.ttlMs);
+  // 那句话里的数也是从上面这几个拼出来的,不是手写死的
+  for (const n of [GUEST_LIMITS.projects, GUEST_LIMITS.assets, GUEST_LIMITS.assetMB, GUEST_LIMITS.ttlDays])
+    assert.ok(GUEST_LIMITS_TEXT.includes(String(n)), `那句话里该出现 ${n}`);
 });
