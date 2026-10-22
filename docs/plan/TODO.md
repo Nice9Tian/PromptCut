@@ -201,6 +201,8 @@
 
 - **一次改动很长的带 id 数组里的大量元素是平方级的**（2026-10-22 查出，未排期）。出处：`server/docservice/json-ops.mjs`。一批里增删同一条很长的带 id 数组的许多元素时，每个元素都要在当前数组里按 id 找位置，于是整批是 O(n²)。实测：在一条 16000 个片段的序列上撤销 16000 处改动要 **11.7 秒**。**不是 0.7.20 引入的**——页面提交走的是同一条路，有同样的代价；是查改密退出撤回的耗时（安全专审 SEC-03）时顺带量出来的。撤回那一侧已经按每批最多 1000 项、256 KiB 分批落地绕开，页面提交本来就受一次提交 256 KiB 的上限约束，所以眼下不致命。方向：给带 id 数组建一次 id → 下标的索引再整批套用，而不是每个元素各找一遍。验收：同样的 16000 片段 × 16000 改动的用例耗时从 11.7 秒降下来，`src/store/*.test.mjs`、`server/test/docservice-json-ops*` 与撤回那几条全过。
 
+- **舞台闸门判安卓只看 `userAgentData.platform`，非安全来源下这道保护会静默失效**（2026-10-22 主会话在安卓模拟器上实测查出，未排期）。出处：`src/online/stageGate.ts` 的 `readGateEnv()`——`platform` 只从 `navigator.userAgentData.platform` 取，没有退回 UA 字符串；而紧挨着的 `identity` 已经用了 `nav.userAgent`。`userAgentData` 和 `deviceMemory` 都是**仅安全来源**可用：实测在 `http://10.0.2.2:5950`（非安全来源）上 `isSecureContext:false`、`'userAgentData' in navigator` 与 `'deviceMemory' in navigator` 都是 **false**；经 `adb reverse` 改用 `http://localhost:5950`（安全来源）后，同一台模拟器报 `isSecureContext:true`、`deviceMemory:4`、`uaDataPlatform:"Android"`。后果：非安全来源（局域网自建、纯 HTTP 部署）上 `platform` 为 null，`stageGate.ts` 第 138 行那条「安卓不到 8 GB 就停在一个舞台、不往上试」的保护不触发，低内存安卓会去试多舞台——而安卓上舞台崩了整页跟着崩、又不会自动重新载入，正是这条保护要防的。**生产不受影响**：在线编辑器走 HTTPS，是安全来源，这次实测已证明那里读得到。改法：`platform` 取不到时退回按 `navigator.userAgent` 里的 `Android` 判（UA 精简后仍带 Android）；那时 `deviceMemory` 同样读不到，`!(NaN >= 8)` 为真，正好落到保守的「停在一个舞台」。验收：补一条 `readGateEnv` 的单测（无 `userAgentData`、UA 带 Android → platform 判为安卓），`src/online/stageGate.test.mjs` 原有用例不退化。
+
 ## 以后研究（未排期）
 
 只是想弄明白、还没决定要不要做的事放这里。
