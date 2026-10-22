@@ -19,13 +19,14 @@ export const GUEST_ID_RE = /^gst_[0-9a-f]{24}$/;
 
 /**
  * 界面上说的那几个限额。真正说了算的是服务端（`server/account/guest.mjs` 的 `GUEST_LIMITS`）——
+ * `videos` 只数视频（小档预览不算），图片、音频不计数；`assetMB` 是每一条源文件（不管什么类型）的上限。
  * 这里只是为了在界面上先讲清楚，省得人传到一半被拒。两边的数必须一致，`guest.test.mjs` 有一条守着。
  */
-export const GUEST_LIMITS = Object.freeze({ projects: 1, assets: 3, assetMB: 100, ttlDays: 3 });
+export const GUEST_LIMITS = Object.freeze({ projects: 1, videos: 3, assetMB: 100, ttlDays: 3 });
 
 /** 进来之前先说清楚游客能干到哪一步，免得做了一半才发现存不住 */
 export const GUEST_LIMITS_TEXT =
-  `游客可以建 ${GUEST_LIMITS.projects} 个项目、传 ${GUEST_LIMITS.assets} 条素材（每条不超过 ${GUEST_LIMITS.assetMB} MB），` +
+  `游客可以建 ${GUEST_LIMITS.projects} 个项目、传 ${GUEST_LIMITS.videos} 条视频（每条源文件不超过 ${GUEST_LIMITS.assetMB} MB），` +
   `${GUEST_LIMITS.ttlDays} 天后自动清理；进别人的项目只能查看。要长期保存，注册一个账号。`;
 
 /** 身份在本机存哪儿。带版本号：以后字段改了，老的直接当没有、重新随机，不去写迁移 */
