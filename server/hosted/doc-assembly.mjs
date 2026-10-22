@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createPublicKey, createPrivateKey } from 'node:crypto';
 import { isProjectId } from '../auth/protocol.mjs';
 import { openOperationHistory, historyError } from '../docservice/modules/operation-history.mjs';
+import { rollbackThrough } from '../account/logout-rollback.mjs';
 import { createOperationWiring, createDurableProjectProjection } from '../docservice/operation-wiring.mjs';
 import { mountSelection } from '../docservice/modules/selection.mjs';
 import { createAccountOrderClient, createWitnessVerifier, signDocProof } from '../account/password-order.mjs';
@@ -151,6 +152,12 @@ export function createDocAssembly({ dataDir, authority, account, runProvider = n
           return { projectId, projectRev: mine[0].currentProjectRev, lastAcceptedOrderSeq: last(mine) };
         }),
         lastAcceptedOrderSeq: Object.fromEntries(loginIds.map(loginId => [loginId, last(rows.filter(op => op.actor.loginId === loginId))])) };
+    },
+    /** 改密退出撤回一个项目（`server/account/logout-rollback.mjs` 的执行器叫）：在项目锁里，按操作历史逐项算要撤的，
+     * 交给这个项目的项目模块作为一次补偿操作落地。`candidate` 是区间与例外（旧登录、改密顺序号、区间终点、保留下来的任务）。 */
+    async rollbackProject(input = {}) {
+      requireOpen();
+      return rollbackThrough({ history, coordinator: ensureTenant(input.projectId) }, input);
     },
     /** 向账号服务登记「这次退出到此为止」的顺序见证。证明由文档服务的证明钥签；同一个请求号重发得到同一份见证。 */
     async sealLogout({ eventId, requestId, proof }) {

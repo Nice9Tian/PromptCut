@@ -50,6 +50,7 @@ import { createAssetReadyProbe } from './asset-doc-client.mjs';
 import { createDocAssembly } from './doc-assembly.mjs';
 import { createDocAgentAssembly } from './doc-agent-assembly.mjs';
 import { createLogoutConfirmer } from '../account/logout-confirmer.mjs';
+import { createLogoutRollback } from '../account/logout-rollback.mjs';
 import { createRunAssetPrivateClient } from './run-assets-metadata-client.mjs';
 import { createRunAssetCheckpoint } from './run-assets-checkpoint.mjs';
 import { createRunAssetObserverAuthority } from './run-assets-observer-authority.mjs';
@@ -372,6 +373,10 @@ export async function startHostedCombo({
       logoutConfirmer = createLogoutConfirmer({ ledger, authority: accountRuntime.authority, now,
         transportEvidence: accessEventId => accountRuntime.docTransportEvidence(accessEventId),
         operations: () => docAssembly,
+        // 改密退出的逐项撤回（0.7.20）：没配有序提交（account.order）的部署里没有操作历史，也就没有要撤的
+        rollback: account.order ? createLogoutRollback({ ledger, operations: () => docAssembly, now,
+          report: (eventId, body) => client.logoutModifications(eventId, body),
+          onDiagnostic: event => say('logout.rollback', event) }) : null,
         completeAgent: account.agent ? () => docAgentAssembly.completeAccessEvents() : null,
         attestedServices: { render: 'service-identity-only: holds no login-bound connection or stream in this version',
           ...(account.agent ? {} : { agent: 'not-deployed: no agent service is registered with this document authority' }) },

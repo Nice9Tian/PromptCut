@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createPasswordOrder } from '../account/password-order.mjs';
 import { canonical, digest, historyError } from './modules/operation-history.mjs';
+import { isReservedOpId } from '../account/logout-rollback.mjs';
 
 /** The same directory passed to createFileStore. No network paths or caller-supplied paths. */
 export function createDurableProjectProjection({ store, directory, failpoint = () => {} } = {}) {
@@ -81,10 +82,20 @@ export function createOperationWiring({ history, account, verifyWitness, authori
     order.assertUnfenced({ projectId, actor: principal });
     return { allowed: true, ...verified };
   }
+  /** 改密退出撤回（`server/account/logout-rollback.mjs`）的补偿操作不借任何登录：每一步都回账本核对这确实是一次
+   * 「改密码后选了退出」、那些旧登录确实都作废了，写入身份只有那个账号和那次事件。 */
+  function checkRollback(principal, operation = null) {
+    const event = typeof authority.logoutRollbackEvent === 'function' ? authority.logoutRollbackEvent(principal.eventId) : null;
+    if (!event || event.accountId !== principal.accountId) throw historyError('operation-forbidden', 403);
+    if (operation && (operation.actor?.rollbackEventId !== principal.eventId || operation.actor?.accountId !== principal.accountId ||
+        operation.actor?.loginId !== undefined)) throw historyError('operation-forbidden', 403);
+    return { eventId: principal.eventId, accountId: principal.accountId };
+  }
   const order = createPasswordOrder({ history, account, verifyWitness, docAttestationPrivateKey, failpoint, initializeProject,
     async checkGate({ operation }) {
       const principal = active.get(operation.requestId);
       if (!principal) throw historyError('operation-forbidden', 403);
+      if (principal.kind === 'logout-rollback') return { allowed: true, rollbackGrant: checkRollback(principal, operation) };
       const result = await checkPrincipal(principal, operation.projectId);
       if ((result.retainedGrant || result.activeGrant) && !docAttestationPrivateKey) throw historyError('run-provider-unavailable', 503);
       return result;
@@ -109,6 +120,8 @@ export function createOperationWiring({ history, account, verifyWitness, authori
       });
     },
     async execute({ projectId, principal, actor, request }, prepare, committed) {
+      // 补偿操作号的前缀留给文档服务自己（改密退出撤回）：页面提交、Agent 提交一律不许用，免得先占号让撤回永远办不完（安全专审 SEC-01）
+      if (isReservedOpId(request?.opId)) throw historyError('reserved-op-id', 400);
       // Stable identity includes the client's exact operation intent, never its claimed actor.
       // 请求身份里不放访问凭证号(`credentialId`):它跟着访问令牌走,同一次登录每续一次令牌就换一个(约两分钟一次)。
       // 页面断线重连、到期前换会话之后重发同一条提交(同 opId、同内容)时令牌多半刚续过,把凭证号算进去会把这次重发判成
@@ -153,6 +166,45 @@ export function createOperationWiring({ history, account, verifyWitness, authori
           return result;
         } finally { active.delete(requestId); }
       }, { resumeOpId: retry?.opId });
+    },
+    /**
+     * 文档服务自己发起的补偿操作（现在只有改密退出撤回）。走同一把项目锁、同一条有序提交和同一份操作历史，
+     * 但不经页面连接：`principal` 是 `{ kind: 'logout-rollback', eventId, accountId }`，每一步都回账本核对（`checkRollback`）。
+     * 同一个 `opId` 重来：已落地的回 `duplicate`；没定序就被作废了的回 `cancelled`（调用方换下一个号重算）。
+     * `prepare` 回 null 表示这一次没有要落地的东西。
+     */
+    async executeSystem({ projectId, principal, opId }, prepare, committed) {
+      if (principal?.kind !== 'logout-rollback' || typeof principal.eventId !== 'string' || typeof principal.accountId !== 'string' ||
+          !isReservedOpId(opId) || opId.length > 128) throw historyError('operation-forbidden', 403);
+      const requestId = `project-op:${digest({ docAuthorityId, projectId, opId })}`;
+      const requestIdentity = digest({ projectId, system: { kind: principal.kind, eventId: principal.eventId, accountId: principal.accountId }, opId });
+      checkRollback(principal);
+      return order.transact(projectId, async scope => {
+        checkRollback(principal);
+        const prior = history.get(projectId, opId);
+        if (prior) {
+          history.verifyPrepared(prior);
+          if (prior.requestIdentity !== requestIdentity || prior.requestId !== requestId) throw historyError('operation-id-mismatch');
+          if (prior.state === 'cancelled') return { operation: prior, cancelled: true };
+        }
+        const spec = prior ? history.verifyPrepared(prior) : await prepare({ requestId, docAuthorityId, requestIdentity });
+        if (!spec) return null;
+        const { v, projectRev, before, after, changes, dependencies, ...input } = spec;
+        active.set(requestId, principal);
+        try {
+          const operation = await scope.submit(prior ? input : spec);
+          ready.add(projectId);
+          const result = { operation, duplicate: Boolean(prior) };
+          committed?.(result);
+          return result;
+        } finally { active.delete(requestId); }
+      });
+    },
+    /** 改密退出撤回一个项目：交给绑在这里的项目模块（它有内容、频道和在线连接）。 */
+    rollback: input => {
+      const adapter = requireTarget();
+      if (typeof adapter.rollback !== 'function') throw historyError('projection-unavailable', 503);
+      return adapter.rollback(input);
     },
     fence: value => order.fence(value),
     idle: () => order.idle(),

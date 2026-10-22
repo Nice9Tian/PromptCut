@@ -47,7 +47,9 @@ export async function operationFixture({ dir, port = 0, request, failpoint = () 
   const coordinator = createOperationWiring({ history, account: client,
     verifyWitness: createWitnessVerifier({ keys: { 'test-account': pair.account.publicKey } }), authority,
     projection: createDurableProjectProjection({ store, directory: storeDir, failpoint: projectionFailpoint }),
-    docAuthorityId: 'doc-fixture', failpoint, onFenceRequested, acknowledgeFence, runProvider });
+    docAuthorityId: 'doc-fixture', failpoint, onFenceRequested, acknowledgeFence, runProvider,
+    // 文档服务的证明钥(改密退出撤回的补偿操作要它签撤回证明;页面提交用不到)
+    docAttestationPrivateKey: pair.doc.privateKey });
   const project = projectModule({ store, now: () => clock.now, operationCoordinator: coordinator });
   const service = createDocService({ modules: [project], autoTick: false, log: () => {},
     async authenticate(req) {
