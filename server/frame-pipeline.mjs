@@ -33,6 +33,7 @@ import { applyResult, manifestKindOf, manifestKeyOf, manifestMatches, spansOf } 
 export const CARD_LOCK_RETRY_MAX = 20;
 import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { withInnerCards, isUserCardControl } from './render-node/split.mjs';
+import { expandProject, streamNeed, subsetCardSources } from './render-node/expand.mjs';
 import { createSmallRenderer, SMALL_SUFFIX } from './bakery/small-bitmap.mjs';
 import { layerMapOf, streamCandidateKey, STREAM_CANDIDATE_PREFIX, layerMapKeyOf } from './artifact-transfer.mjs';
 import { PRERENDER_MODE, parsePrerenderMode, lanesOfMode, modeRefusal, modeServesAgent, modeServesPrerender } from './prerender-mode.mjs';
@@ -904,6 +905,16 @@ export class FramePipeline {
     }
     return list;
   }
+  /**
+   * 子集的整场景键：`project` 按 `need` 展开（`render-node/expand.mjs`，确定的），再照 `entry()` 同一个算法算键
+   * （卡片代码身份也只取子集里用到的）。同步：`project` 要是已经盖过素材戳的那一份（`entry.project`）。`need` 为空回整个项目的键
+   */
+  subsetFrameKey(project, need) {
+    const sub = need ? expandProject(project, need).project : project;
+    let cardSources = {};
+    try { cardSources = this.cardSources(sub) ?? {}; } catch { cardSources = {}; }
+    return frameIdentity(sub, cardEntryCode(this.code(sub), cardSources));
+  }
   async entry(project) {
     project = { ...project, media: await Promise.all((project.media || []).map(async media => {
       const stamp = await this.mediaStamper.stamp(media);
@@ -931,6 +942,9 @@ export class FramePipeline {
       // playback movie: put that sample back to transparent.
       entry.mov.onEvict = frame => entry.playbackMovie?.evict(frame);
       entry.streamLocks = this.streamLocks;
+      // 按「这几帧展开出的子集」算的整场景键（0.7.19 多项目模式定的键口径：键认的是会影响这几帧画面的东西，不是整个项目）。
+      // 依赖下层的流退回整场景时用它（`frame-stream.mjs` 的 `belowStreamSpecs`）；发布方与节点同一个算法，所以同一条流两边逐字节相同
+      entry.subsetKey = need => this.subsetFrameKey(entry.project, need);
       this.entries.set(key, entry);
       entry.loading = this.loadArchive(entry).then(archive => {
         try {
@@ -3202,6 +3216,9 @@ export class FramePipeline {
       // c66-host-cards:全局代码版本(`frameCode`)不再覆盖用户卡与改动层;这一版用到的定制卡的代码身份
       // 由切分写进 requires.cardSources(共享档只写这张卡的,本地档、流写全部),节点手里没有这份代码就不认领
       cardSourceVersions: { ...(entry.cardSources ?? {}) },
+      // 流任务（单卡流、依赖下层的流、导出位图）只要这条流展开出的子集里用到的那几份代码（0.7.19：键与要求都按子集算；
+      // `render-node/expand.mjs` 的 `streamNeed` / `subsetCardSources`，产流的节点按同一个子集建隔离工程）
+      streamCardSources: stream => subsetCardSources(entry.project, streamNeed(stream), entry.cardSources ?? {}),
       weightOf: control => ({ class: this.queueWeightClass(control), estMs: null }),
       // 片段里面任何一张是用户卡就算(挂了强调、滤镜的片段看里面那张);里面拿不准时,这一版有用户卡就算
       isUserCard: control => isUserCardControl(control, sourceVersions),

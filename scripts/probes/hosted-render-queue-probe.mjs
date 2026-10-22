@@ -1,41 +1,39 @@
 #!/usr/bin/env node
 /**
- * 托管方渲染服务「云端排队」的验收探针（0.7.18 第 3 项里「云端一次只有一个活跃项目并排队」那一半；验收映射 RS18-queue，
- * `docs/plan/account-binding-task.md`「新增验收映射」里不依赖本地节点的各条）。用断言，不靠推断。
+ * 托管方渲染服务「云端排队」的验收探针。0.7.19 起按多项目模式验（语义 `product/rendering.md`「渲染服务的两种模式」：看画面先于产流、
+ * 同一类里各项目轮流、同一项目内先来先做、不让哪个项目占着；取代 0.7.18 的「云端 Agent 按轮占用」）。用断言，不靠推断。
  *
  *   node scripts/probes/hosted-render-queue-probe.mjs [--base-port 28100] [--doc-port 28110] [--asset-port 28111]
  *        [--idle-ms 300000] [--keep-temp] [--verbose] [--mem-low 256M] [--time-scale 1] [--skip-retry]
  *
  * 端口（都只绑 127.0.0.1）：`--base-port` +0/+1/+2 常驻工作进程、+3/+4/+5 隔离工作进程、+6 管理进程的诊断与代理口；
  * `--doc-port` / `--asset-port` 本机隔离的托管组合。全部数据在一个临时目录里，结束时删掉。不连任何远端、不连节点。
- * `--idle-ms`：隔离工作进程空闲多久才让位。**缺省就是生产的五分钟**（整趟约十几分钟）；调试时可以给小的（如 20000），那样验的是
- * 「满了配置的时长才让位」这条判据，不是五分钟这个数。
+ * `--idle-ms`：没人排队时隔离工作进程装着的项目留作缓存多久（缺省生产的五分钟）。多项目模式下别的项目一排上就换，用不着等它；
+ * 下面几条断言换装都发生在远早于它的时候。
  *
  * # 布置
  *
  * 本机隔离的托管组合 + 渲染服务（管理进程、常驻工作进程、隔离工作进程）。三个项目甲、乙、丙，**都带用户卡**（一张把舞台涂成一种颜色的卡，
- * 三个项目颜色不同：拿回来的图中心是什么颜色，就知道渲的是哪个项目）。探针持一把登记过的 agent 服务私钥，用 Agent 服务真正用的那个
+ * 三个项目颜色不同：拿回来的图中心是什么颜色，就知道页面里执行的是哪个项目的卡）。探针持一把登记过的 agent 服务私钥，用 Agent 服务真正用的那个
  * 客户端（`server/agent-service/look-client.mjs`）要画面。
  *
  * # 验收（每条一行「过 / 不过」；stdout 最后一行是 JSON `{ ok, pass, fails, checks, timings, … }`；退出码 0 过、1 不过、2 起不来）
  *
- * Q1 单活跃项目、排队不拒
- *   Q1a 甲要一帧：隔离工作进程为它起来、出图（颜色是甲的）。
- *   Q1b 甲装着时乙要一帧：不被拒、没有「忙 / 已满」，登记在队列里等着（状态口：排着 1 个，原因是「隔离工作进程装着别的项目」）；
- *       整个等待期间隔离工作进程装着的始终只有甲一个项目，乙的内容没有被转给任何工作进程。
- *   Q1c 乙排着时甲再要一帧：照常出（排在前面的乙不挡它）。
- *   Q1d 撤回：乙另一条请求登记后被调用方撤回，队列里不留它，原来那条还排着。
- * Q2 看画面优先于预渲染任务：丙先发了预渲染计划在等，乙后来才要看画面；甲让位后下一轮装的是乙（不是先来的丙）。
- * Q3 让位要满时长：从甲最后一次出图算起，不到 `--idle-ms` 不让位（乙在排队、丙有任务等着也一样）；到了才结束，结束原因是空闲。
- * Q4 轮到了照常出图：乙的那一帧在甲让位后出来，颜色是乙的；由隔离工作进程出；调用方从头到尾只是在等，没有收到任何错误。
+ * Q1a 甲要一帧：隔离工作进程为它起来、出图（颜色是甲的）。
+ * Q3a 不让哪个项目占着：甲出完图空着，丙发了产流计划，马上换装丙（不等五分钟），甲那一轮结束原因是轮换。
+ * 丙在产流时，甲要两帧、乙要两帧（甲先登记），乙另登记一条又撤回：
+ *   Q2  看画面先于产流：丙做完手里那一个就让，四帧全部出完之前不再装丙；
+ *   Q1  各项目轮流、项目内先来先做、一轮最多连做 `--turn` 个（缺省渲染服务的缺省）：甲刚出过一帧，乙先；K=1 时 乙-1 → 甲-2 → 乙-2 → 甲-3，
+ *       K≥2 时 乙-1 → 乙-2 → 甲-2 → 甲-3；
+ *   Q4  每一帧颜色都是它自己项目的，都由隔离工作进程出，调用方只是在等；
+ *   Q3  看画面这一段里每次换装都是排第一的换成别的项目触发（结束原因都是轮换），装的次序与 Q1 一致（K=1 四轮，K≥2 两轮）；
+ *   Q1b 任何一拍都没有同时装两个项目；撤回的那一条不留在队列里。
  * Q5 重启后排着的请求还在
- *   Q5a 乙装着时甲又要一帧（排着）；这时把管理进程连同工作进程整棵树强行结束（不走收尾）。盘上队列目录里留着这条请求。
- *   Q5b 再起管理进程，这次把背压的可用内存线调到机器够不着的高度（模拟内存吃紧）：它把那条请求接回队列（状态口：接回 1 条），
- *       因背压排着（原因记的是背压），不回「忙」，也不为它新起隔离工作进程；调用方那一侧只是连不上了一阵、接着在问。
- *   Q5c 正常收尾这个管理进程、按正常的线再起：请求第二次接回来，隔离工作进程为甲起来，出图（颜色是甲的）。调用方拿到了图。
- * Q6 预渲染任务不丢：丙的计划一直在文档服务的队列里；看画面的都做完、装着的项目闲满时长让位后，隔离工作进程为丙起来把它做完。
- * Q7 重试到头的结局（`--skip-retry` 跳过）：把「渲染这一段每次最多等多久」调成 1 毫秒重起管理进程，再要一帧：每次都到时限，
- *     试 1 + 3 次后调用方收到明确的「这次没看成」，不挂着；日志里有三次重试。
+ *   Q5a 一个项目的请求排着（它没装着）时把管理进程连同工作进程整棵树强行结束：盘上队列目录里留着这条请求。
+ *   Q5b 再起管理进程，背压的可用内存线调到机器够不着的高度（模拟内存吃紧）：请求接回队列、因背压排着，不回「忙」、不新起隔离工作进程。
+ *   Q5c 正常收尾、按正常的线再起：请求第二次接回来，隔离工作进程先为它起来（看画面先于丙的产流），出图（颜色对）。
+ * Q6 产流任务不丢：丙的计划让过了看画面的四帧和两次重启，看画面的都出完后马上为丙起来把它做完。
+ * Q7 重试到头的结局（`--skip-retry` 跳过）：把「渲染这一段每次最多等多久」调成 1 毫秒重起管理进程，再要一帧：到时限回「这次没看成」，一次不重试。
  * Q8 收尾：探针起的进程都没了，端口都放了。
  *
  * 没有在这支探针里验的（单测 `server/test/hosted-render-queue.test.mjs` 里有）：产物到了容量上限（素材服务回 507）时排着等；
@@ -57,7 +55,7 @@ import { killTree } from '../../server/hosted-render/worker.mjs';
 import { createSharedProject, buildAuthProtocols } from '../../server/auth/client.mjs';
 import { readServiceKeyFile } from '../../server/auth/service-identity.mjs';
 import { clipsPlanTaskOf } from '../../server/render-queue/messages.mjs';
-import { LOOK_ERRORS } from '../../server/hosted-render/look.mjs';
+import { LOOK_ERRORS, LOOK_DEFAULTS } from '../../server/hosted-render/look.mjs';
 import { createLookClient } from '../../server/agent-service/look-client.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -70,6 +68,22 @@ const KEEP = flag('--keep-temp');
 const VERBOSE = flag('--verbose');
 const MEM_LOW = String(arg('--mem-low', '256M'));
 const IDLE_MS = Number(arg('--idle-ms', 300_000));
+/** 一个项目一轮最多连做几个（`PROMPTCUT_RENDER_TURN`）；缺省用渲染服务的缺省 */
+const TURN = Number(arg('--turn', LOOK_DEFAULTS.turnRequests)) || LOOK_DEFAULTS.turnRequests;
+/** 两个项目各排着几个、谁先：按「各项目轮流、一轮最多连做 TURN 个」算出该有的出图次序与依次装的项目 */
+function expectedTurns(queues, first) {
+  const q = Object.fromEntries(Object.entries(queues).map(([k, v]) => [k, [...v]]));
+  const order = [], loads = [];
+  let cur = first;
+  while (Object.values(q).some((v) => v.length)) {
+    if (!q[cur].length) { cur = Object.keys(q).find((k) => q[k].length); continue; }
+    loads.push(cur);
+    order.push(...q[cur].splice(0, TURN));
+    const others = Object.keys(q).filter((k) => k !== cur && q[k].length);
+    if (others.length) cur = others[0];
+  }
+  return { order, loads };
+}
 const CORES = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length;
 const SCALE = Number(arg('--time-scale', CORES <= 4 ? 2 : 1)) || 1;
 const T = (ms) => Math.round(ms * SCALE);
@@ -106,7 +120,12 @@ async function waitFor(fn, ms, what, every = 250) {
     await delay(every);
   }
 }
-const status = async () => (await fetch(`${STATUS}/status`, { signal: AbortSignal.timeout(5000) })).json();
+/** 状态口；机器满载时管理进程一时答得慢，按退避再问两次（暂时性故障不算结果） */
+const status = async () => {
+  for (let i = 0; ; i += 1) {
+    try { return await (await fetch(`${STATUS}/status`, { signal: AbortSignal.timeout(T(5000)) })).json(); } catch (err) { if (i >= 2) throw err; await delay(1000 * (i + 1)); }
+  }
+};
 
 /* ------------------------------------------------------------------ 成员一侧的连接 */
 let reqSeq = 0;
@@ -196,6 +215,7 @@ function startSupervisor(extraEnv = {}) {
     PROMPTCUT_RENDER_LOOK_SERVICES: hostedPaths(HOSTED_DATA).servicesFile,
     PROMPTCUT_RENDER_STREAMS: '1',
     PROMPTCUT_RENDER_ISO_IDLE_MS: String(IDLE_MS),
+    PROMPTCUT_RENDER_TURN: String(TURN),
     PROMPTCUT_NO_PORT_FILE: '1',
     ...extraEnv,
   });
@@ -299,81 +319,73 @@ async function main() {
   watch();
 
   /* ---- Q1a 甲要一帧 */
-  const jiaRun = { runId: `run-jia-${RUN}`, runGrantId: `grant-jia-${RUN}`, conversationId: `conv-jia-${RUN}` };
-  const a1 = await look(jia, '甲-1', { run: jiaRun }).promise;
+  const a1 = await look(jia, '甲-1').promise;
   const s1 = await status();
   check('Q1a', '甲要一帧：隔离工作进程为它起来、出图，颜色是甲的', a1.ok === true && near(a1.rgb, jia.rgb) && s1.isolation?.current?.projectId === jia.projectId && (s1.look?.byWorker?.isolated ?? 0) === 1 && (s1.look?.byWorker?.resident ?? 0) === 0,
     { ms: a1.ms, rgb: a1.rgb, error: a1.error, iso: nameOf(s1.isolation?.current?.projectId), byWorker: s1.look?.byWorker });
 
-  /* ---- Q2 的布置：丙先发预渲染计划（带用户卡，要隔离工作进程做），在等 */
+  /* ---- 丙发产流计划（带用户卡，要隔离工作进程做）。没有看画面的请求排着时轮到它：甲（缓存着、空着）让位给丙 */
   const hello = await bing.conn.ask({ type: 'publisher.hello', publisherId: `rq-pub-${RUN}` });
   if (hello.type !== 'publisher.welcome') throw new Error(`publisher.hello：${JSON.stringify(hello).slice(0, 200)}`);
   const plan = clipsPlanTaskOf({ projectId: bing.docId, projectRev: bing.rev, clips: ['clip-solid'], codeVersion, streams: true });
   const pub = await bing.conn.ask({ type: 'task.publish', tasks: [plan] });
   if (pub.type !== 'task.published') throw new Error(`task.publish：${JSON.stringify(pub).slice(0, 300)}`);
   const bingPublishedAt = Date.now();
-  await waitFor(async () => ((await status()).isolation?.waiting ?? []).includes(bing.projectId), 30_000, '丙的预渲染任务进了等的名单', 500);
+  const sC = await waitFor(async () => { const s = await status(); return s.isolation?.current?.projectId === bing.projectId ? s : null; }, 240_000, '没人要看画面：隔离工作进程换装丙（产流）', 500).catch(() => null);
+  const jiaStop0 = supLogs.filter((l) => l.event === 'isolation.stop' && l.projectId === jia.projectId).at(-1) ?? null;
+  check('Q3a', '不让哪个项目占着：甲出完图后空着，丙的产流任务一排上就换装丙（不等五分钟），甲那一轮的结束原因是轮换', !!sC && jiaStop0?.reason === 'rotated' && Date.parse(jiaStop0.t) - bingPublishedAt < Math.min(IDLE_MS, T(120_000)),
+    { iso: nameOf(sC?.isolation?.current?.projectId), jiaStopReason: jiaStop0?.reason, jiaStoppedAfterPublishMs: jiaStop0 ? Date.parse(jiaStop0.t) - bingPublishedAt : null, idleMs: IDLE_MS });
 
-  /* ---- Q1b 甲装着时乙要一帧：排着 */
-  const yiRun = { runId: `run-yi-${RUN}`, runGrantId: `grant-yi-${RUN}`, conversationId: `conv-yi-${RUN}` };
-  const markB = seen.length;
-  const b1 = look(yi, '乙-1', { run: yiRun });
-  const yiQueuedAt = Date.now();
-  const sB = await waitFor(async () => { const s = await status(); return s.look?.queue?.queued === 1 && s.look.queue.blocked?.['iso-other-project'] === 1 ? s : null; }, 20_000, '乙的请求排进队列', 300).catch(() => null);
-  await delay(3000);
-  const sB2 = await status();
-  check('Q1b', '甲装着时乙要一帧：不被拒，登记在队列里等着（排着 1 个，原因是隔离工作进程装着别的项目）；调用方没有收到任何错误', !!sB && b1.done === false && sB2.look?.queue?.queued === 1 && sB2.isolation?.current?.projectId === jia.projectId && (sB2.look?.refused ?? 0) === 0 && (sB2.look?.failed ?? 0) === 0,
-    { queued: sB2.look?.queue?.queued, blocked: sB2.look?.queue?.blocked, iso: nameOf(sB2.isolation?.current?.projectId), refused: sB2.look?.refused, failed: sB2.look?.failed, clientDone: b1.done, clientError: b1.error });
-
-  /* ---- Q1c 乙排着时甲再要一帧 */
-  const a2 = await look(jia, '甲-2', { run: jiaRun }).promise;
-  const jiaLastAt = Date.now();
-  check('Q1c', '乙排着时甲再要一帧：照常出（排在前面的乙不挡它），乙还排着', a2.ok === true && near(a2.rgb, jia.rgb) && b1.done === false, { ms: a2.ms, rgb: a2.rgb, error: a2.error, yiDone: b1.done });
-
-  /* ---- Q1d 撤回 */
+  /* ---- Q2 / Q1 / Q3：丙在产流时，甲、乙交错要四帧 */
+  const markL = supLogs.length;
+  const looksAt = Date.now();
+  // 一个一个登记（等渲染服务记下前一个再发下一个）：「先来」按渲染服务收到的先后算，客户端并发发出去的先后不作数
+  const reqs = [];
+  for (const [proj, label] of [[jia, '甲-2'], [jia, '甲-3'], [yi, '乙-1'], [yi, '乙-2']]) {
+    const before = supLogs.filter((l) => l.event === 'look.queued').length;
+    reqs.push(look(proj, label));
+    await waitFor(() => supLogs.filter((l) => l.event === 'look.queued').length > before, 20_000, `${label} 登记进队列`, 50);
+  }
+  // 撤回：乙再登记一条又撤回，队列里不留它
   const ac = new AbortController();
-  const b2 = look(yi, '乙-撤回', { signal: ac.signal });
-  await waitFor(async () => ((await status()).look?.queue?.queued === 2), 15_000, '乙的第二条请求排进队列', 200).catch(() => null);
-  const sD0 = await status();
+  const bx = look(yi, '乙-撤回', { signal: ac.signal });
+  await waitFor(async () => ((await status()).look?.queue?.queued ?? 0) + ((await status()).look?.inFlight ? 1 : 0) >= 5, 20_000, '五条请求都登记了', 200).catch(() => null);
   ac.abort(new Error('调用方这一轮被停掉'));
-  await b2.promise;
-  const sD = await waitFor(async () => { const s = await status(); return s.look?.queue?.queued === 1 ? s : null; }, 15_000, '撤回后队列里只剩一条', 200).catch(() => null);
-  check('Q1d', '撤回：乙另一条请求登记后被调用方撤回，队列里不留它，原来那条还排着', sD0.look?.queue?.queued === 2 && !!sD && (sD.look?.queue?.cancelled ?? 0) === 1 && b1.done === false && !!b2.error,
-    { before: sD0.look?.queue?.queued, after: sD?.look?.queue?.queued, cancelled: sD?.look?.queue?.cancelled });
-
-  /* ---- Q3 / Q2 / Q4：甲一轮结束，立即让位给排队的乙，无需再等 5 分钟！ */
-  say('release-turn', { projectId: jia.projectId, runId: jiaRun.runId });
-  await client.release(jia.projectId, { runId: jiaRun.runId });
-  const b1r = await Promise.race([b1.promise, delay(T(60_000)).then(() => null)]);
-  const yiDoneAt = Date.now();
-  const window1 = seen.slice(markB).filter((x) => x.at <= yiDoneAt);
-  const jiaEnded = supLogs.filter((l) => l.event === 'isolation.ended' && l.projectId === jia.projectId).at(-1) ?? null;
-  const jiaStop = supLogs.filter((l) => l.event === 'isolation.stop' && l.projectId === jia.projectId).at(-1) ?? null;
-  const jiaStopAt = jiaStop ? Date.parse(jiaStop.t) : null;
-  const heldFor = jiaStopAt ? jiaStopAt - jiaLastAt : null;
-  const startsAfter = supLogs.filter((l) => l.event === 'isolation.start' && Date.parse(l.t) >= (jiaStopAt ?? Infinity)).map((l) => nameOf(l.projectId));
-  // 等待期间：装着的始终只有甲；工作进程的清单里从来没有同时出现两个项目
-  const curs = [...new Set(window1.filter((x) => x.at < (jiaStopAt ?? yiDoneAt)).map((x) => nameOf(x.cur)))];
-  const multi = seen.filter((x) => new Set(x.listed).size > 1).length;
-  check('Q1b', '乙等着的整个期间隔离工作进程装着的始终只有甲一个项目（任何一拍都没有同时装两个）', curs.length === 1 && curs[0] === '甲' && multi === 0, { curs, ticks: window1.length, multiProjectTicks: multi });
-  check('Q3', '按轮占用：甲一轮结束立即让位（乙在排队），无需再等 5 分钟；结束原因是轮换或空闲', heldFor !== null && heldFor < IDLE_MS && (jiaEnded?.reason === 'idle' || jiaEnded?.reason === 'rotated' || jiaStop?.reason === 'idle' || jiaStop?.reason === 'rotated'),
-    { heldForMs: heldFor, idleMs: IDLE_MS, reason: jiaEnded?.reason ?? jiaStop?.reason, yiWaitedMs: (jiaStopAt ?? 0) - yiQueuedAt, bingWaitedMs: (jiaStopAt ?? 0) - bingPublishedAt });
-  check('Q2', '看画面优先于预渲染任务：丙先发了预渲染计划、乙后来才要看画面；甲让位后下一轮装的是乙，不是先来的丙', startsAfter[0] === '乙' && bingPublishedAt < yiQueuedAt, { startsAfterJia: startsAfter, bingBeforeYiMs: yiQueuedAt - bingPublishedAt });
-  const sY = await status();
-  const yiLog = supLogs.filter((l) => l.event === 'look.done' && l.projectId === yi.projectId && l.state === 'done').at(-1) ?? null;
-  check('Q4', '轮到了照常出图：乙的那一帧在甲让位后出来，颜色是乙的，由隔离工作进程出；调用方从头到尾只是在等', b1r?.ok === true && near(b1r.rgb, yi.rgb) && yiLog?.worker === 'isolated' && yiLog.attempts === 0 && (sY.look?.failed ?? 0) === 0,
-    { ms: b1r?.ms, rgb: b1r?.rgb, error: b1r?.error, queuedMs: yiLog?.queuedMs, worker: yiLog?.worker, attempts: yiLog?.attempts, failed: sY.look?.failed });
+  await bx.promise;
+  const results = [];
+  for (const r of reqs) results.push(await Promise.race([r.promise, delay(T(900_000)).then(() => null)]));
+  const looksDoneAt = Date.now();
+  const doneOrder = [...results].filter(Boolean).sort((x, y) => (x.started + x.ms) - (y.started + y.ms)).map((x) => x.label);
+  const startsL = supLogs.slice(markL).filter((l) => l.event === 'isolation.start' && Date.parse(l.t) <= looksDoneAt).map((l) => nameOf(l.projectId));
+  const stopsL = supLogs.slice(markL).filter((l) => l.event === 'isolation.stop' && Date.parse(l.t) <= looksDoneAt).map((l) => `${nameOf(l.projectId)}:${l.reason}`);
+  const windowL = seen.filter((x) => x.at >= looksAt && x.at <= looksDoneAt);
+  const multiL = seen.filter((x) => new Set(x.listed).size > 1).length;
+  say('look-phase', { doneOrder, startsL, stopsL });
+  check('Q2', '看画面先于产流：丙正在产流时甲、乙要画面——丙做完手里那一个就让，看画面的四帧全部出完之前不再装丙', results.every((r) => r?.ok === true) && !startsL.includes('丙') && stopsL.some((x) => x === '丙:rotated'),
+    { startsDuringLooks: startsL, stopsDuringLooks: stopsL });
+  const want = expectedTurns({ 甲: ['甲-2', '甲-3'], 乙: ['乙-1', '乙-2'] }, '乙');
+  check('Q1', `各项目轮流、项目内先来先做、一轮最多连做 ${TURN} 个：甲刚出过一帧，乙先；出图次序 ${want.order.join(' → ')}`, JSON.stringify(doneOrder) === JSON.stringify(want.order),
+    { turn: TURN, doneOrder, want: want.order, ms: results.map((r) => r && `${r.label}:${r.ms}`) });
+  check('Q4', '每一帧颜色都是它自己项目的（页面里执行的是自己项目的卡），都由隔离工作进程出；调用方从头到尾只是在等、没收到错误', results.every((r) => r && r.ok === true && near(r.rgb, r.project === '甲' ? jia.rgb : yi.rgb))
+    && supLogs.slice(markL).filter((l) => l.event === 'look.done' && l.state === 'done').every((l) => l.worker === 'isolated'),
+    { rgb: results.map((r) => r && `${r.label}:${r.rgb}`), errors: results.map((r) => r?.error).filter(Boolean) });
+  check('Q3', `不让哪个项目占着：看画面这一段里每次换装都是「排第一的换成别的项目」触发（结束原因都是轮换，没有一次是空闲满时长），依次装 ${want.loads.join('、')}`, stopsL.every((x) => x.endsWith(':rotated')) && JSON.stringify(startsL) === JSON.stringify(want.loads),
+    { startsDuringLooks: startsL, stopsDuringLooks: stopsL });
+  check('Q1b', '隔离：等待期间任何一拍都没有同时装两个项目；撤回的那一条不留在队列里', multiL === 0 && !!bx.error && windowL.length > 0,
+    { ticks: windowL.length, multiProjectTicks: multiL, cancelled: (await status()).look?.queue?.cancelled, cancelError: bx.error });
 
   /* ---- Q5 重启 */
   say('restart', {});
-  const a3 = look(jia, '甲-3（跨两次重启）');
-  await waitFor(async () => { const s = await status(); return s.look?.queue?.queued === 1 && s.isolation?.current?.projectId === yi.projectId ? s : null; }, 20_000, '甲的请求排进队列（乙装着）', 300);
+  const loadedNow = (await status()).isolation?.current?.projectId ?? null;
+  const target = loadedNow === yi.projectId ? jia : yi; // 要一帧的项目此刻没装着：它排着等换装
+  const a3 = look(target, `${target.label}-跨两次重启`);
+  await waitFor(async () => { const s = await status(); return s.look?.queue?.queued === 1 ? s : null; }, 20_000, '请求排进队列', 100);
   const onDisk0 = fs.readdirSync(QUEUE_DIR).filter((n) => n.endsWith('.req.json'));
   const bodyOnDisk = onDisk0.length === 1 ? JSON.parse(fs.readFileSync(path.join(QUEUE_DIR, onDisk0[0]), 'utf8')) : null;
   await stopSupervisor({ hard: true });
   await delay(1500);
   const onDisk1 = fs.readdirSync(QUEUE_DIR).filter((n) => n.endsWith('.req.json'));
-  check('Q5a', '乙装着时甲又要一帧（排着）；管理进程连同工作进程整棵树被强行结束后，盘上队列目录里留着这条请求（项目是甲的）', onDisk0.length === 1 && onDisk1.length === 1 && bodyOnDisk?.projectId === jia.projectId && bodyOnDisk?.body?.project?.id === jia.docId && a3.done === false,
+  check('Q5a', '要一帧的请求排着时把管理进程连同工作进程整棵树强行结束：盘上队列目录里留着这条请求（项目对）', onDisk0.length === 1 && onDisk1.length === 1 && bodyOnDisk?.projectId === target.projectId && bodyOnDisk?.body?.project?.id === target.docId && a3.done === false,
     { before: onDisk0.length, after: onDisk1.length, projectOnDisk: nameOf(bodyOnDisk?.projectId), clientDone: a3.done });
 
   // 再起：背压的可用内存线调到够不着的高度（模拟内存吃紧）
@@ -396,18 +408,17 @@ async function main() {
   await waitReady('渲染服务第二次重启后就绪');
   const a3r = await Promise.race([a3.promise, delay(T(300_000)).then(() => null)]);
   const loaded2 = supLogs.slice(markN).find((l) => l.event === 'look.requests.loaded') ?? null;
-  const jiaLog = supLogs.slice(markN).filter((l) => l.event === 'look.done' && l.projectId === jia.projectId).at(-1) ?? null;
+  const tLog = supLogs.slice(markN).filter((l) => l.event === 'look.done' && l.projectId === target.projectId).at(-1) ?? null;
   const firstStart = supLogs.slice(markN).find((l) => l.event === 'isolation.start');
-  // 重连了几回（两次停机挨得近时调用方可能一直在退避里，合成一回）与一共失败了几趟
   const reconnects = clientLogs.filter((l) => l.event === 'agent.look.reconnected').length;
   const failedTrips = client.describe().reconnects;
-  check('Q5c', '正常收尾后再起：请求第二次接回来，隔离工作进程先为甲（要看画面的）起来、出图，颜色是甲的；调用方拿到了图，中间只是重连', onDisk2.length === 1 && loaded2?.restored === 1 && a3r?.ok === true && near(a3r.rgb, jia.rgb)
-    && jiaLog?.restored === true && jiaLog.worker === 'isolated' && nameOf(firstStart?.projectId) === '甲' && reconnects >= 1 && failedTrips >= 2,
-    { onDiskAfterGracefulStop: onDisk2.length, loaded: loaded2 && { restored: loaded2.restored }, ms: a3r?.ms, rgb: a3r?.rgb, error: a3r?.error, restored: jiaLog?.restored, firstStart: nameOf(firstStart?.projectId), reconnects, failedTrips });
-  const jiaLast2 = Date.now();
+  check('Q5c', '正常收尾后再起：请求第二次接回来，隔离工作进程先为它（要看画面的，先于丙的产流）起来、出图，颜色对；调用方拿到了图，中间只是重连', onDisk2.length === 1 && loaded2?.restored === 1 && a3r?.ok === true && near(a3r.rgb, target.rgb)
+    && tLog?.restored === true && tLog.worker === 'isolated' && nameOf(firstStart?.projectId) === target.label && reconnects >= 1 && failedTrips >= 2,
+    { onDiskAfterGracefulStop: onDisk2.length, loaded: loaded2 && { restored: loaded2.restored }, ms: a3r?.ms, rgb: a3r?.rgb, error: a3r?.error, restored: tLog?.restored, firstStart: nameOf(firstStart?.projectId), reconnects, failedTrips });
+  const lastLookAt = tLog?.t ? Date.parse(tLog.t) : Date.now();
 
-  /* ---- Q6 预渲染任务不丢 */
-  say('wait-prerender', { idleMs: IDLE_MS });
+  /* ---- Q6 产流任务不丢：看画面的都做完之后轮到丙 */
+  say('wait-prerender', {});
   let bingDone = null;
   try {
     bingDone = await waitFor(() => {
@@ -416,14 +427,13 @@ async function main() {
       const fine = tasks.filter((t) => !t.id.startsWith('plan:'));
       if (!p || p.state !== 'done' || fine.length === 0 || fine.some((t) => t.state === 'open' || t.state === 'claimed')) return null;
       return { tasks: fine.length, done: fine.filter((t) => t.state === 'done').length, failed: fine.filter((t) => t.state === 'failed').length };
-    }, IDLE_MS + 420_000, '丙的计划与细任务做完', 500);
+    }, 900_000, '丙的计划与细任务做完', 500);
   } catch (err) { out.bingError = String(err?.message ?? err); }
   const bingStart = supLogs.filter((l) => l.event === 'isolation.start' && l.projectId === bing.projectId).at(-1) ?? null;
-  // 隔离工作进程每秒交一次诊断：任务在文档服务那边记成做完之后，它的计数要等下一次诊断才到，等一等
   const isoNodeOf = (s) => (s.isolation?.queue?.nodes ?? []).find((n) => n.projectId === bing.projectId) ?? (s.isolation?.lastQueue?.nodes ?? []).find((n) => n.projectId === bing.projectId) ?? null;
   const isoBing = await waitFor(async () => { const n = isoNodeOf(await status()); return (n?.completed ?? 0) >= 1 ? n : null; }, 15_000, '隔离工作进程报出丙的任务做完', 500).catch(() => null);
-  check('Q6', '预渲染任务不丢：丙的计划等过了三个看画面的项目轮次和两次重启；装着的项目闲满时长让位后，隔离工作进程为丙起来把它做完', !!bingDone && bingDone.failed === 0 && bingDone.done === bingDone.tasks && !!bingStart && Date.parse(bingStart.t) - jiaLast2 >= IDLE_MS && (isoBing?.completed ?? 0) >= 1,
-    { ...bingDone, error: out.bingError, waitedMs: Date.now() - bingPublishedAt, startedAfterIdleMs: bingStart ? Date.parse(bingStart.t) - jiaLast2 : null, isoCompleted: isoBing?.completed });
+  check('Q6', '产流任务不丢：丙的计划让过了看画面的四帧和两次重启；看画面的都出完后隔离工作进程为丙起来把它做完（不用等装着的项目闲满时长）', !!bingDone && bingDone.failed === 0 && bingDone.done === bingDone.tasks && !!bingStart && Date.parse(bingStart.t) >= lastLookAt - 1000 && Date.parse(bingStart.t) - lastLookAt < Math.min(IDLE_MS, T(120_000)) && (isoBing?.completed ?? 0) >= 1,
+    { ...bingDone, error: out.bingError, waitedMs: Date.now() - bingPublishedAt, startedAfterLastLookMs: bingStart ? Date.parse(bingStart.t) - lastLookAt : null, isoCompleted: isoBing?.completed });
 
   /* ---- Q7 重试到头 */
   if (!flag('--skip-retry')) {

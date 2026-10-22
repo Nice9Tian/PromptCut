@@ -128,7 +128,7 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
     if (look && (!context || context.projectId !== grant.projectId || context.runGrantId !== grant.runGrantId))
       fail(503, 'look-context-unavailable');
     const assignmentDigest = grant.assignmentDigest ?? grant.scopeBinding?.assignmentDigest ?? null;
-    let inst, DataWebSocket, projectAssets = null, toolset = null, bound = null, heartbeatTimer = null;
+    let inst, DataWebSocket, projectAssets = null, toolset = null, bound = null;
     const renderPicker = createRenderClipPicker(() => flatKernel);
     // 写入攒一会儿再判轻重,只把判重的报给主服务(`render_request` 事件);一轮收尾(settle)时攒着的马上判、马上报
     const renderGate = createHeavyRenderGate({
@@ -148,32 +148,11 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       },
     });
     let removeAbort = () => {};
-    if (look && typeof look.heartbeat === 'function') {
-      heartbeatTimer = setInterval(() => {
-        try {
-          look.heartbeat(grant.projectId, {
-            runId: grant.runId,
-            runGrantId: grant.runGrantId,
-            conversationId: grant.conversationId,
-            assignmentDigest,
-          });
-        } catch {}
-      }, 30_000);
-      heartbeatTimer.unref?.();
-    }
+    // 0.7.18「云端 Agent 按轮占用」的心跳与收尾通知（`look.heartbeat` / `look.release`）已取消：0.7.19 起渲染服务是多项目模式，
+    // 不让哪个项目占着，一轮里不必报「还在」、收尾也不必通知（`server/hosted-render/look.mjs`）
     const aborted = new Promise((_, reject) => {
       if (!signal) return;
       const onAbort = () => {
-        if (heartbeatTimer) clearInterval(heartbeatTimer);
-        try {
-          look?.release?.(grant.projectId, {
-            runId: grant.runId,
-            runGrantId: grant.runGrantId,
-            conversationId: grant.conversationId,
-            assignmentDigest,
-            aborted: true,
-          });
-        } catch {}
         try { inst?.close('run-fenced'); } catch { /* Cleanup below still awaits the socket. */ }
         reject(Object.assign(new Error('run-fenced'), { status: 403, code: 'run-fenced' }));
       };
@@ -420,16 +399,6 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
             // 关不干净就抛出去，执行器据此不形成收尾记录，这条任务只能由强制路径收口。
             try { await projectAssets?.close(); }
             finally {
-              if (heartbeatTimer) clearInterval(heartbeatTimer);
-              try {
-                await look?.release?.(grant.projectId, {
-                  runId: grant.runId,
-                  runGrantId: grant.runGrantId,
-                  conversationId: grant.conversationId,
-                  assignmentDigest,
-                  aborted: false,
-                });
-              } catch {}
               removeAbort();
               renderGate.close();
               inst.close('run-drained');
@@ -441,45 +410,15 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
         return { runId: grant.runId, dispatchesOpen: 0 }; },
       /** 文档服务叫停这一轮(停止、转私有、Agent 被关、发起人被踢、删除):工具提供者的收场,无条件做 */
       fence(control) {
-        if (heartbeatTimer) clearInterval(heartbeatTimer);
-        try {
-          look?.release?.(grant.projectId, {
-            runId: grant.runId,
-            runGrantId: grant.runGrantId,
-            conversationId: grant.conversationId,
-            assignmentDigest,
-            aborted: true,
-          });
-        } catch {}
         return toolset ? toolset.fence({ kind: control?.kind }) : Promise.resolve(null);
       },
       close() {
-        if (heartbeatTimer) clearInterval(heartbeatTimer);
-        try {
-          look?.release?.(grant.projectId, {
-            runId: grant.runId,
-            runGrantId: grant.runGrantId,
-            conversationId: grant.conversationId,
-            assignmentDigest,
-            aborted: true,
-          });
-        } catch {}
         removeAbort();
         renderGate.close();
         inst.close('run-finished');
       },
     };
     } catch (error) {
-      if (heartbeatTimer) clearInterval(heartbeatTimer);
-      try {
-        look?.release?.(grant.projectId, {
-          runId: grant.runId,
-          runGrantId: grant.runGrantId,
-          conversationId: grant.conversationId,
-          assignmentDigest,
-          aborted: true,
-        });
-      } catch {}
       removeAbort();
       try { inst?.close('bind-failed'); } catch { /* The socket witness remains mandatory. */ }
       try { await toolset?.close('bind-failed'); } catch { /* 账本与浏览器的关闭各自记了结果 */ }

@@ -277,12 +277,6 @@ export function createLookClient({ url, key, fetch: fetchImpl = globalThis.fetch
         });
       };
     },
-    release(projectId, { runId, aborted = false } = {}) {
-      return send('/look/release', JSON.stringify({ projectId, runId, aborted }), 5000).catch(() => null);
-    },
-    heartbeat(projectId, { runId } = {}) {
-      return send('/look/heartbeat', JSON.stringify({ projectId, runId }), 5000).catch(() => null);
-    },
     cancel(requestId, instance = null) {
       cancel(requestId, instance);
     },

@@ -1,0 +1,49 @@
+  过  A1 甲的任务由隔离工作进程（hosted-render-iso: 节点）认领并做完  〔{"done":{"tasks":8,"done":8,"failed":0,"claimedBy":[],"sample":[{"id":"stream:68a8c7bb81dc1c73be3fb31ef6e3cef803f91e8808f218af0c243","state":"done"},{"id":"stream:68a8c7bb81dc1c73be3fb31ef6e3cef803f91e8808f218af0c243","state":"done"}]},"iso":{"nodeId":"hosted-render-iso:LDm9AvMfLI37/lojpx2ur","claimed":9,"completed":7,"failed":0}}〕
+  过  A1 乙的任务由隔离工作进程认领并做完  〔{"done":{"tasks":4,"done":4,"failed":0,"claimedBy":[],"sample":[{"id":"stream:7b34c614bd8624d3935b6e9c3853d8c8a7ce4246ff1bf45612e85","state":"done"},{"id":"stream:7b34c614bd8624d3935b6e9c3853d8c8a7ce4246ff1bf45612e85","state":"done"}]},"iso":{"nodeId":"hosted-render-iso:LDm9AvMfLI37/xhegh4da","claimed":5,"completed":3,"failed":0}}〕
+  过  A1 甲渲完后层表入库  〔{"type":"content.item","layers":0,"streams":4}〕
+  过  A1 取回了甲、乙各至少一份结果对象，没有拼坏的  〔{"jia":2,"yi":2,"graph":6,"broken":0}〕
+  过  A1 结果对象里固定清单的每一类都有记录（全局对象、存储、窗口、本机接口、回环、元数据、别的项目、收集站、工作目录以外的文件）  〔{"items":136}〕
+  过  A2 常驻工作进程对甲、乙一个任务也没认领（搁着、报「有卡片代码」）  〔{"jia":{"claimed":0,"hold":true,"cards":{"state":"some","count":6,"listedAt":1792627686267,"lists":5},"pending":0},"yi":{"claimed":0,"hold":true,"cards":{"state":"some","count":3,"listedAt":1792627732433,"lists":8}}}〕
+  过  A2 常驻工作进程不报 userCards，隔离工作进程报  〔{"resident":{"userCards":false,"graphCards":false,"transcode":true,"streams":true},"iso":{"userCards":true,"graphCards":false,"transcode":true,"streams":true}}〕
+  过  A3 对照：探测卡读自己这台预渲染 Vite 上的普通模块是通的（200），不是探针瞎了  〔["200 basic // 由 vite-plugin-cards 的 cardOverridesLoader 生成:改动层里有、底版没有的用户卡\nimport "]〕
+  过  A3 对照：探测卡读自己项目的素材是通的（经工作进程凭本项目的票据取回，内容对）  〔[{"tag":"jia","name":"own.asset","ok":true,"got":"200 basic probe asset of project jia PROBE-OWN-JIA-ASSET-6e0fd7d95d93\n"}]〕
+  过  B 页面全局对象：没有假凭证、没有票据形状的串  〔[{"tag":"jia","name":"globals.env","ok":true,"got":"{\"BASE_URL\":\"/\",\"DEV\":true,\"MODE\":\"development\",\"PROD\":false,\"SSR\":false}"},{"tag":"jia","name":"globals.pcKeys","ok":true,"got":"[\"DOMTokenList\",\"__pcEntropyPinned\",\"__pcResetRandom\",\"__pcWithRandomSeed\",\"__pcRealDateNow\",\"__pcMapRgba\",\"__pcPixelMapGl\",\"__pcOverreachLoaded\",\"…〕
+  过  C localStorage / sessionStorage / indexedDB / cookie / Cache：没有假凭证  〔[{"tag":"jia","name":"storage.caches","ok":true,"got":"[]"},{"tag":"jia","name":"storage.cookie","ok":true,"got":""},{"tag":"jia","name":"storage.indexedDB","ok":true,"got":"[]"},{"tag":"jia","name":"storage.localStorage","ok":true,"got":"[[\"pc.skin.studioMigrated\",\"1\"],[\"pc.rail.layout.v1\",\"{\\\"left\\\":[\\\"library\\\",\\\"animations\\\",\\\"effect…〕
+  过  C 渲染用的 Chrome 的用户数据目录在隔离工作进程自己的数据目录里（随换项目清空）  〔["puppeteer_dev_chrome_profile-5qRa5o","puppeteer_dev_chrome_profile-O4LLuT","puppeteer_dev_chrome_profile-cGoEsf"]〕
+  过  D 父页面与同源的别的窗口：导出页自己就是顶层、没有 opener、没有别的框架可读  〔{"window.broadcast":"[]","window.frames":"19","window.isTop":"true","window.opener":"null","window.parent.cookie":"(自己就是顶层)","window.parent.document":"(自己就是顶层)","window.referrer":""}〕
+  过  E1 自己这台预渲染 Vite 的 /api/**（清单里每一条，含写方法）与开发服务器的内部口：都被页面请求闸拒掉（403 page-gate）；WebSocket 升级被拒  〔[{"tag":"jia","name":"self.GET /__open-in-editor","ok":true,"got":"403 basic {\"ok\":false,\"error\":\"page-gate\",\"reason\":\"dev-tool\"}"},{"tag":"jia","name":"self.GET /api/ai/config","ok":true,"got":"403 basic {\"ok\":false,\"error\":\"page-gate\",\"reason\":\"api-not-allowed\"}"}]〕
+  过  E2 管理进程的状态口与代理口、常驻工作进程、自己的编辑器 Vite、文档服务、素材服务：接口拒绝未经认证/跨源的敏感内容，公开healthz允许  〔[{"tag":"jia","name":"loopback.assetService.cors","ok":true,"got":"401 cors {\"ok\":false,\"error\":\"unauthorized\"}"},{"tag":"jia","name":"loopback.assetService.frame","ok":true,"got":"load "},{"tag":"jia","name":"loopback.assetService.no-cors","ok":true,"got":"0 opaque (opaque)"}]〕
+  过  E2 未启用出口代理/Allowlist；管理认证与API闸独立执行  〔{"lines":88,"egressDestinations":[],"pageDenied":85,"mode":"enforce","proxy":null}〕
+  过  E3 metadata出口测试不适用，夹具没有请求真实地址  〔[{"tag":"jia","name":"metadata.not-applicable","ok":true,"got":"不适用：卡片出口护栏本三个版本不做；未请求元数据地址"},{"tag":"jia","name":"metadata.not-applicable","ok":true,"got":"不适用：卡片出口护栏本三个版本不做；未请求元数据地址"},{"tag":"yi","name":"metadata.not-applicable","ok":true,"got":"不适用：卡片出口护栏本三个版本不做；未请求元数据地址"},{"tag":"yi","name":"metadata.not-applicable","ok":true,"got":"不适用：卡片出口护栏本三个版本不做；未请求元…〕
+  过  F 公开外链收集站收到卡片请求  〔{"tcp":27,"http":100,"udp":40}〕
+  过  F 真实云worker外链 image 载入  〔[{"tag":"jia","name":"collector.resource.image","ok":true,"got":"loaded"},{"tag":"jia","name":"collector.resource.image","ok":true,"got":"loaded"}]〕
+  过  F 真实云worker外链 font 载入  〔[{"tag":"jia","name":"collector.resource.font","ok":true,"got":"loaded"},{"tag":"jia","name":"collector.resource.font","ok":true,"got":"loaded"}]〕
+  过  F 真实云worker外链 style 载入  〔[{"tag":"jia","name":"collector.resource.style","ok":true,"got":"loaded"},{"tag":"jia","name":"collector.resource.style","ok":true,"got":"loaded"}]〕
+  过  F 真实云worker外链 script 载入  〔[{"tag":"jia","name":"collector.resource.script","ok":true,"got":"loaded"},{"tag":"jia","name":"collector.resource.script","ok":true,"got":"loaded"}]〕
+  过  F 真实云worker外链 import 载入  〔[{"tag":"jia","name":"collector.resource.import","ok":true,"got":"loaded"},{"tag":"jia","name":"collector.resource.import","ok":true,"got":"loaded"}]〕
+  过  G1 经开发服务器的各种取文件写法：工作目录以外的四个文件（私钥目录、登记表旁、临时文件、常驻工作进程的数据目录）一个都读不到  〔[{"attempts":440,"statuses":["200","err","403"]}]〕
+  过  G2 同步文件预检：overreach-node-side.css 与 .ts 被整份拒掉（卡片同步记被拒）  〔{"notices":["installed:overreach-graph.tsx","installed:overreach-marker-jia.tsx","rejected:overreach-node-side.css","rejected:overreach-node-side.ts","installed:overreach-probe-lib.ts","installed:overreach-probe.tsx"],"inLog":["overreach-node-side.css","overreach-node-side.ts"]}〕
+  过  G2 改动层里没有这两个文件；「在 Node 里被执行过」的记号没有出现在任何输出里  〔["src/cards/user/overreach-graph.tsx","src/cards/user/overreach-marker-jia.tsx","src/cards/user/overreach-probe-lib.ts","src/cards/user/overreach-probe.tsx"]〕
+  过  H 甲的结果里没有任何不该有的假凭证（节点上的、工作目录以外的、乙的内容与卡片源码）  〔[]〕
+  过  H 乙的结果里没有任何不该有的假凭证（节点上的、工作目录以外的、甲的记号卡）  〔[]〕
+  过  H 取回的全部内容里没有票据形状的串
+  过  H 工作进程与管理进程的全部输出里没有节点上的假凭证（环境变量里的两个、私钥目录、登记表旁、工作目录以外、常驻工作进程的数据目录）  〔[]〕
+  过  H 乙那一轮开始之前的全部输出里没有乙的内容与卡片源码  〔[]〕
+  过  I 换项目之前：甲那一轮结束并清空（管理进程记 cleaned），两轮之间磁盘上数据目录是空的  〔{"ended":{"reason":"rotated","cleaned":true,"worked":true},"gap":{"missed":true,"lastRun":{"projectId":"sp_lojpx2urqhr3inud5oclupsxkh","reason":"rotated","worked":true,"served":9,"cleaned":true,"ms":81934,"at":1792627707729}}}〕
+  过  I 隔离工作进程每一轮各是一个新进程，结束后进程树不剩  〔{"rounds":2,"aliveBeforeStop":1,"aliveAfter":[]}〕
+  过  I 乙那一轮的改动层里只有乙的卡（没有甲的任何文件）  〔["src/cards/user/overreach-probe-lib.ts","src/cards/user/overreach-probe.tsx","src/cards/user/overreach-yi-only.tsx"]〕
+  过  I 乙的页面里没有甲的卡片代码：甲的记号卡没有载入、取不到它的文件、用户卡清单里没有它  〔{"markers":"{\"overreach-probe\":true,\"yi-only\":\"<F8-YI-CARD>\",\"ran:yi\":true}","foreign":["other.card src/cards/user/overreach-graph.tsx=200 basic <!doctype html>\n<html lang=\"zh","other.card src/cards/user/overreach-graph.tsx?raw=200 basic <!doctype html>\n<html lang=\"zh","other.card src/cards/user/overreach-marker-jia.ts…〕
+  过  J 以渲染身份提交编辑、写卡片源码都被拒，项目版本号不变  〔{"edit":"error:forbidden","cardPut":"error:forbidden","revBefore":1,"revAfter":1}〕
+  过  K 代理口：不带口令要清单 401；浏览器形状的请求连状态口也 403；状态口的输出里没有假凭证与票据  〔{"noKey":401,"asBrowser":403,"fakes":[]}〕
+  过  L1 看画面这一帧由隔离工作进程出（不是常驻的），回了图  〔{"status":200,"ok":true,"look":null,"image":"768x432","reports":1,"byWorker":{"resident":0,"isolated":1},"byWorkerBefore":{"resident":0,"isolated":0},"isoCurrent":"甲"}〕
+  过  L1 取回了看画面这一路的结果对象，固定清单的每一类都有记录  〔{"reports":1,"items":136}〕
+  过  L1 对照：这一路的渲染页读自己这台预渲染 Vite 上的模块、读自己项目的素材是通的  〔{"module":["200 basic // 由 vite-plugin-cards 的 cardOverridesLoader 生成:改动"],"asset":["200 basic probe asset of project jia PROBE-OWN-JIA-ASSET-6e0"]}〕
+  过  L2 看画面这一路的结果里没有任何不该有的假凭证（节点上的、工作目录以外的、乙的内容与卡片源码），没有票据形状的串  〔[]〕
+  过  L2 这一路的渲染页请求自己这台 Vite 的 /api/**（清单里每一条，含看画面的那两条）：都被页面请求闸拒掉（403 page-gate）  〔[{"name":"self.GET /api/ai/visual/v-000000.json","got":"403 basic {\"ok\":false,\"error\":\"page-gate\",\"reason\":\"api-not-"},{"name":"self.POST /api/vision/snapshot","got":"403 basic {\"ok\":false,\"error\":\"page-gate\",\"reason\":\"api-not-"}]〕
+  过  L2 这一路的渲染页读不到管理进程（状态口、代理口、/look）、常驻工作进程、自己的编辑器 Vite、文档服务、素材服务；metadata未请求  〔[{"tag":"look","name":"loopback.managerLook.cors","ok":false,"err":"TypeError: Failed to fetch"},{"tag":"look","name":"loopback.managerLook.frame","ok":true,"got":"load "}]〕
+  过  L2 这一路的渲染页读不到工作目录以外的四个文件  〔[{"attempts":44}]〕
+  过  L2 这一路的渲染页取不到别的项目（乙）的卡片文件  〔["other.card src/cards/user/overreach-yi-only.tsx=200 basic <!doctype html>\n<html lang=\"zh","other.card src/cards/user/overreach-yi-only.tsx?raw=200 basic <!doctype html>\n<html lang=\"zh"]〕
+  过  L2 看画面期间公开外链请求正常到达  〔{"http":11}〕
+  过  L2 看画面期间工作进程与管理进程的输出里没有节点上的假凭证  〔[]〕
+  过  L3 看画面的口子认身份：不带签名、渲染服务自己的私钥签的（报本名或冒称 agent）、签名对但请求体改过的都 401；浏览器形状的 403；一帧都没多出  〔{"unsigned":401,"renderKey":401,"renderKeyAsAgent":401,"tampered":401,"browserShaped":403,"bearerOnly":401,"served":[1,1]}〕
+  过  L3 绕过管理进程直接请求工作进程的看画面接口（不带那个工作进程的口令）：常驻的 403；隔离的 403（或它已经结束、连不上）  〔{"resident":"403 {\"ok\":false,\"error\":\"look-key\"}","isolated":"403 {\"ok\":false,\"error\":\"look-key\"}"}〕

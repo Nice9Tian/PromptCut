@@ -5,43 +5,50 @@
  * 所以——
  *   - 常驻工作进程不同步任何卡、不执行任何项目带来的代码；内容库里有 `card-source` 的项目它连着但**不认领**（`hold`），
  *     只把「这个项目要隔离、此刻有几个任务等着」报上来；
- *   - 这样的项目由**隔离工作进程**做：同一时刻最多一个，只连这一个项目，代理口只给它这一个项目的票据（口令每轮现生成）；
- *     有自己的检出副本、数据目录与端口，开卡片同步，报 `userCards: true`；
- *   - 让位的规矩（2026-10-09 用户定「满五分钟才让位」，`docs/plan/account-binding-task.md`「提前让位」一行）：装着的项目
- *     **空闲满 `idleMs`（5 分钟）才结束**，别的项目在排队、有人等着看画面也不提前；
- *   - 〔裁，三级〕一直有活的项目不算空闲，上面那条管不到它：另有项目在等时它最多连续做 `sliceMs`（5 分钟）就排空让位，不然别的项目
- *     （连同等着看画面的）会一直排不上。到了 `sliceMs` 而它此刻正闲着的，不按这一条换，照上一条等它闲满 `idleMs`；
- *   - 换项目之前把数据目录整个清空、检出副本重建（装进来的用户卡都在数据目录的改动层里，副本一并重建是兜底）。
+ *   - 这样的项目由**隔离工作进程**做：同一时刻只装一个项目，只连这一个项目，代理口只给它这一个项目的票据（口令每轮现生成）；
+ *     有自己的数据目录与端口，开卡片同步，报 `userCards: true`。这就是「每个请求在只属于它那个项目的隔离环境里执行」
+ *     （语义 `mechanism/rendering.md`「多项目模式的做法」第四条）；
+ *   - 换项目之前把数据目录整个清空（装进来的用户卡都在数据目录的改动层里）。
  *
- * **现状：本文件只有编排的状态机与目录操作，带单测（HR23），还没有接进管理进程（`main.mjs` 不引它）。**
- * 上面说的「常驻工作进程 hold 并上报」「代理口按工作进程分口令」「隔离工作进程的起停」都还没实现；渲染服务现在的行为仍等同方案 B。
+ * # 多项目模式（0.7.19 起；语义 `product/rendering.md`「渲染服务的两种模式」，取代 0.7.18 的「云端 Agent 按轮占用」）
+ *
+ * 不让哪个项目占着。下一个该装哪个项目，只看排队的请求按多项目模式的次序（`server/render-node/multi-queue.mjs`）谁排第一：
+ *   1. **看画面先于产流**：有要隔离的看画面请求排着，就是排第一的那个请求的项目（次序由 `look.mjs` 的队列给：各项目轮流、
+ *      项目内先来先做）；
+ *   2. 否则是要产流的项目（常驻工作进程报的「有卡、有任务等着」），**各项目轮流**：一个项目做了一个任务就排到最后；
+ *      刚装上、还没做到一个任务的项目先做完它这一个（不然两个项目来回装、谁都做不成）；
+ *   3. 装着的项目就是排第一的：接着做（装过的卡和素材是缓存，留给同一项目的下一个请求）；
+ *   4. 排第一的是别的项目：**不等它空闲**——不再认领新的（清单上标排空），手里正在做的那一个做完就结束、清空，下一拍装排第一的那个；
+ *   5. 没人排队：装着的留作缓存，空了 `cacheMs` 才结束；内存吃紧（背压）时不等，空着就结束。
+ * 0.7.18 暂行办法的「一轮从第一次看画面占到收尾」「心跳」「空闲满五分钟才让位」「真人在线的项目先产流、五分钟轮换」
+ * 「流产满且五分钟没修改才关」都没有了。
  *
  * 本文件三块：
- *   `isolationCandidates`  纯函数：目录清单 + 常驻工作进程的诊断 → 此刻要隔离且有活等着的项目
- *   `createIsolation`      状态机：挑谁、何时结束、何时轮换；起停与清理由注入的 `runner` 做（单测不起真进程）
+ *   `isolationCandidates`  纯函数：目录清单 + 常驻工作进程的诊断 + 要看画面的项目 → 此刻要隔离且有活等着的项目
+ *   `createIsolation`      状态机：装哪个、何时换、何时结束；起停与清理由注入的 `runner` 做（单测不起真进程）
  *   `prepareCheckout` / `wipeDir`  检出副本与数据目录的建与清（真文件操作；带「只清自己建的目录」的记号核对）
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRotation, orderByPolicy } from '../render-node/multi-queue.mjs';
 
 export const ISOLATION_DEFAULTS = Object.freeze({
   /**
-   * 这个项目这么久没有隔离工作进程能做的任务（手里没有、没有可认领的、也没有人要看它的画面）才结束。
-   * 2026-10-09 用户定：空闲满五分钟才让位，别的项目在排队也不提前（原来是 60 秒）
+   * 没人排队时，装着的项目留作缓存多久（从最后一次有活算起）。只是缓存：别的项目一排上就不等它（见文件头第 4 条）。
+   * 〔三级数字，待定〕沿用原来的五分钟；管理进程的 `PROMPTCUT_RENDER_ISO_IDLE_MS` 改它
    */
-  IDLE_MS: 5 * 60_000,
-  /** 另有项目在等、而这个项目一直有活（不空闲）时，它最多连续做这么久就排空让位〔裁，见文件头〕 */
-  SLICE_MS: 5 * 60_000,
-  /** 轮换时等手里的任务做完的上限；到点还没完就让掉认领结束 */
+  CACHE_MS: 5 * 60_000,
+  /** 换项目时等手里那一个做完的上限；到点还没完就让掉认领结束 */
   DRAIN_MS: 120_000,
   /** 起来这么久还没交过诊断就算起不来 */
   START_TIMEOUT_MS: 300_000,
   /** 一轮下来一个任务都没认领到（等着的任务它做不了）：同一批任务在这段时间内不再为它起隔离工作进程 */
   RETRY_IDLE_MS: 10 * 60_000,
-  // 0.7.18 暂行：云端 Agent 按轮占用（10-16 用户改定第 3.2～3.7 节）
-  HEARTBEAT_TIMEOUT_MS: 120_000, // 2分钟没心跳当结束
-  STREAM_SLICE_MS: 5 * 60_000,   // 两个以上真人在线项目要产流时每5分钟轮换
-  IDLE_NO_MODIFY_MS: 5 * 60_000, // 5分钟没有修改才关门控
+  /**
+   * 产流时一个项目一轮最多连做几个任务（那一轮开始时就排着的）再让给别的项目；与看画面的 `turnRequests` 同一个数
+   * （`look.mjs` 的 `LOOK_DEFAULTS`）。〔裁，三级：见 AGENT-claude-multi-project-render.md「吞吐」〕
+   */
+  TURN_TASKS: 4,
 });
 
 /** 隔离工作进程的节点 id（与常驻工作进程的 `hosted-render:…` 区分开，两条连接可以同时在一个项目里） */
@@ -52,235 +59,109 @@ export const isoNodeIdFor = (instanceId, projectId) => `hosted-render-iso:${Stri
  * @param {object} o
  * @param {{ projectId, enabled, active, members, since }[]} o.directory 目录清单
  * @param {{ projectId, cards?: { state: string }, pending?: number, pendingKey?: string }[]} o.residentNodes 常驻工作进程诊断里的各节点
- * @returns {{ projectId: string, members: boolean, pending: number, pendingKey: string }[]} 有成员在线的在前，其次按变成有活的先后
+ * @param {null | string[] | Map<string, unknown>} [o.looks] 有要隔离的看画面请求排着的项目，**按看画面队列的出队次序**
+ *   （`look.mjs` 的 `isoOrder()`）；给 Map 时按它的键的次序，值是这次需求的记号
+ * @returns {{ projectId: string, members: boolean, pending: number, pendingKey: string, look?: true, since: number }[]}
+ *   要看画面的在前（按 `looks` 的次序），其余按变成有活的先后；产流那一类谁先由 `createIsolation` 按轮流定
  */
 export function isolationCandidates({ directory = [], residentNodes = [], looks = null } = {}) {
   const byId = new Map(residentNodes.map((n) => [n.projectId, n]));
+  const lookOrder = looks instanceof Map ? [...looks.keys()] : Array.isArray(looks) ? looks : [];
+  const lookMark = (projectId) => (looks instanceof Map ? looks.get(projectId) : 1);
+  const lookRank = new Map(lookOrder.map((id, i) => [id, i]));
   const out = [];
   for (const p of directory) {
     if (!p.enabled || !p.active) continue;
     const n = byId.get(p.projectId);
     /*
-     * 「要看画面」的项目（`looks`：projectId → 这次需求的记号；云端 Agent 经看画面的口子登记的，`look.mjs`）：没有任务等着也算候选，
-     * 而且排在最前——有人（模型的一轮）正等着这一帧。这样的项目不要求常驻工作进程已经报出「有卡」：Agent 服务刚把卡片源码写进内容库时，
-     * 常驻工作进程的那份诊断可能还是上一拍的。
+     * 「要看画面」的项目没有任务等着也算候选，而且排在最前——有人（模型的一轮）正等着这一帧。这样的项目不要求常驻工作进程已经
+     * 报出「有卡」：Agent 服务刚把卡片源码写进内容库时，常驻工作进程的那份诊断可能还是上一拍的。
      */
-    const look = looks?.get(p.projectId) ?? null;
+    const look = lookRank.has(p.projectId);
     if (!look && (!n || n.cards?.state !== 'some')) continue;
     const pending = Number(n?.pending) || 0;
     if (pending <= 0 && !look) continue;
     out.push({
       projectId: p.projectId, members: p.members === true, pending,
-      pendingKey: look ? `${String(n?.pendingKey ?? '')}|look:${look}` : String(n?.pendingKey ?? ''),
-      ...(look ? { look: true } : {}), since: p.since ?? 0,
+      pendingKey: look ? `${String(n?.pendingKey ?? '')}|look:${lookMark(p.projectId)}` : String(n?.pendingKey ?? ''),
+      ...(look ? { look: true } : {}), since: Number(p.since) || 0,
     });
   }
   out.sort((a, b) => ((a.look === true) !== (b.look === true) ? (a.look ? -1 : 1)
-    : a.members === b.members ? (a.since - b.since) || (a.projectId < b.projectId ? -1 : 1) : a.members ? -1 : 1));
-  return out.map(({ since, ...rest }) => rest);
+    : a.look ? lookRank.get(a.projectId) - lookRank.get(b.projectId)
+      : (a.since - b.since) || (a.projectId < b.projectId ? -1 : a.projectId > b.projectId ? 1 : 0)));
+  return out;
 }
 
 /**
  * @param {object} o
  * @param {{ prepare(projectId: string): Promise<void>, start(projectId: string): void, stop(reason: string): Promise<void>, cleanup(projectId: string): Promise<void>, exited(): boolean }} o.runner
- *   `prepare`：清数据目录、重建检出副本、换代理口口令；`start`：起隔离工作进程；`stop`：请它放回认领后结束整棵树；
- *   `cleanup`：再清一遍数据目录与副本；`exited()`：进程是不是已经自己没了
+ *   `prepare`：清数据目录、换代理口口令；`start`：起隔离工作进程；`stop`：请它放回认领后结束整棵树；
+ *   `cleanup`：再清一遍数据目录；`exited()`：进程是不是已经自己没了
  * @param {(projectId: string) => string} o.nodeIdOf
+ * @param {number} [o.cacheMs] 没人排队时装着的项目留多久（`idleMs` 是旧名字，同义）
  * @param {() => number} [o.now]
  * @param {(event: string, fields?: object) => void} [o.log]
  */
 export function createIsolation({
   runner, nodeIdOf, now = Date.now, log = () => {},
-  idleMs = ISOLATION_DEFAULTS.IDLE_MS, sliceMs = ISOLATION_DEFAULTS.SLICE_MS, drainMs = ISOLATION_DEFAULTS.DRAIN_MS,
+  cacheMs: cacheIn = undefined, idleMs = undefined, drainMs = ISOLATION_DEFAULTS.DRAIN_MS,
   startTimeoutMs = ISOLATION_DEFAULTS.START_TIMEOUT_MS, retryIdleMs = ISOLATION_DEFAULTS.RETRY_IDLE_MS,
+  turnTasks = ISOLATION_DEFAULTS.TURN_TASKS,
 } = {}) {
-  /** @type {null | { projectId, members, phase: 'preparing'|'starting'|'running'|'draining'|'stopping', startedAt, readyAt, lastBusyAt, drainAt, worked, pendingKey }} */
+  const turnCap = Math.max(1, Math.floor(Number(turnTasks) || 1));
+  const cacheMs = cacheIn ?? idleMs ?? ISOLATION_DEFAULTS.CACHE_MS;
+  /**
+   * @type {null | { projectId, members, phase: 'preparing'|'starting'|'running'|'draining'|'stopping', startedAt, readyAt, lastBusyAt, drainAt,
+   *   worked, pendingKey, claimed: number, served: number, why: string | null }}
+   *   `claimed`：这一轮工作进程报的认领数（看它涨了没有）；`served`：这一轮做了几个产流任务
+   */
   let current = null;
   let op = null; // 在途的起停操作（Promise）
-  let lastServed = null;
   let runs = 0;
   let lastRun = null;
   let waiting = [];
+  /** 产流那一类的轮流记账（看画面那一类的轮流在看画面的队列里记） */
+  const rotation = createRotation();
   /** projectId → { key, until }：一轮下来什么都没认领到的项目，同一批任务暂不再起 */
   const skip = new Map();
   const history = [];
-
-  // 0.7.18 暂行：云端 Agent 按轮占用（user-decisions-2026-10-16.md 第 3.2～3.7 节）
-  let lockedProject = null;
-  const activeTurns = new Map();
-  const queuedTurns = new Map();
-  const projectLastModified = new Map();
-
-  function acquireTurn({ projectId, runId, runGrantId, conversationId, hasOtherQueued = false }) {
-    if (!runId) return { ok: true, active: true };
-    if (activeTurns.has(runId)) {
-      const t = activeTurns.get(runId);
-      t.lastHeartbeatAt = now();
-      return { ok: true, active: true };
-    }
-    if (!lockedProject) {
-      lockedProject = projectId;
-      activeTurns.set(runId, { runId, projectId, runGrantId, conversationId, lastHeartbeatAt: now(), startedAt: now() });
-      queuedTurns.delete(runId);
-      if (current?.projectId === projectId) {
-        current.turnLocked = true;
-        current.turnReleased = false;
-      }
-      log('isolation.turn-locked', { runId, projectId });
-      return { ok: true, active: true };
-    }
-    if (lockedProject === projectId) {
-      if (!hasOtherQueued && queuedTurns.size === 0) {
-        activeTurns.set(runId, { runId, projectId, runGrantId, conversationId, lastHeartbeatAt: now(), startedAt: now() });
-        queuedTurns.delete(runId);
-        if (current?.projectId === projectId) {
-          current.turnLocked = true;
-          current.turnReleased = false;
-        }
-        log('isolation.turn-shared', { runId, projectId, activeTurns: activeTurns.size });
-        return { ok: true, active: true };
-      }
-      if (!queuedTurns.has(runId)) {
-        queuedTurns.set(runId, { runId, projectId, runGrantId, conversationId, enqueuedAt: now() });
-        log('isolation.turn-queued', { runId, projectId, behindOther: true });
-      }
-      return { ok: false, queued: true };
-    }
-    if (!queuedTurns.has(runId)) {
-      queuedTurns.set(runId, { runId, projectId, runGrantId, conversationId, enqueuedAt: now() });
-      log('isolation.turn-queued', { runId, projectId, lockedProject });
-    }
-    return { ok: false, queued: true };
-  }
-
-  function releaseTurn({ projectId, runId, aborted = false }) {
-    if (runId) {
-      activeTurns.delete(runId);
-      queuedTurns.delete(runId);
-      log('isolation.turn-released', { runId, projectId, aborted, remainingActive: activeTurns.size });
-    }
-    if (lockedProject === projectId) {
-      const remaining = [...activeTurns.values()].filter(t => t.projectId === projectId);
-      if (remaining.length === 0) {
-        lockedProject = null;
-        log('isolation.project-unlocked', { projectId });
-        if (current?.projectId === projectId) {
-          current.turnReleased = true;
-        }
-        if (queuedTurns.size > 0) {
-          const nextRunId = queuedTurns.keys().next().value;
-          const next = queuedTurns.get(nextRunId);
-          queuedTurns.delete(nextRunId);
-          lockedProject = next.projectId;
-          activeTurns.set(next.runId, {
-            runId: next.runId,
-            projectId: next.projectId,
-            runGrantId: next.runGrantId,
-            conversationId: next.conversationId,
-            lastHeartbeatAt: now(),
-            startedAt: now(),
-          });
-          log('isolation.turn-locked', { runId: next.runId, projectId: next.projectId, fromQueue: true });
-        }
-      }
-    }
-  }
-
-  function unlockProject(projectId) {
-    if (lockedProject === projectId) {
-      lockedProject = null;
-      log('isolation.project-unlocked', { projectId, reason: 'forced' });
-      if (queuedTurns.size > 0) {
-        const nextRunId = queuedTurns.keys().next().value;
-        const next = queuedTurns.get(nextRunId);
-        queuedTurns.delete(nextRunId);
-        lockedProject = next.projectId;
-        activeTurns.set(next.runId, {
-          runId: next.runId,
-          projectId: next.projectId,
-          runGrantId: next.runGrantId,
-          conversationId: next.conversationId,
-          lastHeartbeatAt: now(),
-          startedAt: now(),
-        });
-        log('isolation.turn-locked', { runId: next.runId, projectId: next.projectId, fromQueue: true });
-      }
-    }
-  }
-
-  function cancelTurn(runId) {
-    if (runId) {
-      queuedTurns.delete(runId);
-      activeTurns.delete(runId);
-    }
-  }
-
-  function heartbeat({ projectId, runId }) {
-    if (runId && activeTurns.has(runId)) {
-      activeTurns.get(runId).lastHeartbeatAt = now();
-    }
-  }
-
-  function checkHeartbeats() {
-    const at = now();
-    for (const [runId, t] of activeTurns) {
-      if (at - t.lastHeartbeatAt > (ISOLATION_DEFAULTS.HEARTBEAT_TIMEOUT_MS ?? 120_000)) {
-        activeTurns.delete(runId);
-        log('isolation.turn-timeout', { runId, projectId: t.projectId });
-      }
-    }
-    if (lockedProject && [...activeTurns.values()].filter(t => t.projectId === lockedProject).length === 0) {
-      lockedProject = null;
-      if (queuedTurns.size > 0) {
-        const nextRunId = queuedTurns.keys().next().value;
-        const next = queuedTurns.get(nextRunId);
-        queuedTurns.delete(nextRunId);
-        lockedProject = next.projectId;
-        activeTurns.set(next.runId, {
-          runId: next.runId,
-          projectId: next.projectId,
-          runGrantId: next.runGrantId,
-          conversationId: next.conversationId,
-          lastHeartbeatAt: now(),
-          startedAt: now(),
-        });
-        log('isolation.turn-locked', { runId: next.runId, projectId: next.projectId, fromQueue: true });
-      }
-    }
-  }
-
-  function markModified(projectId) {
-    projectLastModified.set(projectId, now());
-  }
 
   const run = (fn) => {
     op = Promise.resolve().then(fn).catch((err) => { log('isolation.error', { message: String(err?.message ?? err) }); }).finally(() => { op = null; });
     return op;
   };
 
-  function pick(candidates) {
-    const usable = candidates.filter((c) => {
-      const s = skip.get(c.projectId);
-      if (!s) return true;
-      if (s.key !== c.pendingKey || now() >= s.until) { skip.delete(c.projectId); return true; }
-      return false;
-    });
-    if (usable.length === 0) return null;
-    if (lockedProject) {
-      const locked = usable.find(c => c.projectId === lockedProject);
-      if (locked) return locked;
-    }
-    // 轮到下一个时，要看画面的先（云端 Agent 的请求优先于预渲染任务）；其余轮流：上一轮做的那个排到最后
-    const urgent = usable.find((c) => c.look === true);
-    if (urgent) return urgent;
-    const others = usable.filter((c) => c.projectId !== lastServed);
-    return others[0] ?? usable[0];
+  const usable = (candidates) => candidates.filter((c) => {
+    const s = skip.get(c.projectId);
+    if (!s) return true;
+    if (s.key !== c.pendingKey || now() >= s.until) { skip.delete(c.projectId); return true; }
+    return false;
+  });
+
+  /**
+   * 按多项目模式的次序，排第一的项目（见文件头）。回候选或 null。
+   * @param {ReturnType<typeof isolationCandidates>} candidates
+   */
+  function target(candidates) {
+    const list = usable(candidates);
+    const look = list.find((c) => c.look === true);
+    if (look) return look;
+    const streams = list.filter((c) => c.look !== true);
+    if (!streams.length) return null;
+    // 装着的项目这一轮还没做满（那一轮开始时排着的、最多 turnTasks 个）：接着做它的
+    const mine = current ? streams.find((c) => c.projectId === current.projectId) : null;
+    if (mine && current.served < Math.min(turnCap, Math.max(1, current.turnPending ?? 1))) return mine;
+    const ordered = orderByPolicy(streams.map((c, i) => ({ ...c, kind: 'stream', seq: i })), rotation);
+    return ordered[0] ?? null;
   }
 
   function begin(c) {
-    current = { projectId: c.projectId, members: c.members, phase: 'preparing', startedAt: now(), readyAt: null, lastBusyAt: null, drainAt: null, worked: false, pendingKey: c.pendingKey, turnLocked: lockedProject === c.projectId, turnReleased: false };
+    current = { projectId: c.projectId, members: c.members, phase: 'preparing', startedAt: now(), readyAt: null, lastBusyAt: null, drainAt: null, worked: false, pendingKey: c.pendingKey, claimed: 0, served: 0, why: null,
+      // 这一轮开始时它排着几个产流任务（一轮最多连做 min(这个数, turnTasks) 个）
+      turnPending: Number(c.pending) || 0 };
     runs += 1;
-    log('isolation.start', { projectId: c.projectId, pending: c.pending, run: runs });
+    log('isolation.start', { projectId: c.projectId, pending: c.pending, look: c.look === true, run: runs });
     const mine = current;
     return run(async () => {
       try {
@@ -304,15 +185,14 @@ export function createIsolation({
     const mine = current;
     if (!mine || mine.phase === 'stopping') return op;
     mine.phase = 'stopping';
-    log('isolation.stop', { projectId: mine.projectId, reason, worked: mine.worked, ranMs: now() - mine.startedAt });
+    log('isolation.stop', { projectId: mine.projectId, reason, worked: mine.worked, served: mine.served, ranMs: now() - mine.startedAt });
     return run(async () => {
       try { await runner.stop(reason); } catch (err) { log('isolation.stop-error', { message: String(err?.message ?? err) }); }
       let cleaned = true;
       try { await runner.cleanup(mine.projectId); } catch (err) { cleaned = false; log('isolation.cleanup-failed', { projectId: mine.projectId, message: String(err?.message ?? err) }); }
       // 什么都没认领到、起不来、内存超限被结束：同一批任务先不再为它起（免得每一拍都重来）
       if ((reason === 'idle' && !mine.worked) || reason === 'oom' || reason === 'start-timeout') skip.set(mine.projectId, { key: mine.pendingKey, until: now() + retryIdleMs });
-      lastServed = mine.projectId;
-      lastRun = { projectId: mine.projectId, reason, worked: mine.worked, cleaned, ms: now() - mine.startedAt, at: now() };
+      lastRun = { projectId: mine.projectId, reason, worked: mine.worked, served: mine.served, cleaned, ms: now() - mine.startedAt, at: now() };
       history.push(lastRun);
       while (history.length > 20) history.shift();
       log('isolation.ended', lastRun);
@@ -328,15 +208,15 @@ export function createIsolation({
      * @param {(projectId: string) => boolean} o.eligible 这个项目现在还该不该由渲染服务做（目录里开着且有活，或手里还有认领）
      * @param {null | { at: number, queue: { nodes: object[] } }} o.report 隔离工作进程最近一次交来的诊断（`at` 是收到的时刻）
      * @param {null | { wanted(projectId: string): boolean, busy: string | null }} [o.looks] 看画面（`look.mjs`）：`wanted` 这个项目此刻有没有
-     *   还没过期的看画面需求（有就不算闲置）；`busy` 正在出图的那个项目（出图的半路上不结束、不轮换走）
+     *   排着或在做的看画面请求（有就不算闲）；`busy` 正在出图的那个项目（出图的半路上不结束、不换走）
+     * @param {boolean} [o.memoryLow] 内存吃紧（背压暂停着）：装着的项目空着就结束，不留缓存
      */
-    tick({ candidates = [], eligible = () => true, report = null, looks = null } = {}) {
-      checkHeartbeats();
+    tick({ candidates = [], eligible = () => true, report = null, looks = null, memoryLow = false } = {}) {
       waiting = candidates.filter((c) => c.projectId !== current?.projectId).map((c) => c.projectId);
       if (op) return;
       if (!current) {
-        const c = pick(candidates);
-        if (c) void begin(c);
+        const first = target(candidates);
+        if (first) void begin(first);
         return;
       }
       const cur = current;
@@ -350,72 +230,42 @@ export function createIsolation({
         else if (now() - cur.startedAt >= startTimeoutMs) { void end('start-timeout'); return; }
         else return;
       }
-      if (runner.exited()) { void end('exit'); return; }
+      // 排空中自己退了（清单上标了排空、手里的做完，工作进程自己收尾退出）：这就是换装，不算意外退出
+      if (runner.exited()) { void end(cur.phase === 'draining' ? 'rotated' : 'exit'); return; }
       const held = (node?.held?.length ?? 0) + (node?.running?.length ?? 0);
-      if ((node?.claimed ?? 0) > 0) cur.worked = true;
+      // 认领数涨了：这一类里它出了一个请求（每涨一个记一次，轮流按「一个请求」算）
+      const claimed = Number(node?.claimed) || 0;
+      if (claimed > cur.claimed) {
+        for (let i = cur.claimed; i < claimed; i += 1) rotation.served('stream', cur.projectId);
+        cur.served += claimed - cur.claimed;
+        cur.claimed = claimed;
+        cur.worked = true;
+      }
+      const next = target(candidates);
       const looking = looks?.busy === cur.projectId;
       const lookWanted = looking || looks?.wanted?.(cur.projectId) === true;
       // 出过图也算这一轮干了活（不然只为看画面起的一轮会被记成「什么都没认领到」而暂不再起）
       if (looking) cur.worked = true;
+      const busyNow = held > 0 || (node?.claimable ?? 0) > 0 || lookWanted;
+      if (busyNow) cur.lastBusyAt = now();
+      // 排第一的是别的项目：不等它空闲（见文件头第 4 条）
+      const other = next && next.projectId !== cur.projectId ? next : null;
+      if (cur.phase === 'draining' && !other && eligible(cur.projectId)) {
+        // 等着的那个不等了（撤回、项目关了）：接着做，不白清一遍
+        cur.phase = 'running';
+        cur.drainAt = null;
+        log('isolation.resume', { projectId: cur.projectId });
+      }
       if (cur.phase === 'running') {
-        const busyNow = held > 0 || (node?.claimable ?? 0) > 0 || lookWanted;
-        if (busyNow) cur.lastBusyAt = now();
         if (!eligible(cur.projectId) && held === 0 && !looking) { void end('not-listed'); return; }
-
-        // 10-16 暂行：按轮占用规则
-        // 这一轮被放开（没有 activeTurns 占着），而且有别的项目在等待：
-        // 忽略 15 秒尾延迟，甲一轮结束立即让给排队的乙，无需再等 5 分钟！
-        const hasActiveTurn = (lockedProject === cur.projectId && activeTurns.size > 0) ||
-          (looks?.hasActiveTurn ? looks.hasActiveTurn(cur.projectId) : false);
-
-        if (waiting.length > 0 && cur.turnReleased && !hasActiveTurn && !looking) {
-          if (cur.worked || held === 0) {
-            cur.phase = 'draining';
-            cur.drainAt = now();
-            log('isolation.rotate', { projectId: cur.projectId, waiting, held, reason: 'turn-released' });
-          }
-        }
-
-        // 产流让位：没有 Agent 在用时才产流，一旦有 Agent 来排队（candidates 里有 look），做完手里这一个产流任务就让出
-        const hasAgentWaiting = candidates.some((c) => c.look === true && c.projectId !== cur.projectId);
-        if (hasAgentWaiting && cur.streams && !hasActiveTurn && !looking && held === 0 && cur.worked) {
+        if (other && !looking) {
           cur.phase = 'draining';
           cur.drainAt = now();
-          log('isolation.rotate', { projectId: cur.projectId, waiting, held, reason: 'streams-yield-agent' });
-        }
-
-        // 几个项目都要产流时的 5 分钟轮换：有真人在线（members: true）的项目先，2 个以上真人在线时每 5 分钟轮换
-        const streamCandidates = candidates.filter((c) => !c.look && c.projectId !== cur.projectId);
-        const onlineMemberStreamCandidates = streamCandidates.filter((c) => c.members === true);
-        if (waiting.length > 0 && busyNow && !looking && !hasActiveTurn && cur.members && onlineMemberStreamCandidates.length > 0 && now() - cur.readyAt >= sliceMs) {
-          cur.phase = 'draining';
-          cur.drainAt = now();
-          log('isolation.rotate', { projectId: cur.projectId, waiting, held, reason: 'streams-5min-rotation' });
-        }
-
-        // 一直有活、又有别的项目在等（通用兜底轮换）：只有在没有活跃轮次时才允许轮换
-        if (waiting.length > 0 && busyNow && !looking && !hasActiveTurn && now() - cur.readyAt >= sliceMs) {
-          cur.phase = 'draining';
-          cur.drainAt = now();
-          log('isolation.rotate', { projectId: cur.projectId, waiting, held });
-        }
-
-        // 关掉装着的项目（两条门控同时满足才关）：只在没人排队且没有活跃轮次时适用——
-        // ① 轨道流已产满（没开「生成轨道流」的项目第一条自然满足）且 ② 连续 5 分钟没有修改
-        if (waiting.length === 0 && !hasActiveTurn && !looking) {
-          const lastMod = projectLastModified.get(cur.projectId);
-          const noModify5min = !lastMod || (now() - lastMod >= (ISOLATION_DEFAULTS.IDLE_NO_MODIFY_MS ?? 5 * 60_000));
-          const streamsDone = (node?.claimable ?? 0) === 0 && held === 0;
-          if (noModify5min && streamsDone && now() - cur.lastBusyAt >= idleMs) {
-            void end('idle');
-            return;
-          }
-        }
-
-        // 空闲满 idleMs 才让位：别的项目在排队、有人等着看画面都不提前（2026-10-09 用户定兜底）
-        // 但如果有活跃轮次占着（hasActiveTurn），绝不结束
-        if (waiting.length > 0 && !hasActiveTurn && !looking && !busyNow && now() - cur.lastBusyAt >= idleMs) {
-          void end('idle');
+          cur.why = other.look ? 'look' : 'stream';
+          log('isolation.rotate', { projectId: cur.projectId, next: other.projectId, nextIsLook: other.look === true, held, served: cur.served });
+        } else if (!other && !busyNow && (memoryLow || now() - cur.lastBusyAt >= cacheMs)) {
+          // 没人排队：缓存到期，或内存吃紧
+          void end(memoryLow ? 'memory' : 'idle');
           return;
         }
       }
@@ -424,16 +274,6 @@ export function createIsolation({
         if (now() - cur.drainAt >= drainMs) { void end('rotate-timeout'); }
       }
     },
-    acquireTurn,
-    releaseTurn,
-    cancelTurn,
-    unlockProject,
-    heartbeat,
-    checkHeartbeats,
-    markModified,
-    get lockedProject() { return lockedProject; },
-    get activeTurns() { return new Map(activeTurns); },
-    get queuedTurns() { return new Map(queuedTurns); },
     /** 隔离工作进程此刻该连的项目（代理口给它的清单）：最多一项 */
     listing() {
       if (!current || (current.phase !== 'starting' && current.phase !== 'running' && current.phase !== 'draining')) return [];
@@ -446,12 +286,9 @@ export function createIsolation({
     get current() { return current ? { ...current } : null; },
     get active() { return !!current; },
     status: () => ({
-      current: current ? { projectId: current.projectId, phase: current.phase, sinceMs: now() - current.startedAt, worked: current.worked } : null,
-      waiting: [...waiting], runs, lastRun, history: history.slice(-5),
+      current: current ? { projectId: current.projectId, phase: current.phase, sinceMs: now() - current.startedAt, worked: current.worked, served: current.served } : null,
+      waiting: [...waiting], runs, lastRun, history: history.slice(-5), rotation: rotation.snapshot(),
       skipped: [...skip.entries()].map(([projectId, s]) => ({ projectId, until: s.until })),
-      lockedProject,
-      activeTurns: [...activeTurns.values()],
-      queuedTurns: [...queuedTurns.values()],
     }),
   };
 }

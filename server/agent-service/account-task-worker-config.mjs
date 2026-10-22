@@ -160,14 +160,6 @@ export function createWorkerMasterLookClient({ masterOrigin, masterFingerprint25
         return res;
       };
     },
-    release(projectId, fields = {}) {
-      const { runId, aborted = false, ...rest } = fields;
-      return callMaster('release', { projectId, runId, ...rest, assignmentDigest: fields?.assignmentDigest }, { aborted }).catch(() => null);
-    },
-    heartbeat(projectId, fields = {}) {
-      const { runId, ...rest } = fields;
-      return callMaster('heartbeat', { projectId, runId, ...rest, assignmentDigest: fields?.assignmentDigest }).catch(() => null);
-    },
     cancel(requestId, fields = {}) {
       return callMaster('cancel', { ...fields, assignmentDigest: fields?.assignmentDigest }, { requestId }).catch(() => null);
     },

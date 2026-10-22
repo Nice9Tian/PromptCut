@@ -394,6 +394,7 @@ export function splitPlan({
   envFingerprint,
   codeVersion,
   cardSourceVersions = {},
+  streamCardSources = null, // (stream) => Record<cardId, version>:一条流展开出的子集里用到的定制卡(见 `streamSources`);不给就要全部
   anchorFrames = [],
   weightOf = () => ({ class: 'heavy', estMs: null }),
   isUserCard = () => false,
@@ -454,6 +455,20 @@ export function splitPlan({
   const allCardSources = () => {
     const out = {};
     for (const [cardId, version] of Object.entries(cardSourceVersions ?? {})) if (typeof version === 'string' && version) out[cardId] = version;
+    return out;
+  };
+  /**
+   * 一条流(切分方自己的那一份)要的代码身份(0.7.19 多项目模式:按这条流展开出的子集算,`render-node/expand.mjs` 的
+   * `streamNeed` / `subsetCardSources`;产流的节点按同一个子集建隔离工程)。调用方没给 `streamCardSources`(旧执行器、测试替身)
+   * 或算不出时照旧要全部
+   */
+  const streamSources = stream => {
+    if (typeof streamCardSources !== 'function') return allCardSources();
+    let got = null;
+    try { got = streamCardSources(stream); } catch { got = null; }
+    if (!got || typeof got !== 'object') return allCardSources();
+    const out = {};
+    for (const [cardId, version] of Object.entries(got)) if (typeof version === 'string' && version && cardSourceVersions?.[cardId] === version) out[cardId] = version;
     return out;
   };
   /** 一张卡的重度:调用方给的;里面有画布卡而控件自己没标的(`innerCanvasHeavy`)照画布卡记「重」 */
@@ -640,7 +655,7 @@ export function splitPlan({
           requires: forBrowser
             ? { ...browser.requires, envFingerprint: fingerprint, cardSources: { ...browser.requires.cardSources }, capabilities: { streams: true } }
             : gateLocalMedia({
-              envFingerprint: fingerprint, codeVersion, cardSources: allCardSources(),
+              envFingerprint: fingerprint, codeVersion, cardSources: streamSources(stream),
               transcode: true, userCards: false, graphCards: false, belowDependent: belowStream,
               // M6c X1:只有报了 `capabilities.streams: true`(探到编码器)的节点能认领(filter.mjs 规则 2)
               capabilities: { streams: true },

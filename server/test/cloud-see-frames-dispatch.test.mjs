@@ -19,7 +19,7 @@ const RUN_ID = 'run-scope-1';
 const RUN_GRANT_ID = 'grant-scope-1';
 const MESSAGE_ID = 'msg-scope-1';
 
-test('cloud see_frames dispatch: scopeBinding.assignmentDigest propagation, lookRoute req/res close handling, and heartbeat/release', { timeout: 120_000 }, async (t) => {
+test('cloud see_frames dispatch: scopeBinding.assignmentDigest propagation, lookRoute req/res close handling, and no 0.7.18 heartbeat/release', { timeout: 120_000 }, async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-cloud-see-frames-'));
   const masterDir = path.join(dir, 'master');
   const sharedDir = path.join(dir, 'shared');
@@ -251,35 +251,20 @@ test('cloud see_frames dispatch: scopeBinding.assignmentDigest propagation, look
   // 验证无本地页面桥时不发 selection.query
   assert.equal(wsSentTypes.includes('selection.query'), false, '无 toolset.pageBridge.call 时不应发送 selection.query');
 
-  // 验证 workerEventSource 收到了正确的 EXPECTED_DIGEST（包含 look 与 drain 时的 release）
-  assert.ok(workerSourceCalls.length >= 2, 'workerEventSource 至少在 look 与 release 时被调用');
+  // 验证 workerEventSource 收到了正确的 EXPECTED_DIGEST
+  assert.ok(workerSourceCalls.length >= 1, 'workerEventSource 至少在 look 时被调用');
   for (const call of workerSourceCalls) {
     assert.equal(call.projectId, PROJECT_ID);
     assert.equal(call.runGrantId, RUN_GRANT_ID);
     assert.equal(call.assignmentDigest, EXPECTED_DIGEST, '每次向文档服务核对都必须携带 scopeBinding.assignmentDigest');
   }
 
-  // 验证 drain 时 release 已被主服务执行
-  assert.equal(masterReleases.length, 1);
-  assert.deepEqual(masterReleases[0], { projectId: PROJECT_ID, runId: RUN_ID, aborted: false });
-
-  // 2. 验证 heartbeat 与 release 同样携带 scopeBinding.assignmentDigest
-  await workerLook.heartbeat(PROJECT_ID, {
-    runId: RUN_ID,
-    runGrantId: RUN_GRANT_ID,
-    conversationId: CONVERSATION_ID,
-    assignmentDigest: grant.assignmentDigest ?? grant.scopeBinding?.assignmentDigest,
-  });
-  assert.equal(masterHeartbeats.length, 1);
-  assert.deepEqual(masterHeartbeats[0], { projectId: PROJECT_ID, runId: RUN_ID });
-
+  // 0.7.19 多项目模式：收尾（drain）与被叫停（fence）都不再发 0.7.18 的收尾通知，一轮里也不发心跳
+  assert.equal(typeof workerLook.heartbeat, 'undefined', '任务进程一侧没有心跳了');
+  assert.equal(typeof workerLook.release, 'undefined', '任务进程一侧没有收尾通知了');
   await runner.fence({ kind: 'stop' });
-  const releaseDeadline = Date.now() + 5000;
-  while (masterReleases.length < 2 && Date.now() < releaseDeadline) {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  assert.equal(masterReleases.length, 2);
-  assert.deepEqual(masterReleases[1], { projectId: PROJECT_ID, runId: RUN_ID, aborted: true });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.deepEqual([masterReleases.length, masterHeartbeats.length], [0, 0], '主服务没有收到收尾通知与心跳');
 
   // 3. 验证客户端在响应未结束（!res.writableEnded）真正提前断开连接时，lookRoute 能正常触发 ac.abort('client-closed')
   let abortObservedByMasterLook = null;

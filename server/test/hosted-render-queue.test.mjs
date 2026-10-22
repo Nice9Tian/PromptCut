@@ -4,7 +4,7 @@
  *
  *   RQ1  两个都带用户卡的项目先后有活：第二个排队，不被拒、不回「忙 / 已满」；轮到了照常出图
  *   RQ2  云端 Agent 要看画面的请求优先于预渲染任务：隔离工作进程下一轮先给要看画面的项目；常驻工作进程先替排着的请求留出名额
- *   RQ3  让位要满五分钟：装着的项目空闲满五分钟才结束，别的项目在排队、有人等着看画面都不提前；一直有活的最多连续做五分钟
+ *   RQ3  多项目模式（0.7.19，取代 0.7.18 的按轮占用与「满五分钟才让位」）：看画面请求各项目轮流、项目内先来先做；转给工作进程的是展开后的项目
  *   RQ4  重启后排着的请求还在：队列落盘，新起的管理进程接回来按原来的次序做；正在做的那一个回到排队；出了结果的留着给调用方取
  *   RQ5  重试：渲染这一段每次最多一分钟，没成自动重试三次；次数到了回「这次没看成」；中途成了就成了；隔离工作进程起不来同样算次数
  *   RQ6  内存或磁盘吃紧：背压暂停、产物到了容量上限时排着等（记下等的原因），过去了接着做；登记的到了硬上限时调用方过一会儿再登记
@@ -95,17 +95,20 @@ test('RQ1 两个都带用户卡的项目先后有活：第二个排队而不是�
   assert.deepEqual(k.state.sent.map((s) => s.projectId), [P1], '乙的内容没有交给装着甲的隔离工作进程');
   assert.equal(k.look.status().queue.queued, 1);
 
-  // 甲再来一个：它的项目正装着，不被排在前面的乙挡住
+  // 甲再来一个（0.7.19 多项目模式）：甲刚出过一个、乙排在前面——甲的项目虽然装着，也不越过乙（各项目轮流，不让甲占着）
   const a3 = await k.submit(k.msg(P1, { requestId: rid(3) }));
   assert.equal(a3.status, 202);
-  assert.equal((await k.poll({ requestId: rid(3), waitMs: 2000 })).status, 200);
-  assert.equal((await k.poll({ requestId: rid(2), waitMs: 50 })).body.state, 'queued', '乙还排着');
+  const a3w = await k.poll({ requestId: rid(3), waitMs: 150 });
+  assert.deepEqual([a3w.status, a3w.body.state, a3w.body.blockedReason, a3w.body.queuePosition], [202, 'queued', 'iso-other-project', 1], '甲的第二个排在乙后面');
+  assert.deepEqual(k.look.isoOrder(), [P2, P1], '隔离工作进程下一个该装的是乙');
 
-  // 轮到乙（甲让位之后隔离工作进程装上乙）：照常出图
+  // 轮到乙（隔离工作进程换装乙）：照常出图；之后再装回甲，出甲的第二个
   k.isoRuns(P2);
   const b3 = await k.poll({ requestId: rid(2), waitMs: 2000 });
   assert.deepEqual([b3.status, b3.body.ok], [200, true]);
-  assert.deepEqual(k.state.sent.map((s) => s.projectId), [P1, P1, P2]);
+  k.isoRuns(P1);
+  assert.equal((await k.poll({ requestId: rid(3), waitMs: 2000 })).status, 200);
+  assert.deepEqual(k.state.sent.map((s) => s.projectId), [P1, P2, P1]);
   const s = k.look.status();
   assert.deepEqual([s.served, s.failed, s.refused, s.queue.queued], [3, 0, 0, 0]);
   // 出了结果的再问一次还是那一份（调用方没收到回执就重问）
@@ -163,80 +166,43 @@ test('RQ2 云端 Agent 要看画面的请求优先于预渲染任务：下一轮
   assert.equal(k.look.wanted(P1), true, '排着的项目一直算有需求（隔离工作进程不因闲置结束）');
 });
 
-test('RQ3 让位要满五分钟：空闲满五分钟才结束，别的项目在排队、有人等着看画面都不提前；一直有活的最多连续做五分钟；到点正闲着的等它闲满', async () => {
-  assert.equal(ISOLATION_DEFAULTS.IDLE_MS, 5 * 60_000);
-  assert.equal(ISOLATION_DEFAULTS.SLICE_MS, 5 * 60_000);
-  assert.equal(ISOLATION_DEFAULTS.LOOK_SLICE_MS, undefined, '有人等着看画面时 45 秒就换的旧规矩已取消');
-  assert.equal(renderServiceConfig({}).isoIdleMs, 5 * 60_000, '管理进程的缺省也是五分钟');
-  const MIN = 60_000;
-  let at = 0;
-  const calls = [];
-  const iso = createIsolation({
-    nodeIdOf: (id) => id, now: () => at,
-    runner: { async prepare(id) { calls.push(`prepare:${id.slice(3, 4)}`); }, start() {}, async stop(reason) { calls.push(`stop:${reason}`); }, async cleanup() {}, exited: () => false },
-  });
-  const settle = async () => { await iso.settled(); await sleep(0); };
-  const report = (projectId, extra = {}) => ({ at, queue: { nodes: [{ projectId, held: [], running: [], claimable: 0, claimed: 1, ...extra }] } });
-  const A = { projectId: P1, members: true, pending: 1, pendingKey: 'a' };
-  const B = { projectId: P2, members: true, pending: 1, pendingKey: 'b' };
-  const Blook = { ...B, look: true, pendingKey: 'b|look:1' };
-  const noLooks = { wanted: () => false, busy: null };
-
-  // 甲装上、做了一会儿活，然后闲下来；乙在排队，而且有人等着看乙的画面
-  iso.tick({ candidates: [A] });
-  await settle();
-  iso.tick({ candidates: [A], report: report(P1, { held: ['t'] }), looks: noLooks });
-  at = 1 * MIN;
-  iso.tick({ candidates: [Blook], report: report(P1, { held: ['t'] }), looks: noLooks });
-  assert.equal(iso.current.phase, 'running');
-  // 从 1 分钟起闲着。闲 45 秒（旧的看画面切换）、60 秒（旧的闲置回收）、4 分 59 秒：都不让位
-  for (const idle of [45_000, 60_000, 3 * MIN, 5 * MIN - 1000]) {
-    at = 1 * MIN + idle;
-    iso.tick({ candidates: [Blook], report: report(P1), looks: noLooks });
-    await settle();
-    assert.equal(iso.current?.projectId, P1, `闲了 ${idle / 1000} 秒：不让位（乙在排队、有人等着看画面也一样）`);
-    assert.equal(iso.current.phase, 'running');
+test('RQ3 多项目模式（取代 0.7.18 按轮占用与「满五分钟才让位」）：看画面请求各项目轮流、项目内先来先做；转给工作进程的是按要的帧展开后的项目', async () => {
+  assert.equal(ISOLATION_DEFAULTS.IDLE_MS, undefined, '「空闲满五分钟才让位」没有了');
+  assert.equal(ISOLATION_DEFAULTS.SLICE_MS, undefined);
+  assert.equal(renderServiceConfig({}).isoIdleMs, ISOLATION_DEFAULTS.CACHE_MS, '管理进程的缺省是缓存时长');
+  const k = kit();
+  for (const p of [P1, P2, P3]) k.state.residentNodes.set(p, { projectId: p, connected: true, cards: { state: 'none' } });
+  // 背压暂停着：请求都排着。甲一口气来了 3 个，乙 2 个，丙最后 1 个
+  k.state.paused = true;
+  const sent = [];
+  k.state.reply = async (url, init) => {
+    const body = JSON.parse(init.body);
+    sent.push({ projectId: body.project.id, n: body.n, clips: body.project.tracks.flatMap((t) => t.clips.map((c) => c.id)) });
+    return { status: 200, json: { ok: true } };
+  };
+  const project = (id) => ({ id, fps: 30, duration: 10, tracks: [{ id: 't', clips: [
+    { id: 'early', cardId: 'title', start: 0, end: 2, params: {} },
+    { id: 'late', cardId: 'title', start: 6, end: 8, params: {} },
+  ] }] });
+  const plan = [[P1, 1], [P1, 2], [P1, 3], [P2, 1], [P2, 2], [P3, 1]];
+  for (const [i, [p, n]] of plan.entries()) {
+    await k.submit({ projectId: p, path: '/api/vision/snapshot', body: { project: project(p), t: 1, n }, cards: {}, requestId: rid(10 + i) });
   }
-  // 闲满五分钟：让位，下一拍起乙
-  at = 6 * MIN;
-  iso.tick({ candidates: [Blook], report: report(P1), looks: noLooks });
-  await settle();
-  assert.deepEqual(calls, ['prepare:a', 'stop:idle']);
-  assert.equal(iso.status().lastRun.reason, 'idle');
-  iso.tick({ candidates: [Blook] });
-  await settle();
-  assert.equal(iso.current.projectId, P2);
-
-  // 乙一直有活、甲在等：做满五分钟才排空让位（不是无限占着）
-  const t0 = at;
-  iso.tick({ candidates: [A], report: report(P2, { held: ['x'] }), looks: noLooks });
-  at = t0 + 5 * MIN - 1000;
-  iso.tick({ candidates: [A], report: report(P2, { held: ['x'] }), looks: noLooks });
-  assert.equal(iso.current.phase, 'running');
-  at = t0 + 5 * MIN;
-  iso.tick({ candidates: [A], report: report(P2, { held: ['x'] }), looks: noLooks });
-  assert.equal(iso.current.phase, 'draining');
-  iso.tick({ candidates: [A], report: report(P2), looks: noLooks });
-  await settle();
-  assert.equal(calls.at(-1), 'stop:rotated');
-
-  // 到了五分钟而此刻正闲着的：不按「连续做满」换，等它闲满五分钟
-  iso.tick({ candidates: [A] });
-  await settle();
-  const t1 = at;
-  iso.tick({ candidates: [A, B], report: report(P1, { held: ['y'] }), looks: noLooks });
-  at = t1 + 4 * MIN; // 做到第 4 分钟
-  iso.tick({ candidates: [B], report: report(P1, { held: ['y'] }), looks: noLooks });
-  at = t1 + 5 * MIN + 1000; // 第 4 分钟起闲着；装上已经过了五分钟，但只闲了一分钟
-  iso.tick({ candidates: [B], report: report(P1), looks: noLooks });
-  assert.equal(iso.current.phase, 'running', '装上满五分钟但只闲了一分钟：不让位');
-  at = t1 + 9 * MIN - 1000;
-  iso.tick({ candidates: [B], report: report(P1), looks: noLooks });
-  assert.equal(iso.current.phase, 'running');
-  at = t1 + 9 * MIN;
-  iso.tick({ candidates: [B], report: report(P1), looks: noLooks });
-  await settle();
-  assert.equal(calls.at(-1), 'stop:idle', '闲满五分钟才让位');
+  // 排队位次按多项目模式的次序（甲 1、乙 1、丙 1、甲 2、乙 2、甲 3）
+  const positions = [];
+  for (let i = 0; i < plan.length; i += 1) positions.push((await k.poll({ requestId: rid(10 + i), waitMs: 0 })).body.queuePosition);
+  assert.deepEqual(positions, [0, 3, 5, 1, 4, 2]);
+  k.state.paused = false;
+  for (let i = 0; i < plan.length; i += 1) assert.equal((await k.poll({ requestId: rid(10 + i), waitMs: 3000 })).status, 200);
+  const order = sent.map((s) => `${s.projectId.slice(3, 4)}${s.n}`);
+  console.log('[RQ3] 看画面请求实际转给工作进程的次序', order.join(' → '));
+  assert.deepEqual(order, ['a1', 'b1', 'c1', 'a2', 'b2', 'a3'], '各项目轮流；同一项目内先来先做');
+  // 只加载用到的：t=1 只挂着 early，late 没有交给工作进程
+  assert.ok(sent.every((s) => s.clips.length === 1 && s.clips[0] === 'early'));
+  assert.ok(k.logs.some((l) => l.event === 'look.expanded' && l.clips === 1));
+  // 0.7.18 的收尾通知与心跳：认身份后什么都不做，回 200（老的 Agent 服务照常调得通）
+  assert.deepEqual([(await k.look.release({ auth: 'agent-x', bodyText: JSON.stringify({ projectId: P1, runId: 'r' }) })).status, (await k.look.heartbeat({ auth: 'agent-x', bodyText: '{}' })).status], [200, 200]);
+  assert.equal((await k.look.release({ auth: 'nobody', bodyText: '{}' })).status, 401, '不认识的照旧进不来');
 });
 
 test('RQ4 重启后排着的请求还在：队列落盘，新起的管理进程接回来按原来的次序做；正在做的回到排队；出了结果的留着给调用方取', async (t) => {
@@ -250,6 +216,7 @@ test('RQ4 重启后排着的请求还在：队列落盘，新起的管理进程�
   assert.equal((await k1.poll({ requestId: rid(0), waitMs: 2000 })).status, 200);
   k1.state.reply = () => new Promise((resolve) => { release = () => resolve({ status: 200, json: { ok: true } }); });
   await k1.submit(k1.msg(P1, { requestId: rid(1) }));
+  await sleep(60);
   await k1.submit(k1.msg(P2, { requestId: rid(2) }));
   await sleep(60);
   k1.state.paused = true;
