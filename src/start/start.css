@@ -247,6 +247,23 @@
 }
 .ps-chip:hover { border-color: var(--hairline-strong); color: var(--ink); }
 .ps-chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+
+/*
+ * 行动点那一颗(传素材):用强调色描边加一层淡底,把人往这儿引。
+ * 不做成实心强调色 —— 右边的发送键已经是实心的了,两个实心在同一条里会互相抢。
+ */
+.ps-chip.is-cta {
+  font-weight: 600;
+  color: var(--accent);
+  border-color: color-mix(in oklab, var(--accent) 55%, transparent);
+  background: color-mix(in oklab, var(--accent) 12%, transparent);
+}
+.ps-chip.is-cta:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 20%, transparent);
+}
+.ps-chip-plus { font-size: 14px; line-height: 1; }
 .ps-prompt-send {
   margin-left: auto;
   flex: 0 0 auto;

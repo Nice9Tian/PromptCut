@@ -59,8 +59,15 @@ export function PromptBox(props: { onSubmit: (text: string, ratio: MockProject["
         }}
       />
       <div className="ps-prompt-foot">
-        <button type="button" className="ps-chip" title="待办：挑素材要编辑器那边的素材库">
-          <span aria-hidden="true">＋</span>素材
+        {/* 这一颗是行动点:用强调色把人往「传素材」上引,所以和右边那排画幅 chip 不是一个分量 */}
+        <button
+          type="button"
+          className="ps-chip is-cta"
+          data-pc="start-prompt-upload"
+          aria-label="上传素材"
+          title="待办：挑素材要编辑器那边的素材库"
+        >
+          <span className="ps-chip-plus" aria-hidden="true">＋</span>素材
         </button>
         {RATIOS.map((r) => (
           <button
