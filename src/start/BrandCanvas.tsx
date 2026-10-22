@@ -39,32 +39,36 @@ const LOOK = {
   /** 细竖条纹的强弱(参考海报右半边那些细线) */
   streak: 0.0,
   /** 条纹毛玻璃:一屏放几条 */
-  stripeN: 16.0,
+  stripeN: 2.0,
   /** 条纹的倾斜(0 = 正竖直;照上一版 CSS 的 104° 略微斜一点) */
-  stripeSkew: -0.22,
+  stripeSkew: -1.5,
   /** 磨砂的模糊半径(噪声坐标里的距离):越大越糊 */
-  frostBlur: 0.30,
+  frostBlur: 1.2,
   /** 磨砂条和清条的对比 */
-  frost: 0.35,
+  frost: 0.36,
   /** 磨砂面的乳白(散射):玻璃磨过的那面会亮一点 */
-  milky: 0.03,
+  milky: 0.25,
   /** 清条与磨砂条交界那道细高光(玻璃的棱) */
-  edge: 0.012,
-  /** 颗粒 */
-  grain: 0.035,
+  edge: 0.028,
+  /** 颗粒的强弱 */
+  grain: 0.065,
+  /** 颗粒多粗:一格几个像素(内部分辨率下算),格子越大颗粒越粗 */
+  grainSize: 2.5,
+  /** 颗粒参与折射的程度:磨砂玻璃靠表面微小凹凸把光打散,这个数就是「凹凸有多乱」 */
+  grainJitter: 0.9,
   /** 两道域扭曲各推多远 */
-  warpA: 3.6,
+  warpA: 4.0,
   warpB: 4.2,
   /** 明暗曲线:次方越大暗部压得越狠 */
-  gamma: 2.6,
+  gamma: 3.35,
   /** 亮部提多少 */
-  gain: 3.1,
+  gain: 4.0,
   /** 最暗处还剩多少(不给 0,全黑一片没有层次) */
-  floor: 0.15,
+  floor: 0.1,
   /** 高光滚落:越大越早压住,防止冲成霓虹 */
-  roll: 0.4,
+  roll: 0.8,
   /** 饱和度:1 不变,大于 1 更浓 */
-  sat: 1.2,
+  sat: 1.28,
   /** 内部分辨率的倍率:0.6 表示按 CSS 尺寸的六成渲染再拉大 */
   resScale: 0.6,
   /** 暖侧的颜色(参考图里的琥珀);冷侧取主题色 */
@@ -91,6 +95,7 @@ uniform vec3  uWarm;
 uniform float uScale, uYStretch, uSplit, uFalloff, uStreak, uGrain;
 uniform float uWarpA, uWarpB, uGamma, uGain, uFloor, uRoll, uSat;
 uniform float uStripeN, uStripeSkew, uFrostBlur, uFrost, uMilky, uEdge;
+uniform float uGrainSize, uGrainJitter;
 
 float hash12(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -144,9 +149,24 @@ void main() {
    * 底图在 scale≈0.9 下本来就很平滑,没多少细节可抽,抽完只剩一条条平板,看着就是百叶窗。
    * 清条的半径是 0,四个样本落在同一点、结果等于原图,所以条与条之间是连续的,不会有接缝。
    */
+  /*
+   * 颗粒:**不随时间变**。玻璃是一块不动的东西,它表面的颗粒当然也不动 ——
+   * 原来那套每帧重算(hash 里带了时间),看着就是满屏闪(用户 2026-10-23 指出)。
+   * 粗粒靠把屏幕坐标按 uGrainSize 量化:一格一个随机数,格子越大颗粒越粗。
+   */
+  vec2 gcell = floor(gl_FragCoord.xy / max(1.0, uGrainSize));
+  float gn1 = hash12(gcell);
+  float gn2 = hash12(gcell + 71.3);
+
   float br = frost * uFrost * uFrostBlur;
-  float f = (fbm(pw + vec2(-1.5 * br, 0.0)) + fbm(pw + vec2(-0.5 * br, 0.0))
-           + fbm(pw + vec2(0.5 * br, 0.0)) + fbm(pw + vec2(1.5 * br, 0.0))) * 0.25;
+  /*
+   * 磨砂的「扰动」:每一粒按自己的随机方向再偏一点去取样 —— 磨砂玻璃就是靠表面微小的凹凸
+   * 把光打散的,所以颗粒要**参与折射**,而不是事后往画面上撒一层。
+   * 偏移乘 br:清条上 br=0,颗粒不起作用,清的地方依旧清楚。
+   */
+  vec2 jit = vec2(gn1 - 0.5, gn2 - 0.5) * br * uGrainJitter;
+  float f = (fbm(pw + jit + vec2(-1.5 * br, 0.0)) + fbm(pw + jit + vec2(-0.5 * br, 0.0))
+           + fbm(pw + jit + vec2(0.5 * br, 0.0)) + fbm(pw + jit + vec2(1.5 * br, 0.0))) * 0.25;
 
   // 冷暖的分界大体是一条竖线,只让噪声轻轻推一下 —— 推多了两边就互相咬进去,
   // 参考图是「左冷右暖、中间一道暗」,不是搅在一起
@@ -181,8 +201,8 @@ void main() {
   vec2 d = (uv - 0.5) * vec2(1.08, 1.0);
   col *= 0.30 + 0.70 * smoothstep(1.15, 0.18, length(d));
 
-  // 颗粒:去掉大色块的塑料感
-  col += (hash12(gl_FragCoord.xy + t * 60.0) - 0.5) * uGrain;
+  // 叠加的那一层颗粒同样不动,而且磨砂条上更明显 —— 它是玻璃的一部分,不是蒙在画面上的胶片颗粒
+  col += (gn1 - 0.5) * uGrain * (0.3 + 0.7 * frost);
 
   fragColor = vec4(max(col, 0.0), 1.0);
 }`;
@@ -297,6 +317,8 @@ export function BrandCanvas(): JSX.Element {
     gl.uniform1f(at("uFrost"), LOOK.frost);
     gl.uniform1f(at("uMilky"), LOOK.milky);
     gl.uniform1f(at("uEdge"), LOOK.edge);
+    gl.uniform1f(at("uGrainSize"), LOOK.grainSize);
+    gl.uniform1f(at("uGrainJitter"), LOOK.grainJitter);
 
     const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 
