@@ -1,0 +1,24 @@
+/*
+ * 登录页左边那块 WebGL 画布的样式。
+ *
+ * 单独一个文件、由 `BrandCanvas.tsx` 自己 import:`start.css` 这会儿由另一个会话在改(顶栏、侧栏收起),
+ * 两边同时动同一个文件一定打架,所以这一支的样式一行都不进那边。
+ */
+
+.ps-brand-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/*
+ * `start.css` 里有一条 `.ps-login-art > *:not(.ps-aurora) { position: relative; z-index: 1; }` ——
+ * 它是为了把文字抬到底纹上面,但画布也会被它抬上去,反过来盖住标题。
+ * 这里多带一个元素选择符(`canvas`),特异性比它高一档,把画布按回底层。
+ */
+.ps-login-art > canvas.ps-brand-canvas {
+  position: absolute;
+  z-index: 0;
+}

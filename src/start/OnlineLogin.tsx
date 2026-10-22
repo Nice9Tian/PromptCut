@@ -17,7 +17,7 @@
 import { useState } from "react";
 import type { JSX } from "react";
 import { Logo } from "../ui/Logo";
-import { BrandAurora } from "./BrandAurora";
+import { BrandCanvas } from "./BrandCanvas";
 
 export function OnlineLogin(props: { onDone: () => void }): JSX.Element {
   const [name, setName] = useState("");
@@ -30,7 +30,7 @@ export function OnlineLogin(props: { onDone: () => void }): JSX.Element {
   return (
     <div className="ps-login" data-pc="start-login">
       <section className="ps-login-art">
-        <BrandAurora />
+        <BrandCanvas />
         <div>
           <Logo size={26} />
           <h1 className="ps-login-art-title">打开浏览器就能剪片子</h1>
