@@ -31,18 +31,25 @@ const LOOK = {
   yStretch: 0.86,
   /** 冷暖分界大概在横向哪个位置(0 左 1 右) */
   split: 0.5,
-  /** 分界处那道暗脊有多深 */
-  spine: 0.04,
+  /**
+   * 冷暖各自的衰减次方。>1 时中间两边都弱 → 自然变暗变灰(参考图中间那片深色就是这么来的);
+   * =1 就是普通插值,中间不会暗
+   */
+  falloff: 1.5,
   /** 细竖条纹的强弱(参考海报右半边那些细线) */
   streak: 0.0,
   /** 条纹毛玻璃:一屏放几条 */
-  stripeN: 18.0,
+  stripeN: 16.0,
   /** 条纹的倾斜(0 = 正竖直;照上一版 CSS 的 104° 略微斜一点) */
   stripeSkew: -0.22,
-  /** 磨砂有多糊:条纹里的纹理被推开多少 */
-  frostShift: 0.09,
+  /** 磨砂的模糊半径(噪声坐标里的距离):越大越糊 */
+  frostBlur: 0.30,
   /** 磨砂条和清条的对比 */
-  frost: 0.55,
+  frost: 0.35,
+  /** 磨砂面的乳白(散射):玻璃磨过的那面会亮一点 */
+  milky: 0.03,
+  /** 清条与磨砂条交界那道细高光(玻璃的棱) */
+  edge: 0.012,
   /** 颗粒 */
   grain: 0.035,
   /** 两道域扭曲各推多远 */
@@ -81,9 +88,9 @@ uniform vec2  uRes;
 uniform float uTime;
 uniform vec3  uCool;
 uniform vec3  uWarm;
-uniform float uScale, uYStretch, uSplit, uSpine, uStreak, uGrain;
+uniform float uScale, uYStretch, uSplit, uFalloff, uStreak, uGrain;
 uniform float uWarpA, uWarpB, uGamma, uGain, uFloor, uRoll, uSat;
-uniform float uStripeN, uStripeSkew, uFrostShift, uFrost;
+uniform float uStripeN, uStripeSkew, uFrostBlur, uFrost, uMilky, uEdge;
 
 float hash12(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -111,19 +118,6 @@ float fbm(vec2 p) {
   return s;
 }
 
-// 同一张图,只取前两层 —— 大结构一样、细节没了,这才是「糊」。
-// (拿另一个尺度的噪声去混出来的是重影,不是模糊;第一版就错在这儿)
-// 1.25 是把两层的幅度(0.75)归一到四层(0.9375),不然混的时候两边亮度对不上
-float fbmLow(vec2 p) {
-  float s = 0.0, a = 0.5;
-  for (int i = 0; i < 2; i++) {
-    s += a * vnoise(p);
-    p *= 2.03;
-    a *= 0.5;
-  }
-  return s * 1.25;
-}
-
 void main() {
   vec2 uv = gl_FragCoord.xy / uRes;
   // 按长宽比拉一下,竖着的面板里纹理才不会被压扁;再把纵向压一道,让纹理在竖直方向拉长
@@ -138,18 +132,33 @@ void main() {
   // 条纹毛玻璃:一道道斜条里,底下的纹理被「磨」过 —— 少一层细节、还被横向推开一点,
   // 就像隔着磨砂玻璃看;条与条之间是清的。这是上一版那层 backdrop-filter 条纹磨砂在着色器里的等价做法
   // (用户点名要的就是「流动的极光 + 条纹毛玻璃 + 噪点」这三样,不能只剩前后两样)
-  float stripe = fract(uv.x * uStripeN + uv.y * uStripeSkew);
-  // 条纹跑满整块(原来只在右半边,左边等于没有,看着像没生效)
-  float frost = smoothstep(0.30, 0.70, stripe);
+  // 条纹的轮廓用 sin,不用 fract:fract 到头会跳回 0,每条接缝处断一下,看着就是百叶窗
+  float phase = (uv.x * uStripeN + uv.y * uStripeSkew) * 6.2831853;
+  float frost = smoothstep(-0.85, 0.85, sin(phase));
   vec2 pw = p + uWarpB * r;
-  // 磨砂条:同一张图的低频版,再横向推开一点(玻璃的折射感);清条用原图
-  float f = mix(fbm(pw), fbmLow(pw + vec2(uFrostShift, 0.0)), frost * uFrost);
+
+  /*
+   * 磨砂条:把背后的像**横向抹开**(取四个横向邻样平均) —— 玻璃干的就是这件事。
+   *
+   * 前两版都想岔了:一版拿另一个尺度的噪声去混(那是重影),一版把细节层抽掉(那是降采样)。
+   * 底图在 scale≈0.9 下本来就很平滑,没多少细节可抽,抽完只剩一条条平板,看着就是百叶窗。
+   * 清条的半径是 0,四个样本落在同一点、结果等于原图,所以条与条之间是连续的,不会有接缝。
+   */
+  float br = frost * uFrost * uFrostBlur;
+  float f = (fbm(pw + vec2(-1.5 * br, 0.0)) + fbm(pw + vec2(-0.5 * br, 0.0))
+           + fbm(pw + vec2(0.5 * br, 0.0)) + fbm(pw + vec2(1.5 * br, 0.0))) * 0.25;
 
   // 冷暖的分界大体是一条竖线,只让噪声轻轻推一下 —— 推多了两边就互相咬进去,
   // 参考图是「左冷右暖、中间一道暗」,不是搅在一起
   float split = uSplit + (r.x - 0.5) * 0.10;
-  float m = smoothstep(split - 0.30, split + 0.30, uv.x);
-  vec3 base = mix(uCool, uWarm, m);
+  float m = smoothstep(split - 0.20, split + 0.20, uv.x);
+
+  // 中间那片深色**不是画上去的**:两种光各自从自己那一侧往外衰减,中间谁都不强,
+  // 加起来就暗、而且去饱和 —— 参考图里蓝和橘黄混成深色就是这么来的(用户 2026-10-23 指出)。
+  // uFalloff 越大中间掉得越狠;等于 1 就退化成普通插值,中间不会暗
+  float wc = pow(clamp(1.0 - m, 0.0, 1.0), uFalloff);
+  float ww = pow(clamp(m, 0.0, 1.0), uFalloff);
+  vec3 base = uCool * wc + uWarm * ww;
 
   // 明暗:暗部压得很狠,所以大部分地方接近黑,颜色只在几处亮起来 —— 这是参考图的分量感
   float lum = pow(clamp(f * 1.18, 0.0, 1.0), uGamma);
@@ -159,12 +168,10 @@ void main() {
   // 饱和度微调
   col = mix(vec3(dot(col, vec3(0.299, 0.587, 0.114))), col, uSat);
 
-  // 分界处那道竖着的暗脊
-  float dx = (uv.x - split) / 0.085;
-  col *= 1.0 - uSpine * exp(-dx * dx);
-
-  // 磨砂那一条自己也要有一点明暗差,不然「玻璃」看不出边
-  col *= 1.0 + (frost - 0.5) * 0.10;
+  // 玻璃的两样:磨砂面本身是乳白的(散射抬一点亮),清条与磨砂条交界处有一道细高光(玻璃的棱)
+  col *= 1.0 + frost * uMilky;
+  float edge = 1.0 - abs(frost * 2.0 - 1.0);
+  col += pow(edge, 3.0) * uEdge;
 
   // 细竖条纹:按列取一个固定的随机数,越往右越明显(参考海报右半边那些细线)
   float band = hash12(vec2(floor(uv.x * 240.0), 7.0));
@@ -274,7 +281,7 @@ export function BrandCanvas(): JSX.Element {
     gl.uniform1f(at("uScale"), LOOK.scale);
     gl.uniform1f(at("uYStretch"), LOOK.yStretch);
     gl.uniform1f(at("uSplit"), LOOK.split);
-    gl.uniform1f(at("uSpine"), LOOK.spine);
+    gl.uniform1f(at("uFalloff"), LOOK.falloff);
     gl.uniform1f(at("uStreak"), LOOK.streak);
     gl.uniform1f(at("uGrain"), LOOK.grain);
     gl.uniform1f(at("uWarpA"), LOOK.warpA);
@@ -286,8 +293,10 @@ export function BrandCanvas(): JSX.Element {
     gl.uniform1f(at("uSat"), LOOK.sat);
     gl.uniform1f(at("uStripeN"), LOOK.stripeN);
     gl.uniform1f(at("uStripeSkew"), LOOK.stripeSkew);
-    gl.uniform1f(at("uFrostShift"), LOOK.frostShift);
+    gl.uniform1f(at("uFrostBlur"), LOOK.frostBlur);
     gl.uniform1f(at("uFrost"), LOOK.frost);
+    gl.uniform1f(at("uMilky"), LOOK.milky);
+    gl.uniform1f(at("uEdge"), LOOK.edge);
 
     const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 
