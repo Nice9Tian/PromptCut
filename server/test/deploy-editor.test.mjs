@@ -327,3 +327,47 @@ test('DEP-8 vite.config.ts 在线构建产出 version.json（codeVersion 与 __P
     assert.equal(found, undefined, `桌面配置（mode=${mode}）不应包含 promptcut-version-json 插件`);
   }
 });
+
+test('DEP-9 换名脚本的重跑：同一份构建再换一次不算新的一代、前几代不被挤掉；上次停在两次换名之间（只剩 editor.prev）的先挪回来', (t) => {
+  const found = findGnuBash();
+  if (!found.bash) return t.skip(found.reason);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-editor-rerun-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const script = `set -euo pipefail\ncd "$1"\n${editorSwapLines().join('\n')}\n`;
+  const deploy = (gen, files) => {
+    const inc = path.join(dir, '.incoming-editor');
+    fs.mkdirSync(path.join(inc, 'assets'), { recursive: true });
+    fs.writeFileSync(path.join(inc, 'index.html'), `<!doctype html><title>${gen}</title>`);
+    for (const f of files) fs.writeFileSync(path.join(inc, 'assets', f), `${gen}:${f}`);
+    const r = spawnSync(found.bash, ['-s', dir.replace(/\\/g, '/')], { input: script, encoding: 'utf8', windowsHide: true });
+    assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+    return r.stdout;
+  };
+  const assets = () => fs.readdirSync(path.join(dir, 'editor', 'assets')).sort();
+  const manifest = (name) => {
+    const p = path.join(dir, 'editor', name);
+    return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').trim().split('\n').filter(Boolean) : null;
+  };
+  deploy('g1', ['a1.js']);
+  deploy('g2', ['a2.js']);
+  deploy('g3', ['a3.js']);
+  deploy('g4', ['a4.js']);
+  assert.deepEqual(assets(), ['a1.js', 'a2.js', 'a3.js', 'a4.js']);
+  // 同一份构建（g4）再换两次：清单不顺延，g1～g3 照旧都在
+  deploy('g4', ['a4.js']);
+  deploy('g4', ['a4.js']);
+  assert.deepEqual(assets(), ['a1.js', 'a2.js', 'a3.js', 'a4.js'], '重跑不挤掉前 3 代');
+  assert.deepEqual([manifest('.assets-own'), manifest('.assets-own.1'), manifest('.assets-own.2')], [['a4.js'], ['a3.js'], ['a2.js']]);
+  // 下一份真正的新构建照常顺延，淘汰 g1
+  deploy('g5', ['a5.js']);
+  assert.deepEqual(assets(), ['a2.js', 'a3.js', 'a4.js', 'a5.js']);
+  assert.deepEqual([manifest('.assets-own'), manifest('.assets-own.1'), manifest('.assets-own.2')], [['a5.js'], ['a4.js'], ['a3.js']]);
+
+  // 模拟上次停在 `mv editor editor.prev` 之后、`mv .incoming-editor editor` 之前
+  fs.renameSync(path.join(dir, 'editor'), path.join(dir, 'editor.prev'));
+  const out = deploy('g6', ['a6.js']);
+  assert.match(out, /editor\.prev 挪回 editor/);
+  assert.deepEqual(assets(), ['a3.js', 'a4.js', 'a5.js', 'a6.js'], '挪回后前 3 代照常保留');
+  assert.match(fs.readFileSync(path.join(dir, 'editor', 'index.html'), 'utf8'), /g6/);
+  assert.ok(!fs.existsSync(path.join(dir, 'editor.prev')));
+});

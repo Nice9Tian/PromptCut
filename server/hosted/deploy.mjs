@@ -166,29 +166,40 @@ export const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
  * - 预压缩的 `.gz`（`stageEditorBuild` 在本机生成）是本代的普通文件，写进 `.assets-own`，下一代照样随原文件保留；
  *   补某个原文件时它旁边若有同名 `.gz` 也一并补（清单里没记 `.gz` 的老一代，如服务器上手工生成的，也不丢）；
  * - 新版自己的清单写成新的 `.assets-own`（在补进旧文件之前记），并把旧目录的 `.assets-own`、`.assets-own.1` 顺延成新目录的 `.assets-own.1`、`.assets-own.2`（缺的清单当空，兼容只有 `.assets-own` 的旧布局）；
- * - 整个目录换名换上去（先把旧的挪成 `editor.prev` 再删），nginx 不会读到拷了一半的目录。
+ *   新旧两份 `.assets-own` 一字不差（同一份构建再换一次）时不算新的一代：旧 `assets/` 原样全留，清单不顺延；
+ * - 整个目录换名换上去（先把旧的挪成 `editor.prev` 再删），nginx 不会读到拷了一半的目录；上次停在两次换名之间（只剩 `editor.prev`）的，先挪回来再换。
  * nginx 的 `/editor` 路由由主会话在服务器上手工加（契约第 2 节），这里不碰。
  */
 export function editorSwapLines() {
   return [
     '# 在线构建：.incoming-editor 换成 editor/，旧版 assets/ 保留前 3 代',
+    '# 上次换代停在两次 mv 之间（editor 已挪成 editor.prev、新的还没换上）：先挪回来，旧代照常保留',
+    'if [ ! -d editor ] && [ -d editor.prev ]; then mv editor.prev editor; echo "editor: 上次换代没做完，editor.prev 挪回 editor"; fi',
     'if [ ! -f .incoming-editor/index.html ]; then echo ".incoming-editor 里没有 index.html" >&2; exit 4; fi',
     'mkdir -p .incoming-editor/assets',
     '( cd .incoming-editor/assets && find . -maxdepth 1 -type f -printf "%f\\n" | sort ) > .incoming-editor/.assets-own',
     'if [ -d editor/assets ]; then',
     '  kept=0',
-    '  for m in editor/.assets-own editor/.assets-own.1 editor/.assets-own.2; do',
-    '    [ -f "$m" ] || continue',
-    '    while IFS= read -r f; do',
-    '      [ -n "$f" ] || continue',
-    '      for g in "$f" "$f.gz"; do',
-    '        case "$f" in *.gz) [ "$g" = "$f" ] || continue ;; esac',
-    '        if [ -f "editor/assets/$g" ] && [ ! -e ".incoming-editor/assets/$g" ]; then cp -p "editor/assets/$g" ".incoming-editor/assets/$g"; kept=$((kept + 1)); fi',
-    '      done',
-    '    done < "$m"',
-    '  done',
-    '  if [ -f editor/.assets-own ]; then cp -p editor/.assets-own .incoming-editor/.assets-own.1; fi',
-    '  if [ -f editor/.assets-own.1 ]; then cp -p editor/.assets-own.1 .incoming-editor/.assets-own.2; fi',
+    '  if [ -f editor/.assets-own ] && cmp -s editor/.assets-own .incoming-editor/.assets-own; then',
+    '    # 同一份构建再换一次（重跑、补运行配置）：不算新的一代，assets/ 原样全留、清单不顺延，免得把真正的前几代挤掉',
+    '    while IFS= read -r g; do',
+    '      if [ ! -e ".incoming-editor/assets/$g" ]; then cp -p "editor/assets/$g" ".incoming-editor/assets/$g"; kept=$((kept + 1)); fi',
+    '    done < <(cd editor/assets && find . -maxdepth 1 -type f -printf "%f\\n")',
+    '    for k in 1 2; do if [ -f "editor/.assets-own.$k" ]; then cp -p "editor/.assets-own.$k" ".incoming-editor/.assets-own.$k"; fi; done',
+    '  else',
+    '    for m in editor/.assets-own editor/.assets-own.1 editor/.assets-own.2; do',
+    '      [ -f "$m" ] || continue',
+    '      while IFS= read -r f; do',
+    '        [ -n "$f" ] || continue',
+    '        for g in "$f" "$f.gz"; do',
+    '          case "$f" in *.gz) [ "$g" = "$f" ] || continue ;; esac',
+    '          if [ -f "editor/assets/$g" ] && [ ! -e ".incoming-editor/assets/$g" ]; then cp -p "editor/assets/$g" ".incoming-editor/assets/$g"; kept=$((kept + 1)); fi',
+    '        done',
+    '      done < "$m"',
+    '    done',
+    '    if [ -f editor/.assets-own ]; then cp -p editor/.assets-own .incoming-editor/.assets-own.1; fi',
+    '    if [ -f editor/.assets-own.1 ]; then cp -p editor/.assets-own.1 .incoming-editor/.assets-own.2; fi',
+    '  fi',
     '  echo "editor: 保留前 3 代 assets $kept 个"',
     'fi',
     '# 运行配置（C10 契约第 2 节，--stage-origins 写的）跟着换代保留；这次另给了就在后面覆盖',
