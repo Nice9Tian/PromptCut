@@ -203,6 +203,10 @@
 
 - **舞台闸门判安卓只看 `userAgentData.platform`，非安全来源下这道保护会静默失效**（2026-10-22 主会话在安卓模拟器上实测查出，未排期）。出处：`src/online/stageGate.ts` 的 `readGateEnv()`——`platform` 只从 `navigator.userAgentData.platform` 取，没有退回 UA 字符串；而紧挨着的 `identity` 已经用了 `nav.userAgent`。`userAgentData` 和 `deviceMemory` 都是**仅安全来源**可用：实测在 `http://10.0.2.2:5950`（非安全来源）上 `isSecureContext:false`、`'userAgentData' in navigator` 与 `'deviceMemory' in navigator` 都是 **false**；经 `adb reverse` 改用 `http://localhost:5950`（安全来源）后，同一台模拟器报 `isSecureContext:true`、`deviceMemory:4`、`uaDataPlatform:"Android"`。后果：非安全来源（局域网自建、纯 HTTP 部署）上 `platform` 为 null，`stageGate.ts` 第 138 行那条「安卓不到 8 GB 就停在一个舞台、不往上试」的保护不触发，低内存安卓会去试多舞台——而安卓上舞台崩了整页跟着崩、又不会自动重新载入，正是这条保护要防的。**生产不受影响**：在线编辑器走 HTTPS，是安全来源，这次实测已证明那里读得到。改法：`platform` 取不到时退回按 `navigator.userAgent` 里的 `Android` 判（UA 精简后仍带 Android）；那时 `deviceMemory` 同样读不到，`!(NaN >= 8)` 为真，正好落到保守的「停在一个舞台」。验收：补一条 `readGateEnv` 的单测（无 `userAgentData`、UA 带 Android → platform 判为安卓），`src/online/stageGate.test.mjs` 原有用例不退化。
 
+- **舞台端口白名单把正当的素材请求拦掉**（2026-10-23 主会话实测，未排期）。`scripts/probes/stage-port-whitelist-probe.mjs` 的「新建项目、点、播放、卡片声音这一路，舞台端口没有一个正当请求被拒」不过，被拒的是 `GET /@media/<hash>`。**不是 0.7.19 引入的**：主会话在在线浏览器合并前的提交 `efd24aec` 上跑同一支探针，同一条断言同样失败（合并前 2 个请求被拒、合并后 1 个）。方向是「拦过头」不是「放过头」，不是安全漏洞，但正当的素材请求被挡会影响舞台取素材。要查的是舞台端口白名单对 `/@media/<hash>` 这类带哈希路径的判法。验收：这支探针 `fails: []`。
+
+- **渲染队列「plan 切分完、细任务全部落定」等不到**（2026-10-23 主会话实测，未排期）。`claim-gate-probe` 的 `[off] plan 切分完、细任务全部落定` 等不到；`S3-1`（渲染服务本机整套演练）栽在同一症状「等『计划与细任务做完』超时（240000 ms）」；清单里 `P-c10-browser-full` 的 known 也记着「main 上 A5（独立渲染主机认领清单计划）超时」。**不是 0.7.19 引入的**：主会话在合并前的提交 `efd24aec` 上跑 `claim-gate-probe`，`ok:false`、`fails` 一字不差。三处同一族，值得当一件事查。验收：`claim-gate-probe` 与 `S3-1` 都 `ok: true`。
+
 ## 以后研究（未排期）
 
 只是想弄明白、还没决定要不要做的事放这里。
