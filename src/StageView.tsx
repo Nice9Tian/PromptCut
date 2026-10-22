@@ -1126,6 +1126,9 @@ export default function StageView() {
         ref.current.catchUps.set(clipId, task);
       }
       task.onEnd = onEnd;
+      // 画的时候兜底照常显示:暂停着没有下一拍来刷占位符,这里刷一次(T3:不可见地追帧、又没有快照或流在画的层显示占位符;
+      // 「停下以后先显示占位……渲好一层替换一层」,`product/platforms.md` 的最低一档)
+      refreshPlaceholders();
       const breathe = () => new Promise<void>((r) => realSetTimeout(r, 0));
       for (;;) {
         if (ended !== null) return ended ? "drawn" : timedOut ? "timeout" : "aborted";

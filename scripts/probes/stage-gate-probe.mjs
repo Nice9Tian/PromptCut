@@ -388,6 +388,22 @@ try {
     await page.evaluate(() => window.__pcStore.actions.pause());
     const settled = await until(() => page.evaluate(() => { const r = window.__pcPreviewDiag().lastSettle; return r && r.ok && r.drawn.some((x) => x.clipId === 'pill-1') ? r : null; }), 60_000, 200);
     check('S15', !!settled && settled.timeoutMs === null, '停下后逐层追一帧画好,不设时限', settled ?? await page.evaluate(() => window.__pcPreviewDiag().lastSettle));
+    // 画好的那一层看得见、里面有内容(不在 .pc-settling 下、没被抑制、不是空包裹)
+    const look = await until(async () => {
+      const f = page.frames().find((x) => /[?&]stage=1/.test(x.url()));
+      const v = f ? await f.evaluate(() => {
+        const w = document.querySelector('[data-pc-clip="pill-1"]:not([data-pc-media])');
+        if (!w) return null;
+        const r = w.getBoundingClientRect();
+        const cs = getComputedStyle(w);
+        const hiddenUp = !!w.closest('.pc-settling') || !!w.closest('.pc-suppressed');
+        const text = (w.textContent ?? '').trim().slice(0, 40);
+        return { cls: w.className, hiddenUp, visibility: cs.visibility, opacity: cs.opacity, kids: w.querySelectorAll('*').length, text, w: Math.round(r.width), h: Math.round(r.height) };
+      }).catch(() => null) : null;
+      return v && !v.hiddenUp && v.visibility === 'visible' && v.kids > 2 && v.text ? v : null;
+    }, 20_000, 200);
+    scenes.S15 = { ...(scenes.S15 ?? { checks: 0, failed: 0 }), look };
+    check('S15', !!look, '停下后画好的那一层看得见、有内容', look);
     await shot(page, 'S15-low-settled');
     await page.browserContext().close();
   }
