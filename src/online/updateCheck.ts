@@ -46,8 +46,6 @@ export interface UpdateCheckEnv {
   codeVersion?: string | null;
   /** 自定义 `fetch`（缺省取全局 `fetch`） */
   fetch?: typeof globalThis.fetch;
-  /** `fetch` 的别名，兼容 `stageOrigins.ts` 的注入命名 */
-  fetchImpl?: typeof globalThis.fetch;
   /** 可见性来源（缺省取全局 `document`） */
   visibility?: VisibilitySource | null;
   /** 前台定时检查间隔毫秒数（缺省 `UPDATE_CHECK_INTERVAL_MS`，即 10 分钟） */
@@ -100,7 +98,7 @@ export function startUpdateCheck(env: UpdateCheckEnv = {}): UpdateCheckControlle
   const selfVersion = typeof rawSelf === "string" && rawSelf.trim().length > 0 ? rawSelf.trim() : null;
   const base = env.base ?? "/editor/";
   const url = `${base.replace(/\/?$/, "/")}${VERSION_FILE}`;
-  const fetchFn = env.fetch ?? env.fetchImpl ?? (typeof globalThis.fetch === "function" ? globalThis.fetch.bind(globalThis) : null);
+  const fetchFn = env.fetch ?? (typeof globalThis.fetch === "function" ? globalThis.fetch.bind(globalThis) : null);
   const visibility: VisibilitySource | null =
     env.visibility !== undefined
       ? env.visibility
