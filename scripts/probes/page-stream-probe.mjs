@@ -1917,6 +1917,8 @@ try {
 } catch (e) {
   fails.push(`异常:${String(e?.stack ?? e).slice(0, 800)}`);
 } finally {
+  // 先把结论写进过程日志:收尾(关浏览器、关托管组合)偶尔卡住时,结果也不丢
+  say('result', { ok: fails.length === 0, fails });
   try { await browserA?.close(); } catch { /* 已关 */ }
   try { await browserB?.close(); } catch { /* 已关 */ }
   await stopDesk();

@@ -33,6 +33,7 @@ test('当节点的条件：身份为电脑、不是最低一档、双舞台、�
     [{ phone: true }, '身份为手机（2026-10-07 用户定：手机不当渲染节点）'],
     [{ lowest: true }, '最低一档'],
     [{ stageLayout: 'single' }, '退回同源单舞台'],
+    [{ stageLayout: 'pending' }, '两个舞台还没都握上手(舞台闸门在试后台舞台)'],
     [{ codeVersion: '' }, '开发构建（CODE_VERSION 为空）'],
     [{ codeVersion: null }, '没有代码版本'],
     [{ userAgent: UA.firefox }, 'Firefox'],

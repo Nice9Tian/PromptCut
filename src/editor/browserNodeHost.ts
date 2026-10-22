@@ -200,6 +200,7 @@ export interface BrowserNodeHostDeps {
  * 只为本页产稀疏版、不当队列节点:身份为手机(语义 `product/platforms.md`「渲染节点」:手机、平板也为本页产稀疏版),
  * 或只有一个舞台(没有后台舞台可以兼做节点)。最低一档两样都不做(连基准卡都跑不动,不在本页产流)。
  */
+/** `stageLayout` 为 `pending`(按两个舞台开、还没都握上手)不算只有一个舞台 */
 export function ownSparseOnly(e: Pick<EligibilityInput, "phone" | "lowest" | "stageLayout">): boolean {
   return !e.lowest && (e.phone || e.stageLayout === "single");
 }

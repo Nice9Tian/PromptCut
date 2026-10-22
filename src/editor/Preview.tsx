@@ -1543,7 +1543,8 @@ export function Preview(props: { variant?: "mobile" } = {}) {
         codeVersion: CODE_VERSION,
         phone: phoneIdentity(),
         lowest: lowestRef.current,
-        stageLayout: dualRef.current && onlineStageState().handshake === "ok" ? "dual" : "single",
+        // 按两个舞台开、还没都握上手(舞台闸门正在试后台舞台)是 `pending`:不当节点,也不按只有一个舞台算(不然本页产流会当成只产稀疏版、不等计划)
+        stageLayout: !dualRef.current ? "single" : onlineStageState().handshake === "ok" ? "dual" : "pending",
         userAgent: typeof navigator === "undefined" ? "" : navigator.userAgent,
         member: !!currentSharedLink() && hasDocLink(),
         measured: measurementSettled(),

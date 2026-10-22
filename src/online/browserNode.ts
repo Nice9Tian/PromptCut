@@ -103,7 +103,8 @@ export interface EligibilityInput {
   /** 最低一档(基准卡都跑不动或一个舞台都撑不住):不当节点,也不为本页产流 */
   lowest: boolean;
   /** 两个跨源舞台都握上手为 `'dual'`;只有一个舞台(舞台闸门第一级、握手失败退回)为 `'single'` */
-  stageLayout: "dual" | "single";
+  /** `pending`:按两个舞台开、还没都握上手(舞台闸门在试后台舞台);不当节点,也不按只有一个舞台算 */
+  stageLayout: "dual" | "single" | "pending";
   userAgent: string;
   /** 以成员身份连着放云端的共享项目(页面连接在线) */
   member: boolean;
