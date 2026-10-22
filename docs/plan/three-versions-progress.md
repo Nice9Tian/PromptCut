@@ -216,17 +216,31 @@ Claude 主会话与 Antigravity 主会话接手后合进 `main` 的（每块的�
 
 **其余界面文字与细节确认**（10-14 第 5 节定）：共有对话设为私有时刷新后仍记已被撤销、禁用输入框、撤掉或换掉顶上「共有对话」字样；其余草稿文字全部照用；新建云端项目每人上限做成部署可配、缺省不限。
 
-## 0.7.19 整套验收怎么跑（2026-10-22 主会话摸清，代码做完就照这个走）
+## 0.7.19 整套验收：清单已按 0.7.19 改写（2026-10-22 合入 main `99876120`）
 
-运行器是现成的清单式工具，**可断点续跑**：`node scripts/acceptance/four-stage-acceptance.mjs`。清单是数据（`scripts/acceptance/four-stage-manifest.mjs`），每项带编号、级别、命令、通过标准，以及对应任务书哪一条。
+**清单从 236 项增到 288 项**（本地验证 257、真实网络验证 31），`--check-coverage` 退出码 0：323 个探针文件全部登记，0.7.19 的 49 条要求每条都有对应项。闸门：tsc 0；`npm run build` 0；全量 `npm test` 7585 条 7570 通过 **0 失败 0 取消** 15 跳过（912 KB 日志、有汇总行——闸门里串着跑的那一遍被截断、退出码虽 0 但只有 116 条无汇总行，单独重跑才拿到这个数）。
 
-- **规模**：`--list` 当前 **236 项（本地验证 210、真实网络验证 26）**。缺省只跑本地那一级；`--level network` 不自己跑，只把每项在节点上怎么验列出来，照 `four-stage-deploy-checklist.md` 做。
-- **常用**：`--only`、`--from <编号>`、`--resume`、`--flaky-rerun 2`、`--out <目录>`、`--dry-run`、`--check-coverage`。
-- **耗时那一节能自动出**：`--release-timings "<版本>"` 会连同自动采集的机器配置（哪台、处理器、核数、内存、显卡、系统，不含凭证）写出 `release-timings-section.md`，直接贴进 `docs/reports/release-timings.md`——正好是「做到什么算完」要的那一条。耗时只记录、不当闸门。
-- **输出**：`results.json`（每跑完一项就整份重写，可随时看）、`summary.txt`（可直接贴进对话）、`logs/<编号>.log`。
-- **清单要先更新**：它现在描述的还是 0.7.18 的行为（多项目渲染节点那一块已指出，0.7.18 的排队验收清单与新模式对不上；撤低内存档、三道闸门、冲突合并窗口也都需要新增或改写条目）。**跑之前先改清单**，改了哪些在报告里列出来。
-- 「做到什么算完」要的逐行结论出自 `account-binding-task.md`「逐项验收」里归 0.7.19 的那几行（暂时离线改动与冲突、保存与修改状态检查，加每版都做的最终产品交互验收／完整安装包／兼容补丁／真实网络环境验收），以及 `online-browser-task.md`「做完的标准」五条；上面 236 项是支撑这些行的细目。
+- 新增 `V19` 类与 49 条要求表，加 `--v19-map` 看每条要求由哪些项支撑；新增 47 项全部指向现成探针，只多一个只读脚本 `v19-lowmem-residue.mjs`（在 main 上失败、在 `claude/online-browser` 上通过）。
+- 新增 5 项真实网络验收（`V19-net-hosted-domain`、`-multi-project`、`-conflict-merge`、`-offline-queue`、`-online-gates`），断线一律只在应用层做。为此改掉了 `server/test/four-stage-acceptance.test.mjs` 第 156、364 行把非 V18 网络项**钉死在 16 条**的断言——不改这一处，0.7.19 一条网络项都加不进去，而「真实网络环境验收」是发版要交结论的一行。
+- **清单原先在腐烂**：18 条标「不适用」的依据早已过时（`8b09add4` 10-17 就把那些在线探针挪到恢复入口、大多通过），恢复 16 条可跑，不适用从 20 条降到 7 条。不查出来，整套验收会漏掉一大块还以为跑全了。
+- `retiredWhen` 字段：因撤低内存档而失去意义的条目在 `claude/online-browser` 合入后自动标不适用，合入前仍对 main 照跑。
+- **保住一条会被合并吃掉的安全测试**：`claude/online-browser` 把 `scripts/probes/stage-gate-probe.mjs` **就地改写**成了三道闸门的探针，而 main 上同名那支验的是 `server/stage-gate.mjs` 的**舞台端口放行白名单**，名字相近、内容无关。主会话已先把 main 的版本另存为 `stage-port-whitelist-probe.mjs`（`971b35d2`），清单里 `RR-stage-gate` 改指新名字、不再随合入退休、从补充项改成缺省就跑。**合入后两支都要跑。**
+- 等 `claude/online-browser` 合入才能跑的 6 项：`V19-ob-tests`、`-stage-gate`、`-lowest`、`-instant-gate`、`-media-gate`、`-residue`。
 
+**跑法**：`node scripts/acceptance/four-stage-acceptance.mjs`，可断点续跑（`--resume`、`--from`、`--only`）；`--level network` 不自己跑、只列每项在节点上怎么验；`--release-timings "<版本>"` 连同自动采集的机器配置写出发版耗时那一节，直接贴进 `docs/reports/release-timings.md`（正是「做到什么算完」要的一条）。输出有 `results.json`（每项跑完即重写）、`summary.txt`、`logs/<编号>.log`。
+
+### 「保存与修改状态检查」这一行查清了（原本要记失败，已改为补做）
+
+`account-binding-task.md`「逐项验收」把这一行归 0.7.19，但进度文件「还差什么」的 0.7.19 六项里**没有它**——它从没被排进工作量。语义是用户 2026-10-08 定的，`product/document-service.md` 第 89 行与 `mechanism/document-service.md` 第 36 行都还标着「待实施」。查出的真实状态：
+
+| 一样 | 现状 | 位置 |
+|---|---|---|
+| 保存时暂停前台编辑 | **未实现**，等待期间不锁任何编辑，整个 `src/` 里没有保存时的编辑锁 | `src/editor/TopBar.tsx` 的 `saveProject` |
+| 等本机写完 | **部分**：只等文档服务确认本地操作与恢复日志落盘；机制文档列的素材入库／上传、本机 Agent、渲染、后台写入都不等；没连文档服务的本地项目直接放行 | `syncManager.ts` 的 `whenSaved` |
+| 失败不覆盖旧保存、并恢复编辑 | **部分**：等确认失败时在写文件前就退出，旧文件与标记不动；**写到一半失败没处理**（`proc.ts` 无 `abort()`），只靠浏览器 API 的行为兜着且无测试；编辑从没被禁用，「恢复编辑」无从谈起 | 同上三处 |
+| 同一行的「固定非本机快照」 | **已实现**（冲突合并那一块，CS-01～06） | — |
+
+在线页面里 `saveProject` 是空函数，所以这一行只对桌面版保存 `.proc`／`.procp` 有意义。**主会话的处置**：不把它留成「失败」——那等于替用户缩范围。已派 `opus-dev-high` 在 `.worktrees/save-state`（分支 `claude/save-state`，端口 5960～5969）补齐三样，要求每样先证明测试改前是红的、再证明改完是绿的。做完由主会话去掉语义那两处的「待实施」标记。
 ## 待用户项
 
 **2026-10-22 新增一条（H04 查出，未做）**：删账号项目时**素材服务那一份也没删**，会留下孤儿素材库。它按内容哈希存，沿用同一个项目号也不冲突，不挡「放弃这次搬迁」，所以这次没修。`server/asset-store/project-stores.mjs` 第 66 行有 `removeProject`，但项目删除时没有任何地方调它。要不要在素材服务里也接上项目删除，请定；影响面在素材服务。
