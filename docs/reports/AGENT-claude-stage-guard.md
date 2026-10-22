@@ -146,3 +146,11 @@
 - 没改 `src/render/gl/spawnWorker.ts`、`src/online/cardRuntime/soundSpawn.ts`、`soundWorker.ts`：运行时线程经包装过的 `Worker` 自动带上守卫，两个探针里 GL 与声音线程都正常；双装不报错靠 `harden.ts` 的 `refuse` 与守卫自身的幂等。
 - 没有把真浏览器核对放进 `scripts/probes/`（另一个 Agent 在那里写探针）；它在 `src/online/isolation/scopeGuard.browser-check.mjs`，文件名不是 `*.test.mjs`，不进 `npm test`。它只读引用 `scripts/probes/probe-chrome.mjs` 的启动参数与 `src/online/stagePolicy.mjs` 的舞台策略。
 - 原地换项目的端到端核对（真实托管组合、两个项目、同一页面里换）仍没有，与上一轮相同。
+
+## 主会话复核（2026-10-23）
+
+- 逐个读了 `scopeGuard.ts`、`harden.ts` 的改动与建卡守则新加的那一条，核了舞台运行时不依赖被收走的东西：GL 与声音线程在构建产物里是经典 blob 线程（`importScripts`），守卫排在它前面装上；`stageGate.ts`、`crashLog.ts` 的 `BroadcastChannel` 只在编辑页跑（`boot.ts` 的 `editorPage`）；舞台里 `captureInviteFromLocation` 读不到 `#`，它清 `#` 的 `replaceState` 落空也无害；没有舞台代码读 `window.name`、`navigator.locks`、`storage` 事件或 Navigation API。
+- 复跑：`npx tsc -b --force` 退出 0；改动影响范围的 9 个测试文件 88/88（`src/online/isolation/` 两个、`stageIsolation`、`cardRuntime/` 四个、`card-authoring-guide`、`layering`）；`scopeGuard.browser-check.mjs` 压缩与不压缩各 49 过 0 不过；`npx vite build --mode online` 之后 `online-card-exec-probe` 61/0、`online-card-security-probe` 113/0。
+- 全量测试没有复跑：用户同日说「不用跑全量测试，只测试改动影响范围即可」，已开的那一次中途停掉。
+- 语义按上一节的建议写进 `docs/semantics/product/platforms.md`（二级〔裁〕，扩同日那一条）与 `docs/semantics/mechanism/platforms.md`（三级），提交 de55607e。
+- 原计划另写一支「项目 A 的卡片留下东西、项目 B 的卡片来找」的端到端探针，子 Agent 与主会话写的时候都被安全检查拦下，没有写成；验证靠本分支的单测（含变异核对）、真浏览器核对与上面两支现有探针。
