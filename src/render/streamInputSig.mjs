@@ -24,7 +24,7 @@
 import { cardJson } from "../kernel/cardGraph.mjs";
 import { hashString } from "./changedClips.mjs";
 import { clipInputSig } from "./layerInputSig.mjs";
-import { flatPlanProject } from "../kernel/cutFlatten.mjs";
+import { flatPlanProject, flatScenePrefix } from "../kernel/cutFlatten.mjs";
 
 /** 签名算法的版本;改了进签名的内容就加一 */
 export const STREAM_INPUT_SIG_VERSION = 1;
@@ -57,7 +57,10 @@ const BELOW_OVERLAP_LEAD = 0.05;
  *     剪辑段先摊平(`kernel/cutFlatten.mjs` 的 `flatPlanProject`:换成它里面的卡与素材),所以签名、下层认定看的是里面的那些层;
  *     只出声音的素材效果卡片段也会被算进来(这里分不出它出不出画),只是多作废;
  *   - 画家顺序同 `FrameScene`:`project.tracks` 里靠前的序列在上面,同一条序列里靠后的片段在上面;
- *   - 时间重叠按秒算,两头都放宽一个挂载提前量。没有再按「会不会碰到这块区域」筛(契约第 5.2 节:第一版宁可多作废)。
+ *   - 时间重叠按秒算,两头都放宽一个挂载提前量。没有再按「会不会碰到这块区域」筛(契约第 5.2 节:第一版宁可多作废);
+ *   - **剪辑段里的卡**(摊平出来的虚拟片段,〔裁〕R01):只算**同一个嵌套场景里**的下层 —— id 以它所在场景的前缀(`flatScenePrefix`,
+ *     `<段 id>~`)打头的那些(更深一层剪辑段里的也算,它们画在这个场景里)。剪辑段的画面是被引用剪辑的整帧合成,嵌套场景是毛玻璃的
+ *     采样边界(`CutSegmentScene` 的 `clip-path`),段外面的层、上一层场景里的层都滤不到;顶层的卡照旧(它的下层里有剪辑段里摊出来的卡)。
  * @param {any} project
  * @param {string} clipId
  */
@@ -80,9 +83,12 @@ export function belowLayersOf(raw, clipId) {
   const at = where.get(clipId);
   if (!at || !at.visual) return null;
   const own = span(at.clip);
+  // 剪辑段里的卡只看同一个嵌套场景里的层(见上);顶层的卡是 null,不筛
+  const scene = at.clip?.flat ? flatScenePrefix(clipId) : null;
   const below = [];
   for (const [id, it] of where) {
     if (id === clipId || !it.visual || it.order >= at.order) continue;
+    if (scene && !id.startsWith(scene)) continue;
     const s = span(it.clip);
     if (s.start - BELOW_OVERLAP_LEAD < own.end && s.end > own.start - BELOW_OVERLAP_LEAD) below.push({ id, clip: it.clip, order: it.order });
   }

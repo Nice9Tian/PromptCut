@@ -146,8 +146,12 @@ function keepTextBoundaries(clone: Element): void {
   for (const text of split) text.before(document.createComment(""));
 }
 
-/** 第五步:`outerHTML` + 整场景的 id 改名 + 逐控件取包裹层 `innerHTML`。 */
-function serializeScene(root: Element, clone: Element): { html: string; controls: ControlSnapshot[] } {
+/**
+ * 第五步:`outerHTML` + 整场景的 id 改名 + 逐控件取包裹层 `innerHTML`。
+ * `flatControls`:剪辑段里的卡(嵌套场景里挂 `data-pc-flat-clip` 的包裹层)也各算一个控件,id 取 `data-pc-flat-clip`(摊平出来的虚拟片段 id)。
+ * 只有浏览器节点替剪辑段里的卡产流时要(`StageView.tsx` 的 `bakeFrame`,〔裁〕R02);缺省不收,别的调用方拿到的控件一个不多。
+ */
+function serializeScene(root: Element, clone: Element, flatControls = false): { html: string; controls: ControlSnapshot[] } {
   keepTextBoundaries(clone);
   // 顺序要紧(连环改名的结果取决于它):文档序去重,根元素的 id 排最后。改名见 `snapshot/renameSceneIds.ts`。
   const ids = new Set(
@@ -155,11 +159,14 @@ function serializeScene(root: Element, clone: Element): { html: string; controls
   );
   const html = renameSceneIds(clone.outerHTML, ids);
   // `:not([data-pc-media])` 排除 FrameScene 的素材层 —— 它也带 data-pc-clip + data-pc-local-frame。
-  const controls = [...clone.querySelectorAll("[data-pc-clip][data-pc-local-frame]:not([data-pc-media])")].map((el) => {
+  const selector = flatControls
+    ? "[data-pc-clip][data-pc-local-frame]:not([data-pc-media]), [data-pc-flat-clip][data-pc-local-frame]"
+    : "[data-pc-clip][data-pc-local-frame]:not([data-pc-media])";
+  const controls = [...clone.querySelectorAll(selector)].map((el) => {
     const inner = el.cloneNode(true) as Element;
     inner.querySelectorAll("[data-pc-proxy-plane]").forEach((plane) => plane.remove());
     return {
-      id: el.getAttribute("data-pc-clip") || "",
+      id: el.getAttribute("data-pc-clip") || el.getAttribute("data-pc-flat-clip") || "",
       frame: Number(el.getAttribute("data-pc-local-frame")),
       html: inner.innerHTML,
     };
@@ -167,7 +174,7 @@ function serializeScene(root: Element, clone: Element): { html: string; controls
   return { html, controls };
 }
 
-export function createSnapshot(root: Element | null): SceneSnapshot {
+export function createSnapshot(root: Element | null, opts?: { flatControls?: boolean }): SceneSnapshot {
   if (!root) return { html: "", lossy: 0, controls: [], timing: { inlineMs: 0, rasterMs: 0, serializeMs: 0 } };
 
   const t0 = nowMs();
@@ -181,7 +188,7 @@ export function createSnapshot(root: Element | null): SceneSnapshot {
   const t2 = nowMs();
 
   stripMedia(orig, copy);
-  const { html, controls } = serializeScene(root, clone);
+  const { html, controls } = serializeScene(root, clone, opts?.flatControls === true);
   const t3 = nowMs();
 
   return { html, lossy, controls, timing: { inlineMs: t1 - t0, rasterMs: t2 - t1, serializeMs: t3 - t2 } };

@@ -45,7 +45,7 @@ import { belowSegmentCapture, newBelowRecord } from './bakery/capture-below.mjs'
 import { prepareFrameMedia } from './bakery/frame-media.mjs';
 import { findFfmpeg, openStreamSegmentEncoder, pickStreamEncoder, STREAM_ENCODERS, streamFilterIdentity, STREAM_SEGMENT_FRAMES } from './bakery/ffmpeg.mjs';
 import { reachableMediaIds } from '../src/kernel/cutIdentity.mjs';
-import { flatPlanProject, isolatedFlatProject } from '../src/kernel/cutFlatten.mjs';
+import { flatPlanProject, flatScenePrefix, isolatedFlatBelowProject, isolatedFlatProject } from '../src/kernel/cutFlatten.mjs';
 import { mountFrameOf } from '../src/render/frameWindow.mjs';
 import { resolveFrameSize } from '../src/kernel/frameSize.mjs';
 import { cardStreamIdentity } from './card-identity.mjs';
@@ -54,7 +54,7 @@ import { expandProject, streamNeed, multiProjectNode } from './render-node/expan
 import { planStreamSegments } from './frame-playback.mjs';
 import { belowLayersOf, streamInputSig } from '../src/render/streamInputSig.mjs';
 import { isStreamOrigin, streamSegmentFirstFrame, streamSegmentFrameCount, streamSegmentLastFrame, streamSegmentOf, streamSegmentSpan } from '../src/render/streamSegments.mjs';
-import { belowStreamEligible, belowTargets, BELOW_STREAM_RULES, cardNodeOf, graphCardWithInputs, soloStreamKind, streamEligible } from '../src/render/streamPlanRules.mjs';
+import { belowStreamEligible, belowTargets, BELOW_STREAM_RULES, cardNodeOf, graphCardWithInputs, mountClipOf, soloStreamKind, streamEligible } from '../src/render/streamPlanRules.mjs';
 import { groupStreams, peakConcurrency, stageStreamPixels, streamCodedPixels, streamCost, STREAM_COUNT_BUDGET } from '../src/render/streamBudget.mjs';
 
 import { StreamStore, readySegmentRanges, handleStreamRequest } from './asset-store/stream-store.mjs';
@@ -633,6 +633,8 @@ export function queueStreamOf(spec) {
     ...(spec.projectId ? { projectId: spec.projectId } : {}),
     // 依赖下层的流另带算进键里的下层(切分据此知道这条流要整场景的下层和素材);别的流不带这一项,形状与原来相同
     ...(spec.kind === 'below' ? { belowClipIds: [...(spec.belowClipIds ?? [])] } : {}),
+    // 剪辑段里依赖下层的卡的流:只算哪个嵌套场景里的下层(别的流不带这一项,形状与原来相同)
+    ...(spec.kind === 'below' && spec.within ? { within: spec.within } : {}),
     // 单独成流的两类卡(`soloStreamKind`)带上是哪一类:切分据此不出浏览器那一份
     ...(spec.solo ? { solo: spec.solo } : {}),
   };
@@ -659,6 +661,12 @@ export function planListStreams(entry, clips, options = {}) {
  * 都去掉):这些在舞台上由包裹层加。组流原样保留(外观画进流里)。
  */
 export function isolatedStreamProject(project, spec) {
+  // 剪辑段里依赖下层的卡(`within`,〔裁〕R01):嵌套场景 1:1 铺满画面,最里面那条剪辑里留目标卡和它下面的层(`isolatedFlatBelowProject`)
+  if (spec?.kind === 'below' && spec.within) {
+    const isolated = isolatedFlatBelowProject(project, spec.topClipId ?? spec.clipIds?.[0]);
+    if (!isolated) throw new Error(`隔离工程:项目里没有剪辑段里的片段 ${spec.topClipId}`);
+    return isolated;
+  }
   if (spec?.kind === 'below') return isolatedBelowProject(project, spec);
   // 剪辑段里摊出来的卡(`solo: 'flat'`):带着这条剪辑段链隔离,嵌套场景照常算预卷(`src/kernel/cutFlatten.mjs` 的 `isolatedFlatProject`)
   if (spec?.solo === 'flat') {
@@ -685,14 +693,7 @@ export function isolatedStreamProject(project, spec) {
   return { ...structuredClone(project), tracks, _cardRender: { mode: 'final', frames: {}, missing: {} } };
 }
 
-/**
- * 回放从哪一刻挂载算:剪辑段里摊出来的片段(带 `flat`)从嵌套场景最早挂上的那一刻起(`flat.mount`,预卷不会比它更早),
- * 别的片段就是它自己。
- */
-function mountClipOf(clip) {
-  const mount = clip?.flat?.mount;
-  return Number.isFinite(mount) ? { ...clip, start: Math.min(clip.start, mount) } : clip;
-}
+// 回放从哪一刻挂载算(`mountClipOf`)挪进了 `src/render/streamPlanRules.mjs`,`belowTargets` 共用
 
 function localClip(clip, spec) {
   const out = structuredClone(clip);
@@ -754,6 +755,15 @@ export function belowLayerExtra(project, clip) {
  *     挂载帧起(在 card plan 里找不到的按有状态算)。纯素材段按时间直接取帧,不算;
  *   - `hasMedia`:项目里有没有画面素材(有的话产流那一趟截图前要等素材就位,`bakeStream` 的 `hasMedia`;
  *     藏起来的源片段也算,素材效果卡可能接着它们)。
+ *
+ * **剪辑段里的目标卡**(摊平出来的虚拟片段,〔裁〕R01:毛玻璃这类卡带着下层一起产流)另带 `within`:它所在那个嵌套场景的前缀
+ * (`flatScenePrefix`)。剪辑段的画面是被引用剪辑的整帧合成,嵌套场景是毛玻璃的采样边界(`CutSegmentScene` 的 `clip-path`),所以
+ *   - 下层只算同一个嵌套场景里的(`belowLayersOf` 按前缀筛);段外的层、段的框与不透明度都不进键;
+ *   - 流按嵌套场景自己的坐标产(隔离工程里链上的剪辑段去掉外观、1:1 铺满画面,`isolatedFlatBelowProject`),矩形上界同样是整幅画面;
+ *     贴的时候平面挂在嵌套舞台里、层序取这张卡那一层,段的框、不透明度、淡入淡出由外面那几层照常加(`src/render/Stage.tsx`);
+ *   - `within` 进内容键(`card-identity.mjs` 的 `belowStreamIdentity`):同样的成员和下层,带与不带键不同;
+ *   - 回放从嵌套场景最早挂上的那一帧起(`mountClipOf`)。
+ * 顶层的目标卡没有 `within`,键、形状和原来逐字相同。
  */
 function belowStreamSpecs(entry, targets, { fps, stage, total, codeVersion, envFingerprint }) {
   const project = flatPlanProject(entry.project);
@@ -784,9 +794,11 @@ function belowStreamSpecs(entry, targets, { fps, stage, total, codeVersion, envF
       ? entry.subsetKey(streamNeed({ fps, mountFrame: target.from, firstFrame: target.firstFrame, lastFrame: target.to, clipIds: [control.clipId], belowClipIds: found.below.map(layer => layer.id) }))
       : entry.key;
     if (whole && (typeof sceneKey !== 'string' || !sceneKey)) continue;
+    // 剪辑段里的目标卡:只算它那个嵌套场景里的下层(见上);顶层的卡是 null
+    const within = clip.flat ? flatScenePrefix(control.clipId) : null;
     const contentKey = cardStreamIdentity({ kind: 'below', fps, stage, codeVersion,
       members: [{ key: targetKey, sampling: control.sampling, count: control.count, extra: belowLayerExtra(project, clip) }],
-      below: whole ? { scene: sceneKey } : { layers } });
+      below: { ...(whole ? { scene: sceneKey } : { layers }), ...(within ? { within } : {}) } });
     let mountFrame = target.from;
     const stateful = [control];
     for (const layer of found.below) {
@@ -806,6 +818,7 @@ function belowStreamSpecs(entry, targets, { fps, stage, total, codeVersion, envF
       kind: 'below', plane: 'stage', offset: { x: 0, y: 0 }, bound: evenRect(view, view),
       members: [control],
       belowClipIds: found.below.map(layer => layer.id), belowScene: whole, hasMedia,
+      ...(within ? { within } : {}),
       // 这一版项目里这条流的输入签名:发层时带给页面(`StreamProducer.publish`),页面按自己手里的项目算同一个签名,
       // 对不上就是下层已经改过、预渲染进程还没换版本的那一小段 —— 旧流不贴(`src/editor/snapshotFeed.ts`)。算不出不带
       inputSig: streamInputSig(project, { clipIds: [control.clipId], kind: 'below' }),

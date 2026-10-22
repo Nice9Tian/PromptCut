@@ -12,3 +12,5 @@ export function belowTargets<C extends PlanControl, K extends PlanClip>(
   plan: readonly C[],
   o: { picked: (clipId: string) => boolean; where: ReadonlyMap<string, { clip: K; track: PlanTrack }>; fps: number; total: number; orderOf: ReadonlyMap<string, number>; taken?: ReadonlySet<string> | null },
 ): { control: C; clip: K; order: number; firstFrame: number; from: number; to: number }[];
+export function mountClipOf<K extends PlanClip>(clip: K): K;
+export function flatClipStreamKind(compositing: string | undefined, frame: unknown, rules?: { sourceDependent?: boolean; frame3d?: boolean }): 'flat' | 'below' | null;

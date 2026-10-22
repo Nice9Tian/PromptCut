@@ -20,6 +20,13 @@ import type { StagePlaneProps } from "./Stage";
  * 嵌套场景里的包裹层不挂 `data-pc-clip`(挂 `data-pc-nested-clip`):命中测试、钉动画、量实体框、
  * 预渲染按轨道前缀拆层这些按「舞台顶层片段」工作的地方,看到的只有剪辑段自己这一层。
  *
+ * **嵌套场景是毛玻璃的采样边界**(〔裁〕R01):剪辑段的画面是被引用剪辑的整帧合成(`product/project-model.md`),里面的毛玻璃
+ * (`backdrop-filter`)滤的只是这条剪辑里排在它下面的层,不透过段去滤段外面的层。场景这一层挂 `clip-path: inset(0)` 让它成为
+ * 毛玻璃的采样根(Backdrop Root;`isolation`、`overflow` 挡不住,`clip-path` 挡得住)。和已有的 `overflow: hidden` 裁的是同一个框,
+ * 别的像素逐字节不变(Chrome 152 实测:平移、缩放、旋转三种框,软件光栅与 GPU 都一样;见 `docs/reports/AGENT-claude-cut-stream.md`)。
+ * 以前只有段在淡入淡出、不透明度小于 1 的那几帧这样(不透明度本来就让它成为采样根),现在每一帧一致。
+ * 剪辑段里依赖下层的卡的流因此按嵌套场景自己的坐标产、只带场景里的下层(`server/frame-stream.mjs` 的 `belowStreamSpecs`)。
+ *
  * 剪辑段里的卡和父时间轴上的卡一样分轻重(用户 2026-10-21 定;`kernel/cutFlatten.mjs` 的摊平视图):舞台把六个平面 prop
  * 原样递进来(`planes`),嵌套舞台按「`flatPrefix` + 片段 id」(计划一侧的虚拟片段 id)查 —— 判重的卡藏活子树、贴自己的流,
  * 没流时显示占位;轻卡照常活渲。导出页、预渲染页不传平面,DOM 一个字不变。
@@ -76,7 +83,7 @@ export function CutSegmentScene({ seg, start, localT, localDirectT = localT, pla
   const mediaT = host ? offset + (host.mediaT - start) : tau;
   return (
     <div data-pc-cut-scene={seg.cutId} style={{
-      position: "absolute", left: 0, top: 0, width: W, height: H, overflow: "hidden",
+      position: "absolute", left: 0, top: 0, width: W, height: H, overflow: "hidden", clipPath: "inset(0)",
       ...(sx !== 1 || sy !== 1 ? { transform: `scale(${sx}, ${sy})`, transformOrigin: "0 0" } : null),
     }}>
       <FrameScene nested project={project} t={tau} directT={tauDirect} playToken={playToken} graph={subGraph(project)}

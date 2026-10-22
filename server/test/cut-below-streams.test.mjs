@@ -37,21 +37,28 @@ import { cutProject, topProject, entryOf, pageValueOf, FP, CV } from './cut-belo
 
 const ROOT = path.resolve(fileURLToPath(import.meta.url), '../../..');
 const h = v => crypto.createHash('sha256').update(JSON.stringify(v)).digest('hex').slice(0, 16);
+/**
+ * 金样比的那一份:流的每一项原样,只是 `members`(卡片计划的控件)里只留和流有关的几项 —— 控件里另有生成快照的代码指纹算进去的键
+ * (`contentKey`、`snapshotKey`,`server/frame-code.mjs` 的 `snapshotCode`),本分支改了 `createSnapshot.ts`(加了一个缺省关着的参数),
+ * 它们跟着变,但不进任何流的键(单卡流用 `streamMemberKey`,组流和依赖下层的流用 `cacheContentKey`)。
+ */
+const view = s => ({ ...s, members: s.members.map(m => ({ clipId: m.clipId, streamMemberKey: m.streamMemberKey, cacheContentKey: m.cacheContentKey, sampling: m.sampling, count: m.count })) });
 const plan = p => planStreams(entryOf(p), { envFingerprint: FP, codeVersion: CV, below: true });
 const belowOf = (p, id) => plan(p).find(s => s.kind === 'below' && s.topClipId === id) ?? null;
 
 /* ================================================================== R01 */
 
 test('CB-golden 顶层的流与开工提交 b362e254 逐字相同', () => {
-  // 金样:在开工提交上用同一份场景算的(`server/test/cut-below-fixtures.mjs`)。顶层场景整张流表一个字不变
-  assert.equal(h(plan(topProject())), 'db48e54f777d7075', '没有剪辑段的项目:流表逐字相同');
+  // 金样:在开工提交上(`git archive b362e254` 解出来的树)用同一份场景、同一个 `view` 算的(`server/test/cut-below-fixtures.mjs`)。
+  // 顶层场景整张流表一个字不变
+  assert.equal(h(plan(topProject()).map(view)), 'd433e1b11d0af435', '没有剪辑段的项目:流表逐字相同');
   // 有剪辑段的项目里原来就有的那几条:各自逐字相同(新出的依赖下层的流另算)
   const specs = plan(cutProject());
-  const want = { over: 'a57b0a81f71a7164', 'S~S2~cc': '07137a4a745f84ef', 'S~m': 'beb789a62032aa21', 'S~up': '8c58df6f775c843d', topg: '9119466bf5b98bdf' };
+  const want = { over: '5e49f36ef9d578ba', 'S~S2~cc': '4d1e02e642a66958', 'S~m': '421d9dcd43f4bf8d', 'S~up': '2523fb08171ba9ea', topg: 'af0aab0e91abff08' };
   for (const [id, hash] of Object.entries(want)) {
     const spec = specs.find(s => s.topClipId === id);
     assert.ok(spec, `${id} 的流还在`);
-    assert.equal(h(spec), hash, `${id} 的流逐字相同`);
+    assert.equal(h(view(spec)), hash, `${id} 的流逐字相同`);
   }
   assert.equal(streamInputSig(topProject(), { clipIds: ['glass'], kind: 'below' }), 's1-c03e47ff075c67d9');
   assert.equal(streamInputSig(cutProject(), { clipIds: ['topg'], kind: 'below' }), 's1-b008c155a4d05838');
@@ -234,5 +241,5 @@ test('CB-bake 浏览器那一份的隔离工程带着剪辑段链;顶层卡照�
   assert.equal(iso.tracks.find(t => !t.hidden).clips[0].start, 1, '时间不平移');
   // 顶层卡照旧是平移到 -phase 的那一份
   const top = isolatedBakeProject(p, { clipId: 'over', start: 0, end: 8, count: 240, sampling: { firstFrame: 0, phase: { numerator: '0', denominator: '1' } } });
-  assert.deepEqual(top.tracks.filter(t => !t.hidden).flatMap(t => t.clips).map(c => [c.id, c.start]), [['over', 0]]);
+  assert.deepEqual(top.tracks.filter(t => !t.hidden).flatMap(t => t.clips).map(c => [c.id, c.start + 0]), [['over', 0]], '目标平移到 -phase(这里 phase 是 0)');
 });
