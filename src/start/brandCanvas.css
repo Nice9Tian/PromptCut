@@ -67,15 +67,17 @@
   z-index: 1;
 }
 
-/* 登录卡片:毛玻璃 */
+/*
+ * 登录卡片:**实体,不用毛玻璃**(用户 2026-10-23 改定,原来那版毛玻璃效果不好)。
+ * 底色用皮肤的面板色,和软件里其它卡片是同一档;背后的渐变到这儿就被挡住,表单区域干净,
+ * 衬托靠的是卡片与背景的明暗差,不再靠透背景。
+ */
 .ps-m-login-card {
   padding: 18px 16px 20px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 1px solid var(--hairline);
   border-radius: 16px;
-  background: rgba(12, 11, 16, 0.5);
-  backdrop-filter: blur(20px) saturate(1.25);
-  -webkit-backdrop-filter: blur(20px) saturate(1.25);
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.45);
+  background: var(--bg-panel);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5);
 }
 
 /* 卡片里第一个小标题贴着上沿,不要再撑出一截空白 */
