@@ -57,6 +57,8 @@ async function openEditor(browser) {
   page.on('dialog', (d) => { console.log(JSON.stringify({ dialog: d.message() })); void d.dismiss(); });
   await page.goto(`${origin}/?editor`, { waitUntil: 'domcontentloaded' });
   await waitFor(page, () => !!window.__pcStore && !!document.querySelector('.pc-proj-btn'), null, 60000);
+  // 页面接上本机文档服务时会整份载入一次(清撤销栈):等它接完再开始改
+  await sleep(3000);
   await page.evaluate(async () => {
     const root = await navigator.storage.getDirectory();
     const probe = { mode: 'plain', release: null, log: [], createCalls: 0 };
@@ -69,7 +71,14 @@ async function openEditor(browser) {
         probe.createCalls += 1;
         if (probe.mode === 'hold') await new Promise((r) => { probe.release = r; });
         const w = await real.createWritable(opts);
-        if (probe.mode !== 'fail') return w;
+        if (probe.mode !== 'fail') {
+          // 照常写,只记一笔「关上了」:探针等它,不靠被测代码自己的界面信号判断保存结束
+          return {
+            write: (data) => w.write(data),
+            close: async () => { await w.close(); probe.log.push('closed'); },
+            abort: (reason) => { probe.log.push('abort'); return w.abort(reason); },
+          };
+        }
         return {
           async write(data) {
             const text = typeof data === 'string' ? data : await new Blob([data]).text();
@@ -92,12 +101,22 @@ async function openEditor(browser) {
 }
 
 async function clickSave(page) {
-  await page.click('.pc-proj-btn');
-  await waitFor(page, () => [...document.querySelectorAll('.pc-proj-item')].some((b) => b.textContent.includes('保存项目')));
-  await page.evaluate(() => {
-    const item = [...document.querySelectorAll('.pc-proj-item')].find((b) => b.textContent.includes('保存项目'));
-    item.click();
-  });
+  // 点顶栏「项目」→「保存项目」。菜单偶尔一打开就被别处的关闭逻辑收回去:重试几次
+  for (let i = 0; i < 4; i += 1) {
+    await page.click('.pc-proj-btn');
+    const open = await waitFor(page, () => [...document.querySelectorAll('.pc-proj-item')].some((b) => b.textContent.includes('保存项目')), null, 2000).then(() => true, () => false);
+    if (open) {
+      await page.evaluate(() => {
+        const item = [...document.querySelectorAll('.pc-proj-item')].find((b) => b.textContent.includes('保存项目'));
+        item.click();
+      });
+      return 'menu';
+    }
+    await sleep(300);
+  }
+  // 退而走桌面版标题栏「文件 → 保存」那条命令(同一个 saveProject)
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('pc-titlebar-command', { detail: 'save-project' })));
+  return 'titlebar';
 }
 
 const projectName = (page) => page.evaluate(() => window.__pcStore.getState().project.name);
@@ -105,6 +124,13 @@ const projectName = (page) => page.evaluate(() => window.__pcStore.getState().pr
 const trackCount = (page) => page.evaluate(() => window.__pcStore.getState().project.tracks.length);
 const addTrack = (page, name) => page.evaluate((n) => { window.__pcStore.actions.addTrack(n); }, name);
 const fileName = (page) => page.evaluate(() => `${window.__pcStore.getState().project.name}.proc`);
+const clipCount = (page) => page.evaluate(() => window.__pcStore.getState().project.tracks.reduce((n, t) => n + t.clips.length, 0));
+/** 选中第一个片段(Delete 键删的就是选中的片段) */
+const selectFirstClip = (page) => page.evaluate(() => {
+  const c = window.__pcStore.getState().project.tracks.flatMap((t) => t.clips)[0];
+  if (c) window.__pcStore.actions.select([c.id]);
+  return c?.id ?? null;
+});
 
 /** 从各条路去改项目;回各条路之后项目对象有没有换 */
 async function tryEditPaths(page) {
@@ -112,10 +138,13 @@ async function tryEditPaths(page) {
   const changed = {};
   const snap = () => page.evaluate(() => {
     const s = window.__pcStore.getState();
-    return { same: s.project === window.__p0, name: s.project.name, tracks: s.project.tracks.length, media: s.project.media.length, renaming: !!document.querySelector('.pc-projname--editing') };
+    return { same: s.project === window.__p0, name: s.project.name, tracks: s.project.tracks.length, clips: s.project.tracks.reduce((n, t) => n + t.clips.length, 0), media: s.project.media.length, renaming: !!document.querySelector('.pc-projname--editing'), canUndo: window.__pcStore.actions.canUndo() };
   });
-  // 1 快捷键:Ctrl+Z 撤销(焦点不在输入框)
+  // 0 快捷键:Delete 删选中的片段(焦点不在输入框)
   await page.evaluate(() => document.activeElement?.blur?.());
+  await page.keyboard.press('Delete');
+  await sleep(150); changed.deleteKey = await snap();
+  // 1 快捷键:Ctrl+Z 撤销
   await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control');
   await sleep(150); changed.ctrlZ = await snap();
   // 2 标题栏菜单命令(桌面版的「编辑 → 撤销」)
@@ -142,14 +171,12 @@ async function tryEditPaths(page) {
     el.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 300, ctrlKey: true }));
   });
   await sleep(150); changed.pasteWheel = await snap();
-  // 6 Agent 面板:焦点放进输入框,打字、回车
+  // 6 Agent 面板:焦点放进输入框打字。打不进字就发不出去;不按回车 —— 没拦住的话(改之前的代码)回车会真把话发给 Agent
   const hasComposer = await page.evaluate(() => { const t = document.querySelector('.ai-composer-input'); if (!t) return false; t.focus(); return true; });
-  if (hasComposer) {
-    await page.keyboard.type('把标题改成 X');
-    await page.keyboard.press('Enter');
-  }
+  if (hasComposer) await page.keyboard.type('把标题改成 X');
   await sleep(200);
   changed.agentPanel = { ...(await snap()), composer: hasComposer, typed: await page.evaluate(() => document.querySelector('.ai-composer-input')?.value ?? null) };
+  await page.evaluate(() => document.activeElement?.blur?.());
   return changed;
 }
 
@@ -161,6 +188,11 @@ async function phaseLock(browser) {
   });
   const tracks0 = await trackCount(page);
   await addTrack(page, '探针序列');
+  const selected = await selectFirstClip(page);
+  const clips0 = await clipCount(page);
+  // 撤销栈里要真有这一步、有选中的片段,快捷键那两条路才测得出东西
+  const undoReady = await waitFor(page, () => window.__pcStore.actions.canUndo(), null, 10000).then(() => true, () => false);
+  check('lock.precondition', undoReady && !!selected, { canUndo: undoReady, selected, clips0 });
   const fname = await fileName(page);
   await page.evaluate(() => { window.__saveProbe.mode = 'hold'; });
   await clickSave(page);
@@ -170,11 +202,13 @@ async function phaseLock(browser) {
   await page.screenshot({ path: path.join(outDir, '1-saving.png') });
   const tried = await tryEditPaths(page);
   for (const [k, v] of Object.entries(tried)) {
-    const ok = v.same && v.name === '保存探针改过' && v.tracks === tracks0 + 1 && !v.renaming && (k !== 'agentPanel' || !v.composer || !v.typed);
+    const ok = v.same && v.name === '保存探针改过' && v.tracks === tracks0 + 1 && v.clips === clips0 && !v.renaming && (k !== 'agentPanel' || !v.composer || !v.typed);
     check(`lock.blocked.${k}`, ok, v);
   }
   await page.evaluate(() => window.__saveProbe.release());
-  await waitFor(page, () => !document.querySelector('[data-pc="save-lock"]'), null, 30000);
+  // 不靠被测代码的界面判断保存结束:等文件真的关上,再等脏标记清掉(最多 10 秒)
+  await waitFor(page, () => window.__saveProbe.log.includes('closed'), null, 30000).catch(() => {});
+  await waitFor(page, () => window.__pcStore.getState().dirty === false, null, 10000).catch(() => {});
   await sleep(300);
   const text = await page.evaluate((n) => window.__opfsText(n), fname);
   let savedName = null, savedTracks = null;
@@ -183,10 +217,11 @@ async function phaseLock(browser) {
   const dirty = await page.evaluate(() => window.__pcStore.getState().dirty);
   check('lock.marked-saved', dirty === false, { dirty });
   await page.evaluate(() => document.activeElement?.blur?.());
-  await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control');
+  await selectFirstClip(page);
+  await page.keyboard.press('Delete');
   await sleep(200);
-  const after = await trackCount(page);
-  check('lock.edit-restored', after === tracks0, { tracksAfterCtrlZ: after, tracks0 });
+  const clipsAfter = await clipCount(page);
+  check('lock.edit-restored', clipsAfter === clips0 - 1, { clipsAfterDelete: clipsAfter, clips0 });
   await page.screenshot({ path: path.join(outDir, '2-after-save.png') });
   await page.close();
 }
@@ -197,7 +232,7 @@ async function phaseTimeout(browser) {
   const fname = await fileName(page);
   // 先正常存一版,作为「上次有效保存」
   await clickSave(page);
-  await waitFor(page, () => !document.querySelector('[data-pc="save-lock"]') && window.__saveProbe.createCalls >= 1, null, 30000);
+  await waitFor(page, () => window.__saveProbe.log.includes('closed') && window.__pcStore.getState().dirty === false, null, 30000);
   await sleep(300);
   const before = await page.evaluate((n) => window.__opfsText(n), fname);
   check('timeout.baseline-saved', !!before && before.includes('超时探针'), { bytes: before?.length ?? 0 });
@@ -240,7 +275,7 @@ async function phaseFail(browser) {
   await page.evaluate(() => { window.__pcStore.actions.setProjectMeta({ name: '失败探针' }); });
   const fname = await fileName(page);
   await clickSave(page);
-  await waitFor(page, () => !document.querySelector('[data-pc="save-lock"]') && window.__saveProbe.createCalls >= 1, null, 30000);
+  await waitFor(page, () => window.__saveProbe.log.includes('closed') && window.__pcStore.getState().dirty === false, null, 30000);
   await sleep(300);
   const before = await page.evaluate((n) => window.__opfsText(n), fname);
   check('fail.baseline-saved', !!before && before.includes('失败探针'), { bytes: before?.length ?? 0 });
