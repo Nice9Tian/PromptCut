@@ -34,3 +34,14 @@ html[data-pc-readonly="member"] button:disabled,
 html[data-pc-readonly="member"] [aria-disabled="true"] {
   cursor: not-allowed;
 }
+
+/* 只读项目里点不了的东西一眼要看得出：被禁用的按钮统一压暗；自绘的格子（卡片、音频条、剪辑格）带 aria-disabled 的同样 */
+html[data-pc-readonly="member"] button:disabled {
+  opacity: 0.5;
+}
+html[data-pc-readonly="member"] :is(.pc-lib-card, .pc-lib-strip, .pc-lib-cut)[aria-disabled="true"],
+html[data-pc-readonly="member"] .pc-lib-card.is-readonly,
+html[data-pc-readonly="member"] .pc-lib-strip.is-readonly {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
