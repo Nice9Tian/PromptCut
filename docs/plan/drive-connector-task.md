@@ -148,6 +148,7 @@ VisuHive 的账号登录（Google 登录）和网盘连接器**共用这一个 O
 - **好处**：同一个产品一组登记，用户只看到一次 Google 授权页，授权一次两边都能用。
 - **代价**：同意屏幕的范围列表是两边共享的。
 - **配套的硬规矩：这个 Cloud 项目的范围列表只许加非敏感范围。** 要加敏感或受限范围的，另建一个 Cloud 项目，不要加在这里。理由：把范围压在 `drive.file` 上就是为了躲开 CASA 安全评估；同一个客户端上只要出现一个敏感范围，网盘连接器会被一起拖进验证流程，前面的功夫白费。
+- **实际上这个项目可以一直只有 `drive.file` 一个范围**〔2026-10-23 登录那条线实测，本会话未复核〕：账号登录走的是 Google Identity Services 的 ID 令牌流程（`google.accounts.id`），`openid` / `email` / `profile` 是 OpenID Connect 登录本身隐含的，不是「数据访问」页里要列的 API 范围——`email`、`email_verified`、`name` 直接在 ID 令牌里。对方用真实 Google 账号在 `https://localhost:5830` 登录成功时，同意屏幕的数据访问里只有 `drive.file`。ID 令牌流程也不需要重定向 URI，那一栏归网盘连接器独用。
 - **已获授权的 JavaScript 来源两边合用，各管各的几条，不要删别人的**：
 
   | 来源 | 谁的 |
