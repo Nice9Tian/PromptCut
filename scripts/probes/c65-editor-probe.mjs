@@ -387,8 +387,10 @@ async function phaseLocal() {
   check('overwritten-toast', !!toast && toast.startsWith('你的近期修改已被 你在另一个页面 覆盖。'), { toast });
   await shot(A, 'overwritten-toast');
 
-  // ---------- 离线:A 断网期间改 3 次,B 期间也改;A 回来 → 第一条被拒 → 离线对话框
-  const offline = async (value, choice) => {
+  // ---------- 离线:A 断网期间改 3 次,B 期间也改;A 回来 → 第一条被拒 → 冲突合并窗口
+  // 2026-10-22 起整份「加进去 / 不要了」的离线对话框换成逐项的「冲突合并」(conflict-merge 报告第十节):
+  // 「不要了」= 全勾 → 删除选中;「加进去」= 全勾 → 合并;关窗(下次再说)后顶栏是「冲突合并」按钮(原「同步已暂停」)
+  const offline = async (value) => {
     await P(A, () => window.__pcSyncTest.drop(4000));
     await waitFor(() => P(A, () => window.__pcSyncTest.view().status === 'offline'), 5000, 'A 离线');
     for (let i = 0; i < 3; i++) await setParam(A, c5, { text: `${value}${i}` });
@@ -396,30 +398,37 @@ async function phaseLocal() {
     await setParam(B, c5, { text: `B5-${value}` });
     await sleep(300);
     const chip = await P(A, () => document.querySelector('[data-pc=sync-offline]')?.innerText ?? null);
-    await waitFor(() => P(A, () => window.__pcSyncTest.view().status === 'paused'), 15_000, 'A 暂停');
+    await waitFor(() => P(A, () => !!document.querySelector('[data-pc=conflict-merge]')), 15_000, 'A 的冲突合并窗口');
     await sleep(300);
-    const dlg = await P(A, () => document.querySelector('[data-pc=offline-dialog]')?.innerText ?? null);
-    return { chip, dlg };
+    const dlg = await P(A, () => document.querySelector('[data-pc=conflict-merge]')?.innerText ?? null);
+    const row = await P(A, (id) => document.querySelector(`[data-pc=merge-thing][data-key="offline:clip:${id}"]`)?.innerText ?? null, c5);
+    return { chip, dlg, row };
   };
-  const off1 = await offline('离线', 'discard');
-  check('offline-dialog', !!off1.dlg && off1.dlg.includes('断网期间项目有新改动') && off1.dlg.includes('你有 3 步断网期间的修改') && off1.chip === '离线', off1);
-  await shot(A, 'offline-dialog');
-  await P(A, () => document.querySelector('[data-pc=offline-dialog] .pc-dialog-x')?.click());
+  const mergeAll = async (button) => {
+    await P(A, () => { for (const i of document.querySelectorAll('[data-pc=merge-thing-check]')) if (!i.checked) i.click(); });
+    await P(A, (b) => document.querySelector(`[data-pc="${b}"]`)?.click(), button);
+    await waitFor(() => P(A, () => document.querySelector('[data-pc=merge-close]')?.textContent?.trim() === '完成'), 5000, '列表清空');
+    await P(A, () => document.querySelector('[data-pc=merge-close]')?.click());
+  };
+  const off1 = await offline('离线');
+  check('conflict-merge-window', !!off1.dlg && off1.dlg.includes('冲突合并') && !!off1.row && off1.row.includes('「离线2」') && off1.row.includes('云端现在是 「B5-离线」') && off1.chip === '离线', off1);
+  await shot(A, 'conflict-merge-window');
+  await P(A, () => document.querySelector('[data-pc=merge-close]')?.click());
   await sleep(300);
-  const pausedChip = await P(A, () => document.querySelector('[data-pc=sync-paused]')?.innerText ?? null);
-  check('paused-chip-after-close', pausedChip === '同步已暂停', { pausedChip });
-  await shot(A, 'sync-paused-chip');
-  await P(A, () => document.querySelector('[data-pc=sync-paused]')?.click());
+  const navChip = await P(A, () => document.querySelector('[data-pc=conflict-merge-open]')?.innerText ?? null);
+  check('merge-button-after-close', !!navChip && navChip.includes('冲突合并'), { navChip });
+  await shot(A, 'conflict-merge-button');
+  await P(A, () => document.querySelector('[data-pc=conflict-merge-open]')?.click());
   await sleep(300);
-  check('paused-chip-reopens-dialog', await P(A, () => !!document.querySelector('[data-pc=offline-dialog]')));
-  await clickText(A, '不要了，用现在的最新版本', '[data-pc=offline-dialog]');
+  check('merge-button-reopens-window', await P(A, () => !!document.querySelector('[data-pc=conflict-merge]')));
+  await mergeAll('merge-delete');
   await settle(A, B);
   const afterDiscard = [await pageDigest(A), await pageDigest(B), await docState(docId)];
   check('offline-discard', afterDiscard[0].sha256 === afterDiscard[2].sha256 && afterDiscard[1].sha256 === afterDiscard[2].sha256 && (await clipOf(A, c5)).params.text === 'B5-离线', { c5: (await clipOf(A, c5)).params.text });
 
-  const off2 = await offline('重放', 'replay');
-  check('offline-dialog-2', !!off2.dlg);
-  await clickText(A, '加进去（可能会盖掉他们刚改的地方）', '[data-pc=offline-dialog]');
+  const off2 = await offline('重放');
+  check('conflict-merge-window-2', !!off2.dlg);
+  await mergeAll('merge-apply');
   await settle(A, B);
   const afterReplay = [await pageDigest(A), await pageDigest(B), await docState(docId)];
   check('offline-replay', afterReplay[0].sha256 === afterReplay[2].sha256 && afterReplay[1].sha256 === afterReplay[2].sha256 && (await clipOf(A, c5)).params.text === '重放2' && (await clipOf(A, c7)).params.text === 'B7-重放', { c5: (await clipOf(A, c5)).params.text, c7: (await clipOf(A, c7)).params.text });

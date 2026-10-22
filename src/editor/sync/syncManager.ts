@@ -21,7 +21,8 @@ import { isViewOnly } from "../io/viewOnly";
 import { SyncLink, type AnyMsg, type CloseInfo } from "./link";
 import { classifyEnterFailure, classifyProtocolError } from "./enterFailure";
 import { client, errorStatus, route, hosted, type Candidate, type SharedMode, type Where } from "./sharedApi";
-import { currentAssociation, noteConvertedFrom, publishGoneConversion, setAssociation, takeLoadedAssociation, type CollaborationDescriptor, type CloudProjectAssociation, currentCloudAssociation, setCloudAssociation, takeLoadedCloudAssociation, handleCloudAssociationReopen, setRealtimeRevGetter } from "./recoveryAssociation";
+import { currentAssociation, noteConvertedFrom, publishGoneConversion, setAssociation, takeLoadedAssociation, type CollaborationDescriptor, type CloudProjectAssociation, currentCloudAssociation, setCloudAssociation, takeLoadedCloudAssociation, handleCloudAssociationReopen, setRealtimeRevGetter, setCloudSnapshotGetter } from "./recoveryAssociation";
+import { reopenPlan } from "./cloudSnapshot";
 import { convertGoneProject, restoreOfflineEdits, type GoneProof } from "./cloudGone";
 // @ts-expect-error Browser-safe proof verification, shared with the server-side tooling.
 import { queryGone } from "../../../server/recovery/gone-proof.mjs";
@@ -33,7 +34,7 @@ import { serviceIdentity } from "../../../server/recovery/descriptor.mjs";
 import { discoverRoom, relayFetch, authorizeRelayAsset } from "../../../server/hosting/client.mjs";
 import { accountNameKey, clipOfEntity, entityLabel, writerLabel, type DisplayNames, type Me } from "./labels";
 import { connectSharedAssets, disconnectSharedAssets, lanAssetBaseOf, receiveSharedAssetEndpoints } from "../media/assetTiers";
-import { bindCardSync, noteProjectForCardSync, detachCardSync } from "./cardSync";
+import { bindCardSync, noteProjectForCardSync, detachCardSync, takeMineCard, receiveCardSyncNotice } from "./cardSync";
 import { accountCardTicket } from "./accountCardSync";
 import { createAccountLinkLife } from "./accountLinkLife";
 import { bindAgentSide, releaseAgentSide } from "./agentSideBinding";
@@ -59,7 +60,11 @@ import { hostedWsUrlOf } from "../../online/invite";
 import { AccountFailure, accountConnectionProtocols, projectLink } from "../../account/client";
 import { createOnlineBackups, type OnlineBackups } from "./onlineBackups";
 import { ACCOUNT_MOVE_TEXT, createAttemptStore } from "./accountMove";
-import { nextRecovery, RECOVERED_SHOW_MS } from "./onlineStatus";
+import { nextRecovery, RECOVERED_SHOW_MS, type OfflineStore } from "./onlineStatus";
+import { applyMerge, cardConflictThing, selectionList, staleSelections, type Box, type MergeThing, type Selection } from "./mergeItems";
+import { MergeTable } from "./mergeTable";
+import { offlineThings } from "./offlineTransfer";
+import { cacheKey, defaultStore } from "./offlineCache";
 
 /* ---------------- 界面状态 ---------------- */
 
@@ -182,6 +187,18 @@ export interface SyncView {
   onlineBackups: number;
   /** 当前项目的历史序号（文档服务确认的 rev） */
   rev: number | null;
+  /**
+   * 待合并表(「冲突合并」窗口,`mergeItems.ts`):当前项目里这位用户还没处理完的东西。
+   * 按「项目 × 用户」存在文档服务(连不上时先用本机暂存的副本),离线重连与 0.7.20 的撤销冲突共用。
+   */
+  merge: { things: MergeThing[]; version: number; blocked: string | null };
+  /** 「冲突合并」窗口开着(重连转进新的离线批次时自动打开;导航栏的「冲突合并」按钮也打开它) */
+  mergeOpen: boolean;
+  /**
+   * 离线改动现在存在哪(离线常驻提示与离开确认用,`onlineStatus.ts`):`saved` = 已存在本机(账号云端项目落盘到浏览器本地缓存、
+   * 桌面版的本机恢复文件);`page` = 只在这个页面里(在线页面里旧办法的口令房间,或浏览器本地缓存这次没写成)。
+   */
+  offlineStore: OfflineStore;
 }
 
 let view: SyncView = {
@@ -206,6 +223,9 @@ let view: SyncView = {
   recovery: null,
   onlineBackups: 0,
   rev: null,
+  merge: { things: [], version: 0, blocked: null },
+  mergeOpen: false,
+  offlineStore: ONLINE ? "page" : "saved",
 };
 const viewListeners = new Set<() => void>();
 
@@ -399,7 +419,11 @@ function saveOnlineBackup(b: LocalBackup) {
 }
 
 async function saveBackup(b: LocalBackup) {
-  if (ONLINE) {
+  // 离线批次逐项转进待合并表时的那一下整批回退:内容在待合并表里,这份只是安全网,不弹「已丢弃」(在线页面留在本页内存里)
+  const quiet = b.kind === "offline-discard" && transferringBatch;
+  if (quiet) {
+    if (ONLINE) { onlineBackupStore.save(b); return; }
+  } else if (ONLINE) {
     saveOnlineBackup(b);
     return;
   }
@@ -412,8 +436,8 @@ async function saveBackup(b: LocalBackup) {
     const r = await fetch("/api/project-backups", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (!r.ok) throw new Error(String(r.status));
   } catch (e) {
-    // 存不下来也要让用户知道:不能让他以为备份在那儿
-    pushToast(`本地备份没存下来(${(e as Error).message}),被覆盖的那一版找不回了。`, "warn", 10_000);
+    // 存不下来也要让用户知道:不能让他以为备份在那儿(转表时的安全网除外:内容在待合并表里)
+    if (!quiet) pushToast(`本地备份没存下来(${(e as Error).message}),被覆盖的那一版找不回了。`, "warn", 10_000);
   }
 }
 
@@ -484,9 +508,12 @@ function onNotice(n: SyncNotice) {
 function refreshStatus() {
   if (!cur) return;
   const ds = cur.link.ds;
+  // 离线批次被拒、停下:逐项转进待合并表(转不了才退回整份处理的离线对话框)
+  if (ds.status === "paused" && mergeTable && !transferringBatch) transferOffline(cur.link);
   const status = ds.status;
   const paused = ds.pausedInfo;
   patch({ status, paused, offlineOpen: status === "paused" ? view.offlineOpen || view.status !== "paused" : false });
+  attachMergeChannel(status === "online" ? cur.link : null);
   if (ONLINE) tickOnline();
 }
 
@@ -551,6 +578,14 @@ const cardSyncHooks = {
   toast: (text: string, tone: Toast["tone"], ms?: number) => pushToast(text, tone, ms),
   who: (actor: Record<string, unknown> | null | undefined) =>
     actor ? writerLabel({ actor, session: typeof actor.session === "string" ? actor.session : undefined }, me(), displayNames()) : "别人",
+  // 断网期间改过、云端也被别人改过的卡:一张卡一条进「冲突合并」(本机已换成云端的版本,我的版本在表里,另有备份)
+  conflict: (c: { key: string; mine: string; cloud: string; rev: number }) => {
+    const table = mergeTable;
+    if (!table) return false;
+    void table.add([cardConflictThing({ key: c.key, mine: c.mine, cloud: c.cloud, rev: c.rev, at: Date.now(), batch: newBatchId() })]);
+    patch({ mergeOpen: true });
+    return true;
+  },
 };
 
 /**
@@ -597,7 +632,7 @@ export function pageOpIdsSince(mark: number | null): string[] {
   return cur.link.ds.opIdsSince(mark);
 }
 
-function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, url: string, accountClient: CloudAccountClient | null = null) {
+function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, url: string, accountClient: CloudAccountClient | null = null, mergeUser: string | null = kind === "local" ? "local" : null) {
   const account = accountClient !== null;
   const prev = cur;
   if (!account) accountNames = new Map();
@@ -628,6 +663,11 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
     offs.push(() => clearInterval(tick));
   }
   cur = { link, kind, docProjectId, url, unbind, offs };
+  bindMergeTable(docProjectId, mergeUser);
+  // 账号云端项目(在线浏览器与桌面版都是):断网期间的修改落盘到浏览器本地缓存(旧办法的协作房间在桌面版另有本机恢复文件)
+  if (mergeUser && account) offs.push(watchBrowserJournal(link, docProjectId, mergeUser));
+  // 离线改动存在哪:账号项目落盘到浏览器本地缓存、桌面版有本机恢复文件 → 本机;在线页面的口令房间不落盘 → 只在本页
+  patch({ offlineStore: account || !ONLINE ? "saved" : "page" });
   // 云端 Agent 的身份跟着共享项目的连接走:接上就绪,回本机空间撤掉(界面据此重取一次 info 与对话列表)
   setCloudIdentity(kind === "shared" && !account ? cloudIdentityOf(link) : null);
   setCloudConsentSource(kind === "shared" && accountClient ? { client: accountClient, accountId: accountClient.account?.id ?? "" } : null);
@@ -683,6 +723,7 @@ function bindAccountEditorSide(link: SyncLink, docProjectId: string, url: string
 function detach() {
   const prev = cur;
   cur = null;
+  bindMergeTable(null, null);
   accountNames = new Map();
   setCloudIdentity(null);
   setCloudConsentSource(null);
@@ -765,9 +806,23 @@ function onLoad(project: Project): Project {
       enterProject: async (opts) => {
         await enterAccountProject(opts);
         const ds = cur?.link.ds;
-        if (ds && ds.confirmedProject && JSON.stringify(project) !== JSON.stringify(ds.confirmedProject)) {
-          ds.mergeOffline(project, cloudAssoc.savedRev);
+        if (!ds || !ds.confirmedProject) return;
+        // 固定非本机快照(`cloudSnapshot.ts`):文件里带着另存时的基准,就拿它和文件内容逐项比 ——
+        // 云端没人动过直接提交;被别人改过进「冲突合并」,别人后来的改动不会被当成「我撤销的」
+        const plan = reopenPlan(cloudAssoc, project, ds.rev, { batch: newBatchId(), at: Date.now() });
+        if (plan.kind === "none") return;
+        if (plan.kind === "table") {
+          if (mergeTable) {
+            void mergeTable.add(plan.things);
+            patch({ mergeOpen: true });
+            return "pending-merge";
+          }
+        } else if (plan.kind === "commit") {
+          ds.mergeOffline(project, ds.rev);
+          return;
         }
+        // 老文件没有基准:照旧以连回时的云端为基准合上去(有冲突照离线批次办)
+        if (JSON.stringify(project) !== JSON.stringify(ds.confirmedProject)) ds.mergeOffline(project, cloudAssoc.savedRev);
       },
     });
     return switchToLocal(project, { load: false });
@@ -997,6 +1052,10 @@ function onSideMessage(msg: AnyMsg) {
     case "presence.message":
       receivePresence(msg as Record<string, unknown>);
       return;
+    case "merge.state":
+      // 同一用户在别的设备、别的页面改了待合并表
+      mergeTable?.receive(msg as { projectId?: unknown; things?: unknown; version?: unknown });
+      return;
     default:
       return;
   }
@@ -1021,6 +1080,10 @@ if (typeof window !== "undefined" && import.meta.env?.DEV) {
     /** 账号云端项目:这条连接能用到什么时候、换过几次会话(`accountLinkLife.ts`) */
     accountLife: () => cur?.accountLife?.() ?? null,
     events: () => eventRecordList(),
+    /** 交一条卡片源码同步的提示给页面(和编辑器进程经 HMR 送来的同一条路;冲突合并里卡片那一行的验收用) */
+    cardNotice: (n: Record<string, unknown>) => receiveCardSyncNotice(n),
+    /** 待合并表现在的样子 */
+    mergeThings: () => view.merge.things,
   };
 }
 
@@ -1091,6 +1154,177 @@ export function discardOffline() {
   cur?.link.ds.discardOffline();
   patch({ offlineOpen: false });
   refreshStatus();
+}
+
+
+/* ---------------- 冲突合并:待合并表 ---------------- */
+
+/**
+ * 当前项目里这位用户的待合并表(`mergeTable.ts`):连上文档服务以它为准,断网时用本机暂存的副本。
+ * 用户按「项目 × 用户」:账号项目 `account:<号>`,口令项目 `user:<名>`,本机空间 `local`(与文档服务按连接身份取的同一口径)。
+ */
+let mergeTable: MergeTable | null = null;
+/** 待合并表现在接在哪条连接上(在线才接) */
+let mergeAttached: SyncLink | null = null;
+/** 正在把离线批次转进待合并表(那一下整批回退不弹「已丢弃」) */
+let transferringBatch = false;
+
+function bindMergeTable(docProjectId: string | null, user: string | null) {
+  if (mergeTable && mergeTable.projectId === docProjectId && mergeTable.user === user) return;
+  mergeTable?.attach(null);
+  mergeAttached = null;
+  const table: MergeTable | null = docProjectId && user ? new MergeTable({ projectId: docProjectId, user, kv: defaultStore(), onChange: (things) => {
+    // 换了项目之后旧表迟到的回调(本机暂存读得慢、旧连接的回包)不算
+    if (!table || mergeTable !== table) return;
+    patch({ merge: { things, version: view.merge.version + 1, blocked: table.blocked } });
+  } }) : null;
+  mergeTable = table;
+  patch({ merge: { things: mergeTable?.things ?? [], version: view.merge.version + 1, blocked: null }, mergeOpen: false });
+}
+
+function attachMergeChannel(link: SyncLink | null) {
+  if (!mergeTable || mergeAttached === link) return;
+  mergeAttached = link;
+  void mergeTable.attach(link ? { request: (msg) => link.request(msg as AnyMsg) } : null);
+}
+
+const newBatchId = () => `b${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+/**
+ * 离线批次被拒(断网期间项目被别人改过):基准 → 我这边逐项比出待合并的东西,交给待合并表;DocSync 当场回到云端现状照常同步,
+ * 离线修改只留在待合并表里(`product/document-service.md`「离线」:连上后存进该用户的待合并记录)。打开「冲突合并」窗口。
+ * 同步做完再等存储:等的这一会儿里的新修改不会被那一下整批回退带走。算不出基准时退回整份处理的离线对话框。
+ */
+function transferOffline(link: SyncLink) {
+  const ds = link.ds, table = mergeTable;
+  if (!table || ds.status !== "paused") return;
+  const things = offlineThings(ds.recoveryJournal(), { batch: newBatchId(), at: Date.now() });
+  if (!things) return;
+  transferringBatch = true;
+  try {
+    ds.discardOffline();
+  } finally {
+    transferringBatch = false;
+  }
+  if (things.length) patch({ mergeOpen: true });
+  // 在线页面的恢复阶段:离线修改没有提交,转进了待合并表,不能说「离线时的修改已全部提交」
+  if (ONLINE) { recoveryState = { phase: null, wasOffline: false, hadUnsent: false }; patch({ recovery: null }); }
+  void table.add(things).then((durable) => {
+    if (!durable && table.pendingOps) pushToast("离线修改已转进「冲突合并」，但这台设备暂时存不下来；连上文档服务前请不要关闭页面。", "warn", 10_000);
+  });
+  clearBrowserJournal(link);
+}
+
+export function setMergeOpen(open: boolean) {
+  patch({ mergeOpen: open });
+}
+
+/** 合并、删除选中的结果:给窗口里显示的一句话 */
+export interface MergeOutcome { ok: boolean; message: string; stale?: string[] }
+
+/**
+ * 「合并」:把选中的二级项照我这边写进项目(一次普通修改,进撤销栈),写成的从待合并表里拿掉。
+ * 每次都重新核对:`seen` 是窗口显示时各二级项的云端值,和现在的不一样(窗口打开后又被别人改过)的这次不并,交还给界面刷新再看。
+ */
+export function mergeSelected(sel: Selection, seen: Map<string, Box>): MergeOutcome {
+  const table = mergeTable;
+  if (!table || !cur || view.status !== "online") return { ok: false, message: "当前离线，连上后再合并。" };
+  const ds = cur.link.ds;
+  const things = table.things;
+  const stale = staleSelections(ds.project, things, seen, sel);
+  const chosen: Selection = new Map();
+  for (const [key, props] of sel) {
+    const kept = new Set([...props].filter((p) => !stale.includes(`${key}|${p}`)));
+    if (kept.size) chosen.set(key, kept);
+  }
+  const r = applyMerge(ds.project, things, chosen, { manualDuration: getState().durationManual });
+  // 卡片源码:交给编辑器进程照我这边的装回并传上去,成了再从表里拿掉(异步;结果另给一句气泡)
+  if (r.external.length) void mergeCards(r.external);
+  if (r.done.length) {
+    try {
+      ds.mergeOffline(r.project, ds.rev);
+    } catch (e) {
+      return { ok: false, message: `没合并成：${(e as Error).message}` };
+    }
+    void table.remove(r.done);
+  }
+  const n = r.done.reduce((k, d) => k + (chosen.get(d.key)?.size ? d.props.filter((p) => chosen.get(d.key)!.has(p)).length : 0), 0);
+  const parts = [n ? `已合并 ${n} 项。` : r.external.length ? "" : "没有合并任何项。"];
+  if (r.external.length) parts.push(`${r.external.length} 张卡片的源码正在照你这边写回去。`);
+  if (stale.length) parts.push(`${stale.length} 项在窗口打开后又被别人改过，这次没有合并，请看过现在的值再决定。`);
+  if (r.failed.length) parts.push(`${r.failed.length} 项没合并成：${[...new Set(r.failed.map((f) => f.reason))].join("；")}。`);
+  return { ok: r.failed.length === 0 && stale.length === 0, message: parts.join(""), stale };
+}
+
+async function mergeCards(list: { key: string; props: string[]; thing: MergeThing }[]) {
+  for (const x of list) {
+    const r = await takeMineCard(x.thing.ref.id, String(x.thing.mine?.v ?? ""));
+    if (r.ok) void mergeTable?.remove([{ key: x.key, props: x.props }]);
+    else pushToast(`卡片 ${x.thing.ref.id.replace(/^src\//, "")} 没写回去:${r.error ?? ""}`, "warn", 10_000);
+  }
+}
+
+/** 「删除选中」:从待合并表里拿掉,云端保持现状;断网时也能删(连上后再交给文档服务) */
+export function deleteSelected(sel: Selection): MergeOutcome {
+  const table = mergeTable;
+  if (!table) return { ok: false, message: "没有待合并项。" };
+  const list = selectionList(sel);
+  const n = list.reduce((k, x) => k + x.props.length, 0);
+  void table.remove(list);
+  return { ok: true, message: `已删除 ${n} 项，云端保持现状。` };
+}
+
+/* ---------------- 浏览器本地缓存里的离线批次 ---------------- */
+
+/**
+ * 账号云端项目与在线页面:断网期间的修改(DocSync 的离线批次)落盘到浏览器本地缓存(`offlineCache.ts`,IndexedDB),
+ * 关页面、刷新都不丢;再进这个项目时先恢复进来,照常走「第一条带期望版本去试」。都确认了就删掉。
+ * 写入合并成每 `BROWSER_JOURNAL_MS` 一次。
+ */
+export const BROWSER_JOURNAL_MS = 300;
+let journalSaved = true;
+const journalKey = (projectId: string, user: string) => cacheKey("journal", projectId, user);
+
+function watchBrowserJournal(link: SyncLink, projectId: string, user: string): () => void {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const write = () => {
+    timer = null;
+    const ds = link.ds;
+    const kv = defaultStore();
+    const key = journalKey(projectId, user);
+    const job = ds.unconfirmed > 0 && ds.status !== "paused" ? kv.put(key, ds.recoveryJournal()) : ds.status === "online" && ds.unconfirmed === 0 ? kv.delete(key) : null;
+    if (!job) return;
+    journalSaved = false;
+    // 写成了才算「已存在本机」;写不成(配额、隐私模式)如实改说「只在这个页面里」
+    job.then(() => { journalSaved = true; if (cur?.link === link) patch({ offlineStore: "saved" }); },
+      () => { journalSaved = false; if (cur?.link === link) patch({ offlineStore: "page" }); });
+  };
+  const schedule = () => { if (!timer) timer = setTimeout(write, BROWSER_JOURNAL_MS); };
+  const offs = [link.ds.on("project", schedule), link.ds.on("status", schedule)];
+  return () => { if (timer) clearTimeout(timer); for (const off of offs) off(); };
+}
+
+function clearBrowserJournal(link: SyncLink) {
+  const user = mergeTable?.user;
+  if (!user) return;
+  void defaultStore().delete(journalKey(link.ds.projectId, user)).catch(() => undefined);
+}
+
+/** 进项目前:浏览器本地缓存里有这个项目这位用户上次没交出去的离线批次,恢复进新连接的 DocSync */
+async function restoreBrowserJournal(ds: DocSync, user: string): Promise<boolean> {
+  try {
+    const saved = await defaultStore().get(journalKey(ds.projectId, user));
+    if (!saved) return false;
+    ds.restoreJournal(saved as Parameters<DocSync["restoreJournal"]>[0]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 浏览器本地缓存里的离线批次最近一次存下了没有(离开页面的确认用) */
+export function browserJournalSaved(): boolean {
+  return journalSaved;
 }
 
 /** 离线对话框里「这段时间项目有以下改动」:谁改了哪些实体 */
@@ -1264,7 +1498,7 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
       });
       patch({ shared: { projectId: options.projectId, name: options.name, mode: 'free', where: 'hosted', base,
         username: account.name, accountId: account.id, creator: current.creator }, members: [], hosted: current.hosted, blocked: null, association: null, reopenState: null });
-      bind(link, 'shared', options.projectId, url, options.client);
+      bind(link, 'shared', options.projectId, url, options.client, `account:${account.id}`);
       projectSession(current);
       setCloudIdentity(accountCloudIdentity({ projectId: options.projectId, isCurrent, session: async () => {
         if (current.expiresAt <= Date.now() + 60_000) await renew();
@@ -1372,6 +1606,8 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
     onClosed: info => { if (!ready || info.fatal) fail(new AccountFailure(info.fatal ? 403 : 0, info.reason || 'network'));
       else refreshStatus(); },
   });
+  // 上次在这个项目里断网时没交出去的修改(浏览器本地缓存):先恢复进来,连上后照常提交,被拒就逐项转进待合并表
+  if (projectAccountId) await restoreBrowserJournal(link.ds, `account:${projectAccountId}`);
   const timeout = setTimeout(() => { if (!ready) fail(new AccountFailure(503, 'session-unavailable')); }, 20_000);
   link.start();
   try { await opened; } finally { clearTimeout(timeout); }
@@ -1537,7 +1773,7 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials, 
         if (holding?.ds === link.ds) releaseHolding();
         const descriptor = descriptorOf(candidate);
         setAssociation(descriptor);
-        bind(link, "shared", candidate.projectId, wsUrl);
+        bind(link, "shared", candidate.projectId, wsUrl, null, `user:${cred.username}`);
         if (cur?.link === link) cur.updateAuthentication = k => { key = k; };
         patch({
           shared: { projectId: candidate.projectId, name: candidate.name, mode: candidate.mode, where: candidate.where, base: candidate.base, username: cred.username, creator: cred.as === "creator", hostDeviceName: candidate.hostDeviceName },
@@ -1847,6 +2083,11 @@ function holdRecovery(project: Project, descriptor: CollaborationDescriptor) {
 function releaseHolding() { holding?.off(); holding = null; }
 setProjectLoader(onLoad);
 setRealtimeRevGetter(() => cur?.link?.ds?.rev ?? null);
+// 另存 .proc 时的「非本机内容确定快照」:只在连着这个云端项目时给(以本地副本打开时 cur 是本机空间,不能拿它的序号与内容)
+setCloudSnapshotGetter((projectId) => {
+  const ds = cur?.kind === "shared" && cur.docProjectId === projectId ? cur.link.ds : null;
+  return ds?.confirmedProject ? { rev: ds.rev, project: ds.confirmedProject } : null;
+});
 
 /** A choice binds an existing device identity; file role fields never participate. */
 export async function recoveryIdentities(): Promise<{ as: "creator" | "member"; username: string; profile?: string }[]> {

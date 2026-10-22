@@ -20,7 +20,13 @@ test("表 A 五条状态措辞与常驻提示一字不差", () => {
     recovering: "已恢复连接，正在提交离线时的修改…",
     recovered: "离线时的修改已全部提交。",
   });
-  assert.equal(st.OFFLINE_UNSENT_TEXT, "当前离线，有未提交的修改。关闭页面将丢失这些操作。");
+  // 〔裁:2026-10-22 主会话〕按改动存没存下来分两句
+  assert.deepEqual({ ...st.OFFLINE_UNSENT_TEXT }, {
+    saved: "当前离线。你的改动已存在本机，连上网络后会合并回项目。",
+    page: "当前离线。你的改动只在这个页面里，关掉页面就会丢失。",
+  });
+  assert.equal(st.offlineUnsentText("saved"), st.OFFLINE_UNSENT_TEXT.saved);
+  assert.equal(st.offlineUnsentText("page"), st.OFFLINE_UNSENT_TEXT.page);
 });
 
 test("状态 → 措辞:断网、连不上文档服务、连不上素材服务、恢复中、恢复完成;暂停交给「同步已暂停」", () => {
@@ -41,6 +47,8 @@ test("常驻提示:离线(含暂停)且有未提交的修改才挂", () => {
   assert.equal(st.offlineUnsent("offline", 2), true);
   assert.equal(st.offlineUnsent("paused", 1), false, "暂停时已连上,不说「当前离线」");
   assert.equal(st.unsentAtRisk("paused", 1), true, "暂停时关页面照样丢,挂离开确认");
+  assert.equal(st.unsentAtRisk("offline", 1, "saved"), false, "改动已存在本机:关页面不丢,不拦");
+  assert.equal(st.unsentAtRisk("offline", 1, "page"), true);
   assert.equal(st.unsentAtRisk("offline", 1), true);
   assert.equal(st.unsentAtRisk("online", 1), false);
   assert.equal(st.offlineUnsent("offline", 0), false);
@@ -141,4 +149,15 @@ test("备份:缺省的下载走 Blob + <a download> + click(浏览器里),不写
     globalThis.document = saved.document;
     globalThis.URL = saved.URL;
   }
+});
+
+test("断网时导入媒体:只有在线浏览器置灰(浏览器说没网,或连不上文档服务);桌面版照常导入", () => {
+  const of = (p) => st.importOfflineOf({ online: true, status: "online", active: true, navigatorOnline: true, ...p });
+  assert.equal(st.IMPORT_OFFLINE_TEXT, "当前离线");
+  assert.equal(of({}), false);
+  assert.equal(of({ navigatorOnline: false }), true);
+  assert.equal(of({ status: "offline" }), true);
+  assert.equal(of({ status: "connecting" }), false, "刚进项目连接中不闪");
+  assert.equal(of({ status: "offline", active: false }), false, "没进共享项目不判");
+  assert.equal(of({ online: false, status: "offline", navigatorOnline: false }), false, "桌面版照常导入,连上后再上传");
 });

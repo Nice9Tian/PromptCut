@@ -392,9 +392,18 @@ try {
       check(near(cf.y, top.y + top.h + 2, 1.5) && near(cf.h, 36, 0.5) && /\d+ 处改动待合并/.test(out.C.bar.text), 'C 冲突横条在顶栏正下方', out.C.bar);
       await shot(A, 'm2-conflict');
       if (!(await A.$('[data-pcm="sheet-conflict"]'))) await tap(A, '[data-pcm="cfbar-open"]');
+      // 进项目时的气泡可能盖住「处理」:点不着就直接点元素
+      if (!(await A.$('[data-pcm="sheet-conflict"]'))) await A.evaluate(() => document.querySelector('[data-pcm="cfbar-open"]')?.click());
       await A.waitForSelector('[data-pcm="sheet-conflict"]', { visible: true });
       await shot(A, 'm2-conflict-sheet');
+      // 2026-10-22 起面板是逐项勾选(同桌面「冲突合并」):「删除选中」没勾时是灰的,先勾上一级再删(原来是整份「删除全部」,点了就清)
+      out.C.dropBeforeSelect = await A.evaluate(() => document.querySelector('[data-pcm="cf-drop"]')?.disabled ?? null);
+      check(out.C.dropBeforeSelect === true, 'C 没勾选时「删除选中」是灰的', out.C.dropBeforeSelect);
+      await A.evaluate(() => { for (const i of document.querySelectorAll('[data-pcm="cf-thing"] .cf-head input')) if (!i.checked) i.click(); });
+      await sleep(300);
       await tap(A, '[data-pcm="cf-drop"]');
+      out.C.closeText = await until('删除选中后关闭按钮变「完成」', () => A.evaluate(() => document.querySelector('[data-pcm="cf-close"]')?.textContent?.trim() === '完成' ? '完成' : null), 10_000);
+      await A.evaluate(() => document.querySelector('[data-pcm="cf-close"]')?.click());
       const gone = await until('处理完横条收起', async () => !(await A.$('[data-pcm="cfbar"]')), 30_000);
       const pane = await rect(A, '[data-pcm="pane-preview"]'), pager = await rect(A, '[data-pcm="pager"]');
       out.C.after = { gone: !!gone, paneBottom: pane.y + pane.h, pagerTop: pager.y };

@@ -9,6 +9,7 @@ import { KIND_GROUP, LIBRARY_GROUPS, LIBRARY_GROUP_IDS, type GroupData } from ".
 import { GroupBrowser } from "./library/GroupBrowser";
 import { useMediaGroup, useMediaMenu } from "./library/mediaGroups";
 import { useCutsGroup } from "./library/cutsGroup";
+import { IMPORT_OFFLINE_TEXT, useImportOffline } from "../sync/useImportOffline";
 
 /**
  * 「素材库」分区:导入媒体 → 搜索 → 分类胶囊 → 分组(视频 / 图片 / 音频)。
@@ -36,7 +37,9 @@ export function LibrarySection() {
 
   const data: Record<string, GroupData> = { videos, images, music, cuts: cuts.data };
 
-  const importMedia = useCallback(() => { mediaInputRef.current?.click(); }, []);
+  // 在线浏览器断网时导入媒体置灰、提示「当前离线」(桌面版照常导入,连上后再上传;2026-10-22 用户定)
+  const importOffline = useImportOffline();
+  const importMedia = useCallback(() => { if (!importOffline) mediaInputRef.current?.click(); }, [importOffline]);
 
   const handleMediaFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -69,11 +72,13 @@ export function LibrarySection() {
           type="button"
           className="pc-btn-primary is-block pc-left-primary"
           data-pc-add="media"
-          title="导入素材(视频 / 音频 / 图片,按类型自动归位)"
+          title={importOffline ? IMPORT_OFFLINE_TEXT : "导入素材(视频 / 音频 / 图片,按类型自动归位)"}
+          disabled={importOffline}
+          data-offline={importOffline ? "" : undefined}
           onClick={importMedia}
         >
           <IconImport size={16} />
-          <span>导入媒体</span>
+          <span>{importOffline ? `导入媒体（${IMPORT_OFFLINE_TEXT}）` : "导入媒体"}</span>
         </button>
         <SearchBox value={search} onChange={setSearch} placeholder="搜索素材…" dataPc="search" />
       </SectionHead>

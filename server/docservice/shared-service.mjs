@@ -37,6 +37,7 @@ import { projectModule } from './modules/project.mjs';
 import { contentModule } from './modules/content.mjs';
 import { costsModule } from './modules/costs.mjs';
 import { presenceModule } from './modules/presence.mjs';
+import { pendingMergeModule } from './modules/pending-merge.mjs';
 import { eventsModule } from './modules/events.mjs';
 import { sharedModule } from './modules/shared.mjs';
 import { createFileStore, createMemoryStore } from './store/index.mjs';
@@ -291,6 +292,8 @@ export function createSharedDocService({
         project, content, events: eventsModule({ project, content }), costs: costsModule({ space, store: storeForSpace(space) }),
         // 在场状态(A3 第二阶段):成员页面的「正在编辑」、Agent 的范围与消息,只在内存里转发,借项目频道广播
         presence: presenceModule({ project }),
+        // 待合并表(冲突合并窗口):按「项目 × 用户」存在这个空间的存储里,独立于项目 JSON
+        merge: pendingMergeModule({ store: storeForSpace(space), now }),
         ...(docAssembly ? { selection: docAssembly.selectionForSpace({ space, project }) } : {}),
       };
       bundles.set(space, b);
@@ -325,6 +328,7 @@ export function createSharedDocService({
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).events }));
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).costs }));
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).presence }));
+  service.mount(spacedModule({ create: (space) => bundleForSpace(space).merge }));
   if (docAssembly) service.mount(spacedModule({ create: (space) => bundleForSpace(space).selection }));
   service.mount(sharedModule({
     store: storeOf,

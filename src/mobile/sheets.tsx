@@ -11,7 +11,11 @@ import { listCuts } from "../kernel/cuts";
 import type { CardDef } from "../kernel/types";
 import { importMediaFiles, MEDIA_ACCEPT } from "../editor/left/importAssets";
 import { useCardLibrary } from "../editor/left/library/cardGroups";
-import { currentAccountProjectLink, currentSharedUrl, discardOffline, pausedSummary, replayOffline, setOfflineOpen, useSync } from "../editor/sync/syncManager";
+import { currentAccountProjectLink, currentSharedUrl, discardOffline, pausedSummary, replayOffline, setMergeOpen, setOfflineOpen, useSync } from "../editor/sync/syncManager";
+import { mergeBarText, useConflictMerge, useMergeCounts } from "../editor/sync/useConflictMerge";
+import { mergeBlockedText } from "../editor/sync/ConflictMerge";
+import { IMPORT_OFFLINE_TEXT, useImportOffline } from "../editor/sync/useImportOffline";
+import "./conflictMerge.css";
 import { exportVideo, cancelExport, streamExportFile } from "../editor/io";
 import { pickSaveTarget } from "../editor/io/proc";
 import { exportGateNow } from "../editor/media/assetTiers";
@@ -52,6 +56,8 @@ export function AssetsSheet(props: { tab: AssetTab; onTab: (t: AssetTab) => void
   const toast = useToast();
   const input = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
+  // 在线浏览器断网时导入媒体置灰、提示「当前离线」(2026-10-22 用户定)
+  const importOffline = useImportOffline();
   const list = media.filter((m) => (props.tab === "audio" ? m.kind === "audio" : props.tab === "image" ? m.kind === "image" : m.kind === "video"));
   const onFiles = async (files: FileList | null) => {
     if (!files?.length) return;
@@ -74,7 +80,7 @@ export function AssetsSheet(props: { tab: AssetTab; onTab: (t: AssetTab) => void
       title="素材库"
       tall
       onClose={props.onClose}
-      head={props.tab !== "cut" ? <button type="button" className="chip accent" data-pcm="import" disabled={busy} onClick={() => input.current?.click()}>{busy ? "导入中…" : "＋ 导入"}</button> : null}
+      head={props.tab !== "cut" ? <button type="button" className="chip accent" data-pcm="import" disabled={busy || importOffline} title={importOffline ? IMPORT_OFFLINE_TEXT : undefined} onClick={() => { if (!importOffline) input.current?.click(); }}>{busy ? "导入中…" : importOffline ? `＋ 导入（${IMPORT_OFFLINE_TEXT}）` : "＋ 导入"}</button> : null}
       tabs={<div className="seg">{ASSET_TABS.map((t) => <button key={t.id} type="button" className={t.id === props.tab ? "on" : undefined} onClick={() => props.onTab(t.id)}>{t.label}</button>)}</div>}
     >
       <input ref={input} type="file" multiple accept={MEDIA_ACCEPT} hidden data-pcm="import-input" onChange={(e) => void onFiles(e.target.files)} />
@@ -92,7 +98,7 @@ export function AssetsSheet(props: { tab: AssetTab; onTab: (t: AssetTab) => void
         </>
       ) : (
         <>
-          <button type="button" className="dropzone" disabled={busy} onClick={() => input.current?.click()}>＋ 从相册 / 文件导入</button>
+          <button type="button" className="dropzone" data-pcm="import-dropzone" disabled={busy || importOffline} onClick={() => { if (!importOffline) input.current?.click(); }}>{importOffline ? `＋ 从相册 / 文件导入（${IMPORT_OFFLINE_TEXT}）` : "＋ 从相册 / 文件导入"}</button>
           <div className="hint">{props.tab === "audio" ? "点一下加到播放头位置。" : "点一下接到主要内容末尾。"}</div>
           {list.length === 0 ? <div className="hint" data-pcm="asset-empty">这个项目里还没有{ASSET_TABS.find((t) => t.id === props.tab)!.label}素材。</div> : (
             <div className="grid">
@@ -309,43 +315,91 @@ export function ParamsSheet(props: { target: ParamsTarget; onClose: () => void; 
 /* ======================== 冲突合并 ======================== */
 
 /**
- * 待合并的离线修改。业务层现在只有「暂停」这一种(断网期间项目被别人改过:`syncManager` 的 `paused`),
- * 处理也只能整份「合并」或整份「丢弃」—— 逐项勾选与「按用户存待合并表」还没实现(`product/document-service.md`
- * 第 75～85 行),这里只列出改动、不画勾选框(任务书「设计决定」3,记待用户项)。
+ * 冲突合并面板:与桌面的「冲突合并」窗口同一套(两级可勾选列表、「选中无冲突项」「取消全部勾选」、
+ * 「合并」「删除选中」「下次再说 / 完成」),状态与动作都在 `editor/sync/useConflictMerge.ts`;样子照演示稿第九轮。
+ * 待合并项来自待合并表(`mergeItems.ts`,按「项目 × 用户」存在文档服务),离线重连与 0.7.20 的撤销冲突共用。
+ * 「同步已暂停」(离线批次算不出逐项差异、退回整份处理)这种少见情形仍在这里给整份「合并 / 删除全部」。
  */
 export function useConflicts(): { pending: boolean; queued: number; conflicts: number } {
+  const c = useMergeCounts();
   const paused = useSync((v) => (v.status === "paused" ? v.paused : null));
-  if (!paused) return { pending: false, queued: 0, conflicts: 0 };
-  const conflicts = pausedSummary().reduce((n, s) => n + s.what.length, 0);
-  return { pending: true, queued: paused.queued, conflicts };
+  if (c.total) return { pending: true, queued: c.total, conflicts: c.conflicts };
+  if (paused) return { pending: true, queued: paused.queued, conflicts: pausedSummary().reduce((n, s) => n + s.what.length, 0) };
+  return { pending: false, queued: 0, conflicts: 0 };
 }
 
 export function conflictBarText(c: { queued: number; conflicts: number }): string {
-  return `${c.queued} 处改动待合并${c.conflicts ? `，其中 ${c.conflicts} 处有冲突` : ""}`;
+  return mergeBarText({ total: c.queued, conflicts: c.conflicts });
 }
 
 export function ConflictSheet(props: { onClose: () => void }) {
-  const c = useConflicts();
-  const summary = c.pending ? pausedSummary() : [];
-  const close = () => { setOfflineOpen(false); props.onClose(); };
+  const paused = useSync((v) => v.status === "paused" && !!v.paused);
+  const m = useConflictMerge();
+  const close = () => { setOfflineOpen(false); setMergeOpen(false); props.onClose(); };
+  if (paused && !m.hasItems) return <PausedSheet onClose={close} done={props.onClose} />;
   return (
     <Sheet id="conflict" title="冲突合并" onClose={close} foot={
       <div className="cf-foot">
-        <button type="button" className="btn primary" data-pcm="cf-merge" disabled={!c.pending} onClick={() => { replayOffline(); props.onClose(); }}>合并</button>
-        <button type="button" className="btn" data-pcm="cf-drop" disabled={!c.pending} onClick={() => { discardOffline(); props.onClose(); }}>删除全部</button>
-        <button type="button" className="btn" data-pcm="cf-close" onClick={close}>{c.pending ? "下次再说" : "完成"}</button>
+        {m.hasItems && <>
+          <button type="button" className="btn primary" data-pcm="cf-merge" disabled={!m.selected || !m.online} onClick={m.merge}>合并</button>
+          <button type="button" className="btn" data-pcm="cf-drop" disabled={!m.selected} onClick={m.remove}>删除选中</button>
+        </>}
+        <button type="button" className="btn" data-pcm="cf-close" onClick={close}>{m.hasItems ? "下次再说" : "完成"}</button>
       </div>
     }>
-      {!c.pending ? <div className="hint" style={{ textAlign: "center", padding: "30px 0" }}>全部处理完了 ✓</div> : <>
-        <div className="hint">你有 {c.queued} 步断网期间的修改。这段时间项目有以下改动，可能会和你的修改重叠：</div>
-        {summary.length ? summary.map((s, i) => (
-          <div key={i} className="cf-group">
-            <div className="cf-head"><span className="nm">{s.who}</span>{s.what.length ? <span className="chip warn">有冲突</span> : <span className="chip">无冲突</span>}</div>
-            <div className="cf-sub">{s.what.length ? s.what.map((w, j) => <span key={j}>{w}</span>) : <span>（没有列出具体位置）</span>}</div>
-          </div>
-        )) : <div className="hint">（文档服务没有列出具体改动）</div>}
-        <div className="hint">「合并」把你的修改加进去（可能会盖掉他们刚改的地方）；「删除全部」丢掉你的离线修改，用现在的最新版本。</div>
+      {!m.hasItems ? <div className="hint" style={{ textAlign: "center", padding: "30px 0" }}>全部处理完了 ✓</div> : <>
+        <div className="hint" data-pcm="cf-summary">{mergeBarText(m.counts)}。勾选要处理的项，可以逐项勾。</div>
+        <div className="cf-top">
+          <button type="button" className="btn" data-pcm="cf-select-clean" onClick={m.selectNonConflict}>选中无冲突项</button>
+          <button type="button" className="btn" data-pcm="cf-clear" onClick={m.clearAll}>取消全部勾选</button>
+        </div>
+        {m.rows.map((row) => {
+          const state = m.check(row);
+          return (
+            <div key={row.key} className="cf-group" data-pcm="cf-thing" data-key={row.key}>
+              <div className="cf-head">
+                <label><input type="checkbox" aria-label={`勾选${row.label}`} checked={state === "all"} ref={(el) => { if (el) el.indeterminate = state === "some"; }} onChange={() => m.toggleThing(row)} /></label>
+                <span className="nm">{row.label}<small className="cf-kind">{row.changeText}</small></span>
+                {row.conflict ? <span className="chip warn">有冲突</span> : <span className="chip">无冲突</span>}
+              </div>
+              <div className="cf-sub">
+                {row.props.map((p) => (
+                  <label key={p.prop} className={p.conflict ? "is-conflict" : undefined} data-pcm="cf-prop">
+                    <input type="checkbox" checked={!!m.sel.get(row.key)?.has(p.prop)} onChange={() => m.toggleProp(row, p.prop)} />
+                    <span>{p.text}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+        {m.blocked && <div className="hint cf-warn" data-pcm="cf-blocked">{mergeBlockedText(m.blocked)}</div>}
+        {!m.online && <div className="hint cf-warn" data-pcm="cf-offline">当前离线：可以先「删除选中」，连上后再「合并」。</div>}
+        {m.note && <div className="hint" role="status" data-pcm="cf-note">{m.note}</div>}
       </>}
+    </Sheet>
+  );
+}
+
+/** 离线批次算不出逐项差异时的退路:整份「合并」(重放)或「删除全部」(丢弃,先存本地备份) */
+function PausedSheet(props: { onClose: () => void; done: () => void }) {
+  const summary = pausedSummary();
+  const queued = useSync((v) => v.paused?.queued ?? 0);
+  return (
+    <Sheet id="conflict" title="冲突合并" onClose={props.onClose} foot={
+      <div className="cf-foot">
+        <button type="button" className="btn primary" data-pcm="cf-merge" onClick={() => { replayOffline(); props.done(); }}>合并</button>
+        <button type="button" className="btn" data-pcm="cf-drop" onClick={() => { discardOffline(); props.done(); }}>删除全部</button>
+        <button type="button" className="btn" data-pcm="cf-close" onClick={props.onClose}>下次再说</button>
+      </div>
+    }>
+      <div className="hint">你有 {queued} 步断网期间的修改。这段时间项目有以下改动，可能会和你的修改重叠：</div>
+      {summary.map((s, i) => (
+        <div key={i} className="cf-group">
+          <div className="cf-head"><span className="nm">{s.who}</span>{s.what.length ? <span className="chip warn">有冲突</span> : <span className="chip">无冲突</span>}</div>
+          <div className="cf-sub">{s.what.length ? s.what.map((w, j) => <span key={j}>{w}</span>) : <span>（没有列出具体位置）</span>}</div>
+        </div>
+      ))}
     </Sheet>
   );
 }

@@ -25,8 +25,23 @@ export const ONLINE_STATUS_TEXT = {
 
 export type OnlineStatusKind = keyof typeof ONLINE_STATUS_TEXT;
 
-/** 离线且有未提交的改动时的常驻提示(表 A) */
-export const OFFLINE_UNSENT_TEXT = "当前离线，有未提交的修改。关闭页面将丢失这些操作。";
+/**
+ * 离线且有未提交的改动时的常驻提示(表 A)。〔裁:2026-10-22 主会话,conflict-merge 报告第六节第 7 条〕按改动到底存没存下来分两句:
+ * - 存下来了(账号云端项目:落盘到浏览器本地缓存;桌面版:本机恢复文件);
+ * - 没存下来(在线页面里旧办法的口令房间:不落盘,只在本页内存里)。
+ * 原文「当前离线，有未提交的修改。关闭页面将丢失这些操作。」作废:对账号项目是一句假警告。
+ */
+export const OFFLINE_UNSENT_TEXT = {
+  saved: "当前离线。你的改动已存在本机，连上网络后会合并回项目。",
+  page: "当前离线。你的改动只在这个页面里，关掉页面就会丢失。",
+} as const;
+
+/** 离线改动现在存在哪:本机(浏览器本地缓存、本机恢复文件)还是只在这个页面里 */
+export type OfflineStore = keyof typeof OFFLINE_UNSENT_TEXT;
+
+export function offlineUnsentText(store: OfflineStore): string {
+  return OFFLINE_UNSENT_TEXT[store];
+}
 
 /** 离线类措辞持续这么久才显示(不闪) */
 export const OFFLINE_SHOW_DELAY_MS = 1500;
@@ -58,9 +73,12 @@ export function offlineUnsent(status: SyncStatus, unconfirmed: number): boolean 
   return status === "offline" && unconfirmed > 0;
 }
 
-/** 该不该挂浏览器原生的离开确认:离线或暂停(离线批次等用户决定)时手里有没提交的修改,关页面就丢 */
-export function unsentAtRisk(status: SyncStatus, unconfirmed: number): boolean {
-  return (status === "offline" || status === "paused") && unconfirmed > 0;
+/**
+ * 该不该挂浏览器原生的离开确认:离线或暂停(离线批次等用户决定)时手里有没提交的修改,而且改动只在这个页面里(关页面就丢)。
+ * 改动已存在本机(`store: "saved"`)时不拦。
+ */
+export function unsentAtRisk(status: SyncStatus, unconfirmed: number, store: OfflineStore = "page"): boolean {
+  return store === "page" && (status === "offline" || status === "paused") && unconfirmed > 0;
 }
 
 /**
@@ -82,4 +100,17 @@ export function nextRecovery(prev: { phase: "recovering" | "recovered" | null; w
   }
   if (prev.phase === "recovering" && unconfirmed === 0 && status === "online") return { phase: "recovered", wasOffline: false, hadUnsent: false };
   return { ...prev, wasOffline: false };
+}
+
+/** 在线浏览器断网时「导入媒体」置灰后的提示(2026-10-22 用户定,`workflow/project.md`「断网时能做的事」) */
+export const IMPORT_OFFLINE_TEXT = "当前离线";
+
+/**
+ * 「导入媒体」要不要置灰:只有在线浏览器断网时(浏览器说没网,或连不上文档服务)。桌面版照常导入,连上后再上传;
+ * 改项目内容的其它操作断网时都允许,不经这里。
+ */
+export function importOfflineOf(s: { online: boolean; status: SyncStatus; active: boolean; navigatorOnline: boolean }): boolean {
+  if (!s.online) return false;
+  if (!s.navigatorOnline) return true;
+  return s.active && s.status === "offline";
 }

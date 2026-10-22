@@ -20,7 +20,14 @@ export async function runRecoveryMatrix(o) {
       return r.journal?.pending?.length > 0;
     } catch { return false; }
   }, { timeout: 15000 });
-  const paused = () => member.waitForFunction(() => window.probe.sync.getSyncView().status === 'paused', { timeout: 20000 });
+  // 2026-10-22 起:离线批次被拒后逐项转进「冲突合并」(conflict-merge 报告第十节),DocSync 只停一下就回到云端现状;等的是窗口
+  const mergeWindow = () => member.waitForSelector('[data-pc="conflict-merge"]', { timeout: 20000 });
+  const mergeAll = async (button) => {
+    await member.evaluate(() => { for (const i of document.querySelectorAll('[data-pc="merge-thing-check"]')) if (!i.checked) i.click(); });
+    await member.evaluate((b) => document.querySelector(`[data-pc="${b}"]`)?.click(), button);
+    await member.waitForFunction(() => document.querySelector('[data-pc="merge-close"]')?.textContent?.trim() === '完成', { timeout: 10000 });
+    await member.evaluate(() => document.querySelector('[data-pc="merge-close"]')?.click());
+  };
   const screenshot = async (p, file) => {
     await p.evaluate(() => { for (const i of document.querySelectorAll('input[type="password"]')) i.value = ''; });
     await p.screenshot({ path: path.join(root, file + '.png') });
@@ -87,11 +94,13 @@ export async function runRecoveryMatrix(o) {
   const beforePid = memberRuntime.pid;
   await member.close(); await stop(memberRuntime.child);
   memberRuntime = await editor('member', 5206); assert.notEqual(memberRuntime.pid, beforePid);
-  member = await page(memberRuntime.base); await open(member, memberFile); await paused();
-  await member.waitForSelector('[data-pc="offline-dialog"]');
-  assert.equal(await member.evaluate(() => window.probe.store.getState().project.name), 'matrix-offline-replay');
+  member = await page(memberRuntime.base); await open(member, memberFile); await mergeWindow();
+  // 离线时改的名称在窗口里是「项目设置」一条、二级「名称」,冲突(主机也改了名);本机先回到云端现状
+  const replayRow = await member.evaluate(() => document.querySelector('[data-pc="merge-thing"][data-key="offline:settings"]')?.innerText ?? null);
+  assert.ok(replayRow && replayRow.includes('matrix-offline-replay') && replayRow.includes('matrix-remote-replay'), `conflict row: ${replayRow}`);
+  assert.equal(await member.evaluate(() => window.probe.store.getState().project.name), 'matrix-remote-replay');
   await screenshot(member, 'matrix-conflict-replay');
-  await clickText(member, '[data-pc="offline-dialog"] button', '加进去（可能会盖掉他们刚改的地方）');
+  await mergeAll('merge-apply');
   await connected(member, roomId, 'member'); await sees(host, 'matrix-offline-replay'); await saved(member);
   evidence.crashRetainsOfflineQueue = true; evidence.conflictReplayUi = true;
 
@@ -102,10 +111,9 @@ export async function runRecoveryMatrix(o) {
   await name(member, 'matrix-offline-discard'); await waitJournal();
   await name(host, 'matrix-remote-discard'); await saved(host);
   assert.equal(await member.evaluate(() => window.probe.sync.currentSharedLink().connected), false, 'the member reconnected before the remote edit was saved; the conflict cannot occur');
-  await paused();
-  await member.waitForSelector('[data-pc="offline-dialog"]');
+  await mergeWindow();
   await screenshot(member, 'matrix-conflict-discard');
-  await clickText(member, '[data-pc="offline-dialog"] button', '不要了，用现在的最新版本');
+  await mergeAll('merge-delete');
   await connected(member, roomId, 'member'); await sees(member, 'matrix-remote-discard');
   await member.waitForFunction(async room => {
     const list = await (await fetch('/api/project-backups')).json();
