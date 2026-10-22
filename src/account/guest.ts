@@ -45,6 +45,11 @@ export interface GuestIdentity {
   token?: string;
   /** 令牌什么时候过期（毫秒） */
   expiresAt?: number;
+  /**
+   * 他自己建的那一个云端项目（游客只能建一个）。游客没有「我创建的」列表可查
+   * ——那张表是向官网账号要的——所以回来时靠这里找回自己的项目。
+   */
+  project?: { id: string; name: string };
 }
 
 /** 头像长什么样：色相 + 第几号图形。两样都是从 ID 推出来的，不单独存 */
@@ -115,8 +120,11 @@ function bytes(n: number): Uint8Array {
   return out;
 }
 
-export function guestFrom(id: string, createdAt: number, cloud?: { token: string; expiresAt: number }): GuestIdentity {
-  return { id, name: guestName(id), createdAt, ...(cloud ? { token: cloud.token, expiresAt: cloud.expiresAt } : {}) };
+export function guestFrom(id: string, createdAt: number, cloud?: { token: string; expiresAt: number },
+  project?: { id: string; name: string }): GuestIdentity {
+  return { id, name: guestName(id), createdAt,
+    ...(cloud ? { token: cloud.token, expiresAt: cloud.expiresAt } : {}),
+    ...(project ? { project } : {}) };
 }
 
 /**
@@ -151,7 +159,9 @@ export function loadGuest(given?: Store | null): GuestIdentity | null {
     // 名字不单独信存下来的那一份:ID 对得上就按 ID 重算,免得手改过存档之后名字和 ID 对不上
     const cloud = typeof value?.token === 'string' && value.token && typeof value?.expiresAt === 'number'
       ? { token: value.token, expiresAt: value.expiresAt } : undefined;
-    return guestFrom(value.id, typeof value?.createdAt === 'number' ? value.createdAt : Date.now(), cloud);
+    const project = typeof value?.project?.id === 'string' && value.project.id && typeof value.project?.name === 'string'
+      ? { id: value.project.id, name: value.project.name } : undefined;
+    return guestFrom(value.id, typeof value?.createdAt === 'number' ? value.createdAt : Date.now(), cloud, project);
   } catch {
     return null;
   }
@@ -186,8 +196,28 @@ export function adoptGuestSession(session: { id: string; token: string; expiresA
   given?: Store | null, now: () => number = Date.now): GuestIdentity {
   if (!isGuestId(session?.id)) throw new TypeError('adoptGuestSession: 不是游客编号');
   const had = loadGuest(given);
-  const createdAt = had && had.id === session.id ? had.createdAt : now();
-  return save(guestFrom(session.id, createdAt, { token: session.token, expiresAt: session.expiresAt }), given);
+  const same = had && had.id === session.id;
+  // 换了编号就是换了个人:上一个人建的项目不归他,别一起带过来
+  return save(guestFrom(session.id, same ? had.createdAt : now(),
+    { token: session.token, expiresAt: session.expiresAt }, same ? had.project : undefined), given);
+}
+
+/**
+ * 记下游客自己建的那个项目（只有一个）。回来时开始页靠它把项目列出来 ——
+ * 「我创建的」那张表是向官网账号要的，游客没有账号，查不到。
+ */
+export function rememberGuestProject(project: { id: string; name: string }, given?: Store | null): GuestIdentity | null {
+  const had = loadGuest(given);
+  if (!had) return null;
+  return save({ ...had, project }, given);
+}
+
+/** 这个项目没了（三天清理、或者创建者删了）：把记的那一条划掉，不然开始页上一直挂着一个打不开的项目 */
+export function forgetGuestProject(given?: Store | null): GuestIdentity | null {
+  const had = loadGuest(given);
+  if (!had?.project) return had;
+  const { project: _gone, ...rest } = had;
+  return save(rest, given);
 }
 
 /** 登录了账号之后把游客身份清掉：账号才是这台设备之后的身份 */

@@ -8,7 +8,7 @@ import './account.css';
 
 export function AccountProjects({ online, onEnterEditor }: { online: boolean; onEnterEditor: () => void }) {
   const ap = useAccountProjects({ online, onEnterEditor });
-  const { origin, account, busy, error, setError, shellOld, link, setLink, lists, listError, perform, request, guest } = ap;
+  const { origin, account, busy, error, setError, shellOld, link, setLink, lists, listError, perform, request, guest, guestProject } = ap;
   const [name, setName] = useState(''), [password, setPassword] = useState(''), [remember, setRemember] = useState(false);
   const [projectName, setProjectName] = useState('未命名');
   const [secondaryPassword, setSecondaryPassword] = useState('');
@@ -66,9 +66,16 @@ export function AccountProjects({ online, onEnterEditor }: { online: boolean; on
           </div>
         : <div className="sp-account-row"><span data-pc="account-name">已登录：{account!.name}</span><button className="sp-ghost-btn" disabled={busy} onClick={() => void perform(ap.logout)}>退出登录</button></div>}
       {guest && <p className="sp-muted sp-guest-limits" data-pc="guest-limits">{GUEST_LIMITS_TEXT}</p>}
+      {/* 游客没有「我创建的」那张表（它是向官网账号要的），自己建的那一个项目靠本机记着的那一条列出来 */}
+      {guest && guestProject && <div className="sp-account-row" data-pc="guest-project">
+        <button className="sp-ghost-btn" data-pc="guest-project-open" disabled={busy}
+          onClick={() => void perform(ap.openGuestProject)}>{guestProject.name}</button>
+        <button className="sp-ghost-btn" onClick={() => { setLink(ap.projectLink(guestProject.id)); }}>显示项目链接</button>
+      </div>}
       <form className="sp-account-form" onSubmit={e => { e.preventDefault(); void perform(() => ap.create(projectName)); }}>
         <label>项目名<input data-pc="cloud-project-name" required maxLength={200} value={projectName} onChange={e => setProjectName(e.target.value)} /></label>
-        <button className="sp-primary-btn" data-pc="cloud-create" disabled={busy}>{busy ? '正在处理…' : '新建云端项目'}</button>
+        <button className="sp-primary-btn" data-pc="cloud-create" disabled={busy || !!(guest && guestProject)}
+          title={guest && guestProject ? '游客只能建一个项目' : undefined}>{busy ? '正在处理…' : '新建云端项目'}</button>
       </form>
     </>}
     <form className="sp-account-form" onSubmit={e => { e.preventDefault(); void submitJoin(askSecondaryPassword ? secondaryPassword : (secondaryPassword || undefined)); }}>

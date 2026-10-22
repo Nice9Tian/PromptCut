@@ -338,6 +338,10 @@ export async function startHostedCombo({
   let accountProjects = null;
   let accountInternalServer = null;
   let accountInternalPort = null;
+  /** 游客项目的三天清理定时器（`server/account/guest.mjs`）；没有账号这条路的部署上一直是 null */
+  let guestSweepTimer = null;
+  /** 停掉清理定时器。关闭这件事有好几个出口（配错、正常关、几条错误路径），每个出口都要叫一次 */
+  const stopGuestSweep = () => { if (guestSweepTimer) { clearInterval(guestSweepTimer); guestSweepTimer = null; } };
   // v2素材独立进程；doc只加载自己的status client私钥，不读asset私钥或共享authority对象。
   const assetReadyProbe = account && assetStatus ? createAssetReadyProbe(assetStatus) : null;
   if (account) {
@@ -371,6 +375,18 @@ export async function startHostedCombo({
         runtime: accountRuntime, serviceRegistry, getDocAssembly: () => docAssembly,
         getService: () => docService, now, onDiagnostic: event => say('run.diagnostic', event) });
       await accountRuntime.start();
+      // 游客建的项目三天就清（`server/account/guest.mjs` 的 `GUEST_LIMITS.ttlMs`）：起来先扫一趟
+      // （上次关着的时候到期的也补上），之后每小时扫一次。一小时的粒度对三天的期限够用，
+      // 也不会在没有游客的部署上空转出什么开销。`unref` 掉，别拦住进程退出
+      const sweepGuests = () => {
+        try {
+          const swept = accountRuntime.authority.sweepExpiredGuestProjects();
+          if (swept.length) say('account.guest-sweep', { count: swept.length });
+        } catch (error) { say('account.diagnostic', { code: 'guest-sweep-failed', detail: String(error?.code ?? 'error') }); }
+      };
+      sweepGuests();
+      guestSweepTimer = setInterval(sweepGuests, 60 * 60 * 1000);
+      guestSweepTimer.unref?.();
       // 退出确认的续办：四样确认齐了才向账号服务报办完（`server/account/logout-confirmer.mjs`）。
       // 〔裁〕渲染服务这一版以服务自己的身份工作，不代任何登录持有连接或流，由文档服务写明原因代为登记；
       // 没配 Agent 的部署里 Agent 服务根本不存在，同样办。配了 Agent 就必须等它那一项真的收口。
@@ -472,7 +488,7 @@ export async function startHostedCombo({
       await docAgentAssembly?.close();
       await docAssembly?.close();
       runObserverAuthority?.close(); runPrivateClient?.close();
-      accountRuntime?.close();
+      stopGuestSweep(); accountRuntime?.close();
       assetReadyProbe?.close();
       throw new HostedConfigError('account-v2', { code: error?.code ?? 'configuration' });
     }
@@ -515,7 +531,7 @@ export async function startHostedCombo({
     try { await docAgentAssembly.start(); }
     catch (error) {
       await logoutConfirmer?.close(); await service.close(); await closeAccountInternal(); await docAgentAssembly.close();
-      await docAssembly?.close(); runObserverAuthority?.close(); runPrivateClient?.close(); accountRuntime?.close(); assetReadyProbe?.close(); throw error;
+      await docAssembly?.close(); runObserverAuthority?.close(); runPrivateClient?.close(); stopGuestSweep(); accountRuntime?.close(); assetReadyProbe?.close(); throw error;
     }
   }
 
@@ -584,7 +600,7 @@ export async function startHostedCombo({
     docAddr = await service.listen(docPort, host);
   } catch (err) {
     await service.close().catch(() => {});
-    await logoutConfirmer?.close(); await closeAccountInternal(); await docAgentAssembly?.close(); await docAssembly?.close(); runObserverAuthority?.close(); runPrivateClient?.close(); accountRuntime?.close(); assetReadyProbe?.close();
+    await logoutConfirmer?.close(); await closeAccountInternal(); await docAgentAssembly?.close(); await docAssembly?.close(); runObserverAuthority?.close(); runPrivateClient?.close(); stopGuestSweep(); accountRuntime?.close(); assetReadyProbe?.close();
     throw err;
   }
   let assetAddr;
@@ -598,7 +614,7 @@ export async function startHostedCombo({
     });
   } catch (err) {
     await service.close().catch(() => {});
-    await logoutConfirmer?.close(); await closeAccountInternal(); await docAgentAssembly?.close(); await docAssembly?.close(); runObserverAuthority?.close(); runPrivateClient?.close(); accountRuntime?.close(); assetReadyProbe?.close();
+    await logoutConfirmer?.close(); await closeAccountInternal(); await docAgentAssembly?.close(); await docAssembly?.close(); runObserverAuthority?.close(); runPrivateClient?.close(); stopGuestSweep(); accountRuntime?.close(); assetReadyProbe?.close();
     throw err;
   }
 
@@ -671,7 +687,7 @@ export async function startHostedCombo({
       await docAgentAssembly?.close();
       await docAssembly?.close();
       runObserverAuthority?.close(); runPrivateClient?.close();
-      accountRuntime?.close();
+      stopGuestSweep(); accountRuntime?.close();
       assetReadyProbe?.close();
     },
   };

@@ -6,6 +6,7 @@ import { AccountFailure, createAccountClient, projectIdFromLink, projectLink, JO
 import { desktopAccountBridge, isDesktopShellTooOld } from './desktopVault';
 import { createRequestIds } from './requestIds';
 import { enterOrAskPassword } from './entryFlow';
+import { forgetGuestProject, loadGuest, rememberGuestProject } from './guest';
 
 function tokenFromLink(text: string): string | undefined {
   const value = text.trim();
@@ -36,6 +37,8 @@ export function useAccountProjects({ online, onEnterEditor }: { online: boolean;
   const [account, setAccount] = useState<Account | null>(null), [busy, setBusy] = useState(true), [error, setError] = useState('');
   /** 以游客身份进来时的那一个身份（2026-10-23 用户定）；不是游客就是 null */
   const [guest, setGuest] = useState<GuestLogin | null>(null);
+  /** 游客自己建的那个项目（只有一个）。游客没有账号，查不到「我创建的」那张表，靠本机记着的这一条回去 */
+  const [guestProject, setGuestProject] = useState<{ id: string; name: string } | null>(null);
   /** 桌面外壳太老(0.2.8 以前的外壳打了补丁)没有账号桥:入口不报错,只说明要装完整安装包 */
   const [shellOld, setShellOld] = useState(false);
   const [link, setLink] = useState(() => {
@@ -96,16 +99,32 @@ export function useAccountProjects({ online, onEnterEditor }: { online: boolean;
   }
   async function logout() { await client.current!.logout(); setAccount(null); setLists(null); clearRequest(); }
   /** 以游客身份进来：本机记着的那一张交回去续期（还是同一个人），没有就领一个新身份 */
-  async function enterAsGuest() { setGuest(await client.current!.enterAsGuest()); }
+  async function enterAsGuest() { setGuest(await client.current!.enterAsGuest()); setGuestProject(loadGuest()?.project ?? null); }
   /** 「换一个」：不交旧令牌，服务端给个新的 */
-  async function newGuest() { setGuest(await client.current!.newGuest()); }
+  async function newGuest() { setGuest(await client.current!.newGuest()); setGuestProject(null); }
   /** 不当游客了（去登录账号）。本机那一份一并清掉 */
-  function leaveGuest() { client.current?.leaveGuest(); setGuest(null); setLists(null); clearRequest(); }
+  function leaveGuest() { client.current?.leaveGuest(); setGuest(null); setGuestProject(null); setLists(null); clearRequest(); }
+  /**
+   * 打开游客自己建的那个项目。它可能已经被三天清理清掉了（或者创建者自己删了）：
+   * 那就把记的那一条划掉，不然开始页上一直挂着一个打不开的项目。
+   */
+  async function openGuestProject() {
+    if (!guestProject) return;
+    try { await enter(guestProject.id, guestProject.name); }
+    catch (e) {
+      if ((e as { code?: string })?.code === 'no-project' || (e as { code?: string })?.code === 'project-gone') {
+        forgetGuestProject(); setGuestProject(null);
+      }
+      throw e;
+    }
+  }
   async function create(projectName: string) {
     const c = client.current!;
     if (createAttempt.current?.name !== projectName) createAttempt.current = { name: projectName, requestId: crypto.randomUUID(), initial: createEmptyProject(projectName) };
     const attempt = createAttempt.current!;
     if (!attempt.projectId) attempt.projectId = (await c.create(attempt.name, attempt.initial, attempt.requestId)).projectId;
+    // 游客记下自己这一个项目:下次进来开始页才列得出来(他没有账号,查不到「我创建的」)
+    if (c.guest) { rememberGuestProject({ id: attempt.projectId, name: attempt.name }); setGuestProject({ id: attempt.projectId, name: attempt.name }); }
     setLink(projectLink(origin, attempt.projectId)); await refreshLists(); await enter(attempt.projectId, attempt.name); createAttempt.current = null;
   }
   async function join(linkText: string, secondaryPassword: string | undefined): Promise<JoinOutcome> {
@@ -163,7 +182,7 @@ export function useAccountProjects({ online, onEnterEditor }: { online: boolean;
   // 读到申请被通过(`member`):马上重取项目列表,这个项目当场出现在「我加入的」里(设了二级密码、还没输的也在,从那里点进去先问密码)
   useEffect(() => { if (request?.state === 'member') void refreshLists(); }, [request?.state, request?.projectId]); // eslint-disable-line react-hooks/exhaustive-deps
   return { origin, account, busy, error, setError, shellOld, link, setLink, lists, listError, refreshLists, perform, enter, open, login, logout, create, join,
-    guest, enterAsGuest, newGuest, leaveGuest,
+    guest, guestProject, enterAsGuest, newGuest, leaveGuest, openGuestProject,
     request, sendRequest, clearRequest,
     projectLink: (projectId: string) => projectLink(origin, projectId) };
 }

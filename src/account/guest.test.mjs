@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import {
   GUEST_ID_RE, GUEST_SHAPES, GUEST_STORAGE_KEY,
   GUEST_LIMITS, GUEST_LIMITS_TEXT,
-  adoptGuestSession, clearGuest, ensureGuest, guestAvatar, guestFrom, guestName, isGuestId, loadGuest, newGuestId, resetGuest,
+  adoptGuestSession, clearGuest, ensureGuest, forgetGuestProject, rememberGuestProject, guestAvatar, guestFrom, guestName, isGuestId, loadGuest, newGuestId, resetGuest,
 } from './guest.ts';
 import { GUEST_LIMITS as SERVER_LIMITS } from '../../server/account/guest.mjs';
 
@@ -157,4 +157,34 @@ test('界面上说的限额和服务端真正拦的那几个数对得上', () =>
   // 那句话里的数也是从上面这几个拼出来的,不是手写死的
   for (const n of [GUEST_LIMITS.projects, GUEST_LIMITS.assets, GUEST_LIMITS.assetMB, GUEST_LIMITS.ttlDays])
     assert.ok(GUEST_LIMITS_TEXT.includes(String(n)), `那句话里该出现 ${n}`);
+});
+
+test('记住游客自己那一个项目：换身份不带过去，清掉之后不再挂着', () => {
+  const s = fakeStore();
+  assert.equal(rememberGuestProject({ id: 'sp_1', name: '第一个' }, s), null, '还没有身份时记不下，也不该抛');
+
+  const me = ensureGuest(s, () => 1);
+  const withProject = rememberGuestProject({ id: 'sp_1', name: '第一个' }, s);
+  assert.deepEqual(withProject.project, { id: 'sp_1', name: '第一个' });
+  assert.deepEqual(loadGuest(s)?.project, { id: 'sp_1', name: '第一个' }, '该存回本机，刷新之后还找得到');
+  assert.equal(loadGuest(s)?.id, me.id);
+
+  // 同一个人续期:项目跟着留
+  adoptGuestSession({ id: me.id, token: 'tok', expiresAt: 9_000 }, s, () => 2);
+  assert.deepEqual(loadGuest(s)?.project, { id: 'sp_1', name: '第一个' });
+
+  // 换了个人:上一个人的项目不归他
+  adoptGuestSession({ id: newGuestId(), token: 'tok2', expiresAt: 9_000 }, s, () => 3);
+  assert.equal(loadGuest(s)?.project, undefined);
+
+  // 项目没了就划掉
+  rememberGuestProject({ id: 'sp_2', name: '第二个' }, s);
+  assert.equal(forgetGuestProject(s)?.project, undefined);
+  assert.equal(loadGuest(s)?.project, undefined);
+  assert.ok(loadGuest(s)?.id, '划掉项目不该把身份一起弄丢');
+
+  // 存档里的项目写坏了当没有
+  const id = newGuestId();
+  s.map.set(GUEST_STORAGE_KEY, JSON.stringify({ id, createdAt: 1, project: { id: 5 } }));
+  assert.equal(loadGuest(s)?.project, undefined);
 });
