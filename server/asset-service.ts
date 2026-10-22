@@ -116,7 +116,7 @@ import { Readable } from "stream";
 import path from "path";
 import { createHash } from "crypto";
 import { apiPath, isAssetServicePath, clientAddressOf, isLocalOrigin } from "./http-guard.mjs";
-import { createBlobStore, candidateFileResolver, projectScopeOfRoot, assetContextOf, setAssetContext, authorizedAssetStore, createGuestAssetQuota } from "./asset-store/index.mjs";
+import { createBlobStore, candidateFileResolver, projectScopeOfRoot, assetContextOf, setAssetContext, authorizedAssetStore, createGuestAssetQuota, guestIdOfUserId } from "./asset-store/index.mjs";
 import {
   mediaDir, isMediaHash, extOfName, contentTypeForExt, resolveHashFile, writeMediaIndex, parseRange,
 } from "./vite-plugin-media";
@@ -508,16 +508,16 @@ function accessOf(req: IncomingMessage, write: boolean, tickets: AssetTicketVeri
     // 不许写预渲染产物;它写的块算成员的,不进托管方服务的容量账(回的结果不带 `service`)
     if (v.actsFor === "member") {
       if (write && ns !== "media") return DENY_403;
-      return { ok: true, projectId: v.projectId, accountId: v.userId };
+      return { ok: true, projectId: v.projectId, accountId: guestIdOfUserId(v.userId) ?? v.userId };
     }
     if (write && v.service && ns !== "snap" && ns !== "px") return DENY_403;
-    return { ok: true, service: v.service, projectId: v.projectId, accountId: v.userId };
+    return { ok: true, service: v.service, projectId: v.projectId, accountId: guestIdOfUserId(v.userId) ?? v.userId };
   }
   if (write) return DENY_401; // 写入一律不认查询串
   const q = queryTicketOf(req);
   if (q === null) return DENY_401;
   const v = verify(q);
-  return v.ok && v.access === "r" ? { ok: true, service: v.service, projectId: v.projectId, accountId: v.userId } : DENY_401;
+  return v.ok && v.access === "r" ? { ok: true, service: v.service, projectId: v.projectId, accountId: guestIdOfUserId(v.userId) ?? v.userId } : DENY_401;
 }
 
 /* ------------------------------------------------------------------ *

@@ -23,7 +23,7 @@ export { createProjectAssetStores, projectScopeOfRoot, projectStorageKey, PROJEC
 export { createAssetRevocationConsumer } from './project-revocations.mjs';
 export { authorizeAsset, openProjectStream, createProjectAssetAccess } from './project-access.mjs';
 export { assetContextOf, setAssetContext, authorizedAssetStore } from './project-access.mjs';
-export { createGuestAssetQuota, guestQuotaApplies } from './guest-quota.mjs';
+export { createGuestAssetQuota, guestQuotaApplies, guestIdOfUserId } from './guest-quota.mjs';
 
 export { BLOB_CHUNK_SIZE, createFsStore, createMemoryStore, createAssetClient, ensureLayoutSync, readLayoutSync, LAYOUT_FILE, LAYOUTS };
 

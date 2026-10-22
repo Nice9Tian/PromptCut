@@ -22,9 +22,9 @@
  *
  * 只引 Node 内置模块与 `../account/guest.mjs`（它只引 `node:crypto` 和同目录的 `client.mjs`）。
  */
-import { checkGuestAsset, isGuestId, GUEST_LIMITS } from '../account/guest.mjs';
+import { checkGuestAsset, guestIdOfUserId, isGuestId, GUEST_LIMITS } from '../account/guest.mjs';
 
-export { GUEST_LIMITS };
+export { GUEST_LIMITS, guestIdOfUserId };
 
 /** 这次写入要不要按游客限额管：只管游客往 `media` 写 */
 export const guestQuotaApplies = (accountId, ns) => ns === 'media' && isGuestId(accountId);

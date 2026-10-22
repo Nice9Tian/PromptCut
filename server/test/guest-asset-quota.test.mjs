@@ -256,7 +256,9 @@ test('整件上传 /api/media/upload：游客同样按 3 条、100 MB 拦，没�
 
 test('票据路径：票据的 userId 是游客就按游客限额拦；账号票据、本机回环不受限', async () => {
   const mediaStore = createMemoryStore();
-  const users = { 'g-rw': GUEST, 'a-rw': ACCOUNT };
+  // 真实票据里的 userId 写成 `account:<编号>@<设备>`（`server/docservice/account-hosted.mjs`），
+  // 不是裸编号 —— 夹具用裸编号的话，这条测试看着过了，线上那条路其实一次都不会命中
+  const users = { 'g-rw': `account:${GUEST}@device-1`, 'a-rw': `account:${ACCOUNT}@device-1`, 'g-bare': GUEST };
   const tickets = { verify: t => users[t] ? { ok: true, access: 'rw', projectId: 'p1', userId: users[t] } : { ok: false, reason: 'unknown' } };
   let trusted = false;
   const a = asset.assetServiceMiddleware(path.join(out, 'ticket-root'), { stores: { media: mediaStore }, tickets, isTrusted: () => trusted, pullArtifact: null, pxEvict: null });
