@@ -218,7 +218,10 @@ test('H07：Agent 服务重启时开着云端对话页，之后的改密退出�
     const pending = await neverShown(initiator, eventId, 4000);
     assert.equal(instances()[alive.ready.instanceId].state, 'active', '活着的实例不被记成已收口');
     assert.equal(instances()[alive.ready.instanceId].closure, null);
-    assert.equal(pageC.stream.closed, false, '页面上的事件流确实还开着');
+    // 等它确认的那条控制记录还没有回执（它的读取由它自己关、自己确认；更新的一代替不了它）
+    const waiting = (reads()?.controls ?? []).filter(c => c.targets[alive.ready.instanceId] && !c.targets[alive.ready.instanceId].receipt);
+    assert.ok(waiting.length >= 1, '等活着的实例确认的那条控制记录还悬着');
+    assert.equal(waiting.some(c => c.targets[newer.ready.instanceId]), false, '更新的一代名下没有读取，也不替旧的确认');
     // 活着的那个自己关了、确认了，才办完。
     await fixture.releaseAgentChildReadClose(alive);
     const done = await completeOnPage(initiator, eventId);
