@@ -33,8 +33,16 @@ const LOOK = {
   split: 0.57,
   /** 分界处那道暗脊有多深 */
   spine: 0.5,
-  /** 竖条纹的强弱 */
-  streak: 0.24,
+  /** 细竖条纹的强弱(参考海报右半边那些细线) */
+  streak: 0.14,
+  /** 条纹毛玻璃:一屏放几条 */
+  stripeN: 18.0,
+  /** 条纹的倾斜(0 = 正竖直;照上一版 CSS 的 104° 略微斜一点) */
+  stripeSkew: -0.22,
+  /** 磨砂有多糊:条纹里的纹理被推开多少 */
+  frostShift: 0.05,
+  /** 磨砂条和清条的对比 */
+  frost: 0.30,
   /** 颗粒 */
   grain: 0.055,
   /** 两道域扭曲各推多远 */
@@ -75,6 +83,7 @@ uniform vec3  uCool;
 uniform vec3  uWarm;
 uniform float uScale, uYStretch, uSplit, uSpine, uStreak, uGrain;
 uniform float uWarpA, uWarpB, uGamma, uGain, uFloor, uRoll, uSat;
+uniform float uStripeN, uStripeSkew, uFrostShift, uFrost;
 
 float hash12(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -113,7 +122,15 @@ void main() {
   vec2 q = vec2(fbm(p + vec2(0.0, t)), fbm(p + vec2(5.2, 1.3) - t * 0.7));
   vec2 r = vec2(fbm(p + uWarpA * q + vec2(1.7, 9.2) + t * 0.5),
                 fbm(p + uWarpA * q + vec2(8.3, 2.8) - t * 0.4));
-  float f = fbm(p + uWarpB * r);
+  // 条纹毛玻璃:一道道斜条里,底下的纹理被「磨」过 —— 少一层细节、还被横向推开一点,
+  // 就像隔着磨砂玻璃看;条与条之间是清的。这是上一版那层 backdrop-filter 条纹磨砂在着色器里的等价做法
+  // (用户点名要的就是「流动的极光 + 条纹毛玻璃 + 噪点」这三样,不能只剩前后两样)
+  float stripe = fract(uv.x * uStripeN + uv.y * uStripeSkew);
+  float frost = smoothstep(0.30, 0.70, stripe) * smoothstep(0.06, 0.45, uv.x);
+  vec2 pw = p + uWarpB * r;
+  float fSharp = fbm(pw);
+  float fSoft = fbm(pw * 0.55 + vec2(uFrostShift, 0.0));
+  float f = mix(fSharp, fSoft, frost * uFrost);
 
   // 冷暖的分界大体是一条竖线,只让噪声轻轻推一下 —— 推多了两边就互相咬进去,
   // 参考图是「左冷右暖、中间一道暗」,不是搅在一起
@@ -133,7 +150,10 @@ void main() {
   float dx = (uv.x - split) / 0.085;
   col *= 1.0 - uSpine * exp(-dx * dx);
 
-  // 竖条纹:按列取一个固定的随机数,越往右越明显(参考图就是右边那半有)
+  // 磨砂那一条自己也要有一点明暗差,不然「玻璃」看不出边
+  col *= 1.0 + (frost - 0.5) * 0.10;
+
+  // 细竖条纹:按列取一个固定的随机数,越往右越明显(参考海报右半边那些细线)
   float band = hash12(vec2(floor(uv.x * 240.0), 7.0));
   col *= 1.0 + (band - 0.5) * uStreak * smoothstep(0.18, 0.9, uv.x);
 
@@ -171,8 +191,16 @@ function compile(gl: WebGL2RenderingContext, type: number, src: string): WebGLSh
   gl.shaderSource(sh, src);
   gl.compileShader(sh);
   if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
-    // 编译不过就退回 CSS 那一版;把原因留在控制台,不然只看到一块兜底背景没法查
-    console.warn("[BrandCanvas] 着色器编译失败：", gl.getShaderInfoLog(sh));
+    // 编译不过就退回 CSS 那一版;把原因留在控制台,不然只看到一块兜底背景没法查。
+    // 开发期有一个常见原因:改这个文件触发热更新会反复重挂组件,每次新建一个 WebGL 上下文,
+    // 用满浏览器的上限(Chrome 约 16 个)之后新上下文一建就是坏的 —— 这时日志会是 null。
+    // 整页刷新一下就好,不是着色器写错了。
+    console.warn(
+      "[BrandCanvas] 着色器编译失败：",
+      gl.getShaderInfoLog(sh),
+      "gl.getError=", gl.getError(),
+      "（开发期若日志为 null，多半是热更新累积的 WebGL 上下文超了上限，整页刷新即可）",
+    );
     gl.deleteShader(sh);
     return null;
   }
@@ -243,6 +271,10 @@ export function BrandCanvas(): JSX.Element {
     gl.uniform1f(at("uFloor"), LOOK.floor);
     gl.uniform1f(at("uRoll"), LOOK.roll);
     gl.uniform1f(at("uSat"), LOOK.sat);
+    gl.uniform1f(at("uStripeN"), LOOK.stripeN);
+    gl.uniform1f(at("uStripeSkew"), LOOK.stripeSkew);
+    gl.uniform1f(at("uFrostShift"), LOOK.frostShift);
+    gl.uniform1f(at("uFrost"), LOOK.frost);
 
     const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 
@@ -335,13 +367,19 @@ export function BrandCanvas(): JSX.Element {
 }
 
 /*
- * 烘成不用实时渲染的版本(用户说审核过了就做):
- * 这个着色器是唯一的来源,别另画一张。两条路都走得通 ——
- *   静态图:把 `uTime` 钉在某一刻,按目标尺寸渲一帧,`canvas.toBlob()` 存成 WebP / AVIF,
- *          组件换成一个 <img>;
- *   循环动图:让 `uTime` 走完一个整周期,逐帧 `readPixels` 交给 ffmpeg 压成 H.264 / VP9,
- *          组件换成 <video loop muted playsinline>。
- * 现在的时间是一直往前走的,所以**不能直接首尾相接**。要无缝循环,得把时间换成在圆上转
- * (噪声的时间维取 `cos/sin` 两路),或者两段交叉淡入。这一步等画面审过再做,免得白烘一版。
- * 另外:烘成图就不会跟着皮肤的 --ui-accent 变了,换皮肤要么换图,要么只烘灰度再在 CSS 里上色。
+ * 烘成不用实时渲染的版本(用户说审核过了就做)。
+ *
+ * **只烘与颜色无关的那一层**,颜色仍由 `--ui-accent` 在运行时染上去 —— 这一条是硬的:
+ * 用户换皮肤、在设置里改强调色,这一块必须跟着变(`src/skins/` 十套皮肤 × 深浅)。整张焗死的图
+ * 换了皮肤就对不上。做法:
+ *   1. 把着色器改成只输出**亮度与结构**(f、frost、band、暗角那几项合成一个单通道),不乘颜色;
+ *   2. 按目标尺寸渲一帧(或一个循环)存成单通道的 WebP / AVIF,或者 H.264 / VP9 的灰度视频;
+ *   3. 页面上拿它当遮罩:一个铺着 `--ui-accent` → 琥珀渐变的层,用 `mask-image`(或 `-webkit-mask`)
+ *      套这张灰度图。换皮肤只换渐变那一层,遮罩不用重烘。
+ *
+ * 循环要无缝:现在时间是一直往前走的,**不能直接首尾相接**。要循环得把时间维换成在圆上转
+ * (噪声的时间参数取 `cos/sin` 两路),或者两段交叉淡入。
+ *
+ * 真要「整张连颜色一起烘死」(比如要的就是参考海报那个特定配色,不跟皮肤走),那是另一个决定,
+ * 得先问用户 —— 代价就是换皮肤这一块不跟着变。
  */
