@@ -50,6 +50,12 @@ export interface OutboxServerMessage { messageId?: unknown; requestId?: unknown;
 export type OutboxVerdict = "send" | "delivered" | "conflict";
 
 /** 用户看得到的几句话(一级语义的文字;出错对照表要补的行见 AGENT 报告) */
+/**
+ * 「发送失败」气泡上的「重新发送」:气泡发这个窗口事件(带气泡号),由持有待发清单的云端对话页接
+ * (桌面 `CloudAiPanel`、手机 `AgentChat`)。走事件不走 props:气泡组件是 memo 的,不多传一个会变的函数。
+ */
+export const OUTBOX_RESEND_EVENT = "pc-cloud-resend";
+
 export const OUTBOX_TEXT = {
   /** 排着的气泡下面那一行 */
   queued: "等网络恢复后发出",

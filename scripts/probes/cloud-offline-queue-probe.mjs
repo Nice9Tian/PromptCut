@@ -221,6 +221,54 @@ try {
   await waitFor(() => agent.messages.some((m) => m.content === '刷新前排着的'), 'fifth-sent', 60_000);
   check(agent.messages.filter((m) => m.content === '刷新前排着的').length === 1, '5-sent-once');
 
+
+  /* 6. 手机版 Agent 分页(真的 AgentChat):排队、发送失败带重新发送、点了发出 */
+  const mctx = await browser.createBrowserContext();
+  const m = await mctx.newPage();
+  debugPage = m;
+  await m.setViewport({ width: 375, height: 812, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+  m.on('pageerror', (e) => results.pageErrors.push(`mobile: ${String(e.message).slice(0, 240)}`));
+  m.on('console', (x) => { if (x.type() === 'error' && !/Failed to load resource|ERR_INTERNET_DISCONNECTED|net::/.test(x.text())) results.pageErrors.push(`mobile: ${x.text().slice(0, 240)}`); });
+  await m.evaluateOnNewDocument((k, v) => { try { if (!localStorage.getItem(k)) localStorage.setItem(k, v); } catch { /* */ } },
+    `pc.cloudChat:${ACCOUNT}:${PROJECT}:${TAB}`, CONV);
+  await m.goto(`${ORIGIN}/editor/?ui=mobile`, { waitUntil: 'domcontentloaded' });
+  const mBubbles = () => m.$$eval('[data-pcm="msg-me"]', (els) => els.map((el) => ({
+    text: el.querySelector('.plain')?.textContent?.trim() ?? '',
+    queued: el.querySelector('[data-pcm="send-queued"]')?.textContent?.trim() ?? null,
+    failed: el.querySelector('[data-pcm="send-failed"]')?.textContent?.trim() ?? null,
+    resend: Boolean(el.querySelector('[data-pcm="resend"]')),
+  })));
+  const mFind = async (text) => (await mBubbles()).find((b) => b.text === text);
+  const mSend = async (text) => {
+    await m.waitForSelector('[data-pcm="chat-input"]:not([disabled])');
+    await m.click('[data-pcm="chat-input"]');
+    await m.type('[data-pcm="chat-input"]', text);
+    await m.click('[data-pcm="chat-send"]');
+  };
+  await waitFor(() => mFind('断网时发的第三条'), 'mobile-history');
+  await m.setOfflineMode(true); dropStreams(); await m.waitForFunction(() => navigator.onLine === false);
+  await mSend('手机断网时发的一条');
+  await mSend('手机断网时发的第二条');
+  const mq = await waitFor(async () => { const a = await mFind('手机断网时发的一条'); const b = await mFind('手机断网时发的第二条');
+    return a?.queued && b?.queued ? [a, b] : null; }, 'mobile-queued');
+  check(mq.every((b) => b.queued === '等网络恢复后发出' && !b.failed), '6-mobile-queued', mq);
+  check(!agent.posts.some((x) => x.prompt.startsWith('手机断网')), '6-mobile-server-received-nothing');
+  { const file = path.join(OUT, 'mobile-01-queued.png'); await m.screenshot({ path: file }); results.shots.push(path.relative(ROOT, file)); }
+  addMessage({ requestId: 'other-device-2', content: '电脑上发的', senderAccountId: ACCOUNT, senderNameAtSend: '探针 A(电脑)' });
+  await m.setOfflineMode(false);
+  const mf = await waitFor(async () => { const a = await mFind('手机断网时发的一条'); const b = await mFind('手机断网时发的第二条');
+    return a?.failed && b?.failed ? [a, b] : null; }, 'mobile-failed', 30_000);
+  check(mf.every((b) => b.failed.startsWith('发送失败') && b.resend), '6-mobile-failed-with-resend', mf);
+  check(!agent.messages.some((x) => x.content.startsWith('手机断网')), '6-mobile-not-sent');
+  await waitFor(() => mFind('电脑上发的'), 'mobile-other-visible');
+  { const file = path.join(OUT, 'mobile-02-failed.png'); await m.screenshot({ path: file }); results.shots.push(path.relative(ROOT, file)); }
+  await m.click('[data-pcm="resend"]');
+  await waitFor(() => agent.messages.some((x) => x.content === '手机断网时发的一条'), 'mobile-resent', 30_000);
+  check((await mFind('手机断网时发的第二条'))?.resend === true && !agent.messages.some((x) => x.content === '手机断网时发的第二条'),
+    '6-mobile-resend-only-that-one');
+  await waitFor(async () => { const b = await mFind('手机断网时发的一条'); return b && !b.failed && !b.queued ? b : null; }, 'mobile-resent-settled');
+  { const file = path.join(OUT, 'mobile-03-resent.png'); await m.screenshot({ path: file }); results.shots.push(path.relative(ROOT, file)); }
+
   check(results.pageErrors.length === 0, 'no-page-errors', results.pageErrors);
   results.ok = true;
 } catch (error) {

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "../../../ai/types";
 import { LiveMarkdown } from "../../../ai/Markdown";
 import { attachIcon } from "./attachIcon";
-import { OUTBOX_TEXT } from "../../../ai/cloud/outbox";
+import { OUTBOX_RESEND_EVENT, OUTBOX_TEXT } from "../../../ai/cloud/outbox";
 import "./chat.css";
 import "./queue.css";
 
@@ -21,11 +21,8 @@ export interface RewindHandlers {
   onRewind: (userMessageId: string) => void;
 }
 
-/**
- * 云端对话里「发送失败」气泡上的「重新发送」:发这个窗口事件(带气泡号),由持有待发清单的云端对话页(CloudAiPanel)接。
- * 走事件不走 props:MessageRow 是 memo 的,不往下多传一个会变的函数。
- */
-export const CLOUD_RESEND_EVENT = "pc-cloud-resend";
+/** 「重新发送」发的窗口事件(定义在 outbox.ts,手机页共用) */
+export const CLOUD_RESEND_EVENT = OUTBOX_RESEND_EVENT;
 
 /** 逆时针的回退箭头 */
 function IconRewind() {
