@@ -196,3 +196,87 @@ VisuHive 全量 node --test account/test/*.test.mjs   ℹ tests 118  ℹ pass 10
 - **「退出和修改处理进度分别表达」**：没有单独的撤回进度显示（撤回结果随「设备已退出」一起出现），见第六节第 4 条。
 - **部署顺序是硬约束**：PromptCut 文档服务不能早于 VisuHive 账号后端上线，见第一节末。没有做「旧账号后端时跳过撤回」的降级，因为那样会把该撤的修改静默留下。
 - 真实网络环境验收没做（不部署就不跑，`verification.md`）。
+
+## 八、安全专审返工（2026-10-22）
+
+专审报告与反例测试在 `.worktrees/sec-logout-rollback`（`docs/reports/AGENT-claude-sec-logout-rollback.md`、`server/test/sec-logout-rollback.test.mjs`）。按协调方要求把那份测试原样复制到本 worktree 的 `server/test/sec-logout-rollback.test.mjs` 作为验收；SEC-01～05 五条全修（SEC-04 按协调方更正后的「五条全绿为准」也修了）。账号后端两个环境变量仍指本人的 VisuHive worktree（VisuHive 这次一行没改）。
+
+### 怎么修的
+
+| 条目 | 改法 | 文件 |
+|---|---|---|
+| SEC-01 补偿操作号被页面占号 | 前缀常量 `ROLLBACK_OP_PREFIX = 'logout-rollback:'` 和拼法 `rollbackOpId()` 写在一起（`logout-rollback.mjs`），项目模块用它拼号；有序提交的 `execute`（页面与 Agent 提交都经过它）遇到这个前缀直接拒 `reserved-op-id`；`executeSystem` 反过来只收这个前缀。执行器另外兜底：真撞上 `operation-id-mismatch`（前缀保留之前留下的老数据）就换下一个号，不卡住。顺带收敛专审 Q5：发给页面的 `project.ops`、`project.state` 的最近写入者、`stale` 回包里的写入身份和操作号都不再带事件号（写入身份换成 `rollback: true`，操作号换成不可反推的散列）；存储里照旧是全的。 | `server/account/logout-rollback.mjs`、`server/docservice/operation-wiring.mjs`、`server/docservice/modules/project.mjs` |
+| SEC-02 普通数组被当成带 id 数组的顺序项 | 删掉按值形状猜的 `isIdList`，改成 `isIdStructure`：看那次操作前后真实的数组（操作历史里每次操作都带前后快照；没有快照时看项目现在的值），用 `json-ops.mjs` 的 `isIdArray` 判；两边都是空数组时看同一次操作有没有记它的元素项。普通数组按整个数组 `set` 回退，和叶子属性一样判冲突、该进保留的进保留。 | `server/account/logout-rollback.mjs` |
+| SEC-03 判冲突两两比、同步占住事件循环 | 走**第①条（降到 O(n log n)）**，另加第②条的上限与分批作纵深防御，见下。 | `server/account/logout-rollback.mjs`、`server/docservice/modules/project.mjs` |
+| SEC-04 一个退出的撤回挡住别的退出 | 续办器里每个退出的撤回各自在后台跑（同一个事件同时只办一份，记在 `rollbacks` 里），一遍里最多等 `LOGOUT_ROLLBACK_WAIT_MS`（1 秒）；没办完记「撤回还在办」、先办别的退出；各退出并发「撤回 → 登记结束见证」。办成了叫醒续办器。「没办完就不登记结束见证」不变。 | `server/account/logout-confirmer.mjs` |
+| SEC-05 账本里的路径不限长 | 每条路径最多 300 个字符，超了截断并标「…〔截断〕」；每个项目 50 条的上限保留。 | `server/account/logout-rollback.mjs` |
+
+### SEC-03 走哪条、为什么
+
+选**第①条**：判「之后别人改没改过它本身、上级、下级」不再两两比。别人的修改记录按路径建两个索引：同一路径上各种类的最晚一次（查本身和上级，上级沿路径往上走，次数等于深度）；按路径排序的数组加区间最大值稀疏表（查下级：路径以 `p/` 开头的在排序后是连续一段，一次二分加一次 O(1) 查询）。带 id 数组按 id 找元素也改成按数组建一次索引。实测（同一台机器，单独跑，`planRollback` 本身）：
+
+| 区间里的修改项 | 改前 | 改后 |
+|---|---|---|
+| 2000（对象下新加键） | 777 ms | 13 ms |
+| 16000 | 28 328 ms（倍数 36.5，平方增长） | 82 ms（倍数约 6，接近线性） |
+| 64000 | 没测（按平方约 7 分钟） | 191 ms |
+
+又加了第②条作纵深防御，原因是另一处平方：`json-ops.mjs` 在**长的带 id 数组**上按 id 找元素和 `splice` 是线性的，一批里对同一个长数组做几千次增删就是平方（实测 16000 个片段的数组、一次撤 16000 处：11.7 秒）。这是 json-ops 原有的性质，页面提交同样受它影响（一笔 256 KiB 的页面提交往 6 万个元素的数组里插几千个也要几秒），不是撤回引入的，但撤回不该比页面提交更糟：
+- **分批**：一批最多 1000 个修改项、序列化后最多 256 KiB（和页面一次提交的上限相同），所以落地一批的开销不超过一笔最大的页面提交。每批是一次单独的补偿操作（自己的号、自己的项目锁），批与批之间 `setImmediate` 让出事件循环，别的项目、别的连接不被冻住。下一批按当时的内容重算：前几批这次撤回自己落地的算「已撤」、它们删掉的东西底下的项跟着没了，也不算「别人后来改过」。气泡只在第一批发。
+- **上限**：一个项目一次撤回最多处理 5 万个修改项（`ROLLBACK_ITEM_LIMIT`）。超出的**不撤、逐条记进保留**（原因 `over-limit`），网页那一行的「保留」数和账本 `overLimit` 都算上，诊断日志里记一条 `logout-rollback-over-limit`；不会「超了就不撤」而不留痕迹。一批里有剩下的却一笔都落不了地（全落不下）时，不空转，剩下的数目同样记进保留和 `overLimit`。
+- 记成待办（不在本次范围）：`json-ops.mjs` 在长数组上按 id 找元素的线性开销，页面提交也有，建议另开一项给 `applyOps` 加按 id 的索引。
+
+### 改前红、改后绿
+
+改前（被审实现，`server/test/sec-logout-rollback.test.mjs`）：
+
+```
+✖ SEC-02 …  AssertionError: 词表的修改既没撤也没记保留:reverted=[] kept=[]
+✖ SEC-03 …  AssertionError: 2000 项 777 ms,16000 项 28328 ms,倍数 36.5:按平方增长,且全程同步占住主线程(整个 Node 事件循环冻住)
+✖ SEC-05 …  AssertionError: 一次退出、一个项目就在账本里留了 1001046 字节(账本每次落盘整段重写)
+✖ SEC-04 …  AssertionError: 别的账号的退出被 pw_stuck 的撤回挡住了:sealed=[]
+✖ SEC-01 …  AssertionError: 页面提交(project.op.ok)占住了补偿操作号;执行器跑了 4 轮仍未办完(第 1 次、诊断 logout-rollback-operation-id-mismatch);… /extra="a-window" 也没撤
+ℹ tests 5  ℹ pass 0  ℹ fail 5
+```
+
+本次新加的四条自己的测试，在被审实现上（实现文件换回 `d91055ae`，测试留着）：
+
+```
+✖ LP-10 普通数组按整个数组撤…(SEC-02)   AssertionError: 词表整个退回
+✖ LP-11 上限与分批…(SEC-03)
+✖ RB-04 补偿操作号的前缀留给文档服务…(SEC-01)
+✖ RB-05 要撤的很多:分批落地…(SEC-03)   AssertionError: 450 项按 120 一批:4 批
+```
+
+同一遍里 RB-01、RB-02 也红：这两条的断言这次有意改了（RB-01 现在断言广播里**不带**事件号；RB-02 改看 `lastOpId`，因为账本里的 `attempt` 现在是「下一个要用的号」），它们在新断言下对旧实现红是预期的。
+
+改后（最终代码，五个文件一起跑）：
+
+```
+✔ LR-E1 … ✔ LR-E2 …
+✔ LP-01 … LP-11（11 条）
+✔ RB-01 ✔ RB-02 ✔ RB-02b ✔ RB-03 ✔ RB-04 ✔ RB-05
+✔ SEC-02 ✔ SEC-03 (659 ms) ✔ SEC-05 ✔ SEC-04 ✔ SEC-01
+✔ UC-01 … UC-04
+ℹ tests 29  ℹ pass 29  ℹ fail 0
+```
+
+### 门槛（返工后）
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 类型检查 | `npx tsc -b --force` | 退出码 0，零错误 |
+| 受影响测试 | `npm test -- <106 个文件>`：第五节那 105 个，加 `server/test/sec-logout-rollback.test.mjs`（引用 `logout-confirmer.mjs` 的测试已在清单里） | 退出码 0；日志 104,839 字节；**759 条，759 过、0 失败、0 取消、0 跳过** |
+| 构建 | `npm run build` | 退出码 0 |
+| 探针 | `PROMPTCUT_NO_PORT_FILE=1 node scripts/probes/logout-rollback-probe.mjs --status …` | 退出码 0，`ok: true`、`fails: []`，三步结果与第四节一致（这次只改了服务器一侧，在线构建沿用） |
+
+没覆盖的范围同第五节；另加一条：`json-ops.mjs` 本身没改，它的测试没另跑。
+
+### 返工里改到的文件
+
+`server/account/logout-rollback.mjs`、`server/account/logout-confirmer.mjs`、`server/docservice/operation-wiring.mjs`、`server/docservice/modules/project.mjs`；测试：`server/test/sec-logout-rollback.test.mjs`（原样复制）、`server/test/logout-rollback-plan.test.mjs`（加 LP-10、LP-11）、`server/test/logout-rollback.test.mjs`（加 RB-04、RB-05，RB-01/02 两处断言按上面改）。VisuHive 没改。
+
+### 要你补的语义（追加）
+
+7. 撤回的上限与分批是三级数字，建议写进 `mechanism/document-service.md`：一批最多 1000 个修改项、256 KiB；一个项目一次最多 5 万个修改项，超出的记进保留；账本每条路径 300 字符、每个项目 50 条；续办器每个退出的撤回一遍最多等 1 秒。
+8. 「超过上限的不撤、算保留」会让网页那一行的「M 处已被别人接着改过，保留」把上限之外的也算进去，字面上不准。要不要给超限另一句话，请定（这一版没改网页的字）。

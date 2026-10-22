@@ -41,6 +41,7 @@ import { createMemoryStore, fileNameOf } from '../store/index.mjs';
 import { actorOf } from './actor.mjs';
 import { applyOps, entitiesOf, normalizeEntity, parsePath, formatPath, idSegment, OpError } from '../json-ops.mjs';
 import { canonical, digest as historyDigest, historyError } from './operation-history.mjs';
+import { rollbackOpId, isReservedOpId, ROLLBACK_OP_PREFIX } from '../../account/logout-rollback.mjs';
 
 /** 账号项目的一次提交从收到到回包超过这么久,记一行 `project.op.slow`(诊断;三级数字) */
 export const SLOW_OP_MS = 5_000;
@@ -148,6 +149,14 @@ const channelOf = (projectId) => `project:${projectId}`;
 export const snapshotBlobName = (projectId, projectRev) => `projects/${fileNameOf(projectId)}@${projectRev}.json`;
 
 const sha256 = (text) => createHash('sha256').update(text, 'utf8').digest('hex');
+
+/** 发给页面的写入身份与操作号里不带改密退出撤回的事件号（安全专审 Q5 / SEC-01：事件号是占号的凭据）。存储里照旧是全的。 */
+const shownActor = (actor) => {
+  if (!actor || typeof actor !== 'object' || actor.rollbackEventId === undefined) return actor;
+  const { rollbackEventId: _event, ...rest } = actor;
+  return { ...rest, rollback: true };
+};
+const shownOpId = (opId) => (isReservedOpId(opId) ? `${ROLLBACK_OP_PREFIX}${sha256(opId).slice(0, 24)}` : opId);
 
 /**
  * 真身快照的文件名：编码后的 projectId 加它的散列前缀。Windows 文件名不分大小写，只差大小写的两个项目
@@ -292,9 +301,9 @@ export function projectModule({
      * 广播给订阅了这个项目的连接（各方照常应用），并给这个项目此刻在线的成员页面各发一条气泡 `shared.notice { event: 'content-rolled-back', name }`。
      * 不在线的不补：重启后认出已落地的同一次（`duplicate`）不再发。没有要撤的不落地、不发气泡。
      */
-    async rollback({ projectId, eventId, accountId, attempt = 1, name = null, plan }) {
+    async rollback({ projectId, eventId, accountId, attempt = 1, name = null, notify = true, plan }) {
       if (typeof plan !== 'function' || !Number.isSafeInteger(attempt) || attempt < 1) throw historyError('bad-rollback', 400);
-      const opId = `logout-rollback:${eventId}:${attempt}`;
+      const opId = rollbackOpId(eventId, attempt);
       const actor = { userId: accountId, deviceId: null, role: 'system', conversation: null, session: null,
         identityVersion: 2, realm: 'account', accountId, rollbackEventId: eventId };
       let planned = null, notified = false;
@@ -309,12 +318,16 @@ export function projectModule({
         landCommit(next, record, applied.root);
         return { ...binding, projectId, opId, expectedRev: st.projectRev, actor, ops: planned.ops,
           beforeProjection: snapshotOf(projectId, st), projection: snapshotOf(projectId, next),
-          result: { record, overwrote: [], victims: [], used: [], rollback: { eventId, reverted: planned.reverted, kept: planned.kept } } };
+          result: { record, overwrote: [], victims: [], used: [], rollback: { eventId, reverted: planned.reverted, kept: planned.kept,
+            remaining: planned.remaining ?? 0, overLimit: planned.overLimit ?? 0 } } };
       }, ({ operation, duplicate }) => {
         if (duplicate) return;
         const { record } = operation.result;
         stats.commits++;
-        lastCtx?.publish(channelOf(projectId), { type: 'project.ops', projectId, rev: record.rev, opId, ops: record.ops, actor: record.actor, at: record.at });
+        // 广播里不带事件号（安全专审 Q5）：成员只需知道是谁的撤回
+        lastCtx?.publish(channelOf(projectId), { type: 'project.ops', projectId, rev: record.rev, opId: shownOpId(opId), ops: record.ops,
+          actor: shownActor(record.actor), at: record.at });
+        if (!notify) return; // 同一个项目分批撤时只在第一批发气泡
         for (const [connId, principal] of principals) {
           if (principal?.projectId !== projectId || principal.role !== 'page' || principal.scope === 'service' || typeof principal.service === 'string') continue;
           lastCtx?.send(connId, { type: 'shared.notice', event: 'content-rolled-back', projectId, name });
@@ -322,10 +335,12 @@ export function projectModule({
         }
         log('project.rollback', { projectId, opId, reverted: operation.result.rollback.reverted.length, kept: operation.result.rollback.kept.length });
       });
-      if (!out) return { state: 'done', opId: null, reverted: [], kept: planned?.kept ?? [], notified: false };
+      if (!out) return { state: 'done', opId: null, reverted: [], kept: planned?.kept ?? [], remaining: planned?.remaining ?? 0,
+        overLimit: planned?.overLimit ?? 0, notified: false };
       if (out.cancelled) return { state: 'cancelled', opId };
       const result = out.operation.result.rollback;
-      return { state: 'done', opId, reverted: result.reverted, kept: result.kept, notified, duplicate: out.duplicate };
+      return { state: 'done', opId, reverted: result.reverted, kept: result.kept, remaining: result.remaining ?? 0, overLimit: result.overLimit ?? 0,
+        notified, duplicate: out.duplicate };
     },
     materialize(operation, projection) {
       const { projectId } = operation;
@@ -491,7 +506,7 @@ export function projectModule({
       .filter(([, w]) => nowMs - w.at <= overwriteWindowMs)
       .sort((a, b) => b[1].rev - a[1].rev)
       .slice(0, PROJECT_LIMITS.WRITERS_IN_STATE)
-      .map(([entity, w]) => ({ entity, actor: w.actor, at: w.at, rev: w.rev }));
+      .map(([entity, w]) => ({ entity, actor: shownActor(w.actor), at: w.at, rev: w.rev }));
   }
 
   function open(ctx, connId, msg, reqId) {
@@ -604,8 +619,8 @@ export function projectModule({
     return {
       expectRev,
       since: shown.map((h) => {
-        const s = { rev: h.rev, actor: h.actor, paths: h.paths, entities: h.entities, at: h.at };
-        if (h.opId !== undefined) s.opId = h.opId;
+        const s = { rev: h.rev, actor: shownActor(h.actor), paths: h.paths, entities: h.entities, at: h.at };
+        if (h.opId !== undefined) s.opId = shownOpId(h.opId);
         if (h.undoOf !== undefined) s.undoOf = h.undoOf;
         if (h.announce) s.announce = true;
         return s;
@@ -694,7 +709,7 @@ export function projectModule({
     // 所以提交者自己的连接若也以被覆盖的身份提交过，照样收
     for (const v of victims) {
       for (const target of identityConns.get(v.identity) ?? []) {
-        ctx.send(target, { type: 'project.overwritten', projectId, entity: v.entity, by: actor, writer: v.writer, rev, at });
+        ctx.send(target, { type: 'project.overwritten', projectId, entity: v.entity, by: actor, writer: shownActor(v.writer), rev, at });
       }
     }
     const broadcast = { type: 'project.ops', projectId, rev, opId, ops, actor, at };
@@ -767,7 +782,7 @@ export function projectModule({
       stats.commits++; stats.overwrites += overwrote.length;
       for (const victim of victims) for (const target of identityConns.get(victim.identity) ?? []) {
         ctx.send(target, { type: 'project.overwritten', projectId, entity: victim.entity, by: record.actor,
-          writer: victim.writer, rev: record.rev, at: record.at });
+          writer: shownActor(victim.writer), rev: record.rev, at: record.at });
       }
       const broadcast = { type: 'project.ops', projectId, rev: record.rev, opId, ops: record.ops, actor: record.actor, at: record.at,
         ...(record.undoOf ? { undoOf: record.undoOf } : {}) };

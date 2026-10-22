@@ -24,10 +24,12 @@ const fail = (status, code) => { throw accountError(status, code); };
 export const LOGOUT_CONFIRM_TIMEOUT_MS = 45_000;
 /** 已经超时并报过超时的退出，后台重办间隔逐次加倍，最长到这个上限；有新事件或新进展（`kick()`）时当场恢复原间隔。 */
 export const LOGOUT_CONFIRM_MAX_POLL_MS = 60_000;
+/** 一遍续办里，每个退出的撤回最多等这么久；没办完就记「撤回还在办」、先去办别的退出，撤回在后台接着跑，办完叫醒续办器（安全专审 SEC-04）。 */
+export const LOGOUT_ROLLBACK_WAIT_MS = 1000;
 
 export function createLogoutConfirmer({ ledger, authority, transportEvidence, operations = () => null, rollback = null,
   completeAgent = null, attestedServices = {}, now = Date.now, pollMs = 1000, maxPollMs = undefined, onDiagnostic = () => {},
-  timeoutMs = LOGOUT_CONFIRM_TIMEOUT_MS, reportTimeout = null, docInstanceId = 'doc' } = {}) {
+  timeoutMs = LOGOUT_CONFIRM_TIMEOUT_MS, reportTimeout = null, docInstanceId = 'doc', rollbackWaitMs = LOGOUT_ROLLBACK_WAIT_MS } = {}) {
   if (![ledger?.read, ledger?.transaction, authority?.flushAccountAcknowledgements, authority?.revocationStatus,
     authority?.ackAccessEvent, authority?.completeLogoutBarrier, transportEvidence, operations].every(value => typeof value === 'function') ||
       Object.entries(attestedServices).some(([service, reason]) => !['agent', 'render'].includes(service) || typeof reason !== 'string' || !reason))
@@ -95,6 +97,31 @@ export function createLogoutConfirmer({ ledger, authority, transportEvidence, op
       diagnostics.delete(barrier.eventId); onDiagnostic({ code: 'logout-complete', eventId: barrier.eventId });
     } catch (error) { note(barrier.eventId, `logout-seal-${error.code ?? 'failed'}`); }
   }
+  /**
+   * 一个退出的撤回：同一个事件同一时间只办一份（`rollbacks` 里记着在办的那一份）；这一遍最多等 `rollbackWaitMs`，
+   * 没办完就回 false，别的退出照常往下办；它办完了（而且办成了）叫醒续办器，下一遍再看它。
+   */
+  const rollbacks = new Map();
+  async function rollbackDone(barrier) {
+    let entry = rollbacks.get(barrier.eventId);
+    if (!entry) {
+      const proof = ledger.read().docLogoutBarriersV1?.[barrier.eventId]?.proof;
+      entry = { settled: false, result: null };
+      entry.promise = Promise.resolve().then(() => rollback.run(barrier, proof)).then(
+        (result) => { entry.result = result; },
+        (error) => { entry.result = { done: false }; note(barrier.eventId, `logout-rollback-${error.code ?? 'failed'}`); })
+        .finally(() => { entry.settled = true; if (!stopped && entry.result?.done === true) setImmediate(() => { backoff = 0; nextPollAt = 0; void safeTick(); }); });
+      rollbacks.set(barrier.eventId, entry);
+    }
+    if (!entry.settled) {
+      let timer;
+      await Promise.race([entry.promise, new Promise((resolve) => { timer = setTimeout(resolve, rollbackWaitMs); timer.unref?.(); })]);
+      clearTimeout(timer);
+    }
+    if (!entry.settled) { note(barrier.eventId, 'logout-rollback-running'); return false; }
+    rollbacks.delete(barrier.eventId);
+    return entry.result?.done === true;
+  }
   async function pass() {
     if (!barriers().length) { backoff = 0; nextPollAt = 0; return { pending: [] }; }
     try {
@@ -103,20 +130,19 @@ export function createLogoutConfirmer({ ledger, authority, transportEvidence, op
     } catch (error) { onDiagnostic({ code: error.code ?? 'logout-agent-pending' }); }
     for (const barrier of barriers()) attest(barrier, authority.revocationStatus(barrier.eventId));
     await authority.flushAccountAcknowledgements();
+    const ready = [];
     for (const barrier of barriers()) {
       const status = authority.revocationStatus(barrier.eventId);
       if (status.pendingServices.length) { note(barrier.eventId, `logout-pending:${status.pendingServices.join(',')}`); continue; }
+      ready.push(barrier);
+    }
+    // 各个退出各办各的：一个退出的撤回慢或卡住，不挡别的退出登记结束见证（安全专审 SEC-04）
+    await Promise.all(ready.map(async (barrier) => {
       // 改密退出的逐项撤回（0.7.20，`logout-rollback.mjs`）：先撤完、把结果报给账号服务，再登记结束见证。
       // 这样网页上「设备已退出」出现时，「N 处已撤回；M 处保留」那一行已经在账号服务那边；撤回没办完就不报办完（下一轮接着办）。
-      if (rollback) {
-        const proof = ledger.read().docLogoutBarriersV1?.[barrier.eventId]?.proof;
-        let outcome;
-        try { outcome = await rollback.run(barrier, proof); }
-        catch (error) { outcome = { done: false }; note(barrier.eventId, `logout-rollback-${error.code ?? 'failed'}`); }
-        if (!outcome.done) { note(barrier.eventId, 'logout-rollback-pending'); continue; }
-      }
+      if (rollback && !(await rollbackDone(barrier))) { note(barrier.eventId, 'logout-rollback-pending'); return; }
       await seal(barrier);
-    }
+    }));
     for (const barrier of barriers()) await timeout(barrier);
     const remaining = barriers();
     if (remaining.length && remaining.every(timedOutAndReported) && pollMs > 0) {

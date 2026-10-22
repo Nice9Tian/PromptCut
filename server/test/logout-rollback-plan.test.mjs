@@ -176,3 +176,41 @@ test('LP-09 只认「改密码后选了退出」;网站上直接退出登录、�
   assert.equal(rollbackEventOf(logout, 'logout_1'), null, '直接退出登录:没有改密事件');
   assert.equal(rollbackEventOf({ ...state, revokedLogins: {} }, 'pw_1'), null, '登录还没作废:不撤');
 });
+
+test('LP-10 普通数组(词表、原本为空的数组)按整个数组撤;别人之后改过的进保留,不悄悄漏掉(安全专审 SEC-02)', () => {
+  const W = '/tracks/@t1/clips/@c1/words', L = '/tracks/@t1/clips/@c1/lines';
+  const base = () => ({ tracks: [{ id: 't1', clips: [{ id: 'c1', words: ['开场', '欢迎'], lines: [] }] }] });
+  const h = history(base(), [
+    [OLD, 11, [{ op: 'set', path: W, value: ['开场', '改了'] }]],
+    [OLD, 12, [{ op: 'set', path: L, value: [{ start: 0, end: 1, text: '加了' }] }]],
+  ]);
+  const { result, reverted } = plan(h);
+  assert.deepEqual(clip(result, 'c1').words, ['开场', '欢迎'], '词表整个退回');
+  assert.deepEqual(clip(result, 'c1').lines, [], '原本为空的数组退回为空');
+  assert.deepEqual(reverted.map((r) => r.path).sort(), [L, W].sort());
+  const later = history(base(), [
+    [OLD, 11, [{ op: 'set', path: W, value: ['开场', '改了'] }]],
+    [OTHER, 12, [{ op: 'set', path: W, value: ['别人', '又改'] }]],
+  ]);
+  const k = plan(later);
+  assert.deepEqual(clip(k.result, 'c1').words, ['别人', '又改']);
+  assert.deepEqual(k.kept.map((x) => [x.path, x.reason]), [[W, 'changed-after']], '冲突的记进保留');
+});
+
+test('LP-11 上限与分批(安全专审 SEC-03):超过上限的逐条记进保留(over-limit);一批只落一部分,剩下的数目回在 remaining,前几批落过的不再算', () => {
+  const ops = Array.from({ length: 30 }, (_, i) => ({ op: 'set', path: `/name${i}`, value: i }));
+  const h = history(project(), [[OLD, 11, ops]]);
+  const capped = planRollback({ accepted: h.accepted, current: h.current, isCandidate: window(), limit: 20 });
+  assert.equal(capped.reverted.length, 20); assert.equal(capped.overLimit, 10);
+  assert.equal(capped.kept.filter((k) => k.reason === 'over-limit').length, 10, '超出的不悄悄丢');
+  const first = planRollback({ accepted: h.accepted, current: h.current, isCandidate: window(), maxItems: 12 });
+  assert.equal(first.reverted.length, 12); assert.equal(first.remaining, 18);
+  // 第一批作为这次撤回自己的补偿操作落地以后再算:落过的算已撤,只剩 18 项
+  const after = applyOps(h.current.value, first.ops).root;
+  const self = { accountId: 'acc_a', rollbackEventId: 'pw_1' };
+  const h2 = history(project(), [[OLD, 11, ops], [self, 12, first.ops]]);
+  assert.deepEqual(h2.current.value, after);
+  const second = planRollback({ accepted: h2.accepted, current: h2.current, isCandidate: window(), maxItems: 12,
+    isSelf: (op) => op.actor.rollbackEventId === 'pw_1' });
+  assert.deepEqual([second.reverted.length, second.remaining, second.kept.length], [12, 6, 0], '前一批落过的不算冲突,也不重算');
+});

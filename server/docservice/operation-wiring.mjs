@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createPasswordOrder } from '../account/password-order.mjs';
 import { canonical, digest, historyError } from './modules/operation-history.mjs';
+import { isReservedOpId } from '../account/logout-rollback.mjs';
 
 /** The same directory passed to createFileStore. No network paths or caller-supplied paths. */
 export function createDurableProjectProjection({ store, directory, failpoint = () => {} } = {}) {
@@ -119,6 +120,8 @@ export function createOperationWiring({ history, account, verifyWitness, authori
       });
     },
     async execute({ projectId, principal, actor, request }, prepare, committed) {
+      // 补偿操作号的前缀留给文档服务自己（改密退出撤回）：页面提交、Agent 提交一律不许用，免得先占号让撤回永远办不完（安全专审 SEC-01）
+      if (isReservedOpId(request?.opId)) throw historyError('reserved-op-id', 400);
       // Stable identity includes the client's exact operation intent, never its claimed actor.
       // 请求身份里不放访问凭证号(`credentialId`):它跟着访问令牌走,同一次登录每续一次令牌就换一个(约两分钟一次)。
       // 页面断线重连、到期前换会话之后重发同一条提交(同 opId、同内容)时令牌多半刚续过,把凭证号算进去会把这次重发判成
@@ -172,7 +175,7 @@ export function createOperationWiring({ history, account, verifyWitness, authori
      */
     async executeSystem({ projectId, principal, opId }, prepare, committed) {
       if (principal?.kind !== 'logout-rollback' || typeof principal.eventId !== 'string' || typeof principal.accountId !== 'string' ||
-          typeof opId !== 'string' || !opId || opId.length > 128) throw historyError('operation-forbidden', 403);
+          !isReservedOpId(opId) || opId.length > 128) throw historyError('operation-forbidden', 403);
       const requestId = `project-op:${digest({ docAuthorityId, projectId, opId })}`;
       const requestIdentity = digest({ projectId, system: { kind: principal.kind, eventId: principal.eventId, accountId: principal.accountId }, opId });
       checkRollback(principal);

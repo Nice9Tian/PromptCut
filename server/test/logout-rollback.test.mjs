@@ -49,8 +49,8 @@ function proofOf(f, loginIds) {
   const mine = f.history.accepted(f.projectId).filter(op => loginIds.includes(op.actor.loginId));
   return { projectCursors: [{ projectId: f.projectId, projectRev: f.history.snapshot(f.projectId).projectRev, lastAcceptedOrderSeq: Math.max(0, ...mine.map(op => op.witness.orderSeq)) }] };
 }
-function executor(f, reports) {
-  return createLogoutRollback({ ledger: f.ledger,
+function executor(f, reports, extra = {}) {
+  return createLogoutRollback({ ledger: f.ledger, ...extra,
     operations: () => ({ rollbackProject: input => rollbackThrough({ history: f.history, coordinator: f.coordinator }, input) }),
     report: async (eventId, body) => { reports.push({ eventId, ...body }); return { recorded: true }; },
     onDiagnostic: event => { if (process.env.RB_DEBUG) console.log("diag", JSON.stringify(event)); } });
@@ -82,7 +82,9 @@ test('RB-01 区间与逐项:只撤区间里旧登录的、冲突的保留;在线
     assert.equal(notice.projectId, f.projectId);
     assert.equal(notice.name, f.ledger.read().projects[f.projectId].members[last.actor.accountId].accountNameAtJoin);
     const ops = await page.next(m => m.type === 'project.ops' && m.opId.startsWith('logout-rollback:'), 5000);
-    assert.equal(ops.actor.rollbackEventId, eventId);
+    // 发给页面的写入身份与操作号里不带事件号(安全专审 Q5/SEC-01:事件号是占号的凭据),只标明是撤回
+    assert.equal(ops.actor.rollback, true); assert.equal(ops.actor.rollbackEventId, undefined);
+    assert.equal(ops.opId.includes(eventId), false);
     assert.equal(page.all.filter(m => m.type === 'shared.notice' && m.event === 'content-rolled-back').length, 1, '只一条');
     assert.equal(page.all.some(m => String(m.type).startsWith('merge.')), false, '改密退出触发的撤回不进待合并表、不弹窗口');
   }
@@ -116,7 +118,7 @@ test('RB-02 幂等与重启:定序请求丢了换号重算;回应丢了认出同
   const ops = f.history.accepted(f.projectId).filter(op => op.opId.startsWith(`logout-rollback:${eventId}`));
   assert.deepEqual(ops.map(op => op.opId), [`logout-rollback:${eventId}:2`], '只落了一次,是第二个号');
   assert.equal(f.history.get(f.projectId, `logout-rollback:${eventId}:1`).state, 'cancelled', '第一次没定序就作废了');
-  assert.equal(rollback.status(eventId).projects[f.projectId].attempt, 2);
+  assert.equal(rollback.status(eventId).projects[f.projectId].lastOpId, `logout-rollback:${eventId}:2`);
   // 二、办完以后再跑:不落第二次、不再报
   const rev = f.history.snapshot(f.projectId).projectRev;
   for (let i = 0; i < 3; i++) assert.equal((await rollback.run(barrier, proof)).done, true);
@@ -169,4 +171,46 @@ test('RB-03 不是改密后选退出的事件、或写入身份对不上:有序�
   const event = f.account.change('exit-change'); f.account.choose(event, true); await f.authority.synchronize();
   await assert.rejects(f.coordinator.rollback({ projectId: f.projectId, eventId: event.event_id, accountId: `acc_${'9'.repeat(24)}`, attempt: 1, plan }), { code: 'operation-forbidden' });
   assert.equal(f.history.snapshot(f.projectId).value.title, 'before');
+});
+
+test('RB-04 补偿操作号的前缀留给文档服务:页面提交用它一律拒(安全专审 SEC-01),撤回照常办完', actual, async t => {
+  const f = await operationFixture({ dir: tmp() }); t.after(() => f.close());
+  const { eventId, c } = await scenario(f);
+  for (const opId of [`logout-rollback:${eventId}:1`, `logout-rollback:${eventId}:2`, 'logout-rollback:anything']) {
+    const reply = await submit(c, f.projectId, opId, [{ op: 'set', path: '/note', value: 'taken' }]);
+    assert.equal(reply.type, 'project.op.rejected'); assert.equal(reply.reason, 'reserved-op-id');
+  }
+  const barrier = f.ledger.read().barriers[`event:${eventId}`];
+  const out = await executor(f, []).run(barrier, proofOf(f, barrier.loginIds));
+  assert.equal(out.done, true);
+  assert.equal(f.history.snapshot(f.projectId).value.extra, undefined);
+});
+
+test('RB-05 要撤的很多:分批落地、批与批之间让出事件循环;总数对、气泡只一条;超过上限的记进保留和账本(安全专审 SEC-03)', actual, async t => {
+  const f = await operationFixture({ dir: tmp() }); t.after(() => f.close());
+  await f.authority.joinProject({ accessToken: f.sessions.c.accessToken }, { projectId: f.projectId, requestId: 'join-other' });
+  const a = await f.connect('a'), c = await f.connect('c');
+  await open(a, f.projectId); await open(c, f.projectId);
+  const event = f.account.change();
+  for (let part = 0; part < 5; part++) {
+    const ops = Array.from({ length: 100 }, (_, i) => ({ op: 'set', path: `/bag${part}x${i}`, value: i }));
+    assert.equal((await submit(a, f.projectId, `bulk${part}`, ops)).type, 'project.op.ok');
+  }
+  f.account.choose(event, true); await f.authority.synchronize();
+  const barrier = f.ledger.read().barriers[`event:${event.event_id}`];
+  let ticks = 0; const beat = setInterval(() => { ticks++; }, 0);
+  const rollback = executor(f, [], { batchItems: 120, itemLimit: 450 });
+  const out = await rollback.run(barrier, proofOf(f, barrier.loginIds));
+  clearInterval(beat);
+  assert.equal(out.done, true);
+  const parts = f.history.accepted(f.projectId).filter(op => op.actor.rollbackEventId === event.event_id);
+  assert.equal(parts.length, 4, '450 项按 120 一批:4 批');
+  const row = rollback.status(event.event_id).projects[f.projectId];
+  assert.deepEqual([row.reverted, row.kept, row.overLimit, row.parts], [450, 50, 50, 4], '超过上限的 50 项记进保留与账本,不悄悄丢');
+  assert.equal(rollback.status(event.event_id).totals.overLimit, 50);
+  assert.ok(ticks > 0, '批与批之间让出了事件循环');
+  const value = f.history.snapshot(f.projectId).value;
+  assert.equal(Object.keys(value).filter(k => k.startsWith('bag')).length, 50, '没撤的正好是超过上限的那 50 项');
+  await new Promise(r => setTimeout(r, 200));
+  assert.equal(c.all.filter(m => m.type === 'shared.notice' && m.event === 'content-rolled-back').length, 1, '分批撤也只一条气泡');
 });
