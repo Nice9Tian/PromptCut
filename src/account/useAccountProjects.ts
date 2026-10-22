@@ -3,7 +3,7 @@ import { createEmptyProject } from '../kernel/project';
 import { setActiveDraftId } from '../editor/io/drafts';
 import { ensureDevice, enterAccountProject } from '../editor/sync/syncManager';
 import { createAccountClient, projectIdFromLink, projectLink, type Account, type CloudAccountClient, type ProjectLists } from './client';
-import { desktopAccountBridge } from './desktopVault';
+import { desktopAccountBridge, isDesktopShellTooOld } from './desktopVault';
 
 function tokenFromLink(text: string): string | undefined {
   const value = text.trim();
@@ -28,6 +28,8 @@ export function useAccountProjects({ online, onEnterEditor }: { online: boolean;
   const [origin, setOrigin] = useState(online ? location.origin : 'https://visuhive.com');
   const client = useRef<CloudAccountClient | null>(null);
   const [account, setAccount] = useState<Account | null>(null), [busy, setBusy] = useState(true), [error, setError] = useState('');
+  /** 桌面外壳太老(0.2.8 以前的外壳打了补丁)没有账号桥:入口不报错,只说明要装完整安装包 */
+  const [shellOld, setShellOld] = useState(false);
   const [link, setLink] = useState(() => {
     const sp = new URL(location.href).searchParams;
     const id = sp.get('project');
@@ -39,7 +41,7 @@ export function useAccountProjects({ online, onEnterEditor }: { online: boolean;
   const joinAttempt = useRef<{ projectId: string; requestId: string } | null>(null);
   const loginAttempt = useRef<{ name: string; requestId: string } | null>(null);
   async function refreshLists() { if (!online || !client.current) return;
-    setListError(''); try { setLists(await client.current.lists()); } catch (e) { setLists(null); setListError(e instanceof Error ? e.message : '项目列表暂时不可用。'); } }
+    setListError(''); try { setLists(await client.current.lists()); } catch (e) { setLists(null); if (isDesktopShellTooOld(e)) setShellOld(true); else setListError(e instanceof Error ? e.message : '项目列表暂时不可用。'); } }
   useEffect(() => { let alive = true;
     void (async () => { const device = await ensureDevice(); if (!alive) return;
       if (!device) throw new Error('无法取得当前设备身份，请重试。');
@@ -51,13 +53,13 @@ export function useAccountProjects({ online, onEnterEditor }: { online: boolean;
       if (invited) setLink(projectLink(serviceOrigin, invited, token));
       const c = createAccountClient({ online, origin: serviceOrigin, device, ...(!online ? { native: desktopAccountBridge } : {}) }); client.current = c;
       try { const current = await c.restore(); if (alive) { setAccount(current); if (current) await refreshLists(); } }
-      catch (e) { if (alive) setError(e instanceof Error ? e.message : '登录恢复失败，请重新登录。'); }
+      catch (e) { if (alive) { if (isDesktopShellTooOld(e)) setShellOld(true); else setError(e instanceof Error ? e.message : '登录恢复失败，请重新登录。'); } }
       finally { if (alive) setBusy(false); }
-    })().catch(e => { if (alive) { setError(e instanceof Error ? e.message : '账号入口初始化失败。'); setBusy(false); } });
+    })().catch(e => { if (alive) { if (isDesktopShellTooOld(e)) setShellOld(true); else setError(e instanceof Error ? e.message : '账号入口初始化失败。'); setBusy(false); } });
     return () => { alive = false; };
   }, [online]);
   async function perform(action: () => Promise<void>) { setBusy(true); setError(''); try { await action(); }
-    catch (e) { setError(e instanceof Error ? e.message : '请求失败，请重试。'); } finally { setBusy(false); } }
+    catch (e) { if (isDesktopShellTooOld(e)) setShellOld(true); else setError(e instanceof Error ? e.message : '请求失败，请重试。'); } finally { setBusy(false); } }
   async function enter(projectId: string, label: string, firstSession?: Awaited<ReturnType<CloudAccountClient['join']>>) {
     if (!client.current) throw new Error('账号入口尚未就绪。');
     await enterAccountProject({ client: client.current, origin, projectId, name: label, initial: createEmptyProject(label), firstSession });
@@ -94,6 +96,6 @@ export function useAccountProjects({ online, onEnterEditor }: { online: boolean;
     joinAttempt.current = null;
     return 'entered';
   }
-  return { origin, account, busy, error, setError, link, setLink, lists, listError, refreshLists, perform, enter, login, logout, create, join,
+  return { origin, account, busy, error, setError, shellOld, link, setLink, lists, listError, refreshLists, perform, enter, login, logout, create, join,
     projectLink: (projectId: string) => projectLink(origin, projectId) };
 }
