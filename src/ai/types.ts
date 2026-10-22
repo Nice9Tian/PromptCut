@@ -239,10 +239,13 @@ export interface ChatMessage {
   text: string;
   /**
    * 云端对话里这一页刚发出、服务端的记录还没回来的那条用户消息(乐观显示,`src/ai/cloud/session.ts` 的 `stage`):
-   * `sending` 正在发、`accepted` 云端已收下、等它开始处理、`failed` 没发出去(原因在 `error`)。
+   * `sending` 正在发、`accepted` 云端已收下、等它开始处理、`failed` 没发出去(原因在 `error`)、
+   * `queued` 断网时发的、排着等网络恢复后自动发出(`src/ai/cloud/outbox.ts`)。
    * 服务端的记录到了就换成它,这个字段跟着本地气泡一起消失。
    */
-  sendState?: "sending" | "accepted" | "failed";
+  sendState?: "sending" | "accepted" | "failed" | "queued";
+  /** 断网待发里不发了的那条(`sendState: "failed"`):气泡上带「重新发送」 */
+  resendable?: boolean;
   attachments?: ChatAttachment[];
   /** 按发生顺序的片段,渲染以它为准;旧历史里没有时由 text/tools/statuses 兜底 */
   parts?: MessagePart[];

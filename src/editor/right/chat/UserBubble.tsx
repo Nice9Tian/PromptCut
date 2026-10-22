@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "../../../ai/types";
 import { LiveMarkdown } from "../../../ai/Markdown";
 import { attachIcon } from "./attachIcon";
+import { OUTBOX_TEXT } from "../../../ai/cloud/outbox";
 import "./chat.css";
 import "./queue.css";
 
@@ -19,6 +20,12 @@ export interface RewindHandlers {
   hasDraft: () => boolean;
   onRewind: (userMessageId: string) => void;
 }
+
+/**
+ * 云端对话里「发送失败」气泡上的「重新发送」:发这个窗口事件(带气泡号),由持有待发清单的云端对话页(CloudAiPanel)接。
+ * 走事件不走 props:MessageRow 是 memo 的,不往下多传一个会变的函数。
+ */
+export const CLOUD_RESEND_EVENT = "pc-cloud-resend";
 
 /** 逆时针的回退箭头 */
 function IconRewind() {
@@ -73,7 +80,7 @@ export function UserBubble(props: { m: ChatMessage; rewind?: RewindHandlers }) {
             </button>
           </div>
         )}
-        <div className={`ai-message user${m.sendState === "sending" ? " is-sending" : m.sendState === "failed" ? " is-failed" : ""}`}>
+        <div className={`ai-message user${m.sendState === "sending" || m.sendState === "queued" ? " is-sending" : m.sendState === "failed" ? " is-failed" : ""}`}>
           {m.attachments && m.attachments.length > 0 && (
             <div className="ai-bubble-files">
               {m.attachments.map((a, i) => (
@@ -92,7 +99,14 @@ export function UserBubble(props: { m: ChatMessage; rewind?: RewindHandlers }) {
           ) : null}
           {m.sendState === "sending" && <div className="ai-message-send-state" data-pc="cloud-send-state" data-state="sending">发送中…</div>}
           {m.sendState === "accepted" && <div className="ai-message-send-state" data-pc="cloud-send-state" data-state="accepted">已发出，等待云端开始处理…</div>}
+          {m.sendState === "queued" && <div className="ai-message-send-state" data-pc="cloud-send-state" data-state="queued">{OUTBOX_TEXT.queued}</div>}
           {m.error && <div className="ai-message-error" data-pc={m.sendState === "failed" ? "cloud-send-failed" : undefined}>{m.error}</div>}
+          {m.sendState === "failed" && m.resendable && (
+            <button type="button" className="ai-message-resend" data-pc="cloud-resend"
+              onClick={() => window.dispatchEvent(new CustomEvent(CLOUD_RESEND_EVENT, { detail: { id: m.id } }))}>
+              {OUTBOX_TEXT.resend}
+            </button>
+          )}
         </div>
       </div>
       {rewind && confirm && (

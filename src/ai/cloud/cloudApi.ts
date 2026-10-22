@@ -86,6 +86,9 @@ export function cloudErrorText(code: string, serverMessage?: string): string {
   }
 }
 
+/** 取票据、取对话委托时和文档服务的连接断着(断网的一种;outbox.ts 据这句认出它) */
+export const DOC_LINK_DOWN_TEXT = "和文档服务的连接断着,云端 Agent 暂时用不了。连上后再试。";
+
 export interface CloudApiDeps {
   /** Agent 服务的 `/v1` 根地址(不带末尾斜杠);每次现取,项目换了地址跟着换 */
   baseUrl: () => string | null;
@@ -214,7 +217,7 @@ export function createCloudApi(deps: CloudApiDeps) {
     if (err instanceof CloudIdentityError) return new CloudError("no-identity", cloudErrorText("no-identity"));
     const code = err instanceof CloudDelegationError ? err.code : "";
     if (code === "service-disabled") return new CloudError("disabled", cloudErrorText("disabled"));
-    if (code === "closed" || code === "timeout" || code === "offline") return new CloudError("unavailable", "和文档服务的连接断着,云端 Agent 暂时用不了。连上后再试。");
+    if (code === "closed" || code === "timeout" || code === "offline") return new CloudError("unavailable", DOC_LINK_DOWN_TEXT);
     return new CloudError("unauthorized", cloudErrorText("unauthorized"));
   }
 
@@ -320,6 +323,30 @@ export function createCloudApi(deps: CloudApiDeps) {
     async ackNotices(noticeIds: string[]): Promise<void> {
       if (!noticeIds.length) return;
       await request("/notices/ack", { method: "POST", json: { noticeIds: noticeIds.slice(0, 200) } });
+    },
+
+    /**
+     * 账号模式:向服务端现问这个对话里的用户消息(文档服务的记录,`GET …/conversations/<id>` 的 `meta.messages`)。
+     * 断网待发的那几条发出之前用它核「最近一条用户消息」变没变(outbox.ts)。只取核对要用的三个字段。
+     * 服务端还没有这个对话(新对话,第一条消息还没发出去)回空清单。
+     */
+    async conversationMessages(conversationId: string): Promise<{ messageId?: string; requestId?: string; arrivalSeq?: number }[]> {
+      let res: Response;
+      try {
+        res = await request(`/conversations/${encodeURIComponent(conversationId)}`);
+      } catch (err) {
+        if (err instanceof CloudError && err.status === 404 && err.code === "no-conversation") return [];
+        throw err;
+      }
+      const body = (await res.json().catch(() => null)) as { meta?: { id?: unknown; messages?: unknown } } | null;
+      const list = body?.meta && Array.isArray(body.meta.messages) ? body.meta.messages : null;
+      if (!list || (body!.meta!.id !== undefined && body!.meta!.id !== conversationId))
+        throw new CloudError("unavailable", cloudErrorText("unavailable"), res.status || 503);
+      return list.filter((m): m is Record<string, unknown> => !!m && typeof m === "object").map((m) => ({
+        ...(typeof m.messageId === "string" ? { messageId: m.messageId } : {}),
+        ...(typeof m.requestId === "string" ? { requestId: m.requestId } : {}),
+        ...(typeof m.arrivalSeq === "number" ? { arrivalSeq: m.arrivalSeq } : {}),
+      }));
     },
 
     /** 发一条消息、起一轮。回 202:这一轮从此与这个请求无关 */
