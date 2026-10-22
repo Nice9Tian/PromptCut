@@ -252,7 +252,7 @@
  * 由外面那一圈(`:focus-within` 的强调色边框)表示聚焦,再画一个圈就重复了。
  */
 .ps-prompt-send:focus-visible,
-.ps-pro-btn:focus-visible,
+.ps-mode-btn:focus-visible,
 .ps-chip:focus-visible,
 .ps-tile:focus-visible,
 .ps-ghost-btn:focus-visible,
@@ -765,8 +765,8 @@
   padding-bottom: 8px;
 }
 .ps-detail-title { font-size: 13px; font-weight: 600; }
-/* 「进入专业模式」:这一头上的主行动,实心强调色;旁边的「收起」是次要的,留 ghost */
-.ps-pro-btn {
+/* 「进入传统式」:这一头上的主行动,实心强调色;旁边的「收起」是次要的,留 ghost */
+.ps-mode-btn {
   flex: 0 0 auto;
   padding: 5px 12px;
   border: 0;
@@ -779,7 +779,7 @@
   cursor: pointer;
   white-space: nowrap;
 }
-.ps-pro-btn:hover { filter: brightness(1.08); }
+.ps-mode-btn:hover { filter: brightness(1.08); }
 .ps-detail-sub { font-size: 11px; color: var(--ink-faint); }
 
 .ps-detail-stage {

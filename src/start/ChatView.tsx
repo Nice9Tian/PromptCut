@@ -28,7 +28,7 @@ export function ChatView(props: {
   onSend: (text: string) => void;
   /** 右边那条拓展栏开着没有。开关在顶栏上(`TopBar.tsx`),所以状态拿在 `OnlineStart` */
   panel: boolean;
-  /** 进专业模式(PromptCut 本来那套编辑界面);按钮在「详细编辑」的头上 */
+  /** 切到传统式(打开编辑界面);按钮在「详细编辑」的头上 */
   onPro: () => void;
   /** 拓展栏的宽度与它那条拖宽缝的回调。状态也在 `OnlineStart`,这里只过一道 */
   ext: {
