@@ -493,6 +493,66 @@ async function scenarioDesktop(accounts) {
   return out;
 }
 
+/* ---------------- 桌面:创建者改二级密码之后,在线老成员那边多久断、界面上出现什么(安全专审 F1 的追问) ---------------- */
+
+async function scenarioPasswordChange(accounts) {
+  const out = {};
+  const [A, B] = [accounts.creator, accounts.b];
+  const editor = await startEditor(EDITOR_PORT);
+  const stateA = {}, stateB = {};
+  const pageA = await newPage({ native: stateA });
+  await pageA.goto(`${editor.base}/?nosetup=1`, { waitUntil: 'domcontentloaded' });
+  await startLogin(pageA, A);
+  const name = `二级密码-在线老成员-${RUN}`;
+  await fill(pageA, '[data-pc="cloud-project-name"]', name);
+  await click(pageA, '[data-pc="cloud-create"]', '新建云端项目');
+  await waitFor(() => inEditor(pageA), 180_000, '创建者进入新项目');
+  const projectId = await waitFor(() => A.ownedProjectId(name), 30_000, '取新项目的项目号');
+  // 乙:设二级密码之前凭链接进来,在编辑器里,成员浮层开着(展开时每 3 秒取一次名单)
+  const pageB = await newPage({ native: stateB });
+  await pageB.goto(`${editor.base}/?nosetup=1`, { waitUntil: 'domcontentloaded' });
+  await startLogin(pageB, B);
+  await startJoin(pageB, `${ORIGIN}/editor?project=${projectId}`);
+  await waitFor(() => inEditor(pageB), 180_000, '乙进入项目');
+  await waitGateGone(pageB);
+  await openMembers(pageB);
+  await waitFor(() => has(pageB, '[data-pc="account-member"]'), 30_000, '乙的成员浮层有名单');
+  await shot(pageB, 'password-1-member-before');
+  const sample = () => P(pageB, () => {
+    const v = window.__pcSyncTest?.view();
+    return { status: v?.status ?? null, shared: !!v?.shared, toasts: (v?.toasts ?? []).map(t => t.text),
+      popoverError: document.querySelector('[data-pc="account-members-error"]')?.textContent ?? null,
+      members: document.querySelectorAll('[data-pc="account-member"]').length };
+  });
+  const before = await sample();
+  // 创建者设二级密码(第一次设,等于「改了密码」:设之前进来的老成员要重新输一次)
+  const t0 = Date.now();
+  check((await adminAs(await A.editorToken(), projectId, { op: 'set-secondary-password', password: `二级-${RUN}` })).status === 200, '改密码-创建者设了项目二级密码');
+  const timeline = [];
+  let last = JSON.stringify(before);
+  const firstAt = {};
+  while (Date.now() - t0 < 60_000) {
+    const s = await sample();
+    const key = JSON.stringify(s);
+    if (key !== last) { timeline.push({ ms: Date.now() - t0, ...s }); last = key; }
+    if (s.popoverError && firstAt.popoverError === undefined) firstAt.popoverError = Date.now() - t0;
+    const toast = s.toasts.find(t => /二级密码/.test(t));
+    if (toast && firstAt.toast === undefined) { firstAt.toast = Date.now() - t0; out.toastText = toast; }
+    if (s.status !== before.status && firstAt.status === undefined) { firstAt.status = Date.now() - t0; out.statusAfter = s.status; }
+    if (firstAt.toast !== undefined && firstAt.popoverError !== undefined) break;
+    await sleep(250);
+  }
+  out.before = before; out.firstAt = firstAt; out.timeline = timeline;
+  out.popoverError = (await sample()).popoverError;
+  await shot(pageB, 'password-2-member-after');
+  // 乙这条账号项目的连接停了没有:停了就不再给自己续会话(`accountLife` 的诊断里看不到它在跑),再取名单直接失败
+  out.linkAfter = await P(pageB, () => ({ status: window.__pcSyncTest?.view().status ?? null, life: window.__pcSyncTest?.accountLife?.() ?? null }));
+  check(firstAt.toast !== undefined && firstAt.toast <= 30_000, '改密码-在线老成员 30 秒内出现「要输二级密码」的提示', firstAt);
+  check(/二级密码/.test(out.popoverError ?? '') || firstAt.toast !== undefined, '改密码-成员浮层与提示说的是「要输二级密码」,不是「没有权限」', { popoverError: out.popoverError, toast: out.toastText });
+  for (const page of [pageA, pageB]) await page.browserContext().close().catch(() => undefined);
+  return out;
+}
+
 /* ---------------- 在线(网页) ---------------- */
 
 async function onlineLogin(page, account) {
@@ -654,6 +714,7 @@ try {
   say('accounts.ready', { names: Object.values(accounts).map(a => a.name) });
   browser = await puppeteer.launch({ headless: true, acceptInsecureCerts: true, protocolTimeout: 300_000,
     args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--no-default-browser-check', '--hide-scrollbars', '--force-device-scale-factor=1', '--mute-audio'] });
+  if (ONLY.includes('password')) res.password = await scenarioPasswordChange(accounts);
   if (ONLY.includes('desktop')) res.desktop = await scenarioDesktop(accounts);
   if (ONLY.includes('online')) res.online = await scenarioOnline(accounts);
   if (ONLY.includes('mobile')) res.mobile = await scenarioMobile(accounts);
