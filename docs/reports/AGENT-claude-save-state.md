@@ -170,7 +170,7 @@ summary 8 项过 5
 | 类型检查 | `npx tsc -b --force` | 退出码 0，零错误（a57db22c） |
 | 全量测试（第一次，a57db22c） | `npm test`（设了两个 VisuHive 变量，值不写进报告） | `tests 7609 / pass 7593 / fail 1 / skipped 15`，退出码 1。唯一的失败是 `server/test/account-instance-dispatch-core.test.mjs` 的「Agent LP rejects unproved oversize/empty sends…」，`Error: read ECONNRESET`（TLS 读被重置），与本分支无关 |
 | 那个文件单跑复核 | `node scripts/test-suite.mjs server/test/account-instance-dispatch-core.test.mjs` | `tests 5 / pass 5 / fail 0`，「零失败」，退出码 0 —— 机器忙时的假失败 |
-| 全量测试（第二次） | 同上 | 见下方补记 |
+| 全量测试（第二次，c59542be，代码同 a57db22c） | 同上 | `tests 7609 / pass 7594 / fail 0 / cancelled 0 / skipped 15`，「npm test 最终结果：零失败」，退出码 0；日志 8558 行，有 `ℹ tests` 汇总行；本分支三份单测的用例在日志里 |
 | 构建 | `npm run build` | 退出码 0 |
 | 本分支的探针 | `node scripts/probes/save-state-probe.mjs --origin http://127.0.0.1:5960 --out out/save-state-shots --phases lock,timeout,fail` | `summary 28 项过 28`，退出码 0（a57db22c） |
 | 本分支的单测 | `saveLock.test.mjs` / `io/localWrites.test.mjs` / `io/procWrite.test.mjs` | 8/8、9/9、7/7 |
@@ -194,7 +194,7 @@ summary 8 项过 5
 **1. 去掉「待实施」标记——两处都只能部分去，因为同一节里还有我没做的条目。**
 
 - `docs/semantics/product/document-service.md` 第 87 行，标题「## 保存与延迟退出的修改处理（2026-10-08 用户定，待实施）」。这一节第一条（保存）做完了，后面四条（改密退出、邮箱重设、延迟撤回、Agent 已读例外）和最后一条「仍待设计」都不是这次的事。建议：标题保留「待实施」，或改成「（2026-10-08 用户定；保存这一条 2026-10-22 已实施，其余待实施）」；第 89 行那条末尾加「（已实施，2026-10-22，`AGENT-claude-save-state.md`）」。
-- `docs/semantics/mechanism/document-service.md` 第 34 行，标题「## 保存基准与修改状态检查（2026-10-08 对齐要求，待实施）」。第 36 行（本机修改状态检查）做完了；第 38 行（非本机快照）此前已实施（CS-01～06，任务书说的）；第 37 行**全局修改状态检查**（同项目各设备、云端 Agent、上传/分片、渲染与后台产物）没有做，不在这次范围里；第 39 行（离线操作与待合并表）我没核对。建议：标题去掉「待实施」只在第 37 行也做完之后；现在先在第 36 行末尾加「（已实施，2026-10-22）」，第 37 行末尾加「（待实施）」。
+- `docs/semantics/mechanism/document-service.md` 第 34 行，标题「## 保存基准与修改状态检查（2026-10-08 对齐要求，待实施）」。第 36 行（本机修改状态检查）做完了；第 38 行（非本机快照）此前已实施（任务书说的，冲突合并那一块里固定非本机快照的那组用例 CS-01～06）；第 37 行**全局修改状态检查**（同项目各设备、云端 Agent、上传/分片、渲染与后台产物）没有做，不在这次范围里；第 39 行（离线操作与待合并表）我没核对。建议：标题去掉「待实施」只在第 37 行也做完之后；现在先在第 36 行末尾加「（已实施，2026-10-22）」，第 37 行末尾加「（待实施）」。
 
 **2. 第 36 行之后补一条三级机制（dry run，供主会话定）：**
 
