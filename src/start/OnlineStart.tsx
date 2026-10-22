@@ -13,6 +13,8 @@
  */
 import { useMemo, useState } from "react";
 import type { JSX } from "react";
+import { ChatView } from "./ChatView";
+import { PENDING_REPLY, messagesOf, type MockMessage } from "./mockChat";
 import { OnlineLogin } from "./OnlineLogin";
 import { ProjectRail } from "./ProjectRail";
 import { ProjectSidebar, scopeKeyOf, type Scope, type TreeOps } from "./ProjectSidebar";
@@ -47,6 +49,14 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
   const [account, setAccount] = useState<string | null>(() => (initialView() === "home" ? "预览账号" : null));
   const [sideWidth, setSideWidth] = useState(readSideWidth);
 
+  /** 点开的那条 Agent 对话(聊天页);为空就是开始页 */
+  const [chatId, setChatId] = useState<string | null>(null);
+  /**
+   * 每条对话的消息,按对话号分开放。放在这儿而不是 `ChatView` 里面:切到别的对话再切回来,
+   * 刚发的那几条还要在 —— 放在那边的话组件一卸载就没了,每次回来都重读写死的脚本。
+   */
+  const [threads, setThreads] = useState<Record<string, MockMessage[]>>({});
+
   const [groups, setGroups] = useState<MockGroup[]>(MOCK_GROUPS);
   // 假数据按最后改动从新到旧;之后的顺序由用户拖出来,所以只在开头排这一次
   const [projects, setProjects] = useState<MockProject[]>(() =>
@@ -55,6 +65,16 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
   const [chats, setChats] = useState<MockAgentChat[]>(MOCK_AGENT_CHATS);
 
   const nameOf = (id: string) => projects.find((p) => p.id === id)?.name ?? id;
+
+  /**
+   * 正在看的那条对话。按 id 去当前的 chats 里取,不存状态里的那个对象 ——
+   * 这样改了名立刻跟着变,被删掉、被归档时自己退回开始页。
+   */
+  const openChat = chatId ? (visible(chats).find((c) => c.id === chatId) ?? null) : null;
+  const whereOf = (c: MockAgentChat) =>
+    c.on === "project"
+      ? `项目「${nameOf(c.projectId)}」`
+      : `分组「${groups.find((g) => g.id === c.groupId)?.name ?? c.groupId}」`;
 
   const ops: TreeOps = {
     rename: (kind, id, name) => {
@@ -137,13 +157,36 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
         }
         onCreate={() => setNotice("待办：新建项目要接云端文档服务（在线浏览器里一律是放云端的多用户协作项目）。")}
         onOpen={(id) => setNotice(`待办：打开项目「${nameOf(id)}」要接云端文档服务，再进编辑器。`)}
-        onOpenChat={(chat) => setNotice(`待办：打开 Agent 对话「${chat.name}」要接云端 Agent 服务（对话按账号归属，分共有和私有，见 product/agent.md）。`)}
+        openChatId={chatId}
+        onOpenChat={(chat) => setChatId(chat.id)}
         onSignOut={() => {
           setAccount(null);
           setView("login");
         }}
       />
 
+      {openChat ? (
+        <ChatView
+          chat={openChat}
+          whereText={whereOf(openChat)}
+          messages={threads[openChat.id] ?? messagesOf(openChat.id)}
+          onSend={(t) =>
+            setThreads((all) => {
+              const list = all[openChat.id] ?? messagesOf(openChat.id);
+              const n = list.length;
+              return {
+                ...all,
+                [openChat.id]: [
+                  ...list,
+                  { id: `me-${n}`, from: "me", text: t },
+                  { id: `todo-${n}`, from: "agent", text: PENDING_REPLY },
+                ],
+              };
+            })
+          }
+          onBack={() => setChatId(null)}
+        />
+      ) : (
       <main className="ps-main">
         <div className="ps-topbar">
           <a
@@ -184,6 +227,7 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
           />
         </div>
       </main>
+      )}
     </div>
   );
 }

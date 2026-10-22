@@ -120,6 +120,8 @@ export function ProjectSidebar(props: {
   onCreate: () => void;
   onOpen: (id: string) => void;
   onOpenChat: (chat: MockAgentChat) => void;
+  /** 聊天页正开着的那条对话:它那一行标成当前项 */
+  openChatId: string | null;
   accountName: string | null;
   onSignOut: () => void;
   ops: TreeOps;
@@ -274,6 +276,7 @@ export function ProjectSidebar(props: {
       sib: chatSib(chat),
       icon: <AgentIcon />,
       className: "is-agent",
+      current: props.openChatId === chat.id,
       pc: "start-side-agent",
       label: `Agent 对话 ${chat.name}${chat.pinned ? "（已置顶）" : ""}`,
       onClick: () => props.onOpenChat(chat),
