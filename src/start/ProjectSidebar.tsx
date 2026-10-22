@@ -18,12 +18,23 @@
  * 搜索只筛这一栏(右边那排跟着当前分组走,不跟搜索走),免得一边打字一边整页都在跳。
  */
 import { useRef, useState } from "react";
-import type { JSX, PointerEvent as ReactPointerEvent } from "react";
+import type { JSX } from "react";
 import { RowMenu, type MenuAt } from "./RowMenu";
-import { SIDE_WIDTH, clampSideWidth } from "./sideWidth";
+import { SIDE_WIDTH } from "./sideWidth";
+import { WidthGrip } from "./WidthGrip";
 import type { TreeKind } from "./treeKind";
 import { ordered, visible, type Place } from "./treeState";
 import type { MockAgentChat, MockGroup, MockProject } from "./mockProjects";
+
+/**
+ * 整块筛选用的那两行(「全部项目」和「没放进分组」)先归档,默认不显示 —— **用户 2026-10-23 要求的**:
+ * 「这个块不需要,归档他」「这两个也不需要,直接按条目显示项目」。代码留着,改回 true 就回来;
+ * 记录另见 `docs/plan/user-decisions-2026-10-23.md`。
+ *
+ * 它们没了之后:没放进分组的项目在「项目」那张卡里直接一条条列出来;要筛回「全部」靠顶栏那颗房子
+ * (`OnlineStart.tsx` 的 `onHome` 一并把作用域设回 all)。
+ */
+const SHOW_SCOPE_ROWS = false;
 
 /** 右边那排现在显示哪一堆 */
 export type Scope = { kind: "all" } | { kind: "group"; id: string } | { kind: "loose" };
@@ -133,6 +144,10 @@ export function ProjectSidebar(props: {
   onWidthNudge: (delta: number) => void;
 }): JSX.Element {
   const [open, setOpen] = useState<Record<string, boolean>>({ "g-brand": true });
+  /** 每张卡收起来没有(用户 2026-10-23:每一个块都可以收起,和右边那条拓展栏一样)。缺省都是开的 */
+  const [cards, setCards] = useState<Record<string, boolean>>({});
+  const cardOpen = (k: string) => cards[k] !== false;
+  const toggleCard = (k: string) => setCards((c) => ({ ...c, [k]: !cardOpen(k) }));
   const [query, setQuery] = useState("");
   const [menu, setMenu] = useState<MenuAt | null>(null);
   const [renaming, setRenaming] = useState<{ kind: TreeKind; id: string; name: string } | null>(null);
@@ -164,6 +179,24 @@ export function ProjectSidebar(props: {
   const current = props.scope;
   const isAt = (s: Scope) =>
     s.kind === current.kind && (s.kind !== "group" || (current.kind === "group" && s.id === current.id));
+
+  /** 一张卡的头:和右边那条拓展栏的段头同一套(`.ps-card-*`),点了收起里面那一截 */
+  const cardHead = (key: string, title: string, count: number): JSX.Element => (
+    <div className="ps-card-head">
+      <button
+        type="button"
+        className="ps-card-toggle"
+        data-pc="start-side-card"
+        data-card={key}
+        aria-expanded={cardOpen(key)}
+        onClick={() => toggleCard(key)}
+      >
+        <span className="ps-card-caret" data-open={cardOpen(key)} aria-hidden="true">›</span>
+        {title}
+      </button>
+      <span className="ps-card-count">{count}</span>
+    </div>
+  );
 
   /** 一行。右键、拖动、重命名都在这儿,三种行只是传进来的 spec 不同 */
   const row = (spec: RowSpec): JSX.Element => {
@@ -307,24 +340,6 @@ export function ProjectSidebar(props: {
     );
   };
 
-  /** 拖右边那条缝改宽度 */
-  const onGrip = (e: ReactPointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const grip = e.currentTarget;
-    const startX = e.clientX;
-    const startW = props.width;
-    grip.setPointerCapture(e.pointerId);
-    const move = (ev: PointerEvent) => props.onWidth(clampSideWidth(startW + (ev.clientX - startX)));
-    const up = (ev: PointerEvent) => {
-      props.onWidthCommit(clampSideWidth(startW + (ev.clientX - startX)));
-      grip.releasePointerCapture(e.pointerId);
-      grip.removeEventListener("pointermove", move);
-      grip.removeEventListener("pointerup", up);
-    };
-    grip.addEventListener("pointermove", move);
-    grip.addEventListener("pointerup", up);
-  };
-
   return (
     <aside
       className="ps-side"
@@ -355,6 +370,7 @@ export function ProjectSidebar(props: {
       </label>
 
       <div className="ps-side-scroll">
+        {SHOW_SCOPE_ROWS && (
         <div className="ps-side-group">
           <button
             type="button"
@@ -370,9 +386,11 @@ export function ProjectSidebar(props: {
             <span className="ps-row-count">{allProjects.length}</span>
           </button>
         </div>
+        )}
 
-        <div className="ps-side-group">
-          <div className="ps-side-label">分组</div>
+        <div className="ps-side-group" data-open={cardOpen("groups")}>
+          {cardHead("groups", "分组", groups.length)}
+          {cardOpen("groups") && <div className="ps-side-body">
           {groups.map((g) => {
             const rows = projectsOf(g.id);
             const groupChats = chatsOfGroup(g.id).filter((c) => hit(c.name));
@@ -410,10 +428,13 @@ export function ProjectSidebar(props: {
             <span className="ps-row-icon" aria-hidden="true">＋</span>
             <span className="ps-row-name ps-muted">新建分组</span>
           </button>
+          </div>}
         </div>
 
-        <div className="ps-side-group">
-          <div className="ps-side-label">未分组</div>
+        <div className="ps-side-group" data-open={cardOpen("projects")}>
+          {cardHead("projects", "项目", projectsOf(null).length)}
+          {cardOpen("projects") && <div className="ps-side-body">
+          {SHOW_SCOPE_ROWS && (
           <button
             type="button"
             className="ps-row"
@@ -427,32 +448,28 @@ export function ProjectSidebar(props: {
             <span className="ps-row-name">没放进分组</span>
             <span className="ps-row-count">{projectsOf(null).length}</span>
           </button>
-          <div className="ps-sub">{projectsOf(null).map(projectBlock)}</div>
+          )}
+          {/* 没放进分组的项目直接一条条列,不再套在「没放进分组」那一行底下(用户 2026-10-23) */}
+          {projectsOf(null).map(projectBlock)}
+          </div>}
         </div>
       </div>
 
       </div>
 
-      {/* 右边那条缝:拖着改宽度,双击回到默认;方向键也能调(只能用鼠标就把键盘用户关在门外了)。收起时没有 */}
-      {!props.collapsed && <div
-        className="ps-side-grip"
-        data-pc="start-side-grip"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="侧栏宽度"
-        aria-valuemin={SIDE_WIDTH.min}
-        aria-valuemax={SIDE_WIDTH.max}
-        aria-valuenow={props.width}
-        tabIndex={0}
-        onPointerDown={onGrip}
-        onDoubleClick={() => props.onWidthCommit(SIDE_WIDTH.def)}
-        onKeyDown={(e) => {
-          const step = e.shiftKey ? 32 : 8;
-          if (e.key === "ArrowLeft") { e.preventDefault(); props.onWidthNudge(-step); }
-          if (e.key === "ArrowRight") { e.preventDefault(); props.onWidthNudge(step); }
-          if (e.key === "Home") { e.preventDefault(); props.onWidthCommit(SIDE_WIDTH.def); }
-        }}
-      />}
+      {/* 右边那条缝:平时不画线,鼠标压上来才亮(`WidthGrip.tsx`)。收起时没有 */}
+      {!props.collapsed && (
+        <WidthGrip
+          spec={SIDE_WIDTH}
+          side="right"
+          width={props.width}
+          label="侧栏宽度"
+          pc="start-side-grip"
+          onWidth={props.onWidth}
+          onWidthCommit={props.onWidthCommit}
+          onWidthNudge={props.onWidthNudge}
+        />
+      )}
 
       {menu && (
         <RowMenu

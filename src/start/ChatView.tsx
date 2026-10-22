@@ -28,6 +28,13 @@ export function ChatView(props: {
   onSend: (text: string) => void;
   /** 右边那条拓展栏开着没有。开关在顶栏上(`TopBar.tsx`),所以状态拿在 `OnlineStart` */
   panel: boolean;
+  /** 拓展栏的宽度与它那条拖宽缝的回调。状态也在 `OnlineStart`,这里只过一道 */
+  ext: {
+    width: number;
+    onWidth: (px: number) => void;
+    onWidthCommit: (px: number) => void;
+    onWidthNudge: (delta: number) => void;
+  };
 }): JSX.Element {
   const messages = props.messages;
   const [text, setText] = useState("");
@@ -120,7 +127,18 @@ export function ChatView(props: {
       </div>
         </div>
 
-        {props.panel && <ChatSidePanel chatId={props.chat.id} projectSeed={seed} onNote={setNote} onDetail={() => setDetail(true)} />}
+        {props.panel && (
+          <ChatSidePanel
+            chatId={props.chat.id}
+            projectSeed={seed}
+            onNote={setNote}
+            onDetail={() => setDetail(true)}
+            width={props.ext.width}
+            onWidth={props.ext.onWidth}
+            onWidthCommit={props.ext.onWidthCommit}
+            onWidthNudge={props.ext.onWidthNudge}
+          />
+        )}
       </div>
       )}
 

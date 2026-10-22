@@ -29,7 +29,7 @@ import { ProjectRail } from "./ProjectRail";
 import { ProjectSidebar, scopeKeyOf, type Scope, type TreeOps } from "./ProjectSidebar";
 import { PromptBox } from "./PromptBox";
 import { TopBar } from "./TopBar";
-import { clampSideWidth, readSideCollapsed, readSideWidth, writeSideCollapsed, writeSideWidth } from "./sideWidth";
+import { EXT_WIDTH, SIDE_WIDTH, clampWidth, readSideCollapsed, readWidth, writeSideCollapsed, writeWidth } from "./sideWidth";
 import { removeById, rename, reorder, setArchived, togglePin, visible } from "./treeState";
 import { MOCK_AGENT_CHATS, MOCK_GROUPS, MOCK_PROJECTS, type MockAgentChat, type MockGroup, type MockProject } from "./mockProjects";
 import "./start.css";
@@ -57,7 +57,8 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
   const [notice, setNotice] = useState("");
   // `?ui=home` 是直接看开始页的预览入口,这一路没走登录,账号给个占位名,免得顶栏上显示「未登录」
   const [account, setAccount] = useState<string | null>(() => (initialView() === "home" ? "预览账号" : null));
-  const [sideWidth, setSideWidth] = useState(readSideWidth);
+  const [sideWidth, setSideWidth] = useState(() => readWidth(SIDE_WIDTH));
+  const [extWidth, setExtWidth] = useState(() => readWidth(EXT_WIDTH));
   const [collapsed, setCollapsed] = useState(readSideCollapsed);
 
   /** 点开的那条 Agent 对话(聊天页);为空就是开始页 */
@@ -153,7 +154,11 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
     <div className="ps" data-pc="start-online">
       <TopBar
         atHome={!openChat}
-        onHome={() => setChatId(null)}
+        onHome={() => {
+          setChatId(null);
+          // 「全部项目」那一块归了档,回到「全部」就靠这颗房子(见 ProjectSidebar.tsx 的 SHOW_ALL_SCOPE)
+          setScope({ kind: "all" });
+        }}
         collapsed={collapsed}
         onToggleSide={() =>
           setCollapsed((v) => {
@@ -233,12 +238,12 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
           onWidth={setSideWidth}
           onWidthCommit={(px) => {
             setSideWidth(px);
-            writeSideWidth(px);
+            writeWidth(SIDE_WIDTH, px);
           }}
           onWidthNudge={(delta) =>
             setSideWidth((w) => {
-              const next = clampSideWidth(w + delta);
-              writeSideWidth(next);
+              const next = clampWidth(SIDE_WIDTH, w + delta);
+              writeWidth(SIDE_WIDTH, next);
               return next;
             })
           }
@@ -252,6 +257,20 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
           <ChatView
             chat={openChat}
             panel={panel}
+            ext={{
+              width: extWidth,
+              onWidth: setExtWidth,
+              onWidthCommit: (px) => {
+                setExtWidth(px);
+                writeWidth(EXT_WIDTH, px);
+              },
+              onWidthNudge: (delta) =>
+                setExtWidth((w) => {
+                  const next = clampWidth(EXT_WIDTH, w + delta);
+                  writeWidth(EXT_WIDTH, next);
+                  return next;
+                }),
+            }}
             messages={threads[openChat.id] ?? messagesOf(openChat.id)}
             onSend={(t) =>
               setThreads((all) => {

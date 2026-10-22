@@ -16,6 +16,8 @@ import { useEffect, useRef, useState } from "react";
 import type { JSX } from "react";
 import { hueOf } from "./hue";
 import { changesOf, type MockChange } from "./mockChat";
+import { EXT_WIDTH } from "./sideWidth";
+import { WidthGrip } from "./WidthGrip";
 
 /** 假的片长(秒):传输控件按它走 */
 const DURATION = 15;
@@ -40,9 +42,9 @@ function section(
   return (
     // 钩子名带 `sec-`:不带的话「画面」这一段会和里面那颗播放键(`start-ext-play`)撞同一个名字
     <section className="ps-ext-sec" data-pc={`start-ext-sec-${key}`} data-open={open}>
-      <div className="ps-ext-head">
-        <button type="button" className="ps-ext-toggle" aria-expanded={open} onClick={toggle}>
-          <span className="ps-ext-caret" data-open={open} aria-hidden="true">›</span>
+      <div className="ps-card-head">
+        <button type="button" className="ps-card-toggle" aria-expanded={open} onClick={toggle}>
+          <span className="ps-card-caret" data-open={open} aria-hidden="true">›</span>
           {title}
         </button>
         {right}
@@ -75,6 +77,11 @@ export function ChatSidePanel(props: {
   onNote: (text: string) => void;
   /** 「画面」段头那颗「详细编辑」:展开占满聊天区的编辑视图(`DetailEdit.tsx`) */
   onDetail: () => void;
+  /** 宽度:和左边那栏一样能拖、记在本机 */
+  width: number;
+  onWidth: (px: number) => void;
+  onWidthCommit: (px: number) => void;
+  onWidthNudge: (delta: number) => void;
 }): JSX.Element {
   const changes = changesOf(props.chatId);
   const diffs = changes.filter((c) => c.hasDiff);
@@ -155,7 +162,18 @@ export function ChatSidePanel(props: {
   const pickedChange = diffs.find((c) => c.id === picked) ?? null;
 
   return (
-    <aside className="ps-ext" data-pc="start-ext">
+    <aside className="ps-ext" data-pc="start-ext" style={{ flexBasis: `${props.width}px` }}>
+      {/* 左边那条缝:平时不画线,鼠标压上来才亮 */}
+      <WidthGrip
+        spec={EXT_WIDTH}
+        side="left"
+        width={props.width}
+        label="拓展栏宽度"
+        pc="start-ext-grip"
+        onWidth={props.onWidth}
+        onWidthCommit={props.onWidthCommit}
+        onWidthNudge={props.onWidthNudge}
+      />
       {section(
         "play",
         "画面",
@@ -213,7 +231,7 @@ export function ChatSidePanel(props: {
           ) : (
             <p className="ps-ext-todo">这条对话还没有改动。</p>
           ),
-          <span className="ps-ext-count">{changes.length}</span>,
+          <span className="ps-card-count">{changes.length}</span>,
         )}
 
       {section(
