@@ -37,6 +37,7 @@ import { ONLINE } from "../online/mode";
 import { lowestTier, phoneIdentity, setBenchmark, subscribeTier, tierGlRoute, tierState } from "../online/onlineTier";
 import { stageGate } from "../online/stageGate";
 import { MEDIA_MARK_MS, decodeLimit, originalLoadSignature, subscribeDecodeLimit } from "../online/mediaGate";
+import { rebuildStagesWithRoute } from "../online/onlineTier";
 import { TierBubble } from "./TierBubble";
 import { GateViewer, gateViewerWanted } from "./GateViewer";
 import { setMediaTierPolicy, type MediaTierPolicy } from "../render/mediaTier";
@@ -1003,6 +1004,8 @@ export function Preview(props: { variant?: "mobile" } = {}) {
    * 基准卡要等它,不然在后台舞台还没起来时测、测不出来(语义「即时渲染闸门」:舞台闸门走完之后先测基准卡)。
    */
   const [gateDriven, setGateDriven] = useState(false);
+  /** 试第三级时两个舞台按各一套渲染器重建了几次(只为让 React 按新的 `stageSrc` 换 iframe 地址) */
+  const [, setStageRebuilds] = useState(0);
   const benchmarkRunRef = useRef(false);
   const [benchmarkInfo, setBenchmarkInfo] = useState<BenchmarkOutcome | null>(null);
   useEffect(() => {
@@ -1033,7 +1036,7 @@ export function Preview(props: { variant?: "mobile" } = {}) {
   /*
    * 舞台闸门(语义 `product/platforms.md`「在线浏览器」;做法 `mechanism/platforms.md`「舞台闸门的步骤」第 2～5 条):
    * 可见舞台握上手、载入项目 → 记「可见舞台就绪」;要试第二级就记「开始试后台舞台」再挂 B,两个舞台都握上手并载入项目后记「双舞台已载入」;
-   * 要试第三级就记「开始试每个舞台各一套渲染器」,两台原地换到路线 1(`setGlRoute`,不重建舞台),回包后记下;走完之后这次使用期间
+   * 要试第三级就记「开始试每个舞台各一套渲染器」,两个舞台按路线 1 重建(重新载入),都握上手、载入项目后记下;走完之后这次使用期间
    * 停在到达的那一级。护栏内、崩过、安卓不到 8 GB 的(`fixed`)不试,只把舞台按那一级挂好。每一步的记录写在崩溃记录里(`stageGate.ts`)。
    * 握手容错(握不上、握上又断就退回单舞台)只管当次、不留崩溃记录(下面另一个 effect)。
    */
@@ -1072,10 +1075,27 @@ export function Preview(props: { variant?: "mobile" } = {}) {
         g.reached(2);
         if (tierState().target < 3) { g.done(); return; }
         await mark("try-separate");
-        const front = frontStage();
-        const results = await Promise.all([front, back].map((c) => c?.setGlRoute("perDocument").catch(() => null) ?? Promise.resolve(null)));
+        /*
+         * 两个舞台按各一套渲染器**重建**(整页重新载入,地址带 `gl=perDocument`),不原地换路线〔裁〕:原地换(RPC `setGlRoute`)之后
+         * 有状态的 canvas 卡(粒子等)在新的渲染器里从头起,同一帧两次活渲对不上;`below-online-e2e-probe` 实测毛玻璃卡那一块与精确活渲平均差
+         * 11～12(上限 7),一开始就按各一套起的舞台是 5.4。重建期间崩了,下次载入停在第二级(崩溃记录这时是「开始试每个舞台各一套渲染器」)。
+         */
+        rebuildStagesWithRoute("perDocument");
+        for (const id of STAGE_IDS) {
+          const client = rpcRef.current[id];
+          if (client) {
+            releaseStageClient(client);
+            client.dispose();
+            rpcRef.current[id] = null;
+            hostCapsRef.current[id] = null;
+          }
+        }
+        // 地址交给 React 换(`stageSrc` 现在拼 `gl=perDocument`):手动再设一次 `src` 会让 iframe 载入两遍,第一遍握上的客户端随即作废
+        setStageRebuilds((n) => n + 1);
+        await Promise.all([whenStageReady("front"), whenStageReady("back")]);
         if (!dualRef.current) return;
-        if (results.some((r) => !r)) { g.done(); return; } // 换不过去(舞台在换):这次停在第二级
+        await syncProject("front", getState().project);
+        await syncProject("back", getState().project);
         await mark("separate-ready");
         g.reached(3);
         // 共用的那一个 Worker 不再有人用:放掉(第三级每个舞台各一套)
@@ -1083,6 +1103,7 @@ export function Preview(props: { variant?: "mobile" } = {}) {
         sharedGlRef.current = null;
         g.done();
       } catch (e) {
+        console.warn("[preview] 舞台闸门驱动出错", e);
         setGateDiag(String((e as Error)?.message ?? e).slice(0, 200));
         stageGate()?.done();
       } finally {

@@ -134,11 +134,11 @@ export function stageSrc(id: StageId, opts: { dual?: boolean } = {}): string {
   /*
    * `dual=1`:这一台舞台有后台舞台做伴,宿主能力表照实报「能测量、能追活渲」(C10 契约第 2 节)。
    * 在线页面另带父页按闸门定下的几样(跨源的舞台读不到编辑器页那个源的页面本地存储,崩溃记录与闸门结果都在编辑器页):
-   * `gl=shared|perDocument` 起手的 canvas 渲染路线(试第三级时父页经 RPC `setGlRoute` 换)、`compact=1` 只有一个舞台
+   * `gl=shared|perDocument` 起手的 canvas 渲染路线(试第三级时两个舞台按 `perDocument` 重建,`onlineTier.ts` 的 `rebuildStagesWithRoute`)、`compact=1` 只有一个舞台
    * (图集按小的上限开)、`lowest=1` 最低一档(素材起手只用小尺寸,不等父页的取档策略到了才改)。
    */
   const dualFlag = dual ? "&dual=1" : "";
-  // 只按页面载入时定下的起手样子拼(`tierStart`):试的途中换路线走 RPC `setGlRoute`,基准卡判出最低一档走取档策略,都不改地址(改了 iframe 就重新载入)
+  // 只按页面载入时定下的起手样子拼(`tierStart`):只有试第三级那一步按各一套渲染器重建时改一次;基准卡判出最低一档走取档策略,不改地址(改了 iframe 就重新载入)
   const tier = ONLINE ? `&gl=${tierStart().route}${dual ? "" : "&compact=1"}${tierStart().lowest ? "&lowest=1" : ""}` : "";
   /*
    * 在线的跨源舞台载单独的舞台入口 `stage.html`(同一份脚本包;契约 `online-card-exec-contract.md` 第 3.3 节):它带舞台的内容安全策略

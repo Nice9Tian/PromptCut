@@ -11,7 +11,7 @@
  * 探针趁这时杀页面进程;`?gates=1` 打开只读查看口。
  *
  * 场景(每个场景一个新的浏览器上下文 = 全新的页面本地存储,除非写明接着上一个):
- *   S1  电脑全新打开:从低往高试,到第三级「顶配模式」;气泡文字照用户定的,几秒后自动消失;崩溃记录最后一步是「第 3 级运行中」
+ *   S1  电脑全新打开:从低往高试(先共用一套渲染器,试第三级时两个舞台按各一套重建),到第三级「顶配模式」;气泡文字照用户定的,几秒后自动消失;崩溃记录最后一步是「第 3 级运行中」
  *   S2  接着 S1 正常刷新(留了正常离开):不算崩;上次试成功,崩的次数为 0
  *   S3  试各一套渲染器时杀掉页面进程 → 重新载入停在第二级「标准模式」,崩 1 次、护栏 30 分钟;气泡「标准模式」
  *   S4  接着 S3:护栏内重新打开,停在第二级、不试
@@ -181,7 +181,7 @@ try {
     const gone = await until(() => page.$('[data-pc="tier-bubble"]').then((e) => !e), 15_000, 200);
     check('S1', !!gone, '气泡几秒后自动消失');
     const iframes = await page.$$eval('iframe[data-pc^="stage-frame"]', (els) => els.map((e) => ({ pc: e.dataset.pc, src: e.getAttribute('src') })));
-    check('S1', iframes.length === 2 && iframes.every((f) => /[?&]gl=shared/.test(f.src)), '两个舞台,地址按起手的路线(共用)拼、不因试第三级而变', iframes);
+    check('S1', iframes.length === 2 && iframes.every((f) => /[?&]gl=perDocument/.test(f.src)), '两个舞台;试第三级时按各一套渲染器重建(地址带 gl=perDocument)', iframes);
     scenes.S1.tier = g?.tier;
     // 即时渲染闸门的基准卡、素材闸门的解码上限(第四步):测完了,结论进查看口
     const gb = await until(async () => { const x = await gates(page); return x?.tier?.benchmark !== 'pending' ? x : null; }, 60_000);

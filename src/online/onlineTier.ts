@@ -74,6 +74,13 @@ let start: { route: TierGlRoute; lowest: boolean } = { route: "perDocument", low
 export function tierStart(): Readonly<typeof start> {
   return start;
 }
+/**
+ * 试第三级时两个舞台按各一套渲染器重建(`Preview.tsx` 的舞台闸门驱动):舞台地址从此按 `perDocument` 拼。
+ * 只在那一步调,别处不改起手的样子。
+ */
+export function rebuildStagesWithRoute(route: TierGlRoute): void {
+  start = { ...start, route };
+}
 
 export function tierState(): Readonly<TierState> {
   return state;
