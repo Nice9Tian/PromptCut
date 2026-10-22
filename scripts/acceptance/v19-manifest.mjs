@@ -106,6 +106,7 @@ export const V19_REQS = [
     ['MG-3', 'AI 栏开始页与 Agent 分页按项目分开(桌面与手机)', 'workflow/editing.md「AI 栏的 Agent 标签」(2026-10-22 用户定)'],
     ['MG-4', '数字框与滑块的提交时机(敲字不落中间值、连按并成一步撤销)', 'workflow/editing.md「撤销、重做」(2026-10-20 用户定)'],
     ['MG-5', '云端 Agent 面板流畅(进项目就能输入、点发送当场出气泡、空闲时请求有数)', 'AGENT-agent-panel-smooth.md'],
+    ['MG-6', '浏览器版不画应用标题栏(菜单行与最小化/最大化/关闭);桌面版照旧;菜单里在线还用得上的七项不丢', '用户 2026-10-22 当场定;product/platforms.md「在线浏览器」'],
   ].map(([id, name, source]) => ({ id, name, source, group: '0.7.18 发版后进 main、随 0.7.19 一起发的其它改动' })),
 ];
 
@@ -291,6 +292,12 @@ export const V19_ITEMS = [
   PR('V19-agent-tabs-start-mobile', '在线构建里 AI 栏的开始页(桌面界面走云端接入)与手机版 Agent 分页的开始页', ['MG-3'], 'agent-tabs-start-mobile-probe',
     ['--dist', '{dist}', '--out', '{item}', '--base-port', B, '--doc-port', DOC(0), '--asset-port', DOC(1)],
     { needs: ['online-build'], prereq: ['G0-4'], timeoutMin: 20 }),
+  PR('V19-titlebar', '浏览器版不画应用标题栏:在线页面上菜单行与三个窗口按钮都没有;桌面模式两组都在、「文件」菜单能打开;「快捷键」「关于」挪进顶栏「⋯」且桌面不重复', ['MG-6'], 'browser-titlebar-probe',
+    ['--online-port', '5960', '--desktop-port', '5963', '--out', '{item}'],
+    { must: [OK_TRUE], timeoutMin: 20, known: '端口写死在探针参数里(5960/5963),与本清单 5690 段不同;守门测试 C10-TITLEBAR-01 另在单测里核产物' }),
+  PR('V19-save-state-probe', '保存与修改状态检查里有探针的几处(保存中断、超时、锁)', ['AB-2'], 'save-state-probe',
+    ['--origin', '{dev.origin}', '--out', '{item}'],
+    { must: [OK_TRUE], timeoutMin: 20, known: '探针自己不起服务,用运行器的共享 dev server;没有探针的三处见 V19-save-state(人工结论)' }),
   PR('V19-agent-panel-smooth', '云端 Agent 面板流畅(进项目就能输入、点发送 300 ms 内出气泡、只一条、空闲 30 秒列对话不超过 12 次、刷新回到原对话)', ['MG-5'], 'agent-panel-smooth-probe',
     ['--dist', '{dist}', '--site-root', '{visuhive}/site', '--out', '{item}', '--base-port', B],
     { account: true, needs: ['online-build'], prereq: ['G0-4'], timeoutMin: 20, must: ['"completed":\\s*true', '"failed":\\s*0'],
@@ -351,4 +358,9 @@ export const V19_TAGS = {
 };
 
 /** scripts/probes 下不进清单的、0.7.19 新出现的文件 */
-export const V19_EXCLUDED = {};
+export const V19_EXCLUDED = {
+  // 0.7.20 的两块(申请加入与账号名单、改密退出后逐项撤回)已经在 main 上、会随 0.7.19 的包一起发,
+  // 但它们的验收行归 0.7.20(account-binding-task.md「逐项验收」),清单项随 0.7.20 的清单一起加。
+  'account-join-request-probe.mjs': '0.7.20 申请加入与账号名单的探针;0.7.19 清单不收,随 0.7.20 清单登记',
+  'logout-rollback-probe.mjs': '0.7.20 改密退出后逐项撤回的探针;0.7.19 清单不收,随 0.7.20 清单登记',
+};
