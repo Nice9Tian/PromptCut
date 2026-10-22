@@ -353,6 +353,7 @@ export async function beginStageGate(deps: GateDeps): Promise<StageGateSession> 
       if (benchmarkSlow) return;
       benchmarkSlow = true;
       markLowest("benchmark");
+      if (doneLevel !== null && step?.kind === "running") setStep(runningStep());
     },
     mediaStart(capLevel) { if (step?.kind === "measure") return; beforeMedia = step?.kind === "media" ? beforeMedia : step; setStep({ kind: "media", capLevel }); },
     mediaEnd() { if (step?.kind !== "media") return; const back = beforeMedia ?? runningStep(); beforeMedia = null; setStep(back); },

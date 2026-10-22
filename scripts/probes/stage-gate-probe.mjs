@@ -26,6 +26,11 @@
  *   S12 iPad(桌面标识 + 多点触控):要试的先按电脑;试后台舞台时杀掉 → 重新载入停在第一级,身份改判手机
  *   S13 两个标签页:第一个还开着时开第二个,第二个不把第一个当成崩了
  *   S14 只读查看口:`?gates=1` 显示档位、舞台闸门、崩溃记录,不含凭证
+ *   S15 最低一档(`?tier=low`):播放时卡被抑制、不即时渲染;停下后逐层追一帧画好(不设时限)
+ *   S16 基准卡跑不动(舞台 CPU 降速 60 倍):进最低一档「低配模式」
+ *   S17 测某张卡时杀掉页面进程 → 重新载入这张卡在测崩的卡里、不再测,直接当重卡
+ *   S18 载入素材原尺寸时(留了记录的那段时间)杀掉 → 重新载入解码上限调低一级
+ *   S19 解码上限:浏览器只说解得动 720p(仿弱设备)→ 上限 720p;查看口里看得到
  *
  * 输出:过程写 stderr;stdout 最后一行一行 JSON `{ ok, fails, scenes }`;截图在 --out。
  */
@@ -71,7 +76,15 @@ const IPAD = {
 };
 
 const env = await startMobileEnv({ dist: DIST, basePort: BASE, docPort: BASE + 3, assetPort: BASE + 4, name: 'stage-gate-probe' });
-await env.seed(emptyProject('stage-gate-probe'));
+// 项目里放一张内置卡(金句药丸,0～4 秒)与两份视频素材的登记(1080p、4K;只有登记、没有字节:素材闸门留记录与解码上限只看登记)
+const seedProject = emptyProject('stage-gate-probe');
+seedProject.tracks[0].clips.push({ id: 'pill-1', cardId: 'punch-pill', start: 0, end: 4, params: { text: '基准' } });
+const HH = (c) => c.repeat(64);
+seedProject.media = [
+  { id: 'm-1080', kind: 'video', name: '1080.mp4', url: `/@media/${HH('1')}`, hash: HH('1'), ext: 'mp4', width: 1920, height: 1080, duration: 4, tiers: { original: HH('1'), small: HH('2') } },
+  { id: 'm-4k', kind: 'video', name: '4k.mp4', url: `/@media/${HH('3')}`, hash: HH('3'), ext: 'mp4', width: 3840, height: 2160, duration: 4, tiers: { original: HH('3'), small: HH('4') } },
+];
+await env.seed(seedProject);
 const browser = await puppeteer.launch({ headless: true, protocolTimeout: 90_000, args: [...PROBE_CHROME_ARGS, '--no-first-run', '--autoplay-policy=no-user-gesture-required'] });
 
 /** 新的上下文与页面;`device` 是 mobile-env 的设备名或 'ipad';`memory` 覆盖 navigator.deviceMemory */
@@ -114,6 +127,15 @@ async function reloadAfterCrash(page, query) {
   await page.reload({ waitUntil: 'domcontentloaded', timeout: 120_000 }).catch(async () => { await reload(page, query); });
 }
 const tabStep = (g) => g?.step;
+/** CPU 降速:页面与两个舞台(跨源舞台是另外的渲染进程,各自要设) */
+async function throttleAll(page, rate) {
+  await page.cdp?.send('Emulation.setCPUThrottlingRate', { rate }).catch(() => {});
+  for (const t of browser.targets()) {
+    if (!t.url().includes(`:${BASE + 1}/`) && !t.url().includes(`:${BASE + 2}/`)) continue;
+    const c = await t.createCDPSession().catch(() => null);
+    await c?.send('Emulation.setCPUThrottlingRate', { rate }).catch(() => {});
+  }
+}
 const shot = (page, name) => page.screenshot({ path: path.join(OUT, `${name}.png`) }).catch(() => {});
 const want = (id) => !ONLY.length || ONLY.includes(id);
 const TEXT = {
@@ -349,6 +371,108 @@ try {
     await shot(page, 'S14-viewer');
     await page.browserContext().close();
   }
+  /* ---------------------------------------------------------------- S15 最低一档:播放不即时渲染,停下逐层画 */
+  if (want('S15')) {
+    const page = await newPage('desktop');
+    await enter(page);
+    await reload(page, 'tier=low');
+    const g = await waitDone(page);
+    check('S15', g?.tier?.lowest === 'stage' && g.decision.reason === 'forced', '强制最低一档', g?.tier);
+    await until(() => page.evaluate(() => !!window.__pcStore && !!window.__pcPreviewDiag), 30_000);
+    await page.evaluate(() => { window.__pcStore.actions.seek(1); window.__pcStore.actions.play(); });
+    const playing = await until(() => page.evaluate(() => { const d = window.__pcPreviewDiag(); return window.__pcStore.getState().playing && d.suppressed.includes('pill-1') ? d : null; }), 20_000, 100);
+    check('S15', !!playing, '播放时卡被抑制(不即时渲染,贴预渲染结果、没有就占位)', await page.evaluate(() => window.__pcPreviewDiag().suppressed));
+    await sleep(800);
+    await page.evaluate(() => window.__pcStore.actions.pause());
+    const settled = await until(() => page.evaluate(() => { const r = window.__pcPreviewDiag().lastSettle; return r && r.ok && r.drawn.some((x) => x.clipId === 'pill-1') ? r : null; }), 60_000, 200);
+    check('S15', !!settled && settled.timeoutMs === null, '停下后逐层追一帧画好,不设时限', settled ?? await page.evaluate(() => window.__pcPreviewDiag().lastSettle));
+    await shot(page, 'S15-low-settled');
+    await page.browserContext().close();
+  }
+
+  /* ---------------------------------------------------------------- S16 基准卡跑不动 */
+  if (want('S16')) {
+    const page = await newPage('desktop');
+    await enter(page);
+    await waitDone(page);
+    // 舞台闸门停在「各一套渲染器就绪」那一步,给两个舞台降速 60 倍,再放行:走完之后测基准卡
+    await reload(page, 'gateHold=separate-ready');
+    await until(async () => { const x = await gates(page); return x?.step?.kind === 'stage' && x.step.what === 'separate-ready' ? x : null; }, 90_000, 100);
+    await throttleAll(page, 60);
+    await page.evaluate(() => window.__pcGateRelease?.());
+    const g = await until(async () => { const x = await gates(page); return x?.tier?.benchmark && x.tier.benchmark !== 'pending' ? x : null; }, 240_000, 500);
+    await throttleAll(page, 1);
+    scenes.S16 = { ...(scenes.S16 ?? { checks: 0, failed: 0 }), benchmark: g?.benchmark, tier: g?.tier, step: (await gates(page))?.step, driverError: (await gates(page))?.driverError };
+    check('S16', g?.tier?.benchmark === 'slow' && g.tier.lowest === 'benchmark', '基准卡跑不动:最低一档', g?.benchmark);
+    const b = await bubbleText(page, 30_000);
+    check('S16', b === TEXT.low, '气泡:低配模式', b);
+    await page.browserContext().close();
+  }
+
+  /* ---------------------------------------------------------------- S17 测某张卡时杀掉 */
+  if (want('S17')) {
+    const page = await newPage('desktop');
+    await page.cdp.send('Emulation.setCPUThrottlingRate', { rate: 6 });
+    await enter(page);
+    const measuring = await until(async () => { const x = await gates(page); return x?.step?.kind === 'measure' && x.step.key !== '@benchmark' ? x : null; }, 120_000, 30);
+    check('S17', !!measuring, '等到测某张卡(常驻探针)', await gates(page));
+    if (measuring) {
+      const mine = measuring.log?.tabs?.[measuring.tab];
+      say('S17 测卡中', { key: measuring.step.key, alive: mine?.alive, now: Date.now() });
+      const t0 = Date.now();
+      const ok = await crashPage(page);
+      say('S17 杀页面', { ok, ms: Date.now() - t0 });
+      // 崩了之后的新渲染进程不带降速(旧的 CDP 会话已经断了,不再发)
+      const t1 = Date.now();
+      await reloadAfterCrash(page);
+      say('S17 重新载入', { ms: Date.now() - t1, sinceMeasure: Date.now() - t0 });
+      const g = await waitDone(page);
+      const key = measuring.step.key;
+      check('S17', g?.judged?.crashed && g.judged.step?.kind === 'measure' && g.log.device.heavyCards.includes(key), '这张卡记进测崩的卡', { judged: g?.judged, device: g?.log?.device, history: g?.log?.history });
+      check('S17', g?.decision?.reason === 'trial', '不算舞台崩:舞台照常试', g?.decision);
+      await sleep(8000);
+      const after = await page.evaluate((k) => ({ probed: window.__pcPreviewDiag().probeRun, heavy: window.__pcGates().log.device.heavyCards.includes(k) }), key);
+      const probedAgain = JSON.stringify(after.probed ?? '').includes(key);
+      check('S17', !probedAgain, '不再测它', after.probed);
+      const heavy = await page.evaluate(() => [...(window.__pcPlanDebug?.()?.prerenderSet ?? [])]).catch(() => null);
+      scenes.S17.heavyPlan = heavy;
+    }
+    await page.browserContext().close();
+  }
+
+  /* ---------------------------------------------------------------- S18 载入原尺寸时杀掉 */
+  if (want('S18')) {
+    const page = await newPage('desktop');
+    await enter(page);
+    let g = await until(async () => { const x = await gates(page); return x?.step?.kind === 'media' ? x : null; }, 60_000, 50);
+    check('S18', !!g, '载入原尺寸之前留了记录(「载入素材原尺寸」)', await gates(page));
+    const before = g?.media?.decode;
+    await crashPage(page);
+    await reloadAfterCrash(page);
+    g = await waitDone(page);
+    const decode = await until(async () => (await gates(page))?.media?.decode, 30_000);
+    check('S18', g?.judged?.step?.kind === 'media' && g.log.device.media.lowered === 1, '判崩在载入原尺寸,解码上限调低一级', g?.log?.device);
+    check('S18', decode && before && decode.index === Math.min(4, before.measured + 1), '生效的上限低了一级', { before, decode });
+    await page.browserContext().close();
+  }
+
+  /* ---------------------------------------------------------------- S19 仿弱设备的解码上限 */
+  if (want('S19')) {
+    const page = await newPage('desktop');
+    await page.evaluateOnNewDocument(() => {
+      if (window.top !== window) return;
+      const mc = navigator.mediaCapabilities;
+      if (!mc) return;
+      mc.decodingInfo = async (cfg) => ({ supported: true, smooth: (cfg?.video?.width ?? 0) <= 1280, powerEfficient: true });
+    });
+    await enter(page);
+    const decode = await until(async () => (await gates(page))?.media?.decode, 30_000);
+    check('S19', decode?.name === '720p' && decode.maxPixels === 1280 * 720, '解码上限 720p', decode);
+    const sig = await page.evaluate(() => window.__pcGates().step);
+    scenes.S19.step = sig;
+    await page.browserContext().close();
+  }
+
 } catch (e) {
   fails.push(`异常:${String(e?.stack ?? e).slice(0, 800)}`);
 } finally {

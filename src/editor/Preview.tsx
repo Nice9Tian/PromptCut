@@ -532,9 +532,11 @@ export function Preview(props: { variant?: "mobile" } = {}) {
    * 最低一档不拉原尺寸,不记。
    */
   const mediaSigRef = useRef("");
+  const decodeReady = useSyncExternalStore(subscribeDecodeLimit, () => decodeLimit() !== null, () => false);
   const mediaMarkTimerRef = useRef(0);
   useEffect(() => {
-    if (!ONLINE || lowest || !stageReady) return;
+    // 等舞台闸门走完、基准卡测完再记(免得这一步盖掉舞台闸门的那几步,崩了算错地方)
+    if (!ONLINE || lowest || !stageReady || tierNow.gate !== "done" || tierNow.benchmark === "pending") return;
     const g = stageGate();
     const lim = decodeLimit();
     if (!g || !lim) return;
@@ -544,7 +546,7 @@ export function Preview(props: { variant?: "mobile" } = {}) {
     g.mediaStart(lim.index);
     window.clearTimeout(mediaMarkTimerRef.current);
     mediaMarkTimerRef.current = window.setTimeout(() => stageGate()?.mediaEnd(), MEDIA_MARK_MS);
-  }, [project.media, lowest, stageReady]);
+  }, [project.media, lowest, stageReady, tierNow.gate, tierNow.benchmark, decodeReady]);
   useEffect(() => () => window.clearTimeout(mediaMarkTimerRef.current), []);
   /*
    * 只有一个舞台时轻重按共享成本记录加界限搜索判(下面那个 effect);最低一档播放时不做任何即时渲染(显示用的表全部判重)。
@@ -1016,6 +1018,7 @@ export function Preview(props: { variant?: "mobile" } = {}) {
         })).catch(() => benchmarkVerdict(null));
       }
       setBenchmarkInfo(out);
+      if (out.verdict === "slow") stageGate()?.benchmarkSlow();
       setBenchmark(out.verdict === "slow" ? "slow" : out.verdict === "ok" ? "ok" : "skipped");
     })();
   }, [stageReady, tierNow.gate, tierNow.lowest]);
@@ -1037,13 +1040,14 @@ export function Preview(props: { variant?: "mobile" } = {}) {
     const trying = !g.decision.fixed;
     /*
      * `?gateHold=<一步>` 只给验收用(`scripts/probes/stage-gate-probe.mjs`):记下这一步之后停住不往下走,探针趁这时把页面进程杀掉,
-     * 验「崩在这一步、重新载入停在下一级」。不带它与平时一样。
+     * 验「崩在这一步、重新载入停在下一级」,或给舞台降速后叫 `__pcGateRelease()` 放行。不带它与平时一样。
      */
     const hold = (() => { try { return new URLSearchParams(location.search).get("gateHold"); } catch { return null; } })();
     const mark = async (what: Parameters<typeof g.stage>[0]) => {
       if (!trying) return;
       g.stage(what);
-      if (hold === what) await new Promise<never>(() => {});
+      // 停住,直到探针叫 `window.__pcGateRelease()`(不叫就一直停着:杀页面进程的那几个场景)
+      if (hold === what) await new Promise<void>((resolve) => { (window as unknown as Record<string, unknown>).__pcGateRelease = resolve; });
     };
     void (async () => {
       try {
