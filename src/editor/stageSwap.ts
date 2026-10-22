@@ -35,6 +35,7 @@ import { getState } from "../store/project";
 import { flattenOverlay, type Project } from "../kernel/project";
 import { cutOf } from "../kernel/cutSegments";
 import { flatPlanProject, isFlatClipId } from "../kernel/cutFlatten.mjs";
+import { flatClipStreamKind } from "../render/streamPlanRules.mjs";
 import { cardMountedAt, mountFrameOf } from "../render/frameWindow.mjs";
 import { createPlayRun, enteredNaturally, notePlayBeat, notePlaySeam, notePlayStart } from "../render/playEntry.mjs";
 import { catchUpEstimateMs, playingLeadMs, sceneCatchUpCost } from "../render/catchUpEstimate.mjs";
@@ -242,7 +243,8 @@ export function needsBackCatchUp(project: Project, t: number): string[] {
     for (const clip of tr.clips) {
       if (!isFlatClipId(clip.id) || !clip.cardId || !cardMountedAt(clip, t)) continue;
       if (pipelineAt(plan, clip.id, t) !== "heavy" || frameModes[clip.id] === "direct") continue;
-      if (clipIdentityOf(project).capabilities.get(clip.id)?.compositing !== "independent") continue;
+      // 有流的才贴着流(独立卡、依赖下层与没审阅过的卡,〔裁〕R01;同 `snapshotFeed.ts` 的 `flatStreamable`);源依赖的照旧活渲,不用补
+      if (flatClipStreamKind(clipIdentityOf(project).capabilities.get(clip.id)?.compositing as string | undefined, clip.frame) === null) continue;
       if (!recordOf(project, clip.id)) continue;
       out.push(clip.id);
     }

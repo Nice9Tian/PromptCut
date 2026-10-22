@@ -1,0 +1,425 @@
+{
+  "out": "C:\\Users\\admin\\Documents\\PromptCut\\.worktrees\\cut-stream\\out\\probe-a4",
+  "project": {
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "segment": "seg-s",
+    "target": "seg-s~cg-glass",
+    "frame": {
+      "x": 128,
+      "y": 72,
+      "w": 1024,
+      "h": 576
+    },
+    "frames": [
+      0,
+      104
+    ]
+  },
+  "streams": [
+    [
+      "card",
+      "seg-s~cg-r6"
+    ],
+    [
+      "below",
+      "seg-s~cg-glass"
+    ]
+  ],
+  "spec": {
+    "kind": "below",
+    "plane": "stage",
+    "within": "seg-s~",
+    "belowClipIds": [
+      "seg-s~cg-below",
+      "seg-s~cg-r6"
+    ],
+    "firstFrame": 0,
+    "lastFrame": 104,
+    "mountFrame": 0,
+    "replay": true,
+    "bound": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 720
+    },
+    "streamKey": "c7c2b247c1898c7e",
+    "contentKey": "9d4c995d568e91df",
+    "inputSig": "s1-d5df97f35f548faf"
+  },
+  "isolated": {
+    "top": [
+      "seg-s"
+    ],
+    "glass": [
+      "cg-glass",
+      "cg-r6",
+      "cg-below"
+    ],
+    "segFrame": null,
+    "segFadeIn": null
+  },
+  "sparseMs": 9433,
+  "denseMs": 10808,
+  "below": {
+    "failed": null,
+    "frames": 112,
+    "glassFrames": 112,
+    "absent": 0,
+    "same": 0,
+    "checks": 14,
+    "overflows": 0
+  },
+  "manifest": {
+    "tight": {
+      "x": 27,
+      "y": 213,
+      "w": 434,
+      "h": 326
+    },
+    "segments": [
+      {
+        "stride": 1,
+        "samples": 15,
+        "box": {
+          "x": 35,
+          "y": 221,
+          "w": 418,
+          "h": 310
+        }
+      },
+      {
+        "stride": 1,
+        "samples": 15,
+        "box": {
+          "x": 39,
+          "y": 225,
+          "w": 414,
+          "h": 306
+        }
+      },
+      {
+        "stride": 1,
+        "samples": 15,
+        "box": {
+          "x": 35,
+          "y": 225,
+          "w": 418,
+          "h": 306
+        }
+      },
+      {
+        "stride": 1,
+        "samples": 15,
+        "box": {
+          "x": 35,
+          "y": 225,
+          "w": 418,
+          "h": 306
+        }
+      },
+      {
+        "stride": 1,
+        "samples": 15,
+        "box": {
+          "x": 35,
+          "y": 225,
+          "w": 418,
+          "h": 306
+        }
+      },
+      {
+        "stride": 1,
+        "samples": 15,
+        "box": {
+          "x": 35,
+          "y": 225,
+          "w": 418,
+          "h": 306
+        }
+      },
+      {
+        "stride": 1,
+        "samples": 15,
+        "box": {
+          "x": 35,
+          "y": 225,
+          "w": 418,
+          "h": 306
+        }
+      },
+      {
+        "stride": 1,
+        "samples": 15,
+        "box": {
+          "x": 215,
+          "y": 313,
+          "w": 250,
+          "h": 96
+        }
+      },
+      {
+        "stride": 1,
+        "samples": 15,
+        "box": {
+          "x": 365,
+          "y": 313,
+          "w": 250,
+          "h": 96
+        }
+      },
+      {
+        "stride": 1,
+        "samples": 15,
+        "box": {
+          "x": 515,
+          "y": 313,
+          "w": 250,
+          "h": 96
+        }
+      },
+      {
+        "stride": 1,
+        "samples": 15,
+        "box": {
+          "x": 665,
+          "y": 313,
+          "w": 250,
+          "h": 96
+        }
+      },
+      {
+        "stride": 1,
+        "samples": 15,
+        "box": {
+          "x": 215,
+          "y": 313,
+          "w": 250,
+          "h": 96
+        }
+      },
+      {
+        "stride": 1,
+        "samples": 15,
+        "box": {
+          "x": 365,
+          "y": 313,
+          "w": 250,
+          "h": 96
+        }
+      },
+      {
+        "stride": 1,
+        "samples": 15,
+        "box": {
+          "x": 515,
+          "y": 313,
+          "w": 250,
+          "h": 96
+        }
+      }
+    ]
+  },
+  "dom10": {
+    "wrapper": true,
+    "suppressed": true,
+    "plane": true,
+    "planeShown": true,
+    "planeInCutScene": true,
+    "cutSceneClipPath": "inset(0px)"
+  },
+  "dom47": {
+    "wrapper": true,
+    "suppressed": true,
+    "plane": true,
+    "planeShown": true,
+    "planeInCutScene": true,
+    "cutSceneClipPath": "inset(0px)"
+  },
+  "stage": [
+    {
+      "frame": 4,
+      "best": 4,
+      "err": 0.47,
+      "scores": [
+        [
+          4,
+          0.47
+        ],
+        [
+          3,
+          1.96
+        ],
+        [
+          5,
+          2.14
+        ],
+        [
+          2,
+          3.1
+        ],
+        [
+          6,
+          3.35
+        ]
+      ]
+    },
+    {
+      "frame": 10,
+      "best": 10,
+      "err": 0.93,
+      "scores": [
+        [
+          10,
+          0.93
+        ],
+        [
+          11,
+          2.45
+        ],
+        [
+          9,
+          2.99
+        ],
+        [
+          12,
+          3.57
+        ],
+        [
+          8,
+          3.91
+        ]
+      ],
+      "withoutStream": 5.35,
+      "bareOk": true
+    },
+    {
+      "frame": 31,
+      "best": 31,
+      "err": 1.11,
+      "scores": [
+        [
+          31,
+          1.11
+        ],
+        [
+          30,
+          1.26
+        ],
+        [
+          29,
+          1.35
+        ],
+        [
+          32,
+          1.42
+        ],
+        [
+          33,
+          1.58
+        ]
+      ]
+    },
+    {
+      "frame": 47,
+      "best": 47,
+      "err": 0.96,
+      "scores": [
+        [
+          47,
+          0.96
+        ],
+        [
+          48,
+          1.43
+        ],
+        [
+          46,
+          1.45
+        ],
+        [
+          49,
+          1.65
+        ],
+        [
+          45,
+          1.65
+        ]
+      ],
+      "withoutStream": 6.35,
+      "bareOk": true
+    },
+    {
+      "frame": 75,
+      "best": 75,
+      "err": 0.74,
+      "scores": [
+        [
+          75,
+          0.74
+        ],
+        [
+          74,
+          0.75
+        ],
+        [
+          76,
+          0.76
+        ],
+        [
+          73,
+          0.79
+        ],
+        [
+          77,
+          0.79
+        ]
+      ]
+    },
+    {
+      "frame": 100,
+      "best": 100,
+      "err": 0.95,
+      "scores": [
+        [
+          100,
+          0.95
+        ],
+        [
+          99,
+          1.34
+        ],
+        [
+          101,
+          1.37
+        ],
+        [
+          98,
+          1.46
+        ],
+        [
+          102,
+          1.51
+        ]
+      ]
+    }
+  ],
+  "sampling": {
+    "region": {
+      "x": 395,
+      "y": 398,
+      "w": 55,
+      "h": 40
+    },
+    "edgeUnderGlass": 42.15,
+    "edgeNoVideo": 3.38,
+    "edgeBare": 283,
+    "concentrationUnderGlass": 1,
+    "concentrationBare": 1
+  },
+  "elapsedMs": 41489,
+  "fails": [],
+  "ok": true
+}
