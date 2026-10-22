@@ -57,7 +57,9 @@ export function pruneNonces(t, at, ttl = READ_NONCE_TTL_MS, maxCount = KEEP_READ
 }
 export const CONVERSATION_CONTROL_ROOT = '/internal/v2/conversation-controls/';
 export const conversationControlOperations = Object.freeze({ subscribe: 'conversationControlSubscribe',
-  open: 'conversationReadOpen', close: 'conversationReadClose', ack: 'conversationControlAck' });
+  open: 'conversationReadOpen', close: 'conversationReadClose', ack: 'conversationControlAck',
+  // 〔裁〕H07：实例报「我在哪个数据目录的独占锁下跑」；后继实例凭同一把锁交「前一个已经不在了」（见 handover）
+  lease: 'conversationInstanceLease', handover: 'conversationInstanceHandover' });
 
 /** 一条访问事件（旧登录作废、被踢等）在 Agent 这一侧的任务是否都收口了。只读账本，不改。
  *
@@ -95,7 +97,8 @@ export function accessEventRunClosure(state, eventId, { scoped = false } = {}) {
 export function conversationControlScope(operation, body) {
   const action = Object.keys(conversationControlOperations).find(key => conversationControlOperations[key] === operation);
   const shapes = { subscribe: ['requestId', 'nonce'], open: ['requestId', 'nonce', 'delegation', 'projectId', 'conversationId', 'action', 'after'],
-    close: ['requestId', 'nonce', 'readHandleIds'], ack: ['requestId', 'nonce', 'controlId', 'payloadDigest', 'seq', 'readHandleIds'] };
+    close: ['requestId', 'nonce', 'readHandleIds'], ack: ['requestId', 'nonce', 'controlId', 'payloadDigest', 'seq', 'readHandleIds'],
+    lease: ['requestId', 'nonce', 'lockId', 'machine'], handover: ['requestId', 'nonce', 'instanceId', 'instanceGeneration'] };
   if (!action || !body || typeof body !== 'object' || Array.isArray(body) ||
       Object.keys(body).sort().join(',') !== [...shapes[action]].sort().join(',') ||
       !reference(body.requestId) || !reference(body.nonce)) fail(400, 'read-control-request-invalid');
@@ -106,6 +109,10 @@ export function conversationControlScope(operation, body) {
       new Set(body.readHandleIds).size !== body.readHandleIds.length || !body.readHandleIds.every(reference))) fail(400, 'read-control-request-invalid');
   if (action === 'ack' && (!reference(body.controlId) || !/^[a-f0-9]{64}$/.test(body.payloadDigest ?? '') ||
       !Number.isSafeInteger(body.seq) || body.seq < 1)) fail(400, 'read-control-request-invalid');
+  // machine 只收 64 位十六进制摘要（Agent 那边的 leaseMachineDigest）：别的形状一律拒，账本里就进不来可读的机器识别码
+  if (action === 'lease' && (!reference(body.lockId) || !/^[a-f0-9]{64}$/.test(body.machine ?? ''))) fail(400, 'read-control-request-invalid');
+  if (action === 'handover' && (!reference(body.instanceId) || !Number.isSafeInteger(body.instanceGeneration) ||
+      body.instanceGeneration < 1)) fail(400, 'read-control-request-invalid');
   return { operation, request: clone(body) };
 }
 
@@ -140,7 +147,8 @@ export function createAgentReadControlHandler({ control, resolveServicePrincipal
         timer = setInterval(() => control.publish(), 1000); timer.unref?.();
         await closed;
       } else {
-        const result = await ({ open: control.open, close: control.closeReads, ack: control.acknowledge })[action]({ servicePrincipal, body });
+        const result = await ({ open: control.open, close: control.closeReads, ack: control.acknowledge,
+          lease: control.declareLease, handover: control.handover })[action]({ servicePrincipal, body });
         if (!res.destroyed) { res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
           res.end(JSON.stringify({ ok: true, result })); }
       }
@@ -156,7 +164,16 @@ export function createAgentReadControlHandler({ control, resolveServicePrincipal
 /** One SQLite authority for HTTP read inventory and close controls. Network
  * adapters must derive servicePrincipal from an actual authenticated socket and
  * release invocation capabilities only after the complete request/stream ends.
- * Unknown historical OS instances never become closed through an empty list. */
+ * Unknown historical OS instances never become closed through an empty list.
+ *
+ * 〔裁〕H07（Agent 服务重启时有人开着云端对话页，之后的退出办不完）：一个实例开着的读取，只有两种办法收口：
+ * 1. 它自己关掉、确认（照旧）；
+ * 2. 它的进程确实不在了：后继实例凭「同一个数据目录的独占锁」交来证据（`handover`）。Agent 那一侧每个读取控制客户端
+ *    在数据目录里握着一把操作系统的独占锁（`conversation-control-client.mjs`），握着锁时才报锁、才订阅、才开读取；
+ *    进程结束（含被硬杀）或正常收口（读取全关完）以后锁才放开。所以后继拿到了锁，前一个握过这把锁的实例就不可能再往页面写东西。
+ *    文档服务这边核：两个实例各自报过的锁号与机器码相同（各自用自己的实例钥匙签的，后继冒充不了前一个）、同一个服务身份、
+ *    后继是更新的一代、前一个此刻没有连着本进程的订阅流。核过了才把前一个记成已收口。
+ * 「新一代登记了」「连接断了」「过了多久」都不当证据（原来凭「更新一代的只做控制的主服务订阅了」就收口，已去掉）。 */
 export function createAgentReadControl({ ledger, instanceAuthority, authorizeRead, checkReadInState,
   synchronize = async () => {}, onProgress = () => {}, now = Date.now } = {}) {
   if (![ledger?.read, ledger?.transaction, instanceAuthority?.verifyInState, authorizeRead, checkReadInState]
@@ -181,38 +198,22 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
     t.nonces[key] = at; rememberNonce(key);
     pruneNonces(t, at);
   };
-  /** 只做控制的主服务（`control-only`）是单实例服务：新一代主服务实例已经登记并连上读取控制流时，
-   * 更早代的主服务进程必然已经退出，把旧主服务名下残留的读取与待办回执一并收口。 */
-  function supersedePriorControlOnlyInState(state, who) {
-    if (state.agentInstancesV2?.[who?.instanceId]?.purpose !== 'control-only') return false;
-    const t = tables(state); let changed = false;
-    for (const prior of Object.values(state.agentInstancesV2 ?? {})) {
-      if (prior.purpose !== 'control-only' || prior.instanceId === who.instanceId ||
-          prior.serviceId !== who.serviceId || prior.serviceKid !== who.serviceKid ||
-          prior.instanceGeneration >= who.instanceGeneration) continue;
-      const priorWho = Object.fromEntries(instanceKeys.map(k => [k, prior[k]]));
-      const supersededTag = `superseded:${who.instanceId}:${who.instanceGeneration}`;
-      if (prior.state !== 'closed' || !prior.closure) {
-        prior.state = 'closed';
-        prior.closure = { complete: true, witnessId: supersededTag,
-          supersededByInstanceId: who.instanceId, supersededByGeneration: who.instanceGeneration };
-        changed = true;
-      }
-      for (const handle of Object.values(t.handles)) {
-        if (!sameInstance(handle, priorWho) || (handle.state === 'closed' && handle.closeReceipt)) continue;
-        handle.state = 'closed';
-        handle.closeReceipt ??= { requestId: supersededTag, ...priorWho };
-        changed = true;
-      }
-      for (const control of t.controls) {
-        const target = control.targets[prior.instanceId];
-        if (!target || target.receipt || !sameInstance(target, priorWho)) continue;
-        target.receipt = { controlId: control.controlId, seq: control.seq, payloadDigest: control.payloadDigest,
-          ...priorWho, closedReadHandleIds: [...target.readHandleIds].sort() };
-        changed = true;
-      }
+  /** 把一个已经证明不在了的实例记成已收口：它名下没关的读取记已关、等它的控制记录补上回执、实例本身记 `closed`。
+   * 只由 `handover` 调；调之前要核完证据（见下）。 */
+  function closeGoneInstanceInState(state, prior, closure) {
+    const t = tables(state), priorWho = Object.fromEntries(instanceKeys.map(k => [k, prior[k]]));
+    prior.state = 'closed'; prior.closure = closure;
+    for (const handle of Object.values(t.handles)) {
+      if (!sameInstance(handle, priorWho) || (handle.state === 'closed' && handle.closeReceipt)) continue;
+      handle.state = 'closed';
+      handle.closeReceipt ??= { requestId: closure.witnessId, ...priorWho };
     }
-    return changed;
+    for (const control of t.controls) {
+      const target = control.targets[prior.instanceId];
+      if (!target || target.receipt || !sameInstance(target, priorWho)) continue;
+      target.receipt = { controlId: control.controlId, seq: control.seq, payloadDigest: control.payloadDigest,
+        ...priorWho, closedReadHandleIds: [...target.readHandleIds].sort() };
+    }
   }
   const requireLive = who => {
     const stream = streams.get(who.instanceId);
@@ -222,17 +223,13 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
   };
   function subscribe({ servicePrincipal, body, send, onFailure }) {
     if (typeof send !== 'function' || typeof onFailure !== 'function') fail(503, 'read-control-configuration');
-    let progressed = false;
     const who = ledger.transaction(state => {
       const who = instance(state, servicePrincipal, 'subscribe', body); nonce(state, who, body);
       const t = tables(state), old = t.instances[who.instanceId];
       if (old && !sameInstance(old, who)) fail(403, 'read-instance-mismatch');
       t.instances[who.instanceId] ??= { ...who };
-      progressed = supersedePriorControlOnlyInState(state, who);
-      if (progressed) pruneClosedReads(state);
       return who;
     });
-    if (progressed) queueMicrotask(() => { for (const wake of waiters) wake(); onProgress(); });
     // A reconnect invalidates the old stream before publishing any ready frame.
     streams.get(who.instanceId)?.close();
     const stream = { who, seq: 0, closed: false,
@@ -352,6 +349,11 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
       if (t.instances[row.instanceId] || fence.kind === 'stop') continue;
       // 只跑一条任务的进程用不了读对话的接口（实例权威里拒掉），名下不可能有读取；它的进程资源由任务的关闭记录管，不在这里等。
       if (row.purpose === 'run-worker') continue;
+      // 〔裁〕H07：登记在「本账本的读取必须清点」之后、又从没订阅过的实例，名下不可能有读取：开读取要先有本进程里活着的订阅流
+      // （`open` 的 `requireLive`），订阅时就记进了 `t.instances`；对话数据接口也只认经读取控制开的读取。原来照样把它当
+      // 「来历不明」一直等，而「来历不明」的目标谁都确认不了（`acknowledge` 拒掉），于是主服务刚登记、还没订阅上的那一会儿
+      // 赶上一次退出，这次退出就永远办不完。更早登记的（这条规矩生效以前的）照旧按来历不明等。
+      if (Number.isSafeInteger(t.inventorySinceGeneration) && row.instanceGeneration > t.inventorySinceGeneration) continue;
       control.targets[row.instanceId] = { ...Object.fromEntries(instanceKeys.map(k => [k, row[k]])),
         readHandleIds: [], receipt: null, unknownInstance: true };
     }
@@ -385,13 +387,62 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
   ledger.transaction(state => {
     state.agentReadControlRequired = true;
     const t = tables(state);
-    const latestControlOnly = Object.values(t.instances)
-      .filter(row => state.agentInstancesV2?.[row.instanceId]?.purpose === 'control-only')
-      .sort((a, b) => a.instanceGeneration - b.instanceGeneration).at(-1);
-    if (latestControlOnly) supersedePriorControlOnlyInState(state, latestControlOnly);
+    // 从这一代往后登记的实例，开读取一定先订阅（见 fenceInState）；只记一次
+    if (!Number.isSafeInteger(t.inventorySinceGeneration)) t.inventorySinceGeneration = state.agentInstanceGenerationV2 ?? 0;
     pruneClosedReads(state);
     pruneNonces(t, now());
   });
+  /** 实例报自己在哪把锁下跑：锁号（Agent 数据目录里那把独占锁的号）和机器摘要。用自己的实例钥匙签，一个实例只报一次、报了不能改。
+   * 每一份按报上来的先后记一个序号（`declaredSeq`）：Agent 那边握着锁才报，所以同一把锁下报得早的，一定是先握锁的那个。
+   * 后继要交「前一个已经不在了」的证据，两边报的必须是同一把锁、同一台机器，而且前一个报得更早（见 handover）。 */
+  function declareLease({ servicePrincipal, body }) {
+    return ledger.transaction(state => {
+      const who = instance(state, servicePrincipal, 'lease', body); nonce(state, who, body);
+      const t = tables(state), leases = t.leases ??= {}, old = leases[who.instanceId];
+      const lease = { ...who, lockId: body.lockId, machine: body.machine };
+      if (old) {
+        const { declaredSeq, ...same } = old;
+        if (canonicalJson(same) !== canonicalJson(lease)) fail(409, 'read-lease-mismatch');
+        return clone(old);
+      }
+      leases[who.instanceId] = { ...lease, declaredSeq: t.leaseHead = (t.leaseHead ?? 0) + 1 };
+      return clone(leases[who.instanceId]);
+    });
+  }
+  /** 〔裁〕H07：后继实例交「前一个实例的进程已经不在了」。证据是 Agent 那一侧的独占锁：前一个在握着这把锁的时候才报锁、订阅、
+   * 开读取，锁要等它的进程结束（或它正常收口、读取全关完）才放开；后继现在握着同一把锁，前一个就不可能再往页面写东西。
+   * 文档服务核的是它自己核得了的那几样，任何一样不符都不收口（照旧等，不放过）：
+   * - 前一个是同一个服务身份（证书与钥匙号）、同一种用途，不是只跑一条任务的进程；
+   * - 两个实例各自报过锁（`declareLease`），是同一把锁、同一台机器，而且前一个报得更早。不看代次：主服务先登记、后拿锁，
+   *   两个主服务交叠着起来时，代次低的可能后拿到锁（审查用例 F2），握锁的先后只有报锁的先后说得准；
+   * - 前一个此刻没有连着本进程的订阅流（连着就说明它还活着，和证据矛盾：拒掉，让后继稍后再试）。 */
+  function handover({ servicePrincipal, body }) {
+    let progressed = false;
+    const result = ledger.transaction(state => {
+      const who = instance(state, servicePrincipal, 'handover', body); nonce(state, who, body);
+      const t = tables(state), leases = t.leases ?? {}, rows = state.agentInstancesV2 ?? {};
+      const prior = rows[body.instanceId];
+      if (!prior || prior.instanceGeneration !== body.instanceGeneration) fail(404, 'read-handover-unknown');
+      const priorWho = Object.fromEntries(instanceKeys.map(k => [k, prior[k]]));
+      if (prior.state === 'closed' && prior.closure) return { ...priorWho, closed: true };
+      if (prior.instanceId === who.instanceId || prior.serviceId !== who.serviceId || prior.serviceKid !== who.serviceKid ||
+          prior.purpose === 'run-worker' || (prior.purpose ?? null) !== (rows[who.instanceId]?.purpose ?? null)) fail(403, 'read-handover-forbidden');
+      const mine = leases[who.instanceId], theirs = leases[prior.instanceId];
+      if (!mine || !theirs || !sameInstance(mine, who) || !sameInstance(theirs, priorWho) ||
+          mine.lockId !== theirs.lockId || mine.machine !== theirs.machine) fail(403, 'read-handover-unproven');
+      if (!(Number.isSafeInteger(theirs.declaredSeq) && Number.isSafeInteger(mine.declaredSeq) && theirs.declaredSeq < mine.declaredSeq))
+        fail(403, 'read-handover-forbidden');
+      if (streams.has(prior.instanceId)) fail(409, 'read-handover-predecessor-live');
+      closeGoneInstanceInState(state, prior, { complete: true, witnessId: `handover:${who.instanceId}:${who.instanceGeneration}`,
+        evidence: 'agent-data-dir-exclusive-lock', lockId: theirs.lockId,
+        handoverByInstanceId: who.instanceId, handoverByGeneration: who.instanceGeneration });
+      delete leases[prior.instanceId];
+      pruneClosedReads(state); progressed = true;
+      return { ...priorWho, closed: true };
+    });
+    if (progressed) queueMicrotask(() => { for (const wake of waiters) wake(); onProgress(); });
+    return result;
+  }
   function acknowledge({ servicePrincipal, body }) {
     const result = ledger.transaction(state => {
       const who = instance(state, servicePrincipal, 'ack', body); nonce(state, who, body);
@@ -443,6 +494,7 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
     });
   }
   return { open, closeReads, subscribe, publish, acknowledge, completion, waitCompletion, finalizeAccessEvent, reconcileAccessEvents,
+    declareLease, handover,
     hooks: { fenceInState }, close() { stopped = true; seenNonces.clear(); for (const stream of [...streams.values()]) stream.close();
       for (const wake of waiters) wake(); } };
 }

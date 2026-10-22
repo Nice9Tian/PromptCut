@@ -74,8 +74,13 @@ test('creator and owner private read remain; ordinary project-wide list is inclu
 
 test('same certificate new RAM instance cannot close or ACK the original read; unknown historical instance stays pending', async t => {
   const f = setup(t); f.subscribe(); const opened = await f.open();
+  // 「本账本的读取必须清点」以前登记的实例（这里改记号模拟）：没订阅过也照旧按来历不明等
+  const historical = f.instances.boot();
+  f.ledger.transaction(state => { state.agentReadsV1.inventorySinceGeneration = historical.registration.instanceGeneration; });
+  // 〔裁〕H07：那以后登记、从没订阅过的实例名下不可能有读取，不等它
   const second = f.instances.boot(); const c = f.fence();
-  assert.equal(c.targets[second.registration.instanceId].unknownInstance, true);
+  assert.equal(c.targets[historical.registration.instanceId].unknownInstance, true);
+  assert.equal(c.targets[second.registration.instanceId], undefined);
   assert.throws(() => f.control.closeReads(f.signed('close', { readHandleIds: [opened.readHandle.readHandleId] }, second)), { code: 'read-instance-mismatch' });
   f.subscribe(second);
   assert.throws(() => f.control.acknowledge(f.signed('ack', { controlId: c.controlId, payloadDigest: c.payloadDigest,
@@ -249,31 +254,141 @@ test('已关的读取只留最近几十条：早关的连同开启记录删掉�
   assert.equal(Object.keys(f.ledger.read().agentReadsV1.nonces).length, KEEP_READ_CONTROL_NONCES);
 });
 
-test('只做控制的主服务（control-only）重启登记新一代实例并订阅后，旧主服务残留的未关读取自动收口，历史访问事件补建控制记录', async t => {
+const LOCK = 'lock_00000000-0000-4000-8000-000000000001', MACHINE = 'a'.repeat(64), OTHER_MACHINE = 'b'.repeat(64);
+const lease = (f, p, fields = {}) => f.control.declareLease(f.signed('lease', { lockId: LOCK, machine: MACHINE, ...fields }, p));
+const handover = (f, p, prior) => f.control.handover(f.signed('handover', { instanceId: prior.registration.instanceId,
+  instanceGeneration: prior.registration.instanceGeneration }, p));
+const controlOnly = (f, ...ps) => f.ledger.transaction(state => { for (const p of ps) state.agentInstancesV2[p.registration.instanceId].purpose = 'control-only'; });
+
+test('〔裁〕H07 主服务重启：新一代登记、订阅都不算证据，旧实例开着的读取照旧等；新一代凭同一把锁交了证据才收口；历史访问事件补建控制记录', async t => {
   const f = setup(t);
-  f.ledger.transaction(state => { state.agentInstancesV2[f.process.registration.instanceId].purpose = 'control-only'; });
-  f.subscribe();
+  controlOnly(f, f.process);
+  lease(f, f.process);
+  const unsubOld = f.subscribe();
   await f.open('member');
-  // 模拟：访问事件先写入账本（当时未调 fenceInState），且旧 control-only 实例带着未关读取退出了
+  // 模拟：访问事件先写入账本（当时未调 fenceInState）
   const event = f.ledger.transaction(state => appendAccessEvent(state, {
     type: 'login-revoked', accountEventId: 'logout-after-restart', accountEventSeq: 1,
     accountIds: ['member-account'], loginIds: ['login-member'], createdAt: 1,
   }));
   f.control.reconcileAccessEvents();
   assert.throws(() => f.control.finalizeAccessEvent({ eventId: event.eventId }), { code: 'read-close-pending' });
-  // 新一代 control-only 主服务实例登记并连上 subscribe
-  const nextProc = f.instances.boot();
-  f.ledger.transaction(state => { state.agentInstancesV2[nextProc.registration.instanceId].purpose = 'control-only'; });
+  // 新一代主服务登记并连上订阅：这本身不是旧进程不在了的证据（原来凭这一条就收口，已去掉）
+  const nextProc = f.instances.boot(); controlOnly(f, nextProc);
   const unsub = f.subscribe(nextProc);
   t.after(() => unsub());
+  assert.throws(() => f.control.finalizeAccessEvent({ eventId: event.eventId }), { code: 'read-close-pending' });
+  assert.equal(f.ledger.read().agentInstancesV2[f.process.registration.instanceId].state, 'active');
+  // 新一代报了同一把锁，但旧实例还连着订阅流（还活着）：证据和事实矛盾，不收口
+  lease(f, nextProc);
+  assert.throws(() => handover(f, nextProc, f.process), { status: 409, code: 'read-handover-predecessor-live' });
+  assert.throws(() => f.control.finalizeAccessEvent({ eventId: event.eventId }), { code: 'read-close-pending' });
+  // 旧实例的订阅流断了：照旧不收口（断线不是证据）
+  unsubOld();
+  assert.throws(() => f.control.finalizeAccessEvent({ eventId: event.eventId }), { code: 'read-close-pending' });
+  // 新一代交了证据，核过才收口
+  const result = handover(f, nextProc, f.process);
+  assert.equal(result.closed, true);
   const closure = f.control.finalizeAccessEvent({ eventId: event.eventId });
   assert.equal(closure.payload.complete, true);
-  assert.equal(f.ledger.read().agentInstancesV2[f.process.registration.instanceId].state, 'closed');
+  const old = f.ledger.read().agentInstancesV2[f.process.registration.instanceId];
+  assert.equal(old.state, 'closed');
+  assert.equal(old.closure.witnessId, `handover:${nextProc.registration.instanceId}:${nextProc.registration.instanceGeneration}`);
+  assert.equal(old.closure.evidence, 'agent-data-dir-exclusive-lock');
+  // 收口了的旧实例再也认不过（连订阅、开读取都不行）；同一份证据再交一遍不报错
+  assert.throws(() => f.subscribe(), { code: 'instance-revoked' });
+  assert.equal(handover(f, nextProc, f.process).closed, true);
+});
+
+test('〔裁〕H07 反向：证据对不上一样都不收口——锁号不同、机器不同、没报过锁、用途不同、更新的一代、只跑一条任务的进程、报过的锁不能改', async t => {
+  const f = setup(t);
+  const unsubOld = f.subscribe(); const opened = await f.open('member');
+  const c = f.fence();
+  assert.deepEqual(c.targets[f.process.registration.instanceId].readHandleIds, [opened.readHandle.readHandleId]);
+  const pending = () => assert.equal(f.control.completion({ projectId: 'project' }).complete, false);
+  const successor = (fields = {}) => { const p = f.instances.boot(); f.subscribe(p); if (fields !== null) lease(f, p, fields); return p; };
+  // 旧实例的订阅流断了（断线本身不是证据）；它没报过锁：后继拿什么锁都不算
+  unsubOld();
+  const s0 = successor();
+  assert.throws(() => handover(f, s0, f.process), { status: 403, code: 'read-handover-unproven' }); pending();
+  // 旧实例报了锁之后：后继的锁号不同、机器不同、后继自己没报，都不算
+  f.ledger.transaction(state => { state.agentReadsV1.leases = { [f.process.registration.instanceId]: {
+    serviceId: 'agent', serviceKid: 'agent-test-key', instanceId: f.process.registration.instanceId,
+    instanceGeneration: f.process.registration.instanceGeneration, lockId: LOCK, machine: MACHINE, declaredSeq: 0 } }; });
+  const sLock = successor({ lockId: 'lock_00000000-0000-4000-8000-000000000002' });
+  assert.throws(() => handover(f, sLock, f.process), { code: 'read-handover-unproven' }); pending();
+  const sMachine = successor({ machine: OTHER_MACHINE });
+  assert.throws(() => handover(f, sMachine, f.process), { code: 'read-handover-unproven' }); pending();
+  const sNone = successor(null);
+  assert.throws(() => handover(f, sNone, f.process), { code: 'read-handover-unproven' }); pending();
+  // 报过的锁不能改
+  assert.throws(() => lease(f, sLock), { status: 409, code: 'read-lease-mismatch' });
+  // 用途不同（后继是只做控制的主服务，旧的不是）
+  const sPurpose = successor(); controlOnly(f, sPurpose);
+  assert.throws(() => handover(f, sPurpose, f.process), { status: 403, code: 'read-handover-forbidden' }); pending();
+  // 报锁报得晚的那个是「前一个」：不行（报锁先后就是握锁先后）
+  const sGood = successor();
+  assert.throws(() => handover(f, f.process, sGood), { code: 'read-handover-forbidden' }); pending();
+  // 前一个是只跑一条任务的进程：不归这里管
+  f.ledger.transaction(state => { state.agentInstancesV2[f.process.registration.instanceId].purpose = 'run-worker'; });
+  assert.throws(() => handover(f, sGood, f.process), { code: 'read-handover-forbidden' }); pending();
+  f.ledger.transaction(state => { delete state.agentInstancesV2[f.process.registration.instanceId].purpose; });
+  // 不认识的实例、代对不上
+  assert.throws(() => f.control.handover(f.signed('handover', { instanceId: f.process.registration.instanceId,
+    instanceGeneration: f.process.registration.instanceGeneration + 100 }, sGood)), { status: 404, code: 'read-handover-unknown' });
+  pending();
+  assert.equal(f.ledger.read().agentInstancesV2[f.process.registration.instanceId].state, 'active');
+  // 都对上了才收口
+  assert.equal(handover(f, sGood, f.process).closed, true);
+  assert.equal(f.control.completion({ projectId: 'project' }).complete, true);
+});
+
+test('〔裁〕H07（审查 F2）：先后看报锁，不看代次——代次低、后拿到锁的后继能替代次高、先握锁的前一个交；反过来不行', async t => {
+  const f = setup(t); f.subscribe();                                // 夹具自带的那个实例：连着，名下没有读取
+  const low = f.instances.boot(), high = f.instances.boot();       // low 先登记（代次低），high 后登记
+  assert.ok(low.registration.instanceGeneration < high.registration.instanceGeneration);
+  controlOnly(f, low, high);
+  lease(f, high); const unsubHigh = f.subscribe(high);              // high 先拿到锁、先报锁、开着读取
+  const opened = await f.open('member', {}, high);
+  const c = f.fence();
+  assert.deepEqual(c.targets[high.registration.instanceId].readHandleIds, [opened.readHandle.readHandleId]);
+  unsubHigh();                                                      // high 的进程没了，锁放开
+  lease(f, low); f.subscribe(low);                                  // low 这时才拿到锁、报锁
+  assert.throws(() => handover(f, high, low), { status: 403, code: 'read-handover-forbidden' }, '报锁晚的不能被报锁早的「交掉」');
+  assert.equal(handover(f, low, high).closed, true);
+  assert.equal(f.control.completion({ projectId: 'project' }).complete, true);
+  assert.equal(f.ledger.read().agentInstancesV2[high.registration.instanceId].state, 'closed');
+});
+
+test('〔裁〕H07（审查必改一）：报锁时机器只收 64 位十六进制摘要；可读的机器识别码进不了账本', async t => {
+  const f = setup(t);
+  assert.throws(() => lease(f, f.process, { machine: 'PCM-ABCDE-ABCDE-ABCDE-ABCDE' }), { status: 400, code: 'read-control-request-invalid' });
+  assert.throws(() => lease(f, f.process, { machine: 'A'.repeat(64) }), { status: 400, code: 'read-control-request-invalid' });
+  assert.equal(f.ledger.read().agentReadsV1?.leases?.[f.process.registration.instanceId], undefined);
+  const ok = lease(f, f.process);
+  assert.equal(ok.machine, MACHINE); assert.equal(ok.declaredSeq, 1);
+  assert.equal(lease(f, f.process).declaredSeq, 1, '同一份再报不另记序号');
+});
+
+test('〔裁〕H07：从没订阅过的新实例不挡退出；它订阅以后开的读取照常要它自己关、自己确认', async t => {
+  const f = setup(t); f.subscribe(); const opened = await f.open('member');
+  const idle = f.instances.boot();
+  const c = f.fence();
+  assert.equal(c.targets[idle.registration.instanceId], undefined, '没订阅过的实例名下没有读取，不等它');
+  f.control.closeReads(f.signed('close', { readHandleIds: [opened.readHandle.readHandleId] }));
+  f.control.acknowledge(f.signed('ack', { controlId: c.controlId, payloadDigest: c.payloadDigest, seq: c.seq,
+    readHandleIds: [opened.readHandle.readHandleId] }));
+  assert.equal(f.control.completion({ projectId: 'project' }).complete, true);
+  // 它订阅、开了读取以后，下一次点名照常等它
+  f.subscribe(idle); const later = await f.open('owner', {}, idle);
+  const next = f.ledger.transaction(state => f.control.hooks.fenceInState(state, { kind: 'delete', projectId: 'project', requestId: 'delete-later' }));
+  assert.deepEqual(next.targets[idle.registration.instanceId].readHandleIds, [later.readHandle.readHandleId]);
+  assert.equal(f.control.completion({ accessSeq: undefined, projectId: 'project', conversationId: undefined }).complete, false);
 });
 
 test('旧一代主服务收口以后，它名下已关的读取一条不留（不再按每个实例留 64 条）', async t => {
   const f = setup(t);
-  f.ledger.transaction(state => { state.agentInstancesV2[f.process.registration.instanceId].purpose = 'control-only'; });
+  controlOnly(f, f.process); lease(f, f.process);
   const unsubOld = f.subscribe();
   for (let i = 0; i < 5; i++) {
     const opened = await f.open('member');
@@ -283,10 +398,11 @@ test('旧一代主服务收口以后，它名下已关的读取一条不留（�
   const ofOld = () => Object.values(f.ledger.read().agentReadsV1.handles).filter(h => h.instanceId === oldId);
   assert.equal(ofOld().length, 5, '还活着的实例照旧留着');
   unsubOld();
-  const nextProc = f.instances.boot();
-  f.ledger.transaction(state => { state.agentInstancesV2[nextProc.registration.instanceId].purpose = 'control-only'; });
+  const nextProc = f.instances.boot(); controlOnly(f, nextProc);
   const unsub = f.subscribe(nextProc);
   t.after(() => unsub());
+  assert.equal(f.ledger.read().agentInstancesV2[oldId].state, 'active', '新一代订阅了不算旧的收口');
+  lease(f, nextProc); handover(f, nextProc, f.process);
   assert.equal(f.ledger.read().agentInstancesV2[oldId].state, 'closed');
   assert.equal(ofOld().length, 0, '收口了的旧一代：已关读取全删');
   assert.equal(Object.values(f.ledger.read().agentReadsV1.requests).filter(row => !f.ledger.read().agentReadsV1.handles[row.readHandleId]).length, 0, '开启记录不留悬空的');
