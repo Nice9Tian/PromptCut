@@ -16,6 +16,7 @@ import { CloudError, cloudErrorText, type CloudApi } from "./cloudApi.ts";
 import { accountMessageId, queueSnapshot, applyCloudEvent, applyCloudEvents, cloudErrorMessage, hasOpenRun, markWaitingFromQueue, settleFromQueue, userMessageId } from "./events.ts";
 import type { CloudEvent, CloudSendBody, CloudSendAccepted, CloudQueueSnapshot, CloudSender } from "./types.ts";
 import type { PageRequestAnswer } from "./pageRequests.ts";
+import { outboxLocalId, type OutboxBaseline, type OutboxItem } from "./outbox.ts";
 
 export type CloudConnection = "idle" | "connecting" | "live" | "reconnecting";
 
@@ -192,7 +193,27 @@ export function createCloudSession(deps: CloudSessionDeps) {
    * 只是这一页自己的显示:云端没收下(没权限、被拒、网络断)时标成「没发出去」,不会显示成已发送;别的成员看不到它。
    * 读取授权重来(断流重放、撤权清屏)时正文从头重放,本地气泡留在表里、重放后补回末尾。换对话时清掉。
    */
-  const staged = new Map<string, ChatMessage & { cloudMessageId?: string }>();
+  const staged = new Map<string, ChatMessage & { cloudMessageId?: string; outbox?: boolean }>();
+  /**
+   * 断网待发(outbox.ts):页面最近看到的那条用户消息(文档服务的消息号)。账号模式断流时正文会清空、连上后从头重放,
+   * 清空之前记在这里;重放还没放到它时仍以它为准。换对话时清掉。
+   */
+  let rememberedUser: string | null = null;
+  /** 页面上这个对话里最近一条已发出的用户消息:服务端的记录(`cq-`),或云端已收下、记录还没到的本地气泡 */
+  function seenUser(): string | null {
+    const list = store.get();
+    let candidate: string | null = null;
+    let fromStaged = false;
+    for (let i = list.length - 1; i >= 0; i--) {
+      const m = list[i] as ChatMessage & { cloudMessageId?: string };
+      if (m.role !== "user") continue;
+      if (m.id.startsWith("cq-")) { candidate = m.id.slice(3); break; }
+      if (m.sendState === "accepted" && m.cloudMessageId) { candidate = m.cloudMessageId; fromStaged = true; break; }
+    }
+    if (fromStaged) return candidate;
+    if (rememberedUser && rememberedUser !== candidate && !list.some((m) => m.id === `cq-${rememberedUser}`)) return rememberedUser;
+    return candidate ?? rememberedUser;
+  }
   function showStaged() {
     if (!staged.size) return;
     store.set((prev) => {
@@ -201,7 +222,17 @@ export function createCloudSession(deps: CloudSessionDeps) {
       return add.length ? [...prev, ...add] : prev;
     });
   }
-  function patchStaged(id: string, patch: Partial<ChatMessage> & { cloudMessageId?: string }) {
+  /**
+   * 本地气泡(还没被服务端记录换掉的)一直排在最后:账号模式断流后正文从头重放,重放回来的记录要排在它们前面,
+   * 不然断网时排着、发送失败的那条会跑到整段对话的最上面。
+   */
+  function stagedLast(list: ChatMessage[]): ChatMessage[] {
+    if (!staged.size) return list;
+    const locals = list.filter((m) => staged.has(m.id));
+    if (!locals.length || list.slice(list.length - locals.length).every((m) => staged.has(m.id))) return list;
+    return [...list.filter((m) => !staged.has(m.id)), ...locals];
+  }
+  function patchStaged(id: string, patch: Partial<ChatMessage> & { cloudMessageId?: string; outbox?: boolean }) {
     const cur = staged.get(id);
     if (!cur) return;
     const next = { ...cur, ...patch };
@@ -278,7 +309,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
     if (!queued.length) return;
     const batch = queued;
     queued = [];
-    store.set((prev) => applyCloudEvents(prev, batch));
+    store.set((prev) => stagedLast(applyCloudEvents(prev, batch)));
   }
 
   /** 账号共享读取失效后，丢弃这条授权下的正文、待折增量和附件关联，再从 seq 0 请求完整授权重放。 */
@@ -286,6 +317,8 @@ export function createCloudSession(deps: CloudSessionDeps) {
     if (!deps.accountMode) return;
     readEpoch++;
     if (flushTimer !== null) { clearTimeout(flushTimer); flushTimer = null; }
+    flush();
+    rememberedUser = seenUser();
     queued = [];
     pendingAttachments.clear();
     lastSeq = 0;
@@ -331,7 +364,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
       flush();
       if (ev.type === 'user' && typeof ev.messageId === 'string' && typeof ev.senderAccountId === 'string' && typeof ev.senderNameAtSend === 'string')
         senders = { ...senders, [accountMessageId(ev.messageId)]: { accountId: ev.senderAccountId, name: ev.senderNameAtSend } };
-      store.set((prev) => markWaitingFromQueue(settleFromQueue(applyCloudEvent(prev, ev), queue), queue));
+      store.set((prev) => stagedLast(markWaitingFromQueue(settleFromQueue(applyCloudEvent(prev, ev), queue), queue)));
       if (ev.type === "user" && typeof ev.runId === "string") applyPendingAttachments(ev.runId);
       if (ev.type === "user" && typeof ev.messageId === "string") settleStaged(ev.messageId);
     }
@@ -523,6 +556,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
       queued = [];
       pendingAttachments.clear();
       staged.clear();
+      rememberedUser = null;
       queue = null; senders = {};
       problem = null;
       store.set([]);
@@ -536,7 +570,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
      */
     stage(text: string, attachments?: ChatAttachment[], key?: string): string {
       const id = `local-${key ?? Math.random().toString(36).slice(2, 10)}`;
-      for (const [other, m] of staged) if (other !== id && m.sendState === "failed") { staged.delete(other); store.set((prev) => prev.filter((x) => x.id !== other)); }
+      for (const [other, m] of staged) if (other !== id && m.sendState === "failed" && !m.outbox) { staged.delete(other); store.set((prev) => prev.filter((x) => x.id !== other)); }
       const prev = staged.get(id);
       const message: ChatMessage & { cloudMessageId?: string } = { id, role: "user", text, sendState: "sending",
         ...(attachments?.length ? { attachments } : {}), ...(prev?.cloudMessageId ? { cloudMessageId: prev.cloudMessageId } : {}) };
@@ -551,6 +585,40 @@ export function createCloudSession(deps: CloudSessionDeps) {
     /** 撤掉一条本地气泡(用户换了内容重新发等) */
     dropStaged(id: string) { if (staged.delete(id)) store.set((prev) => prev.filter((x) => x.id !== id)); },
 
+    /** 断网待发:排这一条时它「看到的最近一条用户消息」里服务端那一半(outbox.ts 的 baselineFor 再叠上这一页更早排着的) */
+    seenBaseline(): OutboxBaseline | null {
+      const id = seenUser();
+      return id ? { messageId: id } : null;
+    },
+
+    /**
+     * 断网待发清单里属于这个对话的几条,画成本地气泡:排着的写「等网络恢复后发出」,正在发的写「发送中…」,
+     * 不发了的标「发送失败」带「重新发送」。清单里已经没有、也没被云端收下的待发气泡撤掉(收下了的由 `send` 接管)。
+     */
+    showOutbox(items: readonly OutboxItem[]) {
+      const mine = items.filter((x) => x.conversationId === conversationId).map((x) => ({ ...x, localId: outboxLocalId(x) }));
+      const want = new Set(mine.map((x) => x.localId));
+      for (const [id, m] of [...staged]) {
+        if (!m.outbox || want.has(id) || m.sendState === "accepted") continue;
+        staged.delete(id);
+        store.set((prev) => prev.filter((x) => x.id !== id));
+      }
+      for (const x of mine) {
+        const cur = staged.get(x.localId);
+        if (cur && cur.sendState === "accepted") continue;
+        // 正在发的那条:头一次试写「发送中…」;连不上试过以后一直写「等网络恢复后发出」,不在两句之间来回闪
+        const sendState = x.state === "failed" ? "failed" as const : x.state === "sending" && !x.tries ? "sending" as const : "queued" as const;
+        const patch = { sendState, error: x.state === "failed" ? x.error : undefined, resendable: x.state === "failed" ? true : undefined, outbox: true };
+        if (cur) {
+          if (cur.sendState === patch.sendState && cur.error === patch.error && cur.outbox) continue;
+          patchStaged(x.localId, patch);
+        } else {
+          staged.set(x.localId, { id: x.localId, role: "user", text: x.text, ...(x.attachments?.length ? { attachments: x.attachments } : {}), ...patch });
+          showStaged();
+        }
+      }
+    },
+
     /** 登记「正在看的对话被删了」的处理(界面退到新对话)。单独一个方法，免得改动创建会话那一处的接线 */
     setOnConversationDeleted(fn: ((conversationId: string) => void) | null) { onConversationDeleted = fn; },
 
@@ -558,7 +626,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
     get conversationId() { return conversationId; },
 
     /** 发一条消息(`shown`:带的附件,只用于本页气泡的显示)。服务端回 202 之后保证流连着。出错抛 `CloudError`(界面显示它的 `message`) */
-    async send(body: CloudSendBody, shown?: ChatAttachment[], opts?: { staged?: string }): Promise<void> {
+    async send(body: CloudSendBody, shown?: ChatAttachment[], opts?: { staged?: string; quiet?: boolean }): Promise<void> {
       if (!conversationId || closed) throw new CloudError("bad-request", "还没有打开对话。");
       const seenBefore = lastSeq;
       const stagedId = deps.accountMode ? opts?.staged : undefined;
@@ -570,7 +638,8 @@ export function createCloudSession(deps: CloudSessionDeps) {
         accepted = await api.send(conversationId, page ? { ...body, pageId: page } : body);
       } catch (err) {
         const error = err instanceof CloudError ? err : new CloudError("network", cloudErrorText("network"));
-        if (stagedId && sentTo === conversationId) patchStaged(stagedId, { sendState: "failed", error: `没有发出去：${error.message}` });
+        // `quiet`:断网待发那条发不出去时气泡由待发清单接着管(还排着、或标「发送失败」),这里不标
+        if (stagedId && sentTo === conversationId && !opts?.quiet) patchStaged(stagedId, { sendState: "failed", error: `没有发出去：${error.message}` });
         throw error;
       }
       problem = null;
@@ -579,7 +648,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
       if (stagedId && sentTo === conversationId && staged.has(stagedId)) {
         if (accepted.messageId && store.get().some((m) => m.id === accountMessageId(accepted.messageId!))) { staged.delete(stagedId); store.set((prev) => prev.filter((x) => x.id !== stagedId)); }
         else if (!accepted.messageId) { staged.delete(stagedId); store.set((prev) => prev.filter((x) => x.id !== stagedId)); }
-        else patchStaged(stagedId, { sendState: "accepted", error: undefined, cloudMessageId: accepted.messageId });
+        else patchStaged(stagedId, { sendState: "accepted", error: undefined, resendable: undefined, outbox: undefined, cloudMessageId: accepted.messageId });
       }
       // 带了附件:气泡里照桌面版显示附件名(服务端的 user 事件自己带了就以它为准)
       if (shown?.length && accepted.runId) {

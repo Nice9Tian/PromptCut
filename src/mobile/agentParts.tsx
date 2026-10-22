@@ -5,6 +5,7 @@
 import { memo, useState } from "react";
 import { LiveMarkdown } from "../ai/Markdown";
 import type { ChatMessage } from "../ai/types";
+import { OUTBOX_RESEND_EVENT, OUTBOX_TEXT } from "../ai/cloud/outbox";
 import { START_PRESET } from "../editor/right/chat/StartHero";
 import { activityText, outcomeText, partsOf, runningTool } from "../editor/right/chat/AgentBubble";
 import { Icon } from "./icons";
@@ -35,14 +36,21 @@ export const UserBubble = memo(function UserBubble({ m }: { m: ChatMessage }) {
   const { quotes, rest } = splitQuotes(m.text);
   const failed = m.sendState === "failed";
   return (
-    <div className={`msg me${m.sendState === "sending" ? " is-sending" : failed ? " is-failed" : ""}`} data-pcm="msg-me">
+    <div className={`msg me${m.sendState === "sending" || m.sendState === "queued" ? " is-sending" : failed ? " is-failed" : ""}`} data-pcm="msg-me">
       {quotes.length > 0 && (
         <div className="refs">{quotes.map((q) => <RefChip key={q.id} label={q.label} />)}</div>
       )}
       {rest ? <div className="plain">{rest}</div> : null}
       {m.sendState === "sending" && <div className="send-state">发送中…</div>}
       {m.sendState === "accepted" && <div className="send-state">已发出,等待云端开始处理…</div>}
+      {m.sendState === "queued" && <div className="send-state" data-pcm="send-queued">{OUTBOX_TEXT.queued}</div>}
       {m.error && <div className="send-err" data-pcm={failed ? "send-failed" : undefined}>{m.error}</div>}
+      {failed && m.resendable && (
+        <button type="button" className="resend" data-pcm="resend"
+          onClick={() => window.dispatchEvent(new CustomEvent(OUTBOX_RESEND_EVENT, { detail: { id: m.id } }))}>
+          {OUTBOX_TEXT.resend}
+        </button>
+      )}
     </div>
   );
 });

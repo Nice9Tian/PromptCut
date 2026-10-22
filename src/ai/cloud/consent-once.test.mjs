@@ -210,8 +210,9 @@ test('接线：面板的发送路径把开头那次读取的许可交给 chat.se
   assert.match(panel, /if \(!accepted\) \{ setConsentError\(null\); setConsentOpen\(true\); return null; \}\r?\n\s*return \{ permit \};/);
   assert.match(panel, /onCloudConsentRequired\(/);
   assert.equal((chat.match(/reportCloudConsentRequired\(\{ accountId: cloud\.accountId, bindingVersion: consent\.bindingVersion \}, tabId\)/g) ?? []).length, 2);
-  assert.match(panel, /chat\.send\(text, prepared, staged \?\? undefined, consentPermit\)/);
-  assert.equal((panel.match(/sendNow\(.*admission\.permit\)/g) ?? []).length, 4);
+  // 断网待发(2026-10-22)给 chat.send 多传一个选项(断网时排着),许可照旧原样交过去
+  assert.match(panel, /chat\.send\(text, prepared, staged \?\? undefined, consentPermit, opts\)/);
+  assert.equal((panel.match(/sendNow\(.*admission\.permit(, \{ queueOnNetwork: true \})?\)/g) ?? []).length, 4);
   assert.match(chat, /requireCloudConsent\(\{ accountId: cloud\.accountId, bindingVersion: consent\.bindingVersion \}, consentPermit\)/);
 });
 

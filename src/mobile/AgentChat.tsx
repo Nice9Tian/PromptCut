@@ -9,6 +9,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
 import "katex/dist/katex.min.css";
 import { useCloudChat, type CloudAgentState } from "../ai/cloud/useCloud";
+import { OUTBOX_RESEND_EVENT } from "../ai/cloud/outbox";
 import { CloudError, cloudConversationControlPolicy, cloudErrorText } from "../ai/cloud/cloudApi";
 import { acceptCloudConsent, cloudConsentState, refreshCloudConsent, subscribeCloudConsent } from "../ai/cloud/consent";
 import { setTabBusy, setTabConversation, setTabCreativity, useAgentTabs } from "../ai/agentTabs";
@@ -35,7 +36,8 @@ export function AgentChat(props: {
   const consent = useSyncExternalStore(subscribeCloudConsent, cloudConsentState, cloudConsentState);
   const [consentOpen, setConsentOpen] = useState(false);
   const [consentError, setConsentError] = useState<string | null>(null);
-  const chat = useCloudChat({ tabId, cloud, enabled: true, autoAttach: true });
+  // 断网待发(2026-10-22 用户定,同桌面):断网时发的消息排着、网络恢复后核对最近一条用户消息再自动发出
+  const chat = useCloudChat({ tabId, cloud, enabled: true, autoAttach: true, outbox: true });
   const { view } = chat;
   const { tabs } = useAgentTabs();
   const tab = tabs.find((t) => t.id === tabId);
@@ -60,7 +62,7 @@ export function AgentChat(props: {
     return () => { dead = true; };
   }, [shown, cloud.accountMode, cloud.available, cloud.projectId, cloud.accountId, consent.accountId, consent.bindingVersion]);
   useEffect(() => { if (cloud.accountMode) { setConsentOpen(false); setConsentError(null); } }, [cloud.accountMode, qKey]);
-  const consentForUse = async () => {
+  const consentForUse = async (opts?: { queueable?: boolean }): Promise<boolean | "queue"> => {
     if (!cloud.accountMode) return true;
     if (!stillCurrent()) return false;
     const expected = cloud.accountId ? { accountId: cloud.accountId, bindingVersion: consent.bindingVersion } : null;
@@ -76,6 +78,8 @@ export function AgentChat(props: {
       return accepted;
     } catch (error) {
       if (!stillCurrent()) return false;
+      // 断网读不到告知:不弹告知框,这条消息排着等网络恢复(恢复后发出之前再核一次告知)
+      if (opts?.queueable && chat.outbox.transient(error)) return "queue";
       setConsentError(error instanceof Error ? error.message : "云端账号暂时不可用。");
       setConsentOpen(true);
       return false;
@@ -115,8 +119,10 @@ export function AgentChat(props: {
   useEffect(() => {
     if (!cloud.accountMode || !hasMessages) return;
     let live = true;
-    void chat.history.refresh().then((ok) => { if (live && ok) setMetadataReadyKey(metadataKey); });
+    // 断着网时(比如刚排了一条等网络恢复的)静默读:读不到不弹「连不上」
+    void chat.history.refresh(chat.outbox.offline()).then((ok) => { if (live && ok) setMetadataReadyKey(metadataKey); });
     return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cloud.accountMode, consent.accepted, chat.conversationId, hasMessages, chat.history.refresh, metadataKey]);
   useEffect(() => { counts.current.set(tabId, chat.messages.length); }, [counts, tabId, chat.messages.length]);
   useEffect(() => () => { counts.current.delete(tabId); }, [counts, tabId]);
@@ -158,12 +164,24 @@ export function AgentChat(props: {
   }, [shown]);
 
   /* ---------- 发送与停止 ---------- */
-  const sendNow = async (text: string, staged: string | null): Promise<boolean> => {
+  // 「发送失败」气泡上的「重新发送」(agentParts 的 UserBubble 发出的事件,带气泡号):是这一页待发清单里的才接
+  const resendRef = useRef(chat.outbox.resend);
+  resendRef.current = chat.outbox.resend;
+  useEffect(() => {
+    const onResend = (ev: Event) => {
+      const id = (ev as CustomEvent).detail?.id;
+      if (typeof id === "string" && stillCurrent()) resendRef.current(id);
+    };
+    window.addEventListener(OUTBOX_RESEND_EVENT, onResend as EventListener);
+    return () => window.removeEventListener(OUTBOX_RESEND_EVENT, onResend as EventListener);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const sendNow = async (text: string, staged: string | null, opts?: { queueOnNetwork?: boolean }): Promise<boolean> => {
     if (off || !stillCurrent() || !policy.canSend || view.revoked) {
       if (staged) chat.failStaged(staged, "现在不能在这个对话里发消息。");
       return false;
     }
-    const ok = await chat.send(text, undefined, staged ?? undefined);
+    const ok = await chat.send(text, undefined, staged ?? undefined, null, opts);
     return stillCurrent() && ok;
   };
   /** 探针与排障的只读口子(同 `window.__pcCloud`):这一页最近一次点发送时的引用和正文,以及引用条此刻的内容 */
@@ -196,15 +214,19 @@ export function AgentChat(props: {
         setInputText((prev) => prev || body);
         setQuotes((prev) => (prev.length ? prev : sentQuotes));
       };
-      if (!await consentForUse() || !stillCurrent()) {
+      // 断网了,或这个对话里已经有排着等网络的(新发的排在它后面,顺序不乱):不报错,排着,网络恢复后自动发出
+      if (staged && (chat.outbox.offline() || chat.outbox.mustQueue()) && chat.outbox.enqueue(text, undefined, staged)) return;
+      const admitted = await consentForUse({ queueable: Boolean(staged) });
+      if (admitted === "queue" && staged && stillCurrent() && chat.outbox.enqueue(text, undefined, staged)) return;
+      if (admitted !== true || !stillCurrent()) {
         if (staged) chat.failStaged(staged, "使用云端 Agent 前,请先阅读并确认告知。");
         restore();
         return;
       }
-      if (!await sendNow(text, staged)) restore();
+      if (!await sendNow(text, staged, { queueOnNetwork: true })) restore();
       return;
     }
-    if (!await consentForUse() || !stillCurrent()) return;
+    if (await consentForUse() !== true || !stillCurrent()) return;
     if (view.streaming) { toast("上一轮还在进行,等它结束再发"); return; }
     if (!await sendNow(text, null)) return;
     if (stillCurrent()) {

@@ -638,6 +638,21 @@
   opacity: 0.8;
   margin-top: 2px;
 }
+/* 断网待发里不发了的那条:气泡里一个「重新发送」小按钮(按当前状态重新走一遍) */
+.ai-message-resend {
+  margin-top: 6px;
+  padding: 2px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: inherit;
+  background: rgb(255 255 255 / 0.16);
+  border: 1px solid rgb(255 255 255 / 0.45);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.ai-message-resend:hover {
+  background: rgb(255 255 255 / 0.28);
+}
 
 /* 用户气泡里的附件:一个文件一枚小胶囊 */
 .ai-bubble-files {

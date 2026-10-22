@@ -16,6 +16,7 @@ import { ChatHistoryDrawer } from "./ChatHistoryDrawer";
 import { useViewPrefs, setShowThinking } from "./chat/viewPrefs";
 import { ChatHeader } from "./chat/ChatHeader";
 import { MessageList } from "./chat/MessageList";
+import { CLOUD_RESEND_EVENT } from "./chat/UserBubble";
 import { ThinkingStrip } from "./chat/ThinkingStrip";
 import { CloudQueueList, QueueList } from "./chat/QueueList";
 import { pushToast, setAccountAgentEnabled, useSync } from "../sync/syncManager";
@@ -89,7 +90,7 @@ export function CloudAiPanel(props: {
    * 用之前向账号服务新读一次告知。放行时回 `{ permit }`：账号模式下是这次新读取发的一次性许可，
    * 交给同一次发送的 `chat.send`，那边当场核对仍有效就不再读第二次（一次发送只核一次告知）；不放行回 null。
    */
-  const consentForUse = async (): Promise<{ permit: CloudConsentPermit | null } | null> => {
+  const consentForUse = async (opts?: { queueable?: boolean }): Promise<{ permit: CloudConsentPermit | null } | { queue: true } | null> => {
     if (!cloud.accountMode) return { permit: null };
     if (!stillCurrent()) return null;
     const expected = cloud.accountId ? { accountId: cloud.accountId, bindingVersion: consent.bindingVersion } : null;
@@ -105,6 +106,8 @@ export function CloudAiPanel(props: {
       return { permit };
     } catch (error) {
       if (!stillCurrent()) return null;
+      // 断网读不到告知:不弹告知框,这条消息排着等网络恢复(恢复后发出之前再核一次告知)
+      if (opts?.queueable && chat.outbox.transient(error)) return { queue: true };
       setConsentError(error instanceof Error ? error.message : "云端账号暂时不可用。");
       setConsentOpen(true);
       return null;
@@ -112,7 +115,9 @@ export function CloudAiPanel(props: {
   };
   const acceptConsent = () => { void acceptCloudConsent().then(() => { if (stillCurrent()) { setConsentError(null); setConsentOpen(false); } },
     error => { if (stillCurrent()) setConsentError(error instanceof Error ? error.message : "云端账号暂时不可用。"); }); };
-  const chat = useCloudChat({ tabId, cloud, enabled: true, autoAttach: true, initialConversation: props.initialConversation });
+  // 断网待发(2026-10-22 用户定):断网时发的消息排着、网络恢复后自动发出;排着的带附件的,真发出去之前同样先放进素材库
+  const chat = useCloudChat({ tabId, cloud, enabled: true, autoAttach: true, initialConversation: props.initialConversation,
+    outbox: true, prepareFiles: (files) => withLibrary(files) });
   const { view } = chat;
   const [metadataReadyKey, setMetadataReadyKey] = useState("");
   const [controlPending, setControlPending] = useState<CloudControlRequest | null>(null);
@@ -190,8 +195,10 @@ export function CloudAiPanel(props: {
   useEffect(() => {
     if (!cloud.accountMode || !hasMessages) return;
     let live = true;
-    void chat.history.refresh().then(ok => { if (live && ok) setMetadataReadyKey(metadataKey); });
+    // 断着网时(比如刚排了一条等网络恢复的)静默读:读不到不弹「连不上」,发消息这件事不报错(2026-10-22 用户定)
+    void chat.history.refresh(chat.outbox.offline()).then(ok => { if (live && ok) setMetadataReadyKey(metadataKey); });
     return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cloud.accountMode, consent.accepted, chat.conversationId, hasMessages, chat.history.refresh, metadataKey]);
 
   // 创建者关了开关:成员列表通知过来的(`cloud.enabled`)或 info 报的
@@ -264,6 +271,19 @@ export function CloudAiPanel(props: {
     return () => window.removeEventListener("pc-quote-clip", onQuote as EventListener);
   }, [active]);
 
+  // 「发送失败」气泡上的「重新发送」(UserBubble 发出的事件,带气泡号):是这一页待发清单里的才接
+  const resendRef = useRef(chat.outbox.resend);
+  resendRef.current = chat.outbox.resend;
+  useEffect(() => {
+    const onResend = (ev: Event) => {
+      const id = (ev as CustomEvent).detail?.id;
+      if (typeof id === "string" && stillCurrent()) resendRef.current(id);
+    };
+    window.addEventListener(CLOUD_RESEND_EVENT, onResend as EventListener);
+    return () => window.removeEventListener(CLOUD_RESEND_EVENT, onResend as EventListener);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   /** 刚发出去、服务端的 user 事件还没回来的那一小会儿也算忙(免得连发两条撞上「对话还有一轮在进行」) */
   const echoWait = useRef(false);
   const echoTimer = useRef<number | null>(null);
@@ -279,13 +299,14 @@ export function CloudAiPanel(props: {
   };
   useEffect(() => () => { if (echoTimer.current !== null) window.clearTimeout(echoTimer.current); }, []);
 
-  const sendNow = async (text: string, files?: ChatAttachment[], staged?: string | null, consentPermit?: CloudConsentPermit | null): Promise<boolean> => {
+  const sendNow = async (text: string, files?: ChatAttachment[], staged?: string | null, consentPermit?: CloudConsentPermit | null,
+    opts?: { queueOnNetwork?: boolean }): Promise<boolean> => {
     if (off || !stillCurrent() || !controlPolicy.canSend || view.revoked) { if (staged) chat.failStaged(staged, "现在不能在这个对话里发消息。"); return false; }
     if (!cloud.accountMode) markSent();
     // 账号模式:图片、视频、音频附件先放进素材库,告诉 Agent 是哪一条(2026-10-18 用户定)
     const prepared = cloud.accountMode && files?.length ? await withLibrary(files) : files;
     if (!stillCurrent()) return false;
-    const ok = await chat.send(text, prepared, staged ?? undefined, consentPermit);
+    const ok = await chat.send(text, prepared, staged ?? undefined, consentPermit, opts);
     if (!stillCurrent()) return false;
     if (!ok) { echoWait.current = false; bump((n) => n + 1); }
     return ok;
@@ -309,18 +330,29 @@ export function CloudAiPanel(props: {
         setInputText(previous => previous ? previous : text);
         setAttachments(previous => previous.length ? previous : sentAttachments);
       };
-      const admission = await consentForUse();
+      // 断网了,或这个对话里已经有排着等网络的(新发的排在它后面,顺序不乱):不报错,排着,网络恢复后自动发出
+      if (staged && (chat.outbox.offline() || chat.outbox.mustQueue()) && chat.outbox.enqueue(text.trim(), usable, staged)) {
+        if (skipped > 0) chat.notify(`${skipped} 个附件还在上传或上传失败,这次没带上。`);
+        return;
+      }
+      const admission = await consentForUse({ queueable: Boolean(staged) });
+      if (admission && "queue" in admission) {
+        if (staged && stillCurrent() && chat.outbox.enqueue(text.trim(), usable, staged)) return;
+        if (staged) chat.failStaged(staged, "使用云端 Agent 前，请先阅读并确认告知。");
+        restore();
+        return;
+      }
       if (!admission || !stillCurrent()) {
         if (staged) chat.failStaged(staged, "使用云端 Agent 前，请先阅读并确认告知。");
         restore();
         return;
       }
       if (skipped > 0) chat.notify(`${skipped} 个附件还在上传或上传失败,这次没带上。`);
-      if (!await sendNow(text.trim(), usable, staged, admission.permit)) restore();
+      if (!await sendNow(text.trim(), usable, staged, admission.permit, { queueOnNetwork: true })) restore();
       return;
     }
     const admission = await consentForUse();
-    if (!admission || !stillCurrent()) return;
+    if (!admission || "queue" in admission || !stillCurrent()) return;
     // 还在上传或上传失败的附件这次先不带上,但发送本身不被挡住
     const { usable, skipped } = pickSendable(attachments, chat.conversationId);
     if (!text.trim()) {
@@ -352,7 +384,7 @@ export function CloudAiPanel(props: {
     void (async () => {
       try {
         const admission = await consentForUse();
-        if (!admission || !stillCurrent()) { setQueuePaused(qKey, true); return; }
+        if (!admission || "queue" in admission || !stillCurrent()) { setQueuePaused(qKey, true); return; }
         if (await sendNow(head.text, head.attachments, null, admission.permit)) removeQueued(qKey, head.id);
         else setQueuePaused(qKey, true);
       } finally { flushingRef.current = false; }
@@ -431,7 +463,7 @@ export function CloudAiPanel(props: {
 
   const insertQueued = async (item: QueuedItem) => {
     const admission = await consentForUse();
-    if (!admission || !stillCurrent()) return;
+    if (!admission || "queue" in admission || !stillCurrent()) return;
     if (view.streaming) {
       await chat.abort();
       // 停止要等服务端收尾的事件回来
