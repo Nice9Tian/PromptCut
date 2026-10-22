@@ -5,8 +5,8 @@ import "./WindowTitleBar.css";
 
 /**
  * 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」),值同 `mode.ts` 的 `ONLINE`。
- * 在线页面上标题栏菜单同顶栏(C10 契约第 10 节〔裁〕,2026-09-28):桌面才有的项置灰,悬停说明与顶栏同一套
- * `onlineUnsupported` 文案,点了不动作;在线构建里桌面壳命令那一支(`desktop_titlebar_command`)剪掉。
+ * 在线构建里标题栏整条不画(见下面 `WindowTitleBar`),所以菜单里「桌面才有的项置灰」(C10 契约第 10 节〔裁〕,2026-09-28)
+ * 在线页面上已无处可见;下面各处 `ONLINE_BUILD &&` 的分支只是没有清掉的旧写法,在线产物里随整个菜单一起被剪掉。
  */
 const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
 
@@ -131,8 +131,17 @@ function sendCommand(command: string) {
 /**
  * 无边框桌面窗口的标题栏。菜单和窗口按钮都在 WebView 里绘制，颜色直接读取皮肤
  * 的 --ui-* 变量，因此切换皮肤时标题栏会和编辑器同步变化。
+ *
+ * 在线构建(浏览器)里整条不画(2026-10-22 用户定:浏览器版不需要菜单行和 − □ × 三个按钮,后者在浏览器里按了没反应)。
+ * 判别用编译期常量 `ONLINE_BUILD`,在线产物里下面那份实现整个剪掉;不用运行时有没有窗口 API 来判,
+ * 免得桌面版万一拿不到窗口 API 时连菜单一起没了。菜单里在线页面还能用的七项各有别的入口,见 `docs/reports/AGENT-claude-browser-titlebar.md`;
+ * 其中「快捷键」「关于 PromptCut」挪进了编辑器顶栏的「⋯」菜单(`TopBar.tsx`)。
  */
-export function WindowTitleBar(): JSX.Element {
+export function WindowTitleBar(): JSX.Element | null {
+  return ONLINE_BUILD ? null : <DesktopTitleBar />;
+}
+
+function DesktopTitleBar(): JSX.Element {
   const [open, setOpen] = useState<MenuId | null>(null);
   const [maximized, setMaximized] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);

@@ -52,6 +52,13 @@ const ONLINE_OFF = (entry: string): string => onlineUnsupported(entry);
  */
 const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
 
+/**
+ * 「快捷键」「关于 PromptCut」的说明文字。桌面版在标题栏菜单「帮助」里点开(`WindowTitleBar.tsx`,经 `pc-titlebar-command` 交到下面的 `onCommand`);
+ * 在线构建不画标题栏(2026-10-22 用户定),这两项改住在「⋯」菜单里,点了弹同一段说明。
+ */
+const SHORTCUTS_TEXT = "空格 播放/暂停\nCtrl/Cmd + Z 撤销\nCtrl/Cmd + Shift + Z 重做\nCtrl/Cmd + Y 重做\nDelete 删除选中片段";
+const ABOUT_TEXT = "PromptCut\nAI 视频编辑器";
+
 /** 顶栏宽度档位:宽档(全部展开)、中档(图标收缩)、窄档(折叠更多菜单) */
 type BarTier = "wide" | "icon" | "narrow";
 
@@ -532,8 +539,8 @@ export function TopBar() {
         case "redo": actions.redo(); break;
         case "open-skin": setSkinOpen(true); break;
         case "open-voice": if (!ONLINE_BUILD) openVoiceSettings(); break;
-        case "shortcuts": alert("空格 播放/暂停\nCtrl/Cmd + Z 撤销\nCtrl/Cmd + Shift + Z 重做\nCtrl/Cmd + Y 重做\nDelete 删除选中片段"); break;
-        case "about": alert("PromptCut\nAI 视频编辑器"); break;
+        case "shortcuts": alert(SHORTCUTS_TEXT); break;
+        case "about": alert(ABOUT_TEXT); break;
       }
     };
     window.addEventListener("pc-titlebar-command", onCommand);
@@ -646,6 +653,35 @@ export function TopBar() {
             <IconPalette />
             <span className="pc-btn-label">皮肤…</span>
           </button>
+          {/* 在线构建没有标题栏菜单(2026-10-22 用户定),它「帮助」里的这两项挪到这里;桌面版仍在标题栏菜单里,这里不重复 */}
+          {ONLINE_BUILD && (
+            <>
+              <button
+                type="button"
+                className="pc-btn"
+                style={{ width: "100%", justifyContent: "flex-start" }}
+                data-pc="more-shortcuts"
+                onClick={() => {
+                  setMenuOpen(false);
+                  alert(SHORTCUTS_TEXT);
+                }}
+              >
+                <span className="pc-btn-label">快捷键</span>
+              </button>
+              <button
+                type="button"
+                className="pc-btn"
+                style={{ width: "100%", justifyContent: "flex-start" }}
+                data-pc="more-about"
+                onClick={() => {
+                  setMenuOpen(false);
+                  alert(ABOUT_TEXT);
+                }}
+              >
+                <span className="pc-btn-label">关于 PromptCut</span>
+              </button>
+            </>
+          )}
           {/* 模式开关只在窄档收进来,宽档它还在条上;项目设置已经住进「项目」菜单 */}
           {tier === "narrow" && (
             <div className="pc-more-menu-row">
