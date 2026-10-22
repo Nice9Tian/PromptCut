@@ -205,3 +205,7 @@
 | 满载失败单跑 | `node scripts/test-suite.mjs server/test/cli-setup.test.mjs` | 28/28 过（两项失败都在这一个文件：真子进程 stdin 等待超时 + 收尾删临时目录 EPERM，第一轮也出现过、单跑都过） |
 | 新增 / 改动的测试 | `cloudSnapshot.test.mjs` CS-01～06、`mergeItems.test.mjs` MI-01～13、`offlineMerge.test.mjs` OM-01～07、`pending-merge.test.mjs` PM-01～09、`card-sync.test.mjs` T8-0～8、`c66-cards.test.mjs`、`c10-ui-gates.test.mjs`、`onlineSync.test.mjs` | 全过（全量里也都过） |
 | 探针 | c65-editor（local）、c10-ui、mobile-ui、conflict-merge | 见本节三：c65 21/21；mobile-ui 与 conflict-merge 无失败；c10-ui 唯一失败项在 main 上同样失败。reopen-matrix 没跑（端口，见上） |
+
+### 七、跑探针时看到的一处，交主会话定
+
+- c10-ui 探针里断网时只挪了一个片段，窗口里却出现两条：那一段，和「项目设置」（二级「时长」）。原因是总时长跟着片段自动变（`duration` 是项目顶层字段，不进撤销栈但进项目 JSON）。它是真实的改动、合并它也无害，但用户会觉得「我没改设置」。可选：把跟着内容自动变的 `duration` 从「项目设置」里排除（合并片段后它会照常自动跟上）。我没改，等主会话定。
