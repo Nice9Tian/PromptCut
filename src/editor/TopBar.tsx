@@ -59,6 +59,9 @@ const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.V
 const SHORTCUTS_TEXT = "空格 播放/暂停\nCtrl/Cmd + Z 撤销\nCtrl/Cmd + Shift + Z 重做\nCtrl/Cmd + Y 重做\nDelete 删除选中片段";
 const ABOUT_TEXT = "PromptCut\nAI 视频编辑器";
 
+/** 「⋯」菜单里没有图标的那几项占位:图标默认 18px,占住同样宽度,文字才和「皮肤…」那一行对齐 */
+const MoreMenuNoIcon = () => <span aria-hidden="true" style={{ flex: "0 0 18px", width: 18 }} />;
+
 /** 顶栏宽度档位:宽档(全部展开)、中档(图标收缩)、窄档(折叠更多菜单) */
 type BarTier = "wide" | "icon" | "narrow";
 
@@ -666,6 +669,7 @@ export function TopBar() {
                   alert(SHORTCUTS_TEXT);
                 }}
               >
+                <MoreMenuNoIcon />
                 <span className="pc-btn-label">快捷键</span>
               </button>
               <button
@@ -678,6 +682,7 @@ export function TopBar() {
                   alert(ABOUT_TEXT);
                 }}
               >
+                <MoreMenuNoIcon />
                 <span className="pc-btn-label">关于 PromptCut</span>
               </button>
             </>
