@@ -2,6 +2,7 @@ export interface ClipTimeLike { start: number; end: number; mediaOffset?: number
 export const CLIP_SPEED_MIN: number;
 export const CLIP_SPEED_MAX: number;
 export const CLIP_SPEED_PRESETS: readonly number[];
+export const SPEED_MUTE_NOTE: string;
 export function clipSpeed(clip: { speed?: number } | null | undefined): number;
 export function isSpeedChanged(clip: { speed?: number } | null | undefined): boolean;
 export function speedMutesSource(clip: { speed?: number; mediaId?: string } | null | undefined): boolean;

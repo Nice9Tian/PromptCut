@@ -15,6 +15,7 @@ const PATHS = {
   mute: <><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z" /><path d="M16 9.5l5 5M21 9.5l-5 5" /></>,
   volume: <><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z" /><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a8 8 0 0 1 0 11" /></>,
   adjust: <><path d="M4 7h9M17 7h3M4 17h3M11 17h9" /><circle cx="15" cy="7" r="2" /><circle cx="9" cy="17" r="2" /></>,
+  speed: <path d="M13 3L5 13.5h6L10 21l8-10.5h-6z" />,
   time: <><circle cx="12" cy="12" r="8.5" /><path d="M12 7.5V12l3 2" /></>,
   swap: <path d="M5 9h13l-3-3M19 15H6l3 3" />,
   plus: <path d="M12 5v14M5 12h14" />,

@@ -28,6 +28,8 @@
 /** 速度的下限与上限(倍) */
 export const CLIP_SPEED_MIN = 0.25;
 export const CLIP_SPEED_MAX = 4;
+/** 界面上写明「变速段不出原声」的那一句(〔裁〕第一版):桌面编辑分区、手机版「速度」面板同一句 */
+export const SPEED_MUTE_NOTE = "变速后这一段不出原声（第一版不做变速声音）；改回 1× 恢复。";
 /** 界面上给的几档 */
 export const CLIP_SPEED_PRESETS = Object.freeze([0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4]);
 

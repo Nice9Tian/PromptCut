@@ -380,7 +380,7 @@ export function thingLabel(ref: ThingRef, value: unknown): string {
 
 const PROP_LABEL: Record<string, string> = {
   "@time": "时间", "@track": "所在序列",
-  opacity: "透明度", fadeIn: "淡入", fadeOut: "淡出", label: "名称", mediaOffset: "素材起点", audioMuted: "静音", audioVolume: "音量",
+  opacity: "透明度", fadeIn: "淡入", fadeOut: "淡出", label: "名称", mediaOffset: "素材起点", speed: "速度", audioMuted: "静音", audioVolume: "音量",
   filter: "滤镜", pixelMap: "像素映射", audioFx: "音频效果", emphasis: "强调", motion: "运动轨迹", parts: "部件", cardId: "卡片",
   mediaId: "素材", cutId: "引用剪辑", cutOffset: "剪辑起点", soundEffect: "音效", embeddedAudio: "内嵌声音", cardAudio: "卡片声音", nodeId: "节点",
   "frame.x": "位置 X", "frame.y": "位置 Y", "frame.w": "宽", "frame.h": "高", "frame.scale": "缩放", "frame.rotate": "旋转",

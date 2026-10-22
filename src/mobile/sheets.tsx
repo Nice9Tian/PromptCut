@@ -7,6 +7,7 @@ import { actions, getState, useStore, withMerge } from "../store/project";
 import { findClip, type MediaAsset, type Project, type TrackClip } from "../kernel/project";
 import { MAX_TRANSITION_DUR, MIN_TRANSITION_DUR, transitionsOf, type Transition, type TransitionKind } from "../kernel/transitions";
 import { getCard } from "../kernel/registry";
+import { CLIP_SPEED_PRESETS, SPEED_MUTE_NOTE, clipSpeed, speedLabel } from "../kernel/clipTime.mjs";
 import { listCuts } from "../kernel/cuts";
 import type { CardDef } from "../kernel/types";
 import { importMediaFiles, MEDIA_ACCEPT } from "../editor/left/importAssets";
@@ -307,10 +308,47 @@ export function ParamsSheet(props: { target: ParamsTarget; onClose: () => void; 
       {filterableClip(project, c) && <ClipFilterFields clip={c} />}
       {(kind === "video" || kind === "audio") && <>
         <Slider label="音量" pcm="param-volume" value={Math.round((c.audioVolume ?? 1) * 100)} min={0} max={100} unit="%" onCommit={(v) => actions.setClipVolume(c.id, v / 100)} />
+        {kind === "video" && clipSpeed(c) !== 1 && <div className="wrapnote" data-pcm="param-speed-note"><b>已变速 {speedLabel(clipSpeed(c))}：</b>{SPEED_MUTE_NOTE}</div>}
         <div className="row"><div className="t">静音此片段<small>画面不受影响；时间轴会醒目标出“已静音”</small></div>
           <button type="button" className={c.audioMuted ? "toggle on" : "toggle"} aria-label="静音" data-pcm="param-mute" onClick={() => actions.setClipMuted(c.id, !c.audioMuted)} /></div>
       </>}
       {undoRow(c.id)}
+    </Sheet>
+  );
+}
+
+/* ======================== 速度 ======================== */
+
+/**
+ * 视频段的「速度」(演示稿子导航栏里的「速度」一项;业务层是 store 的 setClipSpeed,和桌面编辑分区同一个动作)。
+ * 起点不动、终点按新速度重算;〔裁〕第一版变速段不出原声,面板里写明(同一句 SPEED_MUTE_NOTE)。
+ */
+export function SpeedSheet(props: { clipId: string; onClose: () => void }) {
+  const project = useStore((s) => s.project);
+  const toast = useToast();
+  const hit = findClip(project, props.clipId);
+  if (!hit) return <Sheet id="speed" title="速度" light onClose={props.onClose}><div className="hint">这个片段已经不在了。</div></Sheet>;
+  const c = hit.clip;
+  const cur = clipSpeed(c);
+  const presets = CLIP_SPEED_PRESETS.includes(cur) ? CLIP_SPEED_PRESETS : [...CLIP_SPEED_PRESETS, cur].sort((a, b) => a - b);
+  const pick = (v: number) => {
+    if (v === cur) return;
+    const r = actions.setClipSpeed(c.id, v);
+    if (!r.ok) { toast(r.error); return; }
+    toast(r.capped ? `已改成 ${speedLabel(v)}；后面放不下，截到了下一段的起点` : v === 1 ? "已恢复 1×，原声恢复" : `已改成 ${speedLabel(v)}，这一段不出原声`);
+  };
+  return (
+    <Sheet id="speed" title={clipName(project, c, (id) => getCard(id)?.name)} light onClose={props.onClose} head={<span className="chip">速度</span>}>
+      <div className="seg" data-pcm="speed-presets" style={{ flexWrap: "wrap", rowGap: 6 }}>
+        {presets.map((v) => (
+          <button key={v} type="button" className={v === cur ? "on" : undefined} data-pcm="speed-preset" data-speed={v} aria-pressed={v === cur} onClick={() => pick(v)}>{speedLabel(v)}</button>
+        ))}
+      </div>
+      <div className="wrapnote" data-pcm="speed-note"><b>声音：</b>{SPEED_MUTE_NOTE}</div>
+      <div className="hint">起点不动，时长按新速度重算：{fmtDur(c.end - c.start)}（素材 {fmtDur((c.end - c.start) * cur)}）。挂着转场的段要先删掉转场。</div>
+      <div className="undo-row">
+        <button type="button" className="btn" data-pcm="speed-undo" onClick={() => actions.undo()}><Icon name="undo" />撤销</button>
+      </div>
     </Sheet>
   );
 }
