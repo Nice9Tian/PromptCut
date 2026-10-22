@@ -159,6 +159,9 @@
   - 剪辑段里的卡做通产流（〔裁〕R01、R02）：毛玻璃这类依赖下层的卡带着下层一起产轨道流；在线浏览器也替剪辑段里的重卡产流。现状与卡点在 `docs/archive/agent-reports/AGENT-cut-flatten.md`「没做成的与原因」。
   - 「放弃这次搬迁」按钮（〔裁〕H04）：删掉搬到云端失败留下的半成品项目。
   - 顺带发现（2026-10-22，手机版真画面那一块报的，与该任务无关，没改）：在线页面导入视频后这段视频已经在时间轴上了，再点素材格子会成为第二段。请用户判断是不是有意的。
+  - **`reopen-e2e.mjs --matrix` 在 main 上本来就不过**（2026-10-22 主会话实测，与冲突合并那一块无关）：在 `claude/conflict-merge` 和 `main` `f00424ef` 上各跑一遍，**失败在同一个阶段、错误逐字相同**——`{"ok":false,"phase":"member first authentication","error":"member reopen state {\"reopen\":\"rejected\",\"status\":\"idle\",\"shared\":null,\"registration\":null}"}`。失败点在公共设置段，远早于 `--matrix` 那一段（`reopen-e2e.mjs` 第 328 行才进 `runRecoveryMatrix`）。
+    - **后果**：冲突合并那一块对 `reopen-matrix.mjs` 改的 5 处断言**跑不到、没验过**，按「未跑」记，不冒称通过。改了哪 5 处、各自理由写在 `docs/archive/agent-reports/AGENT-claude-conflict-merge.md` 第十一-三节，等这支探针修好后照着核。
+    - **另记一个坑**：`scripts/probes/reopen-matrix.mjs` 是**模块不是脚本**（文件头写明 `Invoked by reopen-e2e --matrix`，只导出 `runRecoveryMatrix`）。直接 `node scripts/probes/reopen-matrix.mjs` 会**空输出、退出码 0**——那是假通过，别当证据。正确入口是 `node scripts/probes/reopen-e2e.mjs --matrix`。
   - **`server/test/account-v2-deploy-config.test.mjs` 太脆：工作区路径里含 `render` 就假失败**（2026-10-22，多项目渲染节点那一块报的）。根因查清了：它序列化出来的结果里**带着绝对路径**，而断言是「输出里绝不出现 `render` 这个字」，于是任何路径含 `render` 的工作区都会中（`.worktrees/multi-project-render` 就是）。合到 `main`（目录不含 `render`）不会中。没改。修法：判断前把路径部分剔掉，或改成只看配置内容。
   - **非账号模式下成员能按哈希读到另一个项目的素材字节**（2026-10-22 由多项目渲染节点那一块查实，**原有缺陷，不是这次引入的**）：
     - **怎么复现**：自由模式的共享项目里，成员拿自己的读票据请求 `GET /api/asset/media/<别的项目的哈希>`，回 200 并给出别的项目的字节。
