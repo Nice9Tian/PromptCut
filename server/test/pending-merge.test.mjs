@@ -152,3 +152,23 @@ test('PM-07 用户身份:账号按账号号、口令项目按用户名、本机�
   assert.equal(mergeUserOf({ userId: 'alice@dev-1', username: 'alice', tenantId: 'P', scope: 'member', role: 'agent', service: 'agent' }), null);
   assert.equal(mergeUserOf({ scope: 'admin' }), null);
 });
+
+test('PM-08 账号项目:按账号号分表(同一账号两台设备同一张表、两个账号不混);账号连接的逐消息权限按「读」核', async () => {
+  const { instanceMessageAction } = await import('../account/agent-instance-internal.mjs');
+  for (const type of ['merge.list', 'merge.put', 'merge.remove']) assert.equal(instanceMessageAction(type), 'read', `${type} 只要项目的读权限(表是自己的;真改项目走 project.op 另核写权限)`);
+  const store = createMemoryStore();
+  const mod = pendingMergeModule({ store });
+  const sent = [];
+  const ctx = { send: (connId, m) => sent.push({ connId, m }) };
+  const acct = (accountId, deviceId) => ({ realm: 'account', identityVersion: 2, accountId, userId: `account:${accountId}@${deviceId}`, deviceId,
+    loginId: `l-${deviceId}`, credentialId: `c-${deviceId}`, loginGeneration: 1, tenantId: 'ACC', role: 'page' });
+  mod.connect(ctx, 'pc', acct('acc_a', 'pc'));
+  mod.connect(ctx, 'phone', acct('acc_a', 'phone'));
+  mod.connect(ctx, 'other', acct('acc_b', 'x'));
+  mod.handle(ctx, 'phone', { type: 'merge.list', projectId: 'ACC', reqId: 1 });
+  mod.handle(ctx, 'pc', { type: 'merge.put', projectId: 'ACC', things: [thing('offline:clip:c1')], reqId: 2 });
+  assert.deepEqual(sent.find((s) => s.connId === 'phone' && s.m.reqId === undefined)?.m.things.map((t) => t.key), ['offline:clip:c1'], '同一账号的手机马上收到');
+  mod.handle(ctx, 'other', { type: 'merge.list', projectId: 'ACC', reqId: 3 });
+  assert.deepEqual(sent.at(-1).m.things, [], '另一个账号看不见');
+  assert.deepEqual(store.read('merges/ACC').map((r) => r.user), ['account:acc_a']);
+});

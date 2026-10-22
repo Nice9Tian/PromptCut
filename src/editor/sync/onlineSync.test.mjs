@@ -142,3 +142,14 @@ test("备份:缺省的下载走 Blob + <a download> + click(浏览器里),不写
     globalThis.URL = saved.URL;
   }
 });
+
+test("断网时导入媒体:只有在线浏览器置灰(浏览器说没网,或连不上文档服务);桌面版照常导入", () => {
+  const of = (p) => st.importOfflineOf({ online: true, status: "online", active: true, navigatorOnline: true, ...p });
+  assert.equal(st.IMPORT_OFFLINE_TEXT, "当前离线");
+  assert.equal(of({}), false);
+  assert.equal(of({ navigatorOnline: false }), true);
+  assert.equal(of({ status: "offline" }), true);
+  assert.equal(of({ status: "connecting" }), false, "刚进项目连接中不闪");
+  assert.equal(of({ status: "offline", active: false }), false, "没进共享项目不判");
+  assert.equal(of({ online: false, status: "offline", navigatorOnline: false }), false, "桌面版照常导入,连上后再上传");
+});
