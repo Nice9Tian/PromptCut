@@ -1,7 +1,7 @@
 import { framesPlugin } from "./server/vite-plugin-frames";
 import { mirrorPlugin } from "./server/vite-plugin-mirror";
 import { costsPlugin } from "./server/vite-plugin-costs";
-import { defineConfig, type Plugin, type UserConfig } from "vite";
+import { defineConfig, type Plugin, type Rollup, type UserConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { apiGuardPlugin } from "./server/vite-plugin-api-guard";
@@ -177,15 +177,19 @@ const stageEntryPlugin = (): Plugin => ({
 
 /**
  * 在线构建的版本文件 `version.json`(语义 `product/platforms.md` 与 `mechanism/platforms.md`「在线浏览器」的「新版本提示」):
- * 产出 `dist-online/version.json`,内容为 `{"codeVersion":"<值>"}`,与嵌进页面的 `__PC_CODE_VERSION__` 用同一个 `codeVersion`。
- * 编辑器页切回前台时及在前台每 10 分钟取它(`src/online/updateCheck.ts`),与本页代码版本不同就挂出新版本提示。
- * 桌面构建与开发服务不挂这个插件、不产出这个文件。
+ * 产出 `dist-online/version.json`,内容为 `{"codeVersion":"<值>","entry":"assets/index-<哈希>.js"}`:`codeVersion` 与嵌进页面的
+ * `__PC_CODE_VERSION__` 是同一个值(渲染服务拿它比对,`server/hosted-render/main.mjs`);`entry` 是编辑器页入口脚本的文件名,
+ * 只改依赖、构建配置时代码版本不变而它会变。编辑器页切回前台时及在前台每 10 分钟取它(`src/online/updateCheck.ts`),
+ * 两样任一与本页不同就挂出新版本提示。桌面构建与开发服务不挂这个插件、不产出这个文件。
  */
 const versionJsonPlugin = (codeVersion: string): Plugin => ({
   name: "promptcut-version-json",
   apply: "build",
-  generateBundle() {
-    this.emitFile({ type: "asset", fileName: "version.json", source: JSON.stringify({ codeVersion }) });
+  generateBundle(_options, bundle) {
+    // 编辑器页的入口脚本:门面是 index.html 的那个入口块;没有就取文件名排在最前的入口块
+    const entries = Object.values(bundle ?? {}).filter((c): c is Rollup.OutputChunk => !!c && c.type === "chunk" && c.isEntry);
+    const page = entries.find((c) => /[\\/]index\.html$/.test(c.facadeModuleId ?? "")) ?? entries.sort((a, b) => a.fileName.localeCompare(b.fileName))[0];
+    this.emitFile({ type: "asset", fileName: "version.json", source: JSON.stringify(page ? { codeVersion, entry: page.fileName } : { codeVersion }) });
   },
 });
 

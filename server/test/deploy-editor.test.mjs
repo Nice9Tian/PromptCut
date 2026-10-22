@@ -320,6 +320,15 @@ test('DEP-8 vite.config.ts 在线构建产出 version.json（codeVersion 与 __P
   assert.deepEqual(JSON.parse(emitted[0].source), {
     codeVersion: JSON.parse(cfg.define.__PC_CODE_VERSION__),
   });
+  // 打包结果里有入口块：写上编辑器页入口脚本的文件名（门面是 index.html 的那一块），只改依赖时靠它看出新版本
+  const withEntry = [];
+  gen.call({ emitFile: (f) => withEntry.push(f) }, {}, {
+    'assets/vendor-x.js': { type: 'chunk', isEntry: false, fileName: 'assets/vendor-x.js', facadeModuleId: null },
+    'assets/stage-y.js': { type: 'chunk', isEntry: true, fileName: 'assets/stage-y.js', facadeModuleId: 'C:/r/stage.html' },
+    'assets/index-z.js': { type: 'chunk', isEntry: true, fileName: 'assets/index-z.js', facadeModuleId: 'C:\\r\\index.html' },
+    'assets/a.css': { type: 'asset', fileName: 'assets/a.css' },
+  });
+  assert.deepEqual(JSON.parse(withEntry[0].source), { codeVersion: JSON.parse(cfg.define.__PC_CODE_VERSION__), entry: 'assets/index-z.js' });
 
   for (const mode of ['development', 'production']) {
     const desk = await mod.default({ mode, command: 'build' });

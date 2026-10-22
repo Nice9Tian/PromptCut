@@ -20,5 +20,6 @@ const view = q.has("audioMix") ? <AudioMixView /> : q.has("export") ? <ExportVie
 // 手机浏览器点输入框自动放大后,失焦时拉回 100%(见 ui/focusZoomReset.ts)
 installFocusZoomReset();
 createRoot(document.getElementById("root")!).render(view);
-// 在线浏览器的新版本提示条:只在在线构建的编辑器页挂载(见 editor/sync/UpdateNotice.tsx)
-mountUpdateNotice();
+// 在线浏览器的新版本提示条:只在在线构建的编辑器页挂载(见 editor/sync/UpdateNotice.tsx);
+// 本文件是入口,它的 import.meta.url 就是入口脚本,拿去和服务端 version.json 的 entry 比
+mountUpdateNotice(import.meta.url);

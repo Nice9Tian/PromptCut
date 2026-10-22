@@ -1,6 +1,9 @@
 /**
  * 在线浏览器的新版本检查（语义 `docs/semantics/product/platforms.md` 与 `docs/semantics/mechanism/platforms.md`「在线浏览器」的「新版本提示」）：
- * - 在线构建产出 `<base>version.json`（内容 `{ "codeVersion": "<值>" }`，与页面里的 `CODE_VERSION` 同源），nginx 回 `Cache-Control: no-store`；
+ * - 在线构建产出 `<base>version.json`（内容 `{ "codeVersion": "<值>", "entry": "assets/index-<哈希>.js" }`：`codeVersion` 与页面里的
+ *   `CODE_VERSION` 同源，`entry` 是编辑器页入口脚本的文件名），nginx 回 `Cache-Control: no-store`；
+ * - 代码版本、入口文件名任一和本页不同就算新版本（只改依赖、构建配置时代码版本不变、入口文件名会变）；
+ *   服务端或本页缺入口文件名（老构建、开发构建）时只比代码版本；
  * - 编辑器页（不含舞台、导出页）切回前台时（`visibilitychange` 且 `visibilityState === "visible"`）、以及在前台时每 10 分钟取一次
  *   （`fetch(url, { cache: "no-store" })`）；启动时不取，在后台时不取；
  * - 取到的 `codeVersion` 与本页自己的代码版本（`src/online/buildInfo.ts` 的 `CODE_VERSION`）不同 → 状态变为「有新版本」并通知订阅者；
@@ -44,6 +47,8 @@ export interface UpdateCheckEnv {
   base?: string;
   /** 本页自己的代码版本（缺省取 `buildInfo.ts` 的 `CODE_VERSION`）；为 `null` 时永远不查、不提示 */
   codeVersion?: string | null;
+  /** 本页入口脚本相对 `base` 的文件名（如 `assets/index-<哈希>.js`，由 `main.tsx` 的 `import.meta.url` 得出）；缺省不比 */
+  entry?: string | null;
   /** 自定义 `fetch`（缺省取全局 `fetch`） */
   fetch?: typeof globalThis.fetch;
   /** 可见性来源（缺省取全局 `document`） */
@@ -71,6 +76,11 @@ export interface UpdateCheckController {
  * 非 JSON（例如 nginx `try_files` 回落的 `index.html`）、不是对象、缺字段或空字符串一律返回 `null`。
  */
 export function parseVersionJson(input: unknown): string | null {
+  return parseVersionInfo(input)?.codeVersion ?? null;
+}
+
+/** 同上，另取 `entry`（入口脚本文件名；缺字段、不是非空字符串时为 `null`）；`codeVersion` 不合法时整份返回 `null` */
+export function parseVersionInfo(input: unknown): { codeVersion: string; entry: string | null } | null {
   let parsed: unknown = input;
   if (typeof parsed === "string") {
     try {
@@ -80,10 +90,10 @@ export function parseVersionJson(input: unknown): string | null {
     }
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-  const raw = (parsed as { codeVersion?: unknown }).codeVersion;
-  if (typeof raw !== "string") return null;
-  const trimmed = raw.trim();
-  return trimmed.length > 0 ? trimmed : null;
+  const nonEmpty = (v: unknown) => (typeof v === "string" && v.trim().length > 0 ? v.trim() : null);
+  const codeVersion = nonEmpty((parsed as { codeVersion?: unknown }).codeVersion);
+  if (!codeVersion) return null;
+  return { codeVersion, entry: nonEmpty((parsed as { entry?: unknown }).entry) };
 }
 
 /**
@@ -96,6 +106,7 @@ export function parseVersionJson(input: unknown): string | null {
 export function startUpdateCheck(env: UpdateCheckEnv = {}): UpdateCheckController {
   const rawSelf = env.codeVersion !== undefined ? env.codeVersion : CODE_VERSION;
   const selfVersion = typeof rawSelf === "string" && rawSelf.trim().length > 0 ? rawSelf.trim() : null;
+  const selfEntry = typeof env.entry === "string" && env.entry.trim().length > 0 ? env.entry.trim() : null;
   const base = env.base ?? "/editor/";
   const url = `${base.replace(/\/?$/, "/")}${VERSION_FILE}`;
   const fetchFn = env.fetch ?? (typeof globalThis.fetch === "function" ? globalThis.fetch.bind(globalThis) : null);
@@ -118,10 +129,11 @@ export function startUpdateCheck(env: UpdateCheckEnv = {}): UpdateCheckControlle
   let inFlight: Promise<void> | null = null;
   let stopped = false;
 
-  const applyRemoteVersion = (remoteVersion: string) => {
+  const applyRemoteVersion = (remote: { codeVersion: string; entry: string | null }) => {
     if (stopped || !selfVersion) return;
-    const nextHasUpdate = remoteVersion !== selfVersion;
-    const nextLatest = nextHasUpdate ? remoteVersion : null;
+    // 两边都有入口文件名才比它；代码版本照比
+    const nextHasUpdate = remote.codeVersion !== selfVersion || (!!selfEntry && !!remote.entry && remote.entry !== selfEntry);
+    const nextLatest = nextHasUpdate ? remote.codeVersion : null;
     if (state.hasUpdate === nextHasUpdate && state.latestVersion === nextLatest) return;
     state = Object.freeze({
       hasUpdate: nextHasUpdate,
@@ -144,9 +156,9 @@ export function startUpdateCheck(env: UpdateCheckEnv = {}): UpdateCheckControlle
         const res = await fetchFn(url, { cache: "no-store" });
         if (!res || !res.ok) return;
         const text = await res.text();
-        const remoteVersion = parseVersionJson(text);
-        if (!remoteVersion) return;
-        applyRemoteVersion(remoteVersion);
+        const remote = parseVersionInfo(text);
+        if (!remote) return;
+        applyRemoteVersion(remote);
       } catch {
         /* 网络失败或解析失败：忽略本次，状态不变 */
       } finally {

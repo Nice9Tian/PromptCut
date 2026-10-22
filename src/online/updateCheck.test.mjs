@@ -394,3 +394,40 @@ test("UPD-08 服务端退回本页的版本：已挂出的提示撤下并通知�
   assert.equal(notified, 3);
   ctl.stop();
 });
+
+test("UPD-09 代码版本相同、入口文件名不同（只改了依赖或构建配置）也算新版本；任一边缺入口文件名时只比代码版本", async () => {
+  const h = makeHarness({ initialVisibility: "visible" });
+  let body = { codeVersion: "v-100", entry: "assets/index-aaa.js" };
+  const ctl = startUpdateCheck({
+    base: "/editor/",
+    codeVersion: "v-100",
+    entry: "assets/index-aaa.js",
+    visibility: h.visibility,
+    setInterval: h.setInterval,
+    clearInterval: h.clearInterval,
+    fetch: async () => ({ ok: true, text: async () => JSON.stringify(body) }),
+  });
+  await h.tick();
+  assert.equal(ctl.getState().hasUpdate, false, "代码版本、入口文件名都一样：没有新版本");
+
+  body = { codeVersion: "v-100", entry: "assets/index-bbb.js" };
+  await h.tick();
+  assert.equal(ctl.getState().hasUpdate, true, "只换了入口文件名：算新版本");
+
+  body = { codeVersion: "v-100" };
+  await h.tick();
+  assert.equal(ctl.getState().hasUpdate, false, "服务端没写入口文件名（老构建）：只比代码版本");
+  ctl.stop();
+
+  const noSelfEntry = startUpdateCheck({
+    base: "/editor/",
+    codeVersion: "v-100",
+    visibility: h.visibility,
+    setInterval: h.setInterval,
+    clearInterval: h.clearInterval,
+    fetch: async () => ({ ok: true, text: async () => JSON.stringify({ codeVersion: "v-100", entry: "assets/index-ccc.js" }) }),
+  });
+  await h.tick();
+  assert.equal(noSelfEntry.getState().hasUpdate, false, "本页拿不到自己的入口文件名：只比代码版本");
+  noSelfEntry.stop();
+});

@@ -117,7 +117,8 @@ let mounted = false;
 /**
  * 在编辑器页根挂载后调用一次；内部自行判断是否为在线构建的编辑器页，整页只启动一次。
  */
-export function mountUpdateNotice(): void {
+/** `entryUrl`:入口脚本自己的 `import.meta.url`(只有 `main.tsx` 拿得到),换成相对 `base` 的文件名交给检查逻辑比对 */
+export function mountUpdateNotice(entryUrl?: string): void {
   if (mounted) return;
   if (!ONLINE) return;
   if (typeof window === "undefined" || typeof document === "undefined" || typeof location === "undefined") return;
@@ -126,9 +127,16 @@ export function mountUpdateNotice(): void {
   if (q.has("stage") || q.has("export") || q.has("audioMix") || q.has("proto")) return;
   mounted = true;
 
+  const base = import.meta.env.BASE_URL;
+  let entry: string | null = null;
+  try {
+    const path = entryUrl ? new URL(entryUrl).pathname : "";
+    if (path.startsWith(base)) entry = path.slice(base.length);
+  } catch { /* 取不到就只比代码版本 */ }
   const ctl = startUpdateCheck({
-    base: import.meta.env.BASE_URL,
+    base,
     codeVersion: CODE_VERSION,
+    entry,
     visibility: document,
     fetch: (url, init) => window.fetch(url, init),
   });
