@@ -61,6 +61,7 @@ import './lib/localhost-dns.cjs'; // Node 这边也认得 *.localhost(托管组�
 import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
 import { resumeRecord, plantResume } from './lib/online-resume-entry.mjs';
 import { createSharedProject, buildAuthProtocols } from '../../server/auth/client.mjs';
+import { androidUaData } from './lib/android-ua.mjs';
 
 const argv = process.argv.slice(2);
 const arg = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : dflt; };
@@ -488,6 +489,7 @@ async function onlinePhases() {
     if (mobile) {
       await page.emulate({ userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36',
         viewport: { width: 412, height: 915, deviceScaleFactor: 2, isMobile: true, hasTouch: true, isLandscape: false } });
+    await androidUaData(page); // userAgentData 也报安卓手机(在线页面按它判身份与「安卓、内存不到 8 GB」)
       await page.evaluateOnNewDocument(() => { Object.defineProperty(Navigator.prototype, 'deviceMemory', { configurable: true, get: () => 4 }); });
     } else await page.setViewport({ width: 1600, height: 900 });
     await page.evaluateOnNewDocument(AUDIO_HOOK);
@@ -510,7 +512,8 @@ async function onlinePhases() {
       base: `${SITE}/hosted/`, derivationBase: `${DOC_DIRECT}/`, projectId: shared.projectId, name: NAME,
       username, password: PROJECT_PW, deviceId: `sab-${RUN}-${++joinSeq}`.padEnd(16, '0'),
     }));
-    await page.goto(`${SITE}/editor`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+    // `?layout=desktop`:模拟手机的那一页身份是手机,缺省进手机版界面;这支探针看的是桌面界面(`?layout=` 只给验收用)
+    await page.goto(`${SITE}/editor?layout=desktop`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
     try { await page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 60_000 }); }
     catch (e) {
       await page.screenshot({ path: path.join(OUT, `join-failed-${username}.png`) }).catch(() => {});

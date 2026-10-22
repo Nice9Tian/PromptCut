@@ -24,6 +24,7 @@ import { lookupProject } from '../../server/auth/client.mjs';
 import { resumeRecord, plantResume } from './lib/online-resume-entry.mjs';
 import { ROOT, startProcess, startHosted, startAgent, killTree as killTreeOf } from './cloud-agent-probe-lib.mjs';
 import { reopenEditorEnv } from './reopen-editor-env.mjs';
+import { androidUaData } from './lib/android-ua.mjs';
 
 export { ROOT };
 export const sleep = (ms) => delay(ms);
@@ -703,6 +704,7 @@ export async function newPage(ctx, { mobile = false, init = [] } = {}) {
   page.on('console', (m) => { if (m.type() === 'error' || m.text().includes('[collab]')) page.consoleErrors.push(m.text().slice(0, 300)); });
   if (mobile) {
     await page.emulate({ userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36', viewport: { width: 412, height: 915, deviceScaleFactor: 2, isMobile: true, hasTouch: true, isLandscape: false } });
+    await androidUaData(page); // userAgentData 也报安卓手机(在线页面按它判身份与「安卓、内存不到 8 GB」)
     await page.evaluateOnNewDocument(() => { Object.defineProperty(Navigator.prototype, 'deviceMemory', { configurable: true, get: () => 4 }); });
   } else await page.setViewport({ width: 1600, height: 900 });
   for (const code of init) await page.evaluateOnNewDocument(code);

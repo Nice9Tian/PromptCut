@@ -225,14 +225,14 @@ export class HttpSnapshotSource implements SnapshotSource {
  * 5. **缓存**:只在内存里按 LRU 存小尺寸,上限 `ONLINE_CACHE_MAX_BYTES`(64 MiB,契约第 8 节〔裁〕,不做 IndexedDB)。
  *    预取:播放头前后各 2 秒、当前可见的重层。导出前 `clearCache()` 释放(契约第 11.1 节)。
  *
- * 6. **轨道流**(`docs/plan/browser-stream-task.md` 第六处;各档都取,最低一档的不同见第 7 条):层表另带一张 `streams` 表(每条流一行:成员、候选的结果键、
+ * 6. **轨道流**(`docs/plan/browser-stream-task.md` 第六处;各档都取,只贴稀疏版时的不同见第 7 条):层表另带一张 `streams` 表(每条流一行:成员、候选的结果键、
  *    分段范围、每份清单几段)。页面按播放头附近的分段去内容库取流清单(`render-manifest`,键 `<结果键>:<起>-<止>`),清单里列着的
  *    开头文件与分段按哈希从素材服务取到本页内存(`px/<hash>`,同一张只读票据);**字节到了本页的分段才算就绪**,照 C3 的
  *    `layer` 消息(`kind: 'stream'`,单位是分段号,组流带 `groupClipIds`)交给订阅方 —— 和桌面的就绪索引同一种消息,`snapshotFeed` 不用改。
  *    舞台不自己取:父页发流平面时把清单和字节一起带过去(`streamPlane`,配 `streamPlayer.ts` 的 `StreamPlaneSender`)。
  *    候选的认定、输入签名过期的处理照快照层的规矩;流这一段没取到时这一层照旧每拍换快照。
  *
- * 7. **最低一档贴轨道流的稀疏版**(2026-10-13 用户定「性能不足时只贴稀疏版、同时活着的解码器给得少」;2026-10-22 起归最低一档,
+ * 7. **只有一个舞台时只贴轨道流的稀疏版**(2026-10-13 用户定「性能不足时只贴稀疏版、同时活着的解码器给得少」;2026-10-22 起归只有一个舞台的页面(精简模式与最低一档),
  *    `mechanism/platforms.md`「三道闸门」〔裁〕):取流的路和别的档是同一条(层表、清单、分段),
  *    舞台那边每个分段只解第一帧(`streamPlayer.ts` 的 `presentFirst`)。这里只有三处不同:
  *      - 先问浏览器解不解得了(`StreamDecodeSupport`):没有 `VideoDecoder` 就一条流都不取、不发;某个开头文件的编码配置
@@ -260,7 +260,7 @@ export const ONLINE_FETCH_CONCURRENCY = 4;
 export const LAYER_MAP_PREFIX = "layers:";
 /** 轨道流的分段字节在本页内存里最多留这么多(按最近用过的留;三级数字:6 条流、每条前后 6 段、每段不超过 512 KB 约 18 MiB,留三倍余量) */
 export const STREAM_CACHE_MAX_BYTES = 64 * 1024 * 1024;
-/** 最低一档(只贴稀疏版):流字节在本页内存里最多留这么多(三级数字:4 条流、每条播放头前后 6 段、每段不超过 512 KB 约 12 MiB) */
+/** 只贴稀疏版时:流字节在本页内存里最多留这么多(三级数字:4 条流、每条播放头前后 6 段、每段不超过 512 KB 约 12 MiB) */
 export const SPARSE_STREAM_CACHE_MAX_BYTES = 16 * 1024 * 1024;
 /** 轨道流预取:播放头所在分段往回这么多段(刚播过的那一段留着,往回拖一点不用重取) */
 export const STREAM_BEHIND_SEGMENTS = 1;
@@ -345,7 +345,7 @@ export interface LayerMap {
   streams: OnlineStream[];
 }
 
-/** 在线页面认的层表版本(C10 契约第 18 节第 3 条);最低一档(`small`)v 1、v 2 都认 */
+/** 在线页面认的层表版本(C10 契约第 18 节第 3 条);只贴稀疏版时(`small`)v 1、v 2 都认 */
 export const LAYER_MAP_V2 = 2;
 /** 层表 v 3(M7 契约 D12):每层带候选;v 2 的字段照旧(等于第一个候选),旧读法照样能读 */
 export const LAYER_MAP_V3 = 3;
@@ -492,7 +492,7 @@ export function parseLayerMap(body: unknown): LayerMap | null {
  * 这一层在这一档能不能用(C10 契约第 5 节、第 18 节第 3 条):
  *   - 取预渲染原尺寸(`original`):只认 v 2、且带 `contentKey` 与 `envFingerprint` 的层 —— 页面不算键,
  *     部署的 `/editor` 与渲染节点代码版本对不上、层表缺这两项时,这一层按「没有预渲染结果」处理(占位、暂停活渲),不报错;
- *   - 最低一档(`small`):v 1、v 2 都认。
+ *   - 只贴稀疏版时(`small`):v 1、v 2 都认。
  */
 export function usableLayer(map: Pick<LayerMap, "v">, layer: OnlineLayer, { anyVersion = false }: { anyVersion?: boolean } = {}): boolean {
   if (anyVersion) return true;
@@ -720,7 +720,7 @@ interface ManifestState {
 }
 
 /**
- * 在线来源取哪一档(C10 契约第 5 节):`original` 取预渲染原尺寸(`snap/<hash>` 的 HTML 快照);`small` 是最低一档:
+ * 在线来源取哪一档(C10 契约第 5 节):`original` 取预渲染原尺寸(`snap/<hash>` 的 HTML 快照);`small` 是只贴稀疏版时:
  * 轨道流只贴稀疏版(文件头第 7 条),快照那一路取 `px/<hash>` 的小位图(预渲染小尺寸 2026-10-13 起停产,这一路取不到东西,留到撤快照时删)。
  */
 export type OnlineTier = "small" | "original";
@@ -736,7 +736,7 @@ export interface L2Like {
 }
 
 /**
- * 最低一档问「这台浏览器解不解得了轨道流」用的两样(文件头第 7 条)。别的档不问(照现状)。单测注入假的。
+ * 只贴稀疏版时问「这台浏览器解不解得了轨道流」用的两样(文件头第 7 条)。别的档不问(照现状)。单测注入假的。
  */
 export interface StreamDecodeSupport {
   /** 浏览器有没有 `VideoDecoder` */
@@ -760,7 +760,7 @@ export interface OnlineSourceOptions {
   /** 没有 L2 时的内存缓存上限(C10a 的 64 MiB) */
   maxBytes?: number;
   tier?: OnlineTier;
-  /** 最低一档问浏览器解不解得了流(缺省 `browserDecodeSupport`) */
+  /** 只贴稀疏版时问浏览器解不解得了流(缺省 `browserDecodeSupport`) */
   decodeSupport?: StreamDecodeSupport;
   /** 页面内快照库 L2(C10 契约第 4 节);给了就把块存进它,内存里只留一小份刚用过的 */
   store?: L2Like | Promise<L2Like | null> | null;
@@ -829,7 +829,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
     streamManifestFetches: 0, streamFetches: 0, streamBytes: 0, streamFailures: 0 };
 
   private decodeSupport: StreamDecodeSupport;
-  /** 最低一档:开头文件(按哈希)的编码配置这台浏览器解不解得了;在问的是 null */
+  /** 只贴稀疏版时:开头文件(按哈希)的编码配置这台浏览器解不解得了;在问的是 null */
   private initDecodable = new Map<string, boolean | null>();
 
   constructor(deps: OnlineSnapshotDeps, { maxBytes = ONLINE_CACHE_MAX_BYTES, tier = "small", store = null, decodeSupport = browserDecodeSupport }: OnlineSourceOptions = {}) {
@@ -850,7 +850,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
   }
 
   private now(): number { return (this.deps.now ?? Date.now)(); }
-  /** 最低一档(只贴稀疏版、层表 v 1 也认) */
+  /** 只贴稀疏版时(只有一个舞台;层表 v 1 也认) */
   private get sparseOnly(): boolean { return this.tier === "small"; }
 
   /** 这一档此刻能用的层(`original` 只认 v 2 且两项齐的层;输入签名对不上的旧层不算) */
@@ -1343,7 +1343,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
   }
 
   /**
-   * 最低一档:用这个开头文件的流这台浏览器贴不贴得了(文件头第 7 条)。别的档恒为 true。头一次问到时去问浏览器,
+   * 只贴稀疏版时:用这个开头文件的流这台浏览器贴不贴得了(文件头第 7 条)。别的档恒为 true。头一次问到时去问浏览器,
    * 问完之前当不行(那几段先不取、不算就绪),问到「行」再重发就绪。
    */
   private decodable(init: StreamInitMeta): boolean {
@@ -1363,7 +1363,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
   }
 
   /**
-   * 此刻能用的流(最低一档要浏览器有 `VideoDecoder`,没有就照没有流办),各自选定一个候选:认定活着的优先,都没认定时取第一个没作废的,
+   * 此刻能用的流(只贴稀疏版时要浏览器有 `VideoDecoder`,没有就照没有流办),各自选定一个候选:认定活着的优先,都没认定时取第一个没作废的,
    * 全作废照旧用第一个 —— 同快照层的 `chosen`。旧输入的流不算。
    */
   private streamsNow(): ChosenStream[] {
@@ -1497,7 +1497,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
       for (let n = Math.max(lo, s.row.firstSegment); n <= Math.min(hi, s.row.lastSegment); n++) {
         const hit = this.streamSegment(s, n);
         if (!hit) continue;
-        // 最低一档:这台浏览器解不了的编码(或者还没问完)不取它的字节
+        // 只贴稀疏版时:这台浏览器解不了的编码(或者还没问完)不取它的字节
         if (!this.decodable(hit.init)) continue;
         // 往回的那一段排在往前的后面
         const dist = n >= cur ? n - cur : hi - cur + (cur - n);
@@ -1783,7 +1783,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
             block = await this.fetchAsset("px", hash, signal);
             this.stats.smallFetches++;
             this.stats.smallBytes += block.bytes.length;
-            // 最低一档的 L2 只存小尺寸(C10 契约第 4 节)
+            // 只贴稀疏版时的 L2 只存小尺寸(C10 契约第 4 节)
             if (this.store) void this.store.putBlock(`px/${hash}`, block.bytes, block.type).catch(() => {});
           }
           const url = `data:${block.type || "image/webp"};base64,${bytesToBase64(block.bytes)}`;

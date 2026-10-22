@@ -30,12 +30,12 @@
  *     12 张满屏卡 × 3 帧 ≈ 225 MB(原来 6 张 × 3 帧 ≈ 113 MB)。
  *   - `STREAM_COUNT_BUDGET` = 32:流平面共用一个 WebGL 上下文以后,条数只剩解码器个数和每条流保底的解码帧两样要管。
  *     实测 64 个解码器正常、30 个各播一条按时画齐;取实测正常值的一半。32 条小卡流保底的解码帧约 87 MB。
- *     最低一档另有一组小得多的数,见下一节。
+ *     只贴稀疏版时另有一组小得多的数,见下一节。
  *
- * # 最低一档(在线浏览器性能不足时)的预算:`sparseStreamBudget()`
+ * # 只有一个舞台(精简模式与最低一档,在线浏览器性能不足时)的预算:`sparseStreamBudget()`
  *
  * 这一档每条流**每个分段只解第一帧那一张**(`streamPlayer.ts` 的 `presentFirst`;2026-10-13 用户定「性能不足时只贴稀疏版,
- * 同时活着的解码器给得少」,2026-10-22 起归最低一档,`mechanism/platforms.md`「三道闸门」〔裁〕),
+ * 同时活着的解码器给得少」,2026-10-22 起归只有一个舞台的页面(精简模式与最低一档),`mechanism/platforms.md`「三道闸门」〔裁〕),
  * 30 帧的项目一条流一秒解两张,花的不是「每秒解的像素」,是同时开着的解码器个数和留着的画面。所以这一档的开销不乘项目帧率,
  * 一律按「编码画幅 × `STREAM_BUDGET_MIN_FPS`」算(调用方把帧率传成 `STREAM_BUDGET_MIN_FPS`),像素预算就等于「同屏各条流编码画幅之和」的上限。
  * 没在真手机上量过,三个数都是保守的起点(要量什么见 `docs/reports/AGENT-rr-lowmem-streams.md`「真手机上要量的」):
@@ -70,15 +70,15 @@ export const STREAM_BUDGET_MIN_FPS = 30;
 /** 不知道编码画幅的流(没带这一项的旧消息)按一张 1920×1080 的满屏卡算 */
 export const STREAM_DEFAULT_PIXELS = 1920 * 2176;
 
-/** 最低一档:同时开着的解码器个数上限(见文件头「最低一档的预算」) */
+/** 只贴稀疏版时:同时开着的解码器个数上限(见文件头「只贴稀疏版时的预算」) */
 export const SPARSE_STREAM_COUNT = 4;
-/** 最低一档:同屏各条流的编码画幅之和的上限(见文件头) */
+/** 只贴稀疏版时:同屏各条流的编码画幅之和的上限(见文件头) */
 export const SPARSE_STREAM_PIXELS = 2 * STREAM_DEFAULT_PIXELS;
-/** 最低一档:头这么多条不看像素(见文件头) */
+/** 只贴稀疏版时:头这么多条不看像素(见文件头) */
 export const SPARSE_STREAM_FREE = 1;
 
 /**
- * 最低一档的预算,形状同 `streamBudgetOf` 的入参。和它配套的开销要按 `streamCost(pixels, STREAM_BUDGET_MIN_FPS)` 算
+ * 只贴稀疏版时的预算,形状同 `streamBudgetOf` 的入参。和它配套的开销要按 `streamCost(pixels, STREAM_BUDGET_MIN_FPS)` 算
  * (不乘项目帧率,见文件头)。
  */
 export function sparseStreamBudget() {

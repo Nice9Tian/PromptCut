@@ -184,7 +184,7 @@ test("最低一档:播放、暂停、拖动都发流平面,每条带 first(只�
   src.push(html("n", [[0, 299]]));
   src.push(stream("h", [[0, 19]]));
   for (const playing of [false, true]) {
-    const f = planFeed({ project: p, t: at(37), playing, single: true, lowest: true });
+    const f = planFeed({ project: p, t: at(37), playing, single: true, sparseOnly: true });
     assert.deepEqual(f.streamPlanes, [{ clipIds: ["h"], key: "s-h", ranges: [[0, 19]], originFrame: 0, first: true }], `playing=${playing}`);
     assert.deepEqual(f.overPlanes, []);
     assert.equal(f.picks.size, 0, "小尺寸快照退役");
@@ -193,7 +193,7 @@ test("最低一档:播放、暂停、拖动都发流平面,每条带 first(只�
   assert.deepEqual(planFeed({ project: p, t: at(37), playing: true }).streamPlanes, [{ clipIds: ["h"], key: "s-h", ranges: [[0, 19]], originFrame: 0 }]);
   // 这一帧所在分段的流还没就绪(只有第 0、1 段,播放头在第 2 段):不发流平面,不选小尺寸
   src.push(stream("h", [[0, 1]]));
-  const late = planFeed({ project: p, t: at(37), playing: false, single: true, lowest: true });
+  const late = planFeed({ project: p, t: at(37), playing: false, single: true, sparseOnly: true });
   assert.deepEqual(late.streamPlanes, []);
   assert.equal(late.picks.size, 0);
   assert.deepEqual(late.scrub, ["h", "n"]);
@@ -206,17 +206,17 @@ test("最低一档的预算:小卡同屏只放 4 条(解码器个数),满屏卡�
   const small = project(ids.map((id) => ({ ...card(id), frame: { x: 0, y: 0, w: 320, h: 240 } })));
   plan = heavyEverywhere(...ids);
   for (const id of ids) { src.push(html(id, [[0, 299]])); src.push(stream(id, [[0, 19]])); }
-  const s = planFeed(head(small, { single: true, lowest: true }));
+  const s = planFeed(head(small, { single: true, sparseOnly: true }));
   assert.deepEqual(s.streamPlanes.map((x) => x.clipIds[0]), ["a", "b", "c", "d"]);
   assert.ok(s.streamPlanes.every((x) => x.first === true));
   assert.deepEqual(s.overPlanes.map((x) => [x.clipIds[0], x.over, "first" in x]), [["e", true, false], ["f", true, false]]);
   assert.equal(s.picks.size, 0, "小尺寸快照退役");
-  assert.equal(streamPlanesAt(head(small, { single: true, lowest: true })).length, 6, "发给舞台的是放行的 4 条加超出的 2 条(只为摆占位符)");
+  assert.equal(streamPlanesAt(head(small, { single: true, sparseOnly: true })).length, 6, "发给舞台的是放行的 4 条加超出的 2 条(只为摆占位符)");
   assert.equal(planFeed(head(small)).streamPlanes.length, 6, "别的档:6 条都放");
   // 六张满屏卡:最低一档放 2 条;60 帧每秒的项目也是 2 条(开销不乘项目帧率)
   for (const fps of [30, 60]) {
     const full = { ...project(ids.map((id) => card(id))), fps };
-    const f = planFeed({ project: full, t: 1, playing: true, single: true, lowest: true });
+    const f = planFeed({ project: full, t: 1, playing: true, single: true, sparseOnly: true });
     assert.deepEqual(f.streamPlanes.map((x) => x.clipIds[0]), ["a", "b"], `fps ${fps}`);
     assert.equal(f.overPlanes.length, 4);
     assert.equal(planFeed({ project: full, t: 1, playing: true }).streamPlanes.length, 6, "别的档:6 条以内不看像素");

@@ -36,6 +36,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { androidUaData } from './lib/android-ua.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
@@ -298,6 +299,7 @@ async function newPage({ mobile = false } = {}) {
       userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36',
       viewport: { width: 412, height: 915, deviceScaleFactor: 2, isMobile: true, hasTouch: true, isLandscape: false },
     });
+    await androidUaData(page); // userAgentData 也报安卓手机(在线页面按它判身份与「安卓、内存不到 8 GB」)
     await page.evaluateOnNewDocument(() => { Object.defineProperty(Navigator.prototype, 'deviceMemory', { configurable: true, get: () => 4 }); });
   }
   page.close$ = () => ctx.close();
@@ -419,7 +421,7 @@ try {
   const t4 = Date.now();
   const phone = await newPage({ mobile: true });
   state.phone = phone;
-  await phone.goto(`${EDITOR}#invite=${codeOf(state.link)}`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+  await phone.goto(`${EDITOR}?layout=desktop#invite=${codeOf(state.link)}`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
   await phone.waitForSelector('[data-pc="join-invite-project"]', { visible: true, timeout: 60_000 });
   await typeInto(phone, '[data-pc="join-username"]', '手机成员');
   await phone.click('[data-pc="join-submit"]');

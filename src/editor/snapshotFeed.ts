@@ -35,7 +35,7 @@
  *
  * 流这一拍画不出来时舞台留着上一张，最多留一个分段的时长，再没有才显示占位符（`streamPlayer`、`StageView`）。
  *
- * **最低一档**(在线浏览器性能不足时;2026-10-13 用户定「只贴轨道流的稀疏版、同时活着的解码器给得少」)走的也是这条顺序,不同的只有:
+ * **只有一个舞台**(精简模式与最低一档,在线浏览器性能不足时;2026-10-13 用户定「只贴轨道流的稀疏版、同时活着的解码器给得少」)走的也是这条顺序,不同的只有:
  * 流平面带 `first`(舞台每个分段只解第一帧那一张,那一段是满密度的也一样);同屏流的预算用小的那一组
  * (`sparseStreamBudget`:4 个解码器、画幅之和两张 1080p 满屏卡);这一档的兜底顺序是「流的分段第一帧 → 占位符」。
  * **只有一个舞台**(舞台闸门第一级、最低一档、握手失败退回)时没有后台舞台可以追到精确再互换:暂停、拖动时重卡一律抑制、
@@ -417,8 +417,11 @@ export interface Playhead {
    * 停下时舞台把当前这一帧逐层追一次(`settleLayers`),画好的层照双舞台一样收 `settled`、不再盖回流。
    */
   single?: boolean;
-  /** 最低一档:流平面带 `first`(每个分段只解第一帧),预算用 `sparseStreamBudget` */
-  lowest?: boolean;
+  /**
+   * 只贴稀疏版(只有一个舞台:精简模式与最低一档,即舞台闸门没到双舞台的设备):流平面带 `first`(每个分段只解第一帧),
+   * 预算用 `sparseStreamBudget`;页面一侧的在线来源也只取稀疏版(`snapshotSource.ts` 的 `small`)
+   */
+  sparseOnly?: boolean;
 }
 
 export interface FeedPlan {
@@ -430,7 +433,7 @@ export interface FeedPlan {
   wanted: { clipId: string; frame: number }[];
   /**
    * 这一刻发给舞台的流平面（已按同屏流的预算截过，`planesWithinBudget`）：这一帧所在分段已经就绪的重卡的流。
-   * 播放、暂停、拖动都有。最低一档的每条带 `first`（舞台每个分段只解第一帧那一张）。
+   * 播放、暂停、拖动都有。只有一个舞台时每条带 `first`（舞台每个分段只解第一帧那一张）。
    */
   streamPlanes: StreamPlaneRequest[];
   /**
@@ -453,7 +456,7 @@ export interface FeedPlan {
  * 兜底顺序（mechanism/rendering.md「兜底顺序」）在父页这一侧：
  * 流平面只发这一帧有流、解码器预算放行的那几条；超出预算的标 `over`。
  */
-export function planFeed({ project, t, playing, single, lowest }: Playhead): FeedPlan {
+export function planFeed({ project, t, playing, single, sparseOnly }: Playhead): FeedPlan {
   const plan = planDispatch.currentPlan();
   const fps = Math.max(1, project.fps || 30);
   const globalFrame = Math.max(0, Math.floor(t * fps + 1e-6));
@@ -485,14 +488,14 @@ export function planFeed({ project, t, playing, single, lowest }: Playhead): Fee
     if (playing) for (const id of extraSuppressed) members.add(id);
     const all = streamPlanesFor(layers, members, globalFrame);
     const pixelsOf = new Map(layers.map((l) => [l.key, l.px]));
-    streamPlanes = lowest
+    streamPlanes = sparseOnly
       ? planesWithinBudget(all, STREAM_BUDGET_MIN_FPS, (p) => pixelsOf.get(p.key ?? ""), sparseStreamBudget())
       : planesWithinBudget(all, fps, (p) => pixelsOf.get(p.key ?? ""));
     if (streamPlanes.length < all.length) {
       const within = new Set(streamPlanes);
       overPlanes = all.filter((p) => !within.has(p)).map((p) => ({ ...p, over: true as const }));
     }
-    if (lowest) streamPlanes = streamPlanes.map((p) => ({ ...p, first: true as const }));
+    if (sparseOnly) streamPlanes = streamPlanes.map((p) => ({ ...p, first: true as const }));
     for (const p of all) for (const id of p.clipIds) wantedStream.add(id);
     if (!playing) {
       for (const p of all) {

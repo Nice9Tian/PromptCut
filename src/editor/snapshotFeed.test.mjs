@@ -221,7 +221,7 @@ test("settled 状态影响 suppressedAt 与 scrub", () => {
 test("单舞台停下追一帧画好的层(settled)暂停中不再抑制;下一次 setTime 照常进入抑制", () => {
   const p = project([card("h", 0, 10)]);
   plan = heavyEverywhere("h");
-  const head = { project: p, t: 1, playing: false, single: true, lowest: true };
+  const head = { project: p, t: 1, playing: false, single: true, sparseOnly: true };
   assert.deepEqual(suppressedAt(head), ["h"]);
   noteSettled("front", ["h"]);
   assert.deepEqual(suppressedAt(head), []);
@@ -254,7 +254,7 @@ test("最低一档:小尺寸快照退役,picks 恒为空,未就绪重卡在暂�
   const p = project([card("h", 0, 10)]);
   plan = heavyEverywhere("h");
   src.push(layer("h", [[1, 27], [32, 119]]));
-  const f = planFeed({ project: p, t: 1, playing: false, single: true, lowest: true });
+  const f = planFeed({ project: p, t: 1, playing: false, single: true, sparseOnly: true });
   assert.equal(f.picks.size, 0);
   assert.deepEqual(f.scrub, ["h"]);
 });

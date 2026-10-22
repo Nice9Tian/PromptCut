@@ -62,6 +62,7 @@ import { startHostedCombo } from '../../server/hosted/combo.mjs';
 import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
 import { resumeRecord, plantResume, switchSharedInPlace } from './lib/online-resume-entry.mjs';
 import { createSharedProject, buildAuthProtocols } from '../../server/auth/client.mjs';
+import { androidUaData } from './lib/android-ua.mjs';
 
 const argv = process.argv.slice(2);
 const arg = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : dflt; };
@@ -194,6 +195,7 @@ async function newPage(label, { mobile = false } = {}) {
       userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36',
       viewport: { width: 412, height: 915, deviceScaleFactor: 2, isMobile: true, hasTouch: true, isLandscape: false },
     });
+    await androidUaData(page); // userAgentData 也报安卓手机(在线页面按它判身份与「安卓、内存不到 8 GB」)
     await page.evaluateOnNewDocument(() => { Object.defineProperty(Navigator.prototype, 'deviceMemory', { configurable: true, get: () => 4 }); });
   } else {
     await page.setViewport({ width: 1600, height: 900 });
@@ -218,7 +220,8 @@ async function join(page, username, name = NAME, { reload = true, projectId = ma
   });
   if (reload) {
     await plantResume(page, record);
-    await page.goto(`${SITE}/editor`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+    // `?layout=desktop`:模拟手机的那一页身份是手机,缺省进手机版界面;这支探针看的是桌面界面上的选择器(界面跟身份走,`?layout=` 只给验收用)
+    await page.goto(`${SITE}/editor?layout=desktop`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
   } else {
     await switchSharedInPlace(page, record);
   }

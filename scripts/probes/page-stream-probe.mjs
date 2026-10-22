@@ -73,6 +73,7 @@ import dnsShim from './lib/localhost-dns.cjs'; // Node 这边也认得 *.localho
 import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
 import { resumeRecord, plantResume } from './lib/online-resume-entry.mjs';
 import { startQueueEditor, viteBin, portFree } from './m8/procs.mjs';
+import { androidUaData } from './lib/android-ua.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
@@ -384,14 +385,15 @@ const editorPxWrites = () => hostedProxy.requests.filter((r) => r.role === 'edit
 let browserA = null, browserB = null, editor = null, chk = null;
 const LAUNCH_ARGS = ['--no-first-run', '--hide-scrollbars', '--autoplay-policy=no-user-gesture-required', '--site-per-process', '--window-position=-32000,-32000'];
 
-async function openMember(browser, { projectId, name, username, password, deviceId, userAgent = null, viewport = null, before = null, single = false, query = '' }) {
+async function openMember(browser, { projectId, name, username, password, deviceId, userAgent = null, viewport = null, before = null, single = false, query = '', android = false }) {
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();
   if (before) await before(page);
   page.on('dialog', (d) => void d.accept());
   page.errors = [];
   page.on('pageerror', (e) => page.errors.push(String(e?.message ?? e).slice(0, 240)));
-  if (userAgent) await page.setUserAgent(userAgent);
+  if (android) await androidUaData(page, userAgent ?? undefined);
+  else if (userAgent) await page.setUserAgent(userAgent);
   await page.setViewport(viewport ?? { width: 1600, height: 900, deviceScaleFactor: 1.25 });
   await plantResume(page, await resumeRecord({ base: HOSTED, derivationBase: `${DOC_DIRECT}/`, projectId, name, username, password, deviceId }));
   await page.goto(`${EDITOR}${query}`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
@@ -1634,6 +1636,9 @@ async function sceneMobile(M) {
       userAgent: MOBILE_UA,
       viewport: MOBILE_VIEWPORT,
       single: true,
+      android: true,
+      // 身份是手机,缺省进手机版界面;这一场看的是流,用桌面界面(`?layout=` 只给验收用)
+      query: '?layout=desktop',
       before: async (page) => {
         await page.evaluateOnNewDocument(() => {
           try {

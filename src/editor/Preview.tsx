@@ -1294,7 +1294,7 @@ export function Preview(props: { variant?: "mobile" } = {}) {
    *     子树藏着、不活渲,贴轨道流(最低一档贴每个分段的第一帧那一张,`snapshotFeed` 给流平面带 `first`),
    *     没有流就由舞台显示占位符;停下后舞台逐层追一帧精确活渲(`settleLayersAt`),画好的层不再按抑制藏。
    */
-  const syncPlanes = useCallback((s: StageRpcClient, head: { project: ReturnType<typeof getState>["project"]; t: number; playing: boolean; single: boolean; lowest: boolean }) => {
+  const syncPlanes = useCallback((s: StageRpcClient, head: { project: ReturnType<typeof getState>["project"]; t: number; playing: boolean; single: boolean; sparseOnly: boolean }) => {
     const planes = streamPlanesAt(head);
     /*
      * 在线页面:流的清单与字节随流平面发给舞台(见握手那里的 `StreamPlaneSender`)。有流平面时把在线来源的 `streamRev` 也算进比较键 ——
@@ -1319,7 +1319,7 @@ export function Preview(props: { variant?: "mobile" } = {}) {
     if (!liveRef.current || costSearchMeasuring()) return;
     const s = frontStage();
     if (!s) return;
-    const head = { project: getState().project, t: at?.t ?? tRef.current, playing: at?.playing ?? playingRef.current, single: singleRef.current, lowest: lowestRef.current };
+    const head = { project: getState().project, t: at?.t ?? tRef.current, playing: at?.playing ?? playingRef.current, single: singleRef.current, sparseOnly: singleRef.current };
     if (head.playing) clearSettled("front", "playing");
     /*
      * 暂停态第二路(后台整场景补跑后互换)正在跑:这一次不动抑制和流平面。互换那一步新的可见舞台已经是精确活渲,
@@ -1362,8 +1362,8 @@ export function Preview(props: { variant?: "mobile" } = {}) {
   useEffect(() => {
     if (!online) return;
     /*
-     * C10 契约第 4、5 节:取预渲染原尺寸(`snap/<hash>`,按层表 v 2 与清单)进页面内快照库 L2;最低一档按 `small` 开
-     * (轨道流只贴稀疏版、流字节在内存里留得少,`snapshotSource.ts` 文件头第 7 条)。
+     * C10 契约第 4、5 节:取预渲染原尺寸(`snap/<hash>`,按层表 v 2 与清单)进页面内快照库 L2;只有一个舞台(精简模式、最低一档)
+     * 按 `small` 开(轨道流只贴稀疏版、流字节在内存里留得少,`snapshotSource.ts` 文件头第 7 条;`mechanism/platforms.md`「三道闸门」)。
      */
     const src = new OnlineSnapshotSource({
       request: docRequest, assetBase: remoteAssetBase, authHeaders: assetAuthHeaders,
@@ -1372,7 +1372,7 @@ export function Preview(props: { variant?: "mobile" } = {}) {
        * 时间轴据此判「预渲染结果覆盖整段没有」(徽标)。
        */
       coverageLayer: (clipId) => localOnlyOf(getState().project).has(clipId),
-    }, { tier: lowestRef.current ? "small" : "original", store: pageL2() });
+    }, { tier: singleRef.current ? "small" : "original", store: pageL2() });
     onlineSourceRef.current = src;
     setActiveOnlineSource(src);
     setCoverageSource(src);
@@ -1401,7 +1401,7 @@ export function Preview(props: { variant?: "mobile" } = {}) {
       setCoverageSource(null);
       stopSnapshotFeed();
     };
-  }, [online, lowest]);
+  }, [online, single]);
   /*
    * stale-layer:项目每变一次(本页改的、别的成员改了同步过来的)都把它交给在线来源。来源按它算各片段的输入签名,
    * 与层表里每层记的 `inputSig` 比对:对不上的旧参数层马上撤掉(就绪区间发空,下一次投递就不再贴,用户卡、素材效果卡显示沙漏,
@@ -1411,7 +1411,7 @@ export function Preview(props: { variant?: "mobile" } = {}) {
   useEffect(() => {
     if (!online) return;
     onlineSourceRef.current?.setInputs(project);
-  }, [online, lowest, project]);
+  }, [online, single, project]);
   /*
    * C10 契约第 9 节「识别」:在线页面经同一条文档服务连接读本项目内容库的卡片源码(`card-source`,键前缀 `src/cards/user/`),
    * 解析出卡片的 id 与名字,进注册表作「已知但本机不能运行」的条目(`sync/onlineCardSources.ts`)。定时重取;连接换了
@@ -1986,7 +1986,7 @@ export function Preview(props: { variant?: "mobile" } = {}) {
       probeRun: probeRunDiag(),
       measureGate: measureGateDiag(),
       hostCaps: { ...hostCapsRef.current },
-      snapshotFeed: snapshotFeedDebug({ project: getState().project, t: tRef.current, playing: playingRef.current, single: singleRef.current, lowest: lowestRef.current }),
+      snapshotFeed: snapshotFeedDebug({ project: getState().project, t: tRef.current, playing: playingRef.current, single: singleRef.current, sparseOnly: singleRef.current }),
     });
     return () => { delete w.__pcPreviewDiag; };
   }, [live]);
@@ -2205,7 +2205,7 @@ export function Preview(props: { variant?: "mobile" } = {}) {
       await syncProject("front", getState().project);
       if (liveRef.current) {
         clearSettled("front", `setTime ${sec}`);
-        syncPlanes(s, { project: getState().project, t: sec, playing: false, single: singleRef.current, lowest: lowestRef.current });
+        syncPlanes(s, { project: getState().project, t: sec, playing: false, single: singleRef.current, sparseOnly: singleRef.current });
       }
       // 只有一个舞台时停下追一帧另走 `settleLayers`(下面),舞台的 K5 第一路不起
       const { settle: _settle, ...stageOpts } = opts;

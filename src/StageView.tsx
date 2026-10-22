@@ -2250,13 +2250,13 @@ export default function StageView() {
          * 这一次**新**点名的卡,挂着流平面而流还没画出第一帧:先不藏它原来的画面(`streamWaiting`),等流画出来再藏
          * (起播、跳转、拖动起步都走这里;父页先发流平面、再发抑制)。已经藏着的、流已经有画面的(暂停着先解好了)照常当场藏。
          * 没有流平面的卡(没有流、超出解码器预算、等后台补跑互换的轻卡)不等。
-         * **最低一档不等**:这一档播放、拖动时一律不活渲(这台设备跑不动;等的那几拍里活组件照跑,每拍都要算它,
-         * 流的解码输出反而排在后面出不来)。流的第一张没到之前这一层先空着(占位符过 120 毫秒才显示)。
-         * 是不是最低一档看父页下发的取档策略(`smallOnly` 只在最低一档为真)。
+         * **只有一个舞台时不等**(精简模式与最低一档:舞台闸门没到双舞台的设备,和「只贴稀疏版」同一批,原低内存档那一批):
+         * 重卡播放、拖动时一律不活渲(这台设备跑不动;等的那几拍里活组件照跑,每拍都要算它,流的解码输出反而排在后面出不来)。
+         * 流的第一张没到之前这一层先空着(占位符过 120 毫秒才显示)。看舞台能力表的 `compact`(只有一个舞台),最低一档另看取档策略的 `smallOnly`。
          */
         {
           const showing = ref.current.streamPlanes.length ? player.showingClips() : NO_CLIPS;
-          const lowestHere = ONLINE && mediaTierPolicy().smallOnly;
+          const lowestHere = ONLINE && (caps.compact || mediaTierPolicy().smallOnly);
           const waiting = new Map<string, number>();
           const now = realNow();
           for (const id of ref.current.parentSuppressed) {
