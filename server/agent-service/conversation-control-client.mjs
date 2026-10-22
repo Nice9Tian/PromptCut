@@ -34,7 +34,7 @@ export const HANDOVER_RETRY_MS = 2000;
  * 操作系统的文件锁。锁号存在同一份文件里，第一次建时生成、以后不变：文档服务据它核「两个实例握的是同一把锁」。
  * 拿不到（另一个活着的进程握着）就抛 `read-control-owner-busy`，调用方隔一会儿再试：活着的那个不会被顶替。
  */
-function acquireDataDirLock(file) {
+export function acquireDataDirLock(file) {
   fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
   const db = new DatabaseSync(file);
   try {
