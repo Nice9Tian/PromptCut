@@ -249,21 +249,24 @@
 .ps-chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 
 /*
- * 行动点那一颗(传素材):用强调色描边加一层淡底,把人往这儿引。
- * 不做成实心强调色 —— 右边的发送键已经是实心的了,两个实心在同一条里会互相抢。
+ * 行动点那一颗(传素材):实心强调色,比旁边的画幅 chip 重一档(用户 2026-10-23 定)。
+ * 边框留着但透明,这样和旁边几颗的盒子尺寸算法一致,只靠内边距和字重拉开分量。
  */
 .ps-chip.is-cta {
-  font-weight: 600;
-  color: var(--accent);
-  border-color: color-mix(in oklab, var(--accent) 55%, transparent);
-  background: color-mix(in oklab, var(--accent) 12%, transparent);
+  padding: 6px 13px;
+  font-weight: 650;
+  color: var(--on-accent);
+  border-color: transparent;
+  background: var(--accent);
+  box-shadow: 0 1px 8px color-mix(in oklab, var(--accent) 35%, transparent);
 }
 .ps-chip.is-cta:hover {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: color-mix(in oklab, var(--accent) 20%, transparent);
+  color: var(--on-accent);
+  border-color: transparent;
+  background: var(--accent);
+  filter: brightness(1.08);
 }
-.ps-chip-plus { font-size: 14px; line-height: 1; }
+.ps-chip-plus { font-size: 15px; line-height: 1; }
 .ps-prompt-send {
   margin-left: auto;
   flex: 0 0 auto;
