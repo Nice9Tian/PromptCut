@@ -34,13 +34,13 @@ export const DEVICES = {
   },
 };
 
-export async function startMobileEnv({ dist, basePort, base2Port, docPort, assetPort, name }) {
+export async function startMobileEnv({ dist, basePort, base2Port, docPort, assetPort, name, log = () => {} }) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-probe-hosted-'));
   const origin = proxyOrigins(basePort).editor;
   const docDirect = `http://127.0.0.1:${docPort}`;
   const combo = await startHostedCombo({
     dataDir, docPort, assetPort, host: '127.0.0.1',
-    docPublicUrl: `ws://pc.localhost:${basePort}/hosted/`, assetPublicUrl: `${origin}/media/api/asset`, log: () => {},
+    docPublicUrl: `ws://pc.localhost:${basePort}/hosted/`, assetPublicUrl: `${origin}/media/api/asset`, log,
   });
   const proxy = await startHostedProxy({ dist, basePort, docPort, assetPort, policy: 'full' });
   /** 第二套同形代理(另一名成员走它;只断第一套时第二套照常在线) */
@@ -109,7 +109,7 @@ export async function startMobileEnv({ dist, basePort, base2Port, docPort, asset
     try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { /* Windows 上还有句柄:留给系统清 */ }
   }
 
-  return { origin, origin2, proxy, proxy2, made, docDirect, seed, newPage, enter, close, creator };
+  return { origin, origin2, proxy, proxy2, made, docDirect, seed, newPage, enter, close, creator, combo };
 }
 
 /** 一份空项目(尺寸、时长同「新建项目」的缺省),两条序列、两条剪辑 */
