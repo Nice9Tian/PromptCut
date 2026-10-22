@@ -998,10 +998,15 @@ export function Preview(props: { variant?: "mobile" } = {}) {
     setPlanForcedHeavy(crashedCards());
     return () => { setProbeMeasureHooks(null); setPlanForcedHeavy([]); };
   }, [tierNow.online]);
+  /*
+   * 舞台按这一级挂好了(后面舞台闸门的驱动走完)。护栏内、崩过、安卓不到 8 GB 的(`fixed`)一打开 `gate` 就是 `done`,可舞台还没挂好:
+   * 基准卡要等它,不然在后台舞台还没起来时测、测不出来(语义「即时渲染闸门」:舞台闸门走完之后先测基准卡)。
+   */
+  const [gateDriven, setGateDriven] = useState(false);
   const benchmarkRunRef = useRef(false);
   const [benchmarkInfo, setBenchmarkInfo] = useState<BenchmarkOutcome | null>(null);
   useEffect(() => {
-    if (!ONLINE || benchmarkRunRef.current || !stageReady || tierNow.gate !== "done") return;
+    if (!ONLINE || benchmarkRunRef.current || !stageReady || tierNow.gate !== "done" || !gateDriven) return;
     benchmarkRunRef.current = true;
     if (tierNow.lowest) { setBenchmark("skipped"); return; }
     const borrow = !dualRef.current;
@@ -1023,7 +1028,7 @@ export function Preview(props: { variant?: "mobile" } = {}) {
       if (out.verdict === "slow") stageGate()?.benchmarkSlow();
       setBenchmark(out.verdict === "slow" ? "slow" : out.verdict === "ok" ? "ok" : "skipped");
     })();
-  }, [stageReady, tierNow.gate, tierNow.lowest]);
+  }, [stageReady, tierNow.gate, tierNow.lowest, gateDriven]);
 
   /*
    * 舞台闸门(语义 `product/platforms.md`「在线浏览器」;做法 `mechanism/platforms.md`「舞台闸门的步骤」第 2～5 条):
@@ -1080,6 +1085,8 @@ export function Preview(props: { variant?: "mobile" } = {}) {
       } catch (e) {
         setGateDiag(String((e as Error)?.message ?? e).slice(0, 200));
         stageGate()?.done();
+      } finally {
+        setGateDriven(true);
       }
     })();
   }, [stageReady]);

@@ -100,12 +100,23 @@ async function newPage(device = 'desktop', { memory } = {}) {
   } else {
     page = await env.newPage(browser, device);
   }
+  // 气泡只显示几秒:从文档一开始就记下它出现过的文字(进项目、等闸门走完这段时间里它可能已经出过又撤了)
+  await page.evaluateOnNewDocument(() => {
+    if (window.top !== window) return;
+    window.__sgBubbles = [];
+    const seen = () => { const t = document.querySelector('[data-pc="tier-bubble"]')?.textContent; if (t && window.__sgBubbles.at(-1) !== t) window.__sgBubbles.push(t); };
+    new MutationObserver(seen).observe(document, { childList: true, subtree: true, characterData: true });
+  });
   if (memory !== undefined) await page.evaluateOnNewDocument((m) => { try { Object.defineProperty(Navigator.prototype, 'deviceMemory', { get: () => m, configurable: true }); } catch { /* 改不了 */ } }, memory);
   return page;
 }
 const gates = (page) => page.evaluate(() => (typeof window.__pcGates === 'function' ? window.__pcGates() : null)).catch(() => null);
-const waitDone = (page, ms = 90_000) => until(async () => { const g = await gates(page); return g?.tier?.online && g.tier.gate === 'done' && g.step?.kind === 'running' ? g : null; }, ms);
-const bubbleText = (page, ms = 30_000) => until(() => page.$eval('[data-pc="tier-bubble"]', (el) => el.textContent).catch(() => null), ms, 100);
+const waitDone = async (page, ms = 90_000) => {
+  const g = await until(async () => { const x = await gates(page); return x?.tier?.online && x.tier.gate === 'done' && x.step?.kind === 'running' ? x : null; }, ms);
+  if (!g) say('等闸门走完超时', { url: page.url(), gates: await gates(page) });
+  return g;
+};
+const bubbleText = (page, ms = 30_000) => until(() => page.evaluate(() => document.querySelector('[data-pc="tier-bubble"]')?.textContent ?? window.__sgBubbles?.at(-1) ?? null).catch(() => null), ms, 100);
 async function enter(page, query = '') {
   await env.enter(page, { layout: 'desktop' });
   if (query) await page.goto(`${env.origin}/editor?layout=desktop&${query}`, { waitUntil: 'domcontentloaded', timeout: 120_000 });

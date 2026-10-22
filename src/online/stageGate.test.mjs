@@ -19,6 +19,7 @@
  *   SG-14 强制档位(开发与验收用):照它停,不改设备记录
  *   SG-15 记录读不懂、存不下都不抛:当没有记录;只在这一次有效
  *   SG-16 测量与素材的留记录:测完回到原来那一步;测量期间不被素材盖掉
+ *   SG-17 测的时候闸门走完了:测完回「第几级运行中」(护栏内、崩过的那一次,基准卡和舞台挂好抢先后)
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -313,5 +314,20 @@ test("SG-16 测量与素材留记录:测完回到原来那一步;测量期间不
     const again = await open({ local: s.local, session: s.session, now: 3_000 });
     assert.ok(again.g.heavyCards().has("card-boom"));
     again.g.dispose();
+  } finally { s.g.dispose(); }
+});
+
+test("SG-17 测量开始时还在舞台闸门的某一步、测的这段时间里闸门走完了:测完回「第几级运行中」,不回那一步", async () => {
+  const s = await open();
+  try {
+    s.g.stage("visible-ready");
+    s.g.measureStart("@benchmark", "punch-pill");
+    s.g.reached(1);
+    s.g.done();
+    s.g.measureEnd();
+    assert.equal(s.log().tabs[s.g.tab].step.kind, "running", "回的是运行中,不是过时的「可见舞台就绪」");
+    s.g.mediaStart(2);
+    s.g.mediaEnd();
+    assert.equal(s.log().tabs[s.g.tab].step.kind, "running");
   } finally { s.g.dispose(); }
 });

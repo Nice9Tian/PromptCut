@@ -348,7 +348,8 @@ export async function beginStageGate(deps: GateDeps): Promise<StageGateSession> 
       setStep(runningStep());
     },
     measureStart(key, cardId) { beforeMeasure = step?.kind === "measure" ? beforeMeasure : step; setStep({ kind: "measure", key, cardId }); },
-    measureEnd() { const back = beforeMeasure ?? runningStep(); beforeMeasure = null; setStep(back.kind === "measure" ? runningStep() : back); },
+    // 回到测之前那一步;闸门在测的这段时间里走完了(那一步是舞台闸门的某一步,已经过时),回「第几级运行中」
+    measureEnd() { const back = beforeMeasure ?? runningStep(); beforeMeasure = null; setStep(back.kind === "measure" || (back.kind === "stage" && doneLevel !== null) ? runningStep() : back); },
     benchmarkSlow() {
       if (benchmarkSlow) return;
       benchmarkSlow = true;
@@ -356,7 +357,7 @@ export async function beginStageGate(deps: GateDeps): Promise<StageGateSession> 
       if (doneLevel !== null && step?.kind === "running") setStep(runningStep());
     },
     mediaStart(capLevel) { if (step?.kind === "measure") return; beforeMedia = step?.kind === "media" ? beforeMedia : step; setStep({ kind: "media", capLevel }); },
-    mediaEnd() { if (step?.kind !== "media") return; const back = beforeMedia ?? runningStep(); beforeMedia = null; setStep(back); },
+    mediaEnd() { if (step?.kind !== "media") return; const back = beforeMedia ?? runningStep(); beforeMedia = null; setStep(back.kind === "stage" && doneLevel !== null ? runningStep() : back); },
     heavyCards: () => new Set(readCrashLog(local, deps.version).device.heavyCards),
     mediaLowered: () => readCrashLog(local, deps.version).device.media.lowered,
     snapshot() {
