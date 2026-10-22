@@ -12,8 +12,10 @@
  *   U1 打开 `/editor/`，等 `#root` 渲染后再等约 2 秒：页面无 `[data-pc="update-notice"]`，且 `version.json` 请求数为 0（启动时不取）；
  *   U2 服务端版本不变时切到后台再切回前台：`version.json` 请求数加 1（限时 15 秒），再等约 1 秒仍无提示条；
  *   U3 把服务端内存里的版本改为新值，再切后台再切回前台：`version.json` 再次被请求，出现 `[data-pc="update-notice"]`（限时 15 秒），含文字「有新版本，刷新后使用。」与 `[data-pc="update-notice-refresh"]` 按钮；
+ *   U3b 把服务端版本改回本页的版本再切一次：提示条撤下（限时 15 秒）；再改回新值切一次，提示条重新出现（供 U4 用）；
  *   U4 在页面设置 `window.__updateProbeMark = 1` 后点击「刷新」：页面重新载入（`waitForNavigation`），标记消失且 `index.html` 请求数增加；
  *   U5 分别打开 `/editor/?stage=1`、`/editor/stage.html`、`/editor/?export=1`、`/editor/?audioMix=1`，载入后切后台再切回前台并等约 2 秒：`version.json` 请求数不变且均无提示条。
+ *   U6 手机宽度（390×844、触屏、`?layout=mobile` 的开始页）服务端是新版本时切一次：提示条出现，文字只占一行，整条在视口里、左右各留出至少 16px。
  *
  * 输出：过程写 stderr；stdout 最后一行输出单行 JSON `{ ok, fails, checks, visibility, ... }`；全过退出码 0，否则 1。
  */
@@ -357,6 +359,26 @@ try {
     out.steps.u3,
   );
 
+  /* ---------------------------------------------------------------- U3b: 服务端退回本页的版本，提示撤下；再换新版本又挂上 */
+  currentVersion = V;
+  await cycleVisibility(page, ctx);
+  const u3bGone = await until(
+    'U3b 服务端退回本页版本后提示条撤下',
+    () => page.evaluate(() => !document.querySelector('[data-pc="update-notice"]')),
+    15_000,
+    100,
+  );
+  currentVersion = nextVersion;
+  await cycleVisibility(page, ctx);
+  const u3bBack = await until(
+    'U3b 再换新版本后提示条重新出现',
+    () => page.evaluate(() => !!document.querySelector('[data-pc="update-notice"]')),
+    15_000,
+    100,
+  );
+  out.steps.u3b = { gone: !!u3bGone, back: !!u3bBack, versionJsonRequests: reqCounts.versionJson };
+  check(!!u3bGone && !!u3bBack, 'U3b 服务端退回本页版本时提示条撤下，再换新版本又出现', out.steps.u3b);
+
   /* ---------------------------------------------------------------- U4: 点「刷新」重新载入页面 */
   await page.evaluate(() => { window.__updateProbeMark = 1; });
   const idxBeforeU4 = reqCounts.indexHtml;
@@ -416,6 +438,37 @@ try {
     'U5 舞台页与导出/混音页（?stage=1、stage.html、?export=1、?audioMix=1）切后台再切回前台：不请求 version.json 且无提示条',
     u5Results,
   );
+
+  /* ---------------------------------------------------------------- U6: 手机宽度上一行放得下 */
+  {
+    const phoneCtx = await browser.createBrowserContext();
+    const phone = attachPageLogs(await phoneCtx.newPage());
+    try {
+      await phone.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
+      await phone.goto(`${out.site}/editor/?layout=mobile`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      await until('U6 #root 渲染出内容', () => phone.evaluate(() => (document.getElementById('root')?.children.length ?? 0) > 0), 30_000, 100);
+      await cycleVisibility(phone, phoneCtx);
+      const bar = await until(
+        'U6 手机宽度出现提示条',
+        () => phone.evaluate(() => {
+          const el = document.querySelector('[data-pc="update-notice"]');
+          const text = el?.querySelector('.pc-update-notice-text');
+          if (!el || !text) return null;
+          const r = el.getBoundingClientRect();
+          return { textHeight: Math.round(text.getBoundingClientRect().height), left: Math.round(r.left), right: Math.round(r.right), width: Math.round(r.width), vw: innerWidth };
+        }),
+        15_000,
+        100,
+      );
+      out.steps.u6 = { bar, pageErrors: phone.pageErrors };
+      // 一行：12.5px、行高 1.4 时约 18px，两行就是 35px 上下（文字是弹性盒的子项，getClientRects 只回一个框，只能看高度）
+      check(!!bar && bar.textHeight < 26 && bar.left >= 16 && bar.right <= bar.vw - 16,
+        'U6 手机宽度（390）：提示条文字只占一行，左右各留出至少 16px', out.steps.u6);
+    } finally {
+      await phone.close().catch(() => {});
+      await phoneCtx.close().catch(() => {});
+    }
+  }
 } catch (e) {
   fails.push(`探针异常:${String(e?.stack ?? e).slice(0, 1200)}`);
 } finally {
