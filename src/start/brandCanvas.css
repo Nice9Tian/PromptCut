@@ -22,3 +22,16 @@
   position: absolute;
   z-index: 0;
 }
+
+/*
+ * 画布透出来的应该是**整页**的底色。
+ *
+ * `start.css` 给 `.ps-login-art` 铺的是 `--bg-panel`(#23222A,比整页底色 `--bg-canvas` #111016
+ * 浅一档、偏紫),所以 alpha 透出来的地方和右半边对不上,看着像「混了提亮的浅紫」
+ * (用户 2026-10-23 指出,实测左块 rgb(35,34,42)、整页 rgb(17,16,22))。这里按回整页的底色。
+ *
+ * 选择器多带一个元素名,特异性压过 `start.css` 里那条 —— 那个文件归另一个会话,不去动它。
+ */
+.ps-login > section.ps-login-art {
+  background: var(--bg-canvas);
+}
