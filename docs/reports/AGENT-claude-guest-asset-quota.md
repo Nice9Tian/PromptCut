@@ -105,7 +105,7 @@ $ npx tsc -b --force
 TSC_EXIT=0
 ```
 
-全量测试：见下节「全量测试结果」。
+全量测试：**在本分支上不全绿**，原因是越界的一处文件清单，见下节「全量测试结果」。
 
 渲染附加项（导出确定性、快照重放、看图）：不适用。这次只改素材服务的写入放行，不出画面。
 
@@ -126,4 +126,65 @@ TSC_EXIT=0
 
 ## 全量测试结果
 
-（跑完补）
+两个环境变量按任务书设（Windows 路径形式），用 `npm test`。
+
+### 第 1 次（本分支原样）：23 项失败，全是同一个原因
+
+```
+ℹ tests 7695
+ℹ pass 7656
+ℹ fail 23
+✖ npm test 最终结果：仍有失败
+```
+
+失败里出现 25 次 `{"event":"asset.config-error","code":"ERR_MODULE_NOT_FOUND"}`（`asset-wiring-integration`、`move-guard`、`account-*`、`accept-018-*` 等起独立素材进程的测试）。
+原因：独立素材进程是按 `server/hosted/files.mjs` 的 `HOSTED_ASSET_DEPLOY_FILES` **逐个文件**拷进暂存目录再起的（`asset-entry-stage.test.mjs` 守着这个闭包），
+我新加的 `server/asset-store/guest-quota.mjs` 和它引的 `server/account/guest.mjs` 不在清单里。
+
+**`server/hosted/files.mjs` 不在我能改的清单里**（只允许 `server/hosted/asset-*.mjs`），按规矩停在这里，没有提交这处改动。要补的是两行：
+
+```diff
+   'server/account/client.mjs',
++  'server/account/guest.mjs',
+   'server/account/ledger.mjs',
+ ...
+   'server/asset-store/fs-store.mjs',
++  'server/asset-store/guest-quota.mjs',
+   'server/asset-store/index.mjs',
+```
+
+（补丁另存在会话草稿目录 `files-mjs.patch`，内容就是上面这两行。）
+
+### 第 2 次（临时打上这两行再跑，跑完已 `git checkout` 还原，没提交）
+
+```
+ℹ tests 7736
+ℹ pass 7718
+ℹ fail 1        （另 2 项 cancelled，同属下面的超时）
+✖ npm test 最终结果：仍有失败
+```
+
+`ERR_MODULE_NOT_FOUND` 出现 0 次。剩下 3 处：
+
+- `agent-live-selection.test.mjs`：`test timed out after 30000ms`
+- `asset-project-workers.test.mjs`：真 ffmpeg 转码，`test timed out after 20000ms`
+- `cloud-tools-p3-track.test.mjs`：`TRACK_FAILED`「读不出视频分辨率」
+
+都是全量并发下的超时 / ffmpeg 探测，和素材上传放行无关。单独重跑（仍打着那两行，用 `npm test -- <文件>`，带上起独立素材进程的两项和新测试）：
+
+```
+$ npm test -- server/test/agent-live-selection.test.mjs server/test/asset-project-workers.test.mjs server/test/cloud-tools-p3-track.test.mjs server/test/asset-entry-stage.test.mjs server/test/asset-wiring-integration.test.mjs server/test/guest-asset-quota.test.mjs
+ℹ tests 40
+ℹ pass 40
+ℹ fail 0
+✓ npm test 最终结果：零失败
+```
+
+结论：打上 `files.mjs` 那两行后基线可以全绿（3 处是偶发，单独重跑全过）；不打，本分支的全量测试是红的。
+任务书点名的偶发文件 `multi-agent-presence.test.mjs`、`user-editing.test.mjs` 两次都没红。
+
+## 待主 Agent 决定
+
+1. 在 `server/hosted/files.mjs` 补上面两行（或授权我补）。不补不能合。
+2. 「3 条素材」按块数还是按素材数（上节第 1 条），建议 (a)。
+3. 游客扔下的暂存占名额（上节第 3 条）要不要加暂存过期。
