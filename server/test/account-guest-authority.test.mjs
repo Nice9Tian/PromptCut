@@ -134,3 +134,36 @@ test('游客被踢之后进不去，和账号一样', async t => {
   assert.deepEqual(await code(authority.joinProject({ accessToken: g.token }, { projectId: owned.projectId, requestId: 'join-2' })),
     { status: 403, code: 'banned' });
 });
+
+test('三天清理：游客建的项目到点标成已删除，账号建的一个都不碰', async t => {
+  const { authority, ledger, create } = await open(t);
+  const g = guest(), g2 = guest();
+  const mine = await create(g.token);
+  const fresh = await create(g2.token);
+  const owned = await create(A);
+  // 把一个游客项目的生日拨到三天零一秒之前
+  const born = Date.now() - GUEST_LIMITS.ttlMs - 1000;
+  ledger.transaction(state => { state.projects[mine.projectId].createdAt = born; });
+
+  const swept = authority.sweepExpiredGuestProjects();
+  assert.deepEqual(swept, [mine.projectId], '只该清到点的那一个');
+  const after = ledger.read().projects;
+  assert.equal(after[mine.projectId].status, 'deleted');
+  assert.ok(after[mine.projectId].tombstone, '该落墓碑，和创建者自己点删项目走同一条路');
+  assert.equal(after[fresh.projectId].status, 'active', '没到点的游客项目不动');
+  assert.equal(after[owned.projectId].status, 'active', '账号建的一个都不碰');
+  // 清掉之后那个游客进不去了,也不再占他的名额
+  assert.equal((await code(authority.authorizePrincipal({ accessToken: g.token }, { projectId: mine.projectId, action: 'read' })))?.status, 404);
+  assert.ok((await create(g.token)).projectId, '清掉的不占名额，可以再建一个');
+  // 再扫一趟没有新的可清:不重复落事件
+  assert.deepEqual(authority.sweepExpiredGuestProjects(), []);
+});
+
+test('三天清理：这条规矩之前建的老项目没有生日，一律不动', async t => {
+  const { authority, ledger, create } = await open(t);
+  const g = guest();
+  const mine = await create(g.token);
+  ledger.transaction(state => { delete state.projects[mine.projectId].createdAt; });
+  assert.deepEqual(authority.sweepExpiredGuestProjects(Date.now() + GUEST_LIMITS.ttlMs * 10), [], '生日不详就不猜，不误删');
+  assert.equal(ledger.read().projects[mine.projectId].status, 'active');
+});

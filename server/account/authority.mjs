@@ -4,7 +4,7 @@ import { validateAccountEvent, validateEventBatch, requireRequestId } from './pr
 import { accountError } from './client.mjs';
 import { canonicalJson, digestOf, appendAccessEvent } from './ledger.mjs';
 import { rollbackEventOf } from './logout-rollback.mjs';
-import { guestPrincipal, guestProjectLimitReached, isGuestId, looksLikeGuestToken, readGuestToken } from './guest.mjs';
+import { guestExpired, guestPrincipal, guestProjectLimitReached, isGuestId, looksLikeGuestToken, readGuestToken } from './guest.mjs';
 
 /**
  * 主体编号：账号是 `acc_` + 24 位十六进制，游客是 `gst_` + 24 位（`guest.mjs`）。两种在成员名单、禁入表、
@@ -410,7 +410,7 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
         do { projectId = newProjectId(); } while (state.projects[projectId]);
       }
       state.projects[projectId] = { v: 2, identityRealm: 'account', projectId, authorityId: ledger.authorityId,
-        name, status: 'pending', creatorAccountId: actor.accountId, allowLinkJoin: payload.allowLinkJoin,
+        name, status: 'pending', creatorAccountId: actor.accountId, allowLinkJoin: payload.allowLinkJoin, createdAt: now(),
         members: { [actor.accountId]: { access: 'rw', joinedAt: now(), accountNameAtJoin: actor.accountName } }, bans: {}, accessRevision: 0,
         // 托管方的两个服务（渲染节点、云端 Agent）缺省开（product/document-service.md、product/agent.md），创建者可以关；
         // 「生成轨道流」等子选项不在这里，没有记就是关（hostedOptions）
@@ -617,6 +617,40 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     notifyProjectChanged(body.projectId, body.op);
     return committed.result;
   }
+  /**
+   * 游客建的项目三天就清（2026-10-23 用户定，天数在 `guest.mjs` 的 `GUEST_LIMITS.ttlMs`）。
+   *
+   * 清的办法和创建者自己点「删项目」完全一样（上面 `adminProject` 的 `delete` 分支）：标成已删除、落墓碑、
+   * 记一条访问事件、按 `delete` 围栏停掉在跑的任务。走同一条路，下游（素材服务按项目清字节、连着的页面被断开）
+   * 不用为游客另认一种「项目没了」。账号建的项目一个都不碰。
+   *
+   * 由外面定时叫（`server/hosted/main.mjs`）；这里不自己起计时器，测试才好把时间拨过去。
+   * @returns {string[]} 这一趟清掉的项目号
+   */
+  function sweepExpiredGuestProjects(at = now()) {
+    // 没有 createdAt 的是这条规矩之前建的项目:那时还没有游客,一律当没到期(不猜生日、不误删)
+    const bornAt = p => (Number.isSafeInteger(p?.createdAt) ? p.createdAt : null);
+    const committed = ledger.transaction(state => {
+      const done = [];
+      for (const p of Object.values(state.projects)) {
+        if (p.status === 'deleted' || !isGuestId(p.creatorAccountId)) continue;
+        const born = bornAt(p);
+        if (born === null || !guestExpired(born, at)) continue;
+        const affected = Object.keys(p.members);
+        p.status = 'deleted'; delete p.joinRequests;
+        p.accessRevision = ++state.revision;
+        const event = appendAccessEvent(state, { type: 'project-access-changed', reason: 'delete', projectId: p.projectId,
+          accountIds: affected, accessRevision: p.accessRevision, createdAt: at });
+        const control = fenceRuns(state, { requestId: `access:${event.eventId}`, projectId: p.projectId, accessSeq: event.seq, kind: 'delete' });
+        p.tombstone = { revision: p.accessRevision, deletedAt: at };
+        done.push({ projectId: p.projectId, event, control });
+      }
+      return done;
+    });
+    for (const { projectId, event, control } of committed) { notify(event, control); notifyProjectChanged(projectId, 'delete'); }
+    return committed.map(c => c.projectId);
+  }
+
   /**
    * 申请加入,申请人这一侧(公开路由 `/hosted/shared/account/join` 带 `joinRequest` 字段,不另开路由:桌面外壳的账号桥只放行
    * create / join / session / admin / members 五条,`desktop/src-tauri/src/account_vault.rs`)。
@@ -875,6 +909,7 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     return agentReadClosureComplete(state, eventId, state.accessAcks[`ack:${eventId}:agent`]);
   }
   return { authorityId: ledger.authorityId, synchronize, applyRevocation, applyRevocationNotification, authorizePrincipal, checkAccess,
+    sweepExpiredGuestProjects,
     createProject, joinProject, joinRequest, decideJoinRequest, entryState, adminProject, listProjects, status, statusForPrincipal, legacyGoneStatus, eventsSince, ackAccessEvent, hasAgentReadClosure, revocationStatus, completeLogoutBarrier, recordLogoutTimeout, flushAccountAcknowledgements,
     subscribeProjectChanges(callback) {
       if (typeof callback !== 'function') reject(400, 'invalid-subscription');
