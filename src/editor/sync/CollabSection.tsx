@@ -25,7 +25,8 @@ import { CreatorFlow, type Flow } from "./MembersPanel";
 import { HostedServiceRows } from "./HostedServiceRows";
 import { useSync, moveSharedToHosted, moveSharedToLan, pushToast, regenAccountProjectLink, setAccountSecondaryPassword } from "./syncManager";
 import { ACCOUNT_MOVE_TEXT, abandonFailureText, moveFailureText } from "./accountMove";
-import { abandonPendingMove, accountCloud, accountCloudLogin, accountCloudSignIn, moveCurrentToAccountCloud, pendingMove, targetsAccountCloud, type AccountCloud } from "./accountMoveFlow";
+import { abandonPendingMove, accountCloud, accountCloudLogin, accountCloudSignIn, accountShellTooOld, moveCurrentToAccountCloud, oldShellBlocksAccountMove, pendingMove, targetsAccountCloud, type AccountCloud } from "./accountMoveFlow";
+import { OLD_SHELL_ACCOUNT_TEXT } from "../../account/desktopVault";
 import { projectLink, type Account } from "../../account/client";
 import {
   createInvite, defaultCreatorName, disableCollab, enableCollab, fetchInviteStatus, generatePassword, localCollab,
@@ -102,6 +103,8 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
   // 账号办法的「搬到云端」：这台桌面版配置的账号云端（没有账号桥是 null）、登录的账号（undefined = 还在查）
   const [acct, setAcct] = useState<AccountCloud | null>(null);
   const [acctUser, setAcctUser] = useState<Account | null | undefined>(undefined);
+  /** 桌面外壳太老（0.2.8 以前打了补丁）没有账号桥：缺省云端的「搬到云端」说明要装完整安装包，不往下走 */
+  const [shellOld, setShellOld] = useState(false);
   /** 要先登录：登录成功后接着搬（`name` 是那一次要用的云端项目名） */
   const [loginFor, setLoginFor] = useState<{ name: string } | null>(null);
   const [loginName, setLoginName] = useState("");
@@ -151,10 +154,10 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
     setCloudName(""); setAskCloudName(false); setMovePw(""); setAskMovePw(false); setMoveLink(null); setAbandonAsk(false);
     // 账号云端与登录状态：打开设置时查一次（没有账号桥就没有这一套，「云端」照旧办法）
     let live = true;
-    setAcctUser(undefined);
+    setAcctUser(undefined); setShellOld(false);
     void accountCloud().then(async (c) => {
       if (!live) return;
-      setAcct(c);
+      setAcct(c); setShellOld(accountShellTooOld());
       if (!c) { setAcctUser(null); return; }
       try { const user = await accountCloudLogin(c); if (live) setAcctUser(user); }
       catch { if (live) setAcctUser(null); }
@@ -200,6 +203,7 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
             void startAccountMove(c!, projectName);
             return true;
           }
+          if (oldShellBlocksAccountMove(hostedUrl)) { setStatus({ text: OLD_SHELL_ACCOUNT_TEXT, tone: "info" }); return true; }
         }
         if (!creator.trim() || !creatorPw || (mode === "free" && !projectPw)) {
           setStatus({ text: "创建者用户名和密码不能为空。", tone: "err" });
@@ -373,6 +377,7 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
   const moveHosted = async () => {
     // 房间登记的云端就是账号云端：走账号办法（云端新建账号项目、搬完关本机协作）；别的节点照旧办法
     const c = acct ?? await accountCloud();
+    if (shared && oldShellBlocksAccountMove(association?.service)) { setStatus({ text: OLD_SHELL_ACCOUNT_TEXT, tone: "info" }); return; }
     if (shared && targetsAccountCloud(association?.service, c)) {
       if (!iAmCreator) { setStatus({ text: moveFailureText({ ok: false, error: "not-creator", stage: "check", localClosed: false, cloud: null }, "room"), tone: "err" }); return; }
       void startAccountMove(c!, (askCloudName ? cloudName.trim() : "") || shared.name);
@@ -461,7 +466,9 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
               </div>
             </div>
           )}
-          {accountTarget ? (
+          {where === "hosted" && shellOld && oldShellBlocksAccountMove(hostedUrl) ? (
+            <div className="pc-sync-warn" data-pc="collab-shell-old">{OLD_SHELL_ACCOUNT_TEXT}</div>
+          ) : accountTarget ? (
             <>
               <div className="pc-sync-hint" data-pc="collab-account-intro">{ACCOUNT_MOVE_TEXT.intro}</div>
               {accountRow}

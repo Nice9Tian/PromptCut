@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useAccountProjects } from './useAccountProjects';
+import { OLD_SHELL_ACCOUNT_TEXT } from './desktopVault';
 
 export function AccountProjects({ online, onEnterEditor }: { online: boolean; onEnterEditor: () => void }) {
   const ap = useAccountProjects({ online, onEnterEditor });
-  const { origin, account, busy, error, setError, link, setLink, lists, listError, perform } = ap;
+  const { origin, account, busy, error, setError, shellOld, link, setLink, lists, listError, perform } = ap;
   const [name, setName] = useState(''), [password, setPassword] = useState(''), [remember, setRemember] = useState(false);
   const [projectName, setProjectName] = useState('未命名');
   const [secondaryPassword, setSecondaryPassword] = useState('');
@@ -11,6 +12,7 @@ export function AccountProjects({ online, onEnterEditor }: { online: boolean; on
   return <section className="sp-section sp-account" data-pc="account-projects">
     <div className="sp-section-head"><h2 className="sp-section-title">云端项目</h2>
       <a className="sp-ghost-btn" href={`${origin}/account`} target="_blank" rel="noopener noreferrer">官网账号与项目列表</a></div>
+    {shellOld ? <p className="sp-muted" role="status" data-pc="account-shell-old">{OLD_SHELL_ACCOUNT_TEXT}</p> : <>
     {error && <div className="sp-error" role="alert" data-pc="account-error">{error}</div>}
     {!account ? <form className="sp-account-form" onSubmit={e => { e.preventDefault(); void perform(async () => {
       await ap.login(name, password, remember);
@@ -54,5 +56,6 @@ export function AccountProjects({ online, onEnterEditor }: { online: boolean; on
           <button className="sp-ghost-btn" onClick={() => { setLink(ap.projectLink(p.projectId)); }}>显示项目链接</button></div>)}</div>)}</div>}
     {listError && <p role="status">{listError}<button className="sp-ghost-btn" disabled={busy} onClick={() => void ap.refreshLists()}>重试列表</button></p>}
     {!online && <p className="sp-muted">本机项目照常使用本地身份。账号登录用于云端；恢复凭据由桌面版安全保存。</p>}
+    </>}
   </section>;
 }

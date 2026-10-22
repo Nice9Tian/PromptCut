@@ -8,7 +8,7 @@
  */
 import { ONLINE } from "../../online/mode";
 import { createAccountClient, projectLink, type Account, type CloudAccountClient } from "../../account/client";
-import { desktopAccountBridge } from "../../account/desktopVault";
+import { desktopAccountBridge, isDesktopShellTooOld } from "../../account/desktopVault";
 import { createEmptyProject, type Project } from "../../kernel/project";
 import { getState } from "../../store/project";
 import { hostedWsUrlOf } from "../../online/invite";
@@ -36,6 +36,8 @@ const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.V
 export interface AccountCloud { origin: string; client: CloudAccountClient }
 
 let cloud: Promise<AccountCloud | null> | null = null;
+/** 这台桌面版的外壳太老（0.2.8 以前打了补丁），没有账号桥：`accountCloud()` 问到时记下，设置里据此说明要装完整安装包 */
+let shellTooOld = false;
 
 /**
  * 这台桌面版配置的账号云端与账号客户端(整个页面一份)。没有账号桥(在线页面、没有桌面外壳的开发服务器)回 null ——
@@ -49,13 +51,29 @@ export function accountCloud(): Promise<AccountCloud | null> {
     if (!device) return null;
     let origin: string;
     try { origin = new URL((await desktopAccountBridge("configuration") as { origin: string }).origin).origin; }
-    catch { return null; }
+    catch (error) { shellTooOld = isDesktopShellTooOld(error); return null; }
+    shellTooOld = false;
     return { origin, client: createAccountClient({ online: false, origin, device: { deviceId: device.deviceId, deviceName: device.deviceName }, native: desktopAccountBridge }) };
   })().catch(() => null);
   cloud = task;
   // 没取到(设备信息还没好、没有账号桥)不记住:下次再问
   void task.then((value) => { if (!value && cloud === task) cloud = null; });
   return task;
+}
+
+/**
+ * 外壳太老、没有账号桥（`accountCloud()` 回 null 的原因之一，要先等它问过才有结果）。和「没有桌面外壳」不同：
+ * 后者（在线页面、开发服务器）本来就没有这一套，照旧办法走，不提示。
+ */
+export function accountShellTooOld(): boolean { return shellTooOld; }
+
+/**
+ * 外壳太老时，界面上填的云端地址（或房间登记的）指的是不是缺省的账号云端：是的话「搬到云端」不能照旧办法走
+ * （缺省云端只接受网站账号），要说明装完整安装包；用户自己填的别的节点仍是旧办法，不需要账号桥。
+ * 外壳太老就读不到账号云端的配置，所以拿内置的缺省托管地址当账号云端认。
+ */
+export function oldShellBlocksAccountMove(serviceUrl: string | null | undefined): boolean {
+  return shellTooOld && isAccountCloudTarget(serviceUrl, hosted.DEFAULT_HOSTED_URL, hosted.DEFAULT_HOSTED_URL);
 }
 
 /** 界面上填的云端地址(或房间登记用的那个)指的是不是账号云端 */
