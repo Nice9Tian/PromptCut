@@ -260,19 +260,25 @@
   gap: 18px;
 }
 
-/* 自己说的话靠右、带气泡;Agent 说的话靠左、不套气泡,只在前面放头像 ——
-   和编辑器右栏那套一致(src/editor/right/chat/MessageList.tsx) */
+/*
+ * 气泡配色照编辑器右栏那一套逐项对齐(`src/editor/right/chat/chat.css` 的 `.ai-message`):
+ * 自己说的话是**整块强调色**,Agent 说的话是**比消息区亮一档的面板色**,两边都套气泡;
+ * 圆角、内边距、字号、行高、最大宽度也一并对齐,免得同一个产品里两套聊天长得不一样。
+ *
+ * 原来这一页自己调了一套(18% 强调色加描边、Agent 侧干脆不套气泡),和软件里对不上(用户 2026-10-23 指出)。
+ * 自己那一侧靠右、不放头像,Agent 那一侧靠左、前面放头像 —— 这一条和编辑器一致,没变。
+ */
 .ps-msg { display: flex; gap: 10px; }
 .ps-msg.is-me { justify-content: flex-end; }
 .ps-bubble {
-  max-width: 78%;
-  padding: 9px 13px;
-  border-radius: 14px 14px 4px 14px;
-  background: color-mix(in oklab, var(--accent) 18%, var(--bg-panel));
-  border: 1px solid color-mix(in oklab, var(--accent) 32%, transparent);
-  color: var(--ink);
-  font-size: 14px;
-  line-height: 1.65;
+  max-width: 85%;
+  box-sizing: border-box;
+  padding: 10px;
+  border-radius: var(--ui-radius-lg, 8px);
+  background: var(--ui-accent, var(--accent));
+  color: var(--ui-accent-fg, var(--on-accent));
+  font-size: 13px;
+  line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -288,18 +294,32 @@
   background: var(--fill-subtle);
   color: var(--ui-agent, var(--accent));
 }
-.ps-msg-body { flex: 1 1 auto; min-width: 0; }
+/* Agent 气泡:和编辑器的 `.ai-message.assistant` 同一档 —— 比消息区底色亮一档的面板色 */
+.ps-msg-body {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 85%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: var(--ui-radius-lg, 8px);
+  background: var(--ui-panel, var(--bg-panel));
+  color: var(--ui-fg, var(--ink));
+  font-size: 13px;
+  line-height: 1.6;
+}
 .ps-msg-text {
   margin: 0;
-  font-size: 14px;
-  line-height: 1.75;
+  font-size: inherit;
+  line-height: inherit;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-/* 这一轮 Agent 做过的事 */
+/* 这一轮 Agent 做过的事。气泡里各块只靠 gap 隔开,自己不带上下外边距(和编辑器那一条同理) */
 .ps-actions {
-  margin-top: 10px;
   padding: 9px 12px;
   border: 1px solid var(--hairline);
   border-radius: 10px;
