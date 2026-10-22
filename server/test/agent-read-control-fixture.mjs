@@ -14,7 +14,7 @@ import { createRunClient } from '../agent-service/run-client.mjs';
 // Real TLS/exporter/RAM-instance and SQLite control fixture. The supplied account
 // authority/consent provider is explicitly owned by the calling test.
 export function agentReadControlFixture({ ledger, directory, docTls, agentTls, docPin, agentPin,
-  accountAuthority, resolveDelegation, checkConsent, verifySelectionSnapshot, port }) {
+  accountAuthority, resolveDelegation, checkConsent, verifySelectionSnapshot, port, unsupportedRoute = () => false }) {
   const sockets = new WeakMap(), subjects = new Map(), serverSockets = new Set();
   const resolveServicePrincipal = ({ socket }) => {
     if (!socket.authorized || certificateFingerprint(socket.getPeerCertificate().fingerprint256) !== certificateFingerprint(agentPin))
@@ -48,6 +48,9 @@ export function agentReadControlFixture({ ledger, directory, docTls, agentTls, d
       agentFingerprint256: agentPin, resolveDelegation }),
   ];
   const server = https.createServer({ ...docTls, requestCert: true, rejectUnauthorized: true }, async (req, res) => {
+    // 扮旧版文档服务：这几个接口它还没有，回和旧版一样的 404
+    if (unsupportedRoute(req)) { req.resume(); res.writeHead(404, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ ok: false, code: 'read-control-no-route' })); }
     for (const handler of handlers) if (await handler(req, res)) return;
     res.writeHead(404); res.end();
   });
@@ -57,6 +60,8 @@ export function agentReadControlFixture({ ledger, directory, docTls, agentTls, d
   const readClient = createConversationControlClient({ ...options, runClient, receiptFile: path.join(directory, 'read-closures.sqlite') });
   client.useReadControl(readClient);
   return { conversations, control, client, runClient, readClient, server,
+    /** 文档服务这一侧把所有连接掐掉（Agent 会自己重连） */
+    dropConnections() { for (const socket of serverSockets) socket.destroy(); },
     async start() {
       await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
       await readClient.start();

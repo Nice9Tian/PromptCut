@@ -16,6 +16,8 @@ import { DatabaseSync } from 'node:sqlite';
 import WebSocket from 'ws';
 import { fileURLToPath } from 'node:url';
 import { freePorts } from './free-ports.mjs';
+import { machineCode, machineFingerprint } from '../runners/machine-id.mjs';
+import { leaseMachineDigest } from '../agent-service/conversation-control-client.mjs';
 import { startAccountPasswordUserFixture } from './fixtures/account-password-user-path.mjs';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -180,6 +182,12 @@ test('H07：Agent 服务重启时开着云端对话页，之后的改密退出�
     assert.match(old.closure.witnessId, /^handover:/);
     assert.equal(old.closure.handoverByInstanceId, current.ready.instanceId);
     assert.equal(openReadsOf(before.ready.instanceId).length, 0);
+    // 审查必改一：文档服务账本里只有专用的机器摘要，没有这台机器的识别码（那是模型 Key 密文的解开口令）
+    const raw = JSON.stringify(docState()), code = machineCode(machineFingerprint());
+    assert.equal(raw.includes(code), false, '账本里不出现完整机器识别码');
+    assert.equal(raw.includes(code.replaceAll('-', '')), false);
+    const leasesNow = Object.values(reads().leases ?? {});
+    assert.ok(leasesNow.length >= 1 && leasesNow.every(row => row.machine === leaseMachineDigest() && /^[a-f0-9]{64}$/.test(row.machine)));
     summary.restartThenLogout = { oldGeneration: before.ready.instanceGeneration, newGeneration: current.ready.instanceGeneration,
       evidence: old.closure.evidence };
   });

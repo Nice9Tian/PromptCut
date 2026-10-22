@@ -109,7 +109,8 @@ export function conversationControlScope(operation, body) {
       new Set(body.readHandleIds).size !== body.readHandleIds.length || !body.readHandleIds.every(reference))) fail(400, 'read-control-request-invalid');
   if (action === 'ack' && (!reference(body.controlId) || !/^[a-f0-9]{64}$/.test(body.payloadDigest ?? '') ||
       !Number.isSafeInteger(body.seq) || body.seq < 1)) fail(400, 'read-control-request-invalid');
-  if (action === 'lease' && (!reference(body.lockId) || !reference(body.machine))) fail(400, 'read-control-request-invalid');
+  // machine 只收 64 位十六进制摘要（Agent 那边的 leaseMachineDigest）：别的形状一律拒，账本里就进不来可读的机器识别码
+  if (action === 'lease' && (!reference(body.lockId) || !/^[a-f0-9]{64}$/.test(body.machine ?? ''))) fail(400, 'read-control-request-invalid');
   if (action === 'handover' && (!reference(body.instanceId) || !Number.isSafeInteger(body.instanceGeneration) ||
       body.instanceGeneration < 1)) fail(400, 'read-control-request-invalid');
   return { operation, request: clone(body) };
@@ -391,23 +392,29 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
     pruneClosedReads(state);
     pruneNonces(t, now());
   });
-  /** 实例报自己在哪把锁下跑：锁号（Agent 数据目录里那把独占锁的号）和机器码。用自己的实例钥匙签，一个实例只报一次、报了不能改。
-   * 后继要交「前一个已经不在了」的证据，两边报的必须是同一把锁、同一台机器（见 handover）。 */
+  /** 实例报自己在哪把锁下跑：锁号（Agent 数据目录里那把独占锁的号）和机器摘要。用自己的实例钥匙签，一个实例只报一次、报了不能改。
+   * 每一份按报上来的先后记一个序号（`declaredSeq`）：Agent 那边握着锁才报，所以同一把锁下报得早的，一定是先握锁的那个。
+   * 后继要交「前一个已经不在了」的证据，两边报的必须是同一把锁、同一台机器，而且前一个报得更早（见 handover）。 */
   function declareLease({ servicePrincipal, body }) {
     return ledger.transaction(state => {
       const who = instance(state, servicePrincipal, 'lease', body); nonce(state, who, body);
-      const leases = tables(state).leases ??= {};
+      const t = tables(state), leases = t.leases ??= {}, old = leases[who.instanceId];
       const lease = { ...who, lockId: body.lockId, machine: body.machine };
-      if (leases[who.instanceId] && canonicalJson(leases[who.instanceId]) !== canonicalJson(lease)) fail(409, 'read-lease-mismatch');
-      leases[who.instanceId] = lease;
-      return clone(lease);
+      if (old) {
+        const { declaredSeq, ...same } = old;
+        if (canonicalJson(same) !== canonicalJson(lease)) fail(409, 'read-lease-mismatch');
+        return clone(old);
+      }
+      leases[who.instanceId] = { ...lease, declaredSeq: t.leaseHead = (t.leaseHead ?? 0) + 1 };
+      return clone(leases[who.instanceId]);
     });
   }
   /** 〔裁〕H07：后继实例交「前一个实例的进程已经不在了」。证据是 Agent 那一侧的独占锁：前一个在握着这把锁的时候才报锁、订阅、
    * 开读取，锁要等它的进程结束（或它正常收口、读取全关完）才放开；后继现在握着同一把锁，前一个就不可能再往页面写东西。
    * 文档服务核的是它自己核得了的那几样，任何一样不符都不收口（照旧等，不放过）：
-   * - 前一个是同一个服务身份（证书与钥匙号）、同一种用途、更早的一代，不是只跑一条任务的进程；
-   * - 两个实例各自报过锁（`declareLease`），是同一把锁、同一台机器；
+   * - 前一个是同一个服务身份（证书与钥匙号）、同一种用途，不是只跑一条任务的进程；
+   * - 两个实例各自报过锁（`declareLease`），是同一把锁、同一台机器，而且前一个报得更早。不看代次：主服务先登记、后拿锁，
+   *   两个主服务交叠着起来时，代次低的可能后拿到锁（审查用例 F2），握锁的先后只有报锁的先后说得准；
    * - 前一个此刻没有连着本进程的订阅流（连着就说明它还活着，和证据矛盾：拒掉，让后继稍后再试）。 */
   function handover({ servicePrincipal, body }) {
     let progressed = false;
@@ -419,11 +426,12 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
       const priorWho = Object.fromEntries(instanceKeys.map(k => [k, prior[k]]));
       if (prior.state === 'closed' && prior.closure) return { ...priorWho, closed: true };
       if (prior.instanceId === who.instanceId || prior.serviceId !== who.serviceId || prior.serviceKid !== who.serviceKid ||
-          prior.purpose === 'run-worker' || (prior.purpose ?? null) !== (rows[who.instanceId]?.purpose ?? null) ||
-          prior.instanceGeneration >= who.instanceGeneration) fail(403, 'read-handover-forbidden');
+          prior.purpose === 'run-worker' || (prior.purpose ?? null) !== (rows[who.instanceId]?.purpose ?? null)) fail(403, 'read-handover-forbidden');
       const mine = leases[who.instanceId], theirs = leases[prior.instanceId];
       if (!mine || !theirs || !sameInstance(mine, who) || !sameInstance(theirs, priorWho) ||
           mine.lockId !== theirs.lockId || mine.machine !== theirs.machine) fail(403, 'read-handover-unproven');
+      if (!(Number.isSafeInteger(theirs.declaredSeq) && Number.isSafeInteger(mine.declaredSeq) && theirs.declaredSeq < mine.declaredSeq))
+        fail(403, 'read-handover-forbidden');
       if (streams.has(prior.instanceId)) fail(409, 'read-handover-predecessor-live');
       closeGoneInstanceInState(state, prior, { complete: true, witnessId: `handover:${who.instanceId}:${who.instanceGeneration}`,
         evidence: 'agent-data-dir-exclusive-lock', lockId: theirs.lockId,

@@ -64,4 +64,7 @@ test('数据目录独占锁：活着的握着就拿不到；硬杀以后拿得�
   const original = acquireDataDirLock(file);
   assert.equal(original.lockId, first.lockId, '原来那份锁号不变');
   original.release();
+
+  // 别的毛病（这里：锁文件的位置是个目录，打不开）不混成「有人握着」
+  assert.throws(() => acquireDataDirLock(dir), err => err.code === 'read-control-owner-unavailable' && err.code !== 'read-control-owner-busy');
 });

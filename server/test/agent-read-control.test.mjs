@@ -254,7 +254,7 @@ test('已关的读取只留最近几十条：早关的连同开启记录删掉�
   assert.equal(Object.keys(f.ledger.read().agentReadsV1.nonces).length, KEEP_READ_CONTROL_NONCES);
 });
 
-const LOCK = 'lock_00000000-0000-4000-8000-000000000001', MACHINE = 'PCM-TEST1-TEST1-TEST1-TEST1';
+const LOCK = 'lock_00000000-0000-4000-8000-000000000001', MACHINE = 'a'.repeat(64), OTHER_MACHINE = 'b'.repeat(64);
 const lease = (f, p, fields = {}) => f.control.declareLease(f.signed('lease', { lockId: LOCK, machine: MACHINE, ...fields }, p));
 const handover = (f, p, prior) => f.control.handover(f.signed('handover', { instanceId: prior.registration.instanceId,
   instanceGeneration: prior.registration.instanceGeneration }, p));
@@ -314,10 +314,10 @@ test('〔裁〕H07 反向：证据对不上一样都不收口——锁号不同�
   // 旧实例报了锁之后：后继的锁号不同、机器不同、后继自己没报，都不算
   f.ledger.transaction(state => { state.agentReadsV1.leases = { [f.process.registration.instanceId]: {
     serviceId: 'agent', serviceKid: 'agent-test-key', instanceId: f.process.registration.instanceId,
-    instanceGeneration: f.process.registration.instanceGeneration, lockId: LOCK, machine: MACHINE } }; });
+    instanceGeneration: f.process.registration.instanceGeneration, lockId: LOCK, machine: MACHINE, declaredSeq: 0 } }; });
   const sLock = successor({ lockId: 'lock_00000000-0000-4000-8000-000000000002' });
   assert.throws(() => handover(f, sLock, f.process), { code: 'read-handover-unproven' }); pending();
-  const sMachine = successor({ machine: 'PCM-OTHER-OTHER-OTHER-OTHER' });
+  const sMachine = successor({ machine: OTHER_MACHINE });
   assert.throws(() => handover(f, sMachine, f.process), { code: 'read-handover-unproven' }); pending();
   const sNone = successor(null);
   assert.throws(() => handover(f, sNone, f.process), { code: 'read-handover-unproven' }); pending();
@@ -326,7 +326,7 @@ test('〔裁〕H07 反向：证据对不上一样都不收口——锁号不同�
   // 用途不同（后继是只做控制的主服务，旧的不是）
   const sPurpose = successor(); controlOnly(f, sPurpose);
   assert.throws(() => handover(f, sPurpose, f.process), { status: 403, code: 'read-handover-forbidden' }); pending();
-  // 更早的一代替更新的一代交：不行
+  // 报锁报得晚的那个是「前一个」：不行（报锁先后就是握锁先后）
   const sGood = successor();
   assert.throws(() => handover(f, f.process, sGood), { code: 'read-handover-forbidden' }); pending();
   // 前一个是只跑一条任务的进程：不归这里管
@@ -341,6 +341,33 @@ test('〔裁〕H07 反向：证据对不上一样都不收口——锁号不同�
   // 都对上了才收口
   assert.equal(handover(f, sGood, f.process).closed, true);
   assert.equal(f.control.completion({ projectId: 'project' }).complete, true);
+});
+
+test('〔裁〕H07（审查 F2）：先后看报锁，不看代次——代次低、后拿到锁的后继能替代次高、先握锁的前一个交；反过来不行', async t => {
+  const f = setup(t); f.subscribe();                                // 夹具自带的那个实例：连着，名下没有读取
+  const low = f.instances.boot(), high = f.instances.boot();       // low 先登记（代次低），high 后登记
+  assert.ok(low.registration.instanceGeneration < high.registration.instanceGeneration);
+  controlOnly(f, low, high);
+  lease(f, high); const unsubHigh = f.subscribe(high);              // high 先拿到锁、先报锁、开着读取
+  const opened = await f.open('member', {}, high);
+  const c = f.fence();
+  assert.deepEqual(c.targets[high.registration.instanceId].readHandleIds, [opened.readHandle.readHandleId]);
+  unsubHigh();                                                      // high 的进程没了，锁放开
+  lease(f, low); f.subscribe(low);                                  // low 这时才拿到锁、报锁
+  assert.throws(() => handover(f, high, low), { status: 403, code: 'read-handover-forbidden' }, '报锁晚的不能被报锁早的「交掉」');
+  assert.equal(handover(f, low, high).closed, true);
+  assert.equal(f.control.completion({ projectId: 'project' }).complete, true);
+  assert.equal(f.ledger.read().agentInstancesV2[high.registration.instanceId].state, 'closed');
+});
+
+test('〔裁〕H07（审查必改一）：报锁时机器只收 64 位十六进制摘要；可读的机器识别码进不了账本', async t => {
+  const f = setup(t);
+  assert.throws(() => lease(f, f.process, { machine: 'PCM-ABCDE-ABCDE-ABCDE-ABCDE' }), { status: 400, code: 'read-control-request-invalid' });
+  assert.throws(() => lease(f, f.process, { machine: 'A'.repeat(64) }), { status: 400, code: 'read-control-request-invalid' });
+  assert.equal(f.ledger.read().agentReadsV1?.leases?.[f.process.registration.instanceId], undefined);
+  const ok = lease(f, f.process);
+  assert.equal(ok.machine, MACHINE); assert.equal(ok.declaredSeq, 1);
+  assert.equal(lease(f, f.process).declaredSeq, 1, '同一份再报不另记序号');
 });
 
 test('〔裁〕H07：从没订阅过的新实例不挡退出；它订阅以后开的读取照常要它自己关、自己确认', async t => {
