@@ -70,7 +70,34 @@
 
 ## 五、验证
 
-（本节在全量门槛跑完后补全）
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 类型检查 | `npx tsc -b --force` | 退出码 0，零错误（最后一次在提交 514ca0e4 之后） |
+| 构建 | `npm run build` | 退出码 0（同上）；`npx vite build --mode online` 退出码 0（探针用） |
+| 新增单测 | `node --test src/editor/sync/mergeItems.test.mjs` | 12/12 过 |
+| | `node --test src/editor/sync/offlineMerge.test.mjs` | 6/6 过 |
+| | `node --test server/test/pending-merge.test.mjs` | 8/8 过 |
+| | `node --test src/editor/sync/onlineSync.test.mjs` | 7/7 过（含新加的断网导入判据） |
+| 相关回归 | `node --test src/editor/sync/*.test.mjs src/mobile/*.test.mjs src/store/*.test.mjs` | 280/280 过 |
+| | docservice / 共享项目相关（`auth-impl-service`、`docservice-auth`、`c65-shared-admin`、`multi-agent-presence`、`c65-docservice`、`docservice-project`、`docservice-router`、`docservice-channels`） | 35/35、43/43 过 |
+| 全量（满载） | `npm test`（设好两个账号环境变量；机器上另有两个任务在跑，同时我的探针也在跑） | 7509 项：通过 7482、失败 11、取消 1、跳过 15 |
+| 全量失败逐个单跑 | `node scripts/test-suite.mjs server/test/<文件>` | 见下 |
+| 界面探针 | `node scripts/probes/conflict-merge-probe.mjs`（在线构建 + 本机托管组合 + 两套代理，端口 5890～5897） | 第三次跑 `ok: true`、`fails: []`、两页 `pageerror` 都是 0（第一次也全过；第二次手机「处理」按钮被进项目的气泡盖住没点着，探针加了直接点元素的退路后再跑全过） |
+
+满载失败的 11 项与单跑结果：
+
+| 文件 | 满载 | 单跑 | 判断 |
+|---|---|---|---|
+| `server/test/accept-018-auth-agent-path.test.mjs`（2.3-3 共有对话按到达顺序） | 失败（30 s 等待超时） | 9/9 过 | 时序敏感，机器忙时假失败 |
+| `server/test/account-master-production.test.mjs` | 失败（169 s） | 1/1 过 | 同上 |
+| `server/test/account-render-publish.test.mjs`（AR-09/11/12） | 失败（各 24～30 s 超时） | 12/12 过 | 同上 |
+| `server/test/account-root-resident.test.mjs` | 失败（叫停后 15 s 内没退出） | 1/1 过 | 同上 |
+| `server/test/account-runner-wiring.test.mjs`（RW10） | 失败（162 s） | 10/10 过 | 同上 |
+| `server/test/account-task-worker-child.test.mjs` | 失败（164 s） | 1/1 过 | 同上 |
+| `server/test/cli-setup.test.mjs`（真子进程 stdin + 收尾删临时目录 EPERM） | 失败 | 28/28 过 | 同上 |
+| `server/test/c10-ui-gates.test.mjs`（C10-UI-01） | 失败 | 改回原文后 8/8 过 | **我引起的**：我改了离线常驻提示的字，这条门测试锁定 C10 表 A 原文。已回退原文（提交 514ca0e4），改字交主会话定，见第六节第 7 条 |
+
+上面 7 个文件都在 Agent 任务进程、账号服务、命令行登录一带，本分支没碰；`media-tiers` 的 T3-8 这次全量里没有失败。
 
 ## 六、语义里说不通或缺的地方（交主会话定）
 
@@ -80,7 +107,7 @@
 4. **不冲突的二级项也写「（云端现在是 X）」**（此时 X 就是基准值）。语义的例子只给了冲突的情形；我按「写明改成什么、云端现在是什么」一律写。
 5. **片段的开始与结束合成一条「时间」**：移动片段与改长度是同一个属性。满足「先改长度、又改透明度仍是两条」，但「先移动、又改长度」只出一条。要拆成「开始」「结束」或「位置」「长度」两条，改 `mergeItems.ts` 的 `clipProps` 一处。
 6. **一级除了语义列的四类，还列了序列、剪辑、转场、素材与各效果库条目**：不列的话离线时对它们的改动就无处可合（会丢）。
-7. **在线页面离线常驻提示改了字**：原文（C10 契约表 A）「当前离线，有未提交的修改。关闭页面将丢失这些操作。」在 2026-10-22「落盘到浏览器本地缓存」之后不成立，改成「当前离线，有未提交的修改，已暂存在这台设备的浏览器里，连上后再提交。」请定稿。
+7. **在线页面离线常驻提示的字不准了，但没改**：原文（C10 契约表 A，`c10-ui-gates.test.mjs` 的 C10-UI-01 锁定）「当前离线，有未提交的修改。关闭页面将丢失这些操作。」在 2026-10-22「落盘到浏览器本地缓存」之后，对账号云端项目已不成立。我先改过一版（「当前离线，有未提交的修改，已暂存在这台设备的浏览器里，连上后再提交。」，截图 `desktop-0-offline.png` 里是这一版），撞了门测试，已回退原文。请主会话定新字，同时改 `server/test/c10-kit.mjs` 的 `TABLE_A`。离开页面的原生确认已改成「离线批次存进浏览器本地缓存了就不拦」（`SyncOverlays.tsx`）。
 8. **「合并」要连着文档服务**，断网时只能「删除选中」（语义说每次合并要重新核对云端历史序号，断网核对不了）。
 9. **从云端项目另存的 .proc 在本地改过、重开连回云端**（`handleCloudAssociationReopen` → `mergeOffline`）：文件里只有改过的内容、没有另存时的基准，所以基准只能取「连回时的云端」，另存之后别人在云端的改动会被当成「我这边改回去了」列进窗口。要做对，需要另存时把非本机内容的确定快照（基准内容，不只是哈希）随文件保存——这正是「固定非本机快照」那一条，见第八节。
 
@@ -108,5 +135,5 @@
 
 都在 `out/conflict-merge/`（worktree 下，不入库）：
 
-- 桌面：`desktop-0-offline.png`（断网，常驻提示新字）、`desktop-6-import-offline.png`（导入媒体置灰）、`desktop-1-window.png`（重连后窗口自动打开，两级展开）、`desktop-2-select-clean.png`、`desktop-3-merged.png`、`desktop-4-nav-button.png`（顶栏「冲突合并 3」）、`desktop-5-cleared.png`（处理完按钮消失）
+- 桌面：`desktop-0-offline.png`（断网时的常驻提示；截的是改字那一版，现已回退原文）、`desktop-6-import-offline.png`（导入媒体置灰）、`desktop-1-window.png`（重连后窗口自动打开，两级展开）、`desktop-2-select-clean.png`、`desktop-3-merged.png`、`desktop-4-nav-button.png`（顶栏「冲突合并 3」）、`desktop-5-cleared.png`（处理完按钮消失）
 - 手机：`mobile-1-bar.png`（冲突横条）、`mobile-2-sheet.png`（面板）、`mobile-3-picked.png`、`mobile-4-done.png`（「完成」）、`mobile-5-cleared.png`、`mobile-6-import-offline.png`
