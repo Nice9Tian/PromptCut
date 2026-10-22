@@ -79,6 +79,30 @@ export function OnlineLogin(props: { onDone: () => void }): JSX.Element {
 
           <div className="ps-login-sep">或</div>
 
+          {/*
+            第三方登录的位置。逻辑归「接通 Google 账号登录」那个会话(OAuth、账号服务接口、会话都在
+            VisuHive 仓库的 account/、site/ 下),它只改这里这几行,不动这一页其余部分。
+
+            **这里和现有语义冲突,合入前要先裁**:`product/document-service.md` 第 66 行写的是
+            「云端网站账号已有邮箱重设密码,不另做第三方登录。」真要做第三方登录,得按
+            `guide_files/suggested_agent_behavior.md`「对齐」先把这条二级语义以「修改前 / 修改后」
+            dry run 给用户过目、改掉,再把按钮接上。在那之前这个按钮不接任何逻辑。
+
+            标记用的是一个普通的「G」字,不是 Google 的官方商标:真接上去时按它的品牌规范换成官方图形。
+          */}
+          <div className="ps-login-oauth" data-pc="start-login-oauth">
+            <button
+              type="button"
+              className="ps-oauth-btn"
+              data-pc="start-login-google"
+              aria-label="用 Google 继续"
+              title="待办：OAuth 流程在 VisuHive 仓库，这里只留位置"
+            >
+              <span className="ps-oauth-mark" aria-hidden="true">G</span>
+              用 Google 继续
+            </button>
+          </div>
+
           {byLink ? (
             <label className="ps-field">
               项目链接

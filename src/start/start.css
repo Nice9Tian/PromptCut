@@ -481,6 +481,34 @@
 }
 .ps-login-sep::before,
 .ps-login-sep::after { content: ""; flex: 1 1 auto; height: 1px; background: var(--hairline); }
+/* 第三方登录那一块:现在只占位,逻辑由账号那边接(见 OnlineLogin.tsx 里的注释) */
+.ps-login-oauth { display: flex; flex-direction: column; gap: 8px; }
+.ps-oauth-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 9px;
+  background: var(--bg-panel);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.ps-oauth-btn:hover { background: var(--fill-hover); }
+.ps-oauth-mark {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--hairline-strong);
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .ps-login-note {
   margin: 0;
   font-size: 11px;
