@@ -69,7 +69,7 @@ export function ChatView(props: {
 
   return (
     <main className="ps-main ps-chat" data-pc="start-chat" data-chat={props.chat.id}>
-      <div className="ps-chat-col">
+      {/* 标题栏横向填满整页(用户 2026-10-23 定):拓展栏只从下面那一行里让出宽度,不切标题栏 */}
       <header className="ps-chat-head">
         <button type="button" className="ps-chat-back" data-pc="start-chat-back" aria-label="回到开始页" onClick={props.onBack}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -98,7 +98,7 @@ export function ChatView(props: {
           data-pc="start-chat-ext-toggle"
           aria-pressed={panel}
           aria-label="右侧拓展栏"
-          title="画面、这次改动、修改前 / 修改后"
+          title="画面、修改前 / 修改后"
           onClick={() => setPanel((v) => !v)}
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round">
@@ -108,6 +108,8 @@ export function ChatView(props: {
         </button>
       </header>
 
+      <div className="ps-chat-row">
+        <div className="ps-chat-col">
       <div className="ps-chat-scroll">
         <div className="ps-chat-list">
           {messages.map((m) =>
@@ -178,9 +180,10 @@ export function ChatView(props: {
           {note || "界面预览阶段：发出去不会真的跑 Agent，也不会改动项目。"}
         </p>
       </div>
-      </div>
+        </div>
 
-      {panel && <ChatSidePanel chatId={props.chat.id} projectSeed={seed} onNote={setNote} />}
+        {panel && <ChatSidePanel chatId={props.chat.id} projectSeed={seed} onNote={setNote} />}
+      </div>
     </main>
   );
 }

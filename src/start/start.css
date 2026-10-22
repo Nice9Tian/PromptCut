@@ -203,11 +203,18 @@
 
 /* ── 聊天页 ───────────────────────────────────── */
 /*
- * 左右两块:对话那一列 + 右边的拓展栏。对话列自己分三段(标题栏、滚动的消息、贴底的输入框)。
- * 选择器写成 `.ps-main.ps-chat`:`.ps-main` 在这张表里排在后面、它是 column,单写 `.ps-chat`
- * 同样是一个类,比不过它,拓展栏就被排到对话下面去了。
+ * 上下两层:标题栏横向填满整页,下面一行才左右分成「对话 + 拓展栏」(用户 2026-10-23 定) ——
+ * 拓展栏只从对话这一块里让出宽度,不把标题栏切断。
+ * 选择器写成 `.ps-main.ps-chat`:`.ps-main` 在这张表里排在后面,单写 `.ps-chat` 同样是一个类,比不过它。
  */
-.ps-main.ps-chat { display: flex; flex-direction: row; overflow: hidden; }
+.ps-main.ps-chat { display: flex; flex-direction: column; overflow: hidden; }
+.ps-chat-row {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+}
 .ps-chat-col {
   flex: 1 1 auto;
   min-width: 0;
@@ -217,13 +224,21 @@
   overflow: hidden;
 }
 
-/* ── 右侧拓展栏 ───────────────────────────────── */
+/*
+ * ── 右侧拓展栏 ───────────────────────────────────
+ * 不单独划一栏(用户 2026-10-23 定):没有分隔线、不铺自己的底色,就浮在聊天同一张底上,
+ * 每一段是一张卡。所以这里只给内边距和卡与卡之间的间距,底色留给 `.ps` 那一层。
+ */
 .ps-ext {
   flex: 0 0 320px;
   min-height: 0;
   overflow-y: auto;
-  border-left: 1px solid var(--hairline);
-  background: var(--bg-panel);
+  padding: 10px 12px 16px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: transparent;
 }
 .ps-chat-ext-btn {
   flex: 0 0 auto;
@@ -240,7 +255,12 @@
 .ps-chat-ext-btn:hover { border-color: var(--hairline-strong); color: var(--ink); }
 .ps-chat-ext-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 
-.ps-ext-sec { border-bottom: 1px solid var(--hairline); }
+/* 一段是一张卡,不是一条横栏 */
+.ps-ext-sec {
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--bg-panel);
+}
 .ps-ext-head {
   display: flex;
   align-items: center;
@@ -306,9 +326,50 @@
 }
 .ps-ext-play:hover { background: rgba(0, 0, 0, 0.68); }
 
-.ps-ext-transport { display: flex; align-items: center; gap: 8px; }
+/* 全屏键:和时间读数并排在播放条最右边 */
+.ps-ext-full {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+}
+.ps-ext-full:hover { background: rgba(255, 255, 255, 0.18); }
+
+/* 进了全屏:画框铺满屏幕,圆角和固定比例都让开,播放条照旧叠在底部 */
+.ps-ext-frame:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  aspect-ratio: auto;
+  border-radius: 0;
+}
+.ps-ext-frame:fullscreen .ps-ext-transport { padding: 16px 20px 12px; }
+.ps-ext-frame:fullscreen .ps-ext-time { font-size: 13px; }
+
+/* 播放条叠在画面底部:压一道由下往上的暗角,白字和滑杆在任何画面上都看得清 */
+.ps-ext-transport {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 8px 6px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.66), transparent);
+}
 .ps-ext-scrub { flex: 1 1 auto; min-width: 0; accent-color: var(--accent); }
-.ps-ext-time { font-size: 11px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.ps-ext-time {
+  font-size: 11px;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
 .ps-ext-todo { margin: 0; font-size: 11px; line-height: 1.7; color: var(--ink-faint); }
 
 /* 改动那一段:一行一次操作 */
@@ -513,10 +574,10 @@
   color: var(--ink-muted);
 }
 
+/* 输入框上面不画横线(用户 2026-10-23 定):输入框自己有边框,再来一条线就把这一块切断了 */
 .ps-chat-foot {
   flex: 0 0 auto;
   padding: 10px 24px 16px;
-  border-top: 1px solid var(--hairline);
   background: var(--bg-canvas);
 }
 .ps-chat-box {
