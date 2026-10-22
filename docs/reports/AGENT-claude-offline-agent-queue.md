@@ -107,3 +107,13 @@
 | 本任务探针 | `node scripts/probes/cloud-offline-queue-probe.mjs --port 5900` | `ok: true`，14 项全过，页面报错 0 |
 | 渲染附加项 | — | 不适用：没改画面（渲染、舞台、卡片），只改云端对话的发送与气泡文字 |
 | 真实网络环境验收 | — | 未跑：服务端接口与部署都没改，按 `verification.md` 本地验证即可 |
+
+### 第二轮门槛（合 main `44d1a234`、接手机版之后，提交 `872384b5`）
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 类型检查 | `npx tsc -b --force` | 退出码 0 |
+| 全量测试 | `npm test` | 退出码 1：tests 7561、pass 7545、fail 0、cancelled 1、skipped 15。被取消的那一个是 `server/test/asset-project-workers.test.mjs` 的「真实ffmpeg项目worker独立转码/登记；编码后失权的迟到产物清理不发布」，`test timed out after 20000ms`（机器上并行着别的任务，真跑 ffmpeg 的用例在等）。 |
+| 单跑复核 | `npm test -- server/test/asset-project-workers.test.mjs` | 退出码 0，11 过 0 失败，那一个 254 ms 过。与本分支无关（本分支没碰素材、转码、`server/**`），属于机器忙时的时序假失败。 |
+| 构建 | `npm run build` | 退出码 0 |
+| 本任务探针 | `node scripts/probes/cloud-offline-queue-probe.mjs --port 5900` | `ok: true`，19 项全过（桌面 14 + 手机 5），页面报错 0 |
