@@ -260,3 +260,26 @@ test("MI-13 卡片源码:一张卡一条、二级是「源码」;总算冲突;�
   assert.equal(clipIn(r.project, "c1").opacity, 0.8, "同一次合并里项目里的项照常写");
   assert.deepEqual(M.lineDelta("x\ny", "x\ny"), { added: 0, removed: 0 });
 });
+
+test("MI-14 〔裁〕只列用户直接改的东西:总时长、素材元数据回填、卡片声音产物这类算出来的不进表;合并后总时长跟着内容重算", () => {
+  const base = project({ duration: 10 });
+  // 用户只挪了 c3(内容末尾 10 → 11):总时长跟着变成 11,但不该冒出一条「项目设置 · 时长」
+  const mine = edit(base, (p) => {
+    clipIn(p, "c3").start = 9; clipIn(p, "c3").end = 11; p.duration = 11;
+    // 系统回填素材元数据、生成卡片声音产物
+    Object.assign(p.media[0], { hash: "a".repeat(64), duration: 12, width: 1920, height: 1080, pending: false });
+    clipIn(p, "c1").cardAudio = { v: 1, hash: "b".repeat(64) };
+    clipIn(p, "c1").embeddedAudio = true;
+  });
+  const things = M.diffThings(base, mine, meta());
+  assert.deepEqual(things.map((t) => t.key), ["offline:clip:c3"], "只有用户挪的那一段");
+  assert.deepEqual(things[0].props.map((p) => p.prop), ["@time"]);
+  // 改名照列
+  const renamed = M.diffThings(base, edit(base, (p) => { p.media[0].name = "新名字.mp4"; }), meta());
+  assert.deepEqual(renamed.map((t) => `${t.key}:${t.props.map((p) => p.prop)}`), ["offline:lib:media:m1:name"]);
+  // 合并后总时长按内容末尾重算(不进表、也不留旧值)
+  const r = M.applyMerge(base, things, new Map([["offline:clip:c3", new Set(["@time"])]]));
+  assert.equal(r.project.duration, 11);
+  const truncated = M.applyMerge(base, things, new Map([["offline:clip:c3", new Set(["@time"])]]), { manualDuration: 10.5 });
+  assert.equal(truncated.project.duration, 10.5, "手动截断着的照截断");
+});

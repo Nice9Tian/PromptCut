@@ -1233,7 +1233,7 @@ export function mergeSelected(sel: Selection, seen: Map<string, Box>): MergeOutc
     const kept = new Set([...props].filter((p) => !stale.includes(`${key}|${p}`)));
     if (kept.size) chosen.set(key, kept);
   }
-  const r = applyMerge(ds.project, things, chosen);
+  const r = applyMerge(ds.project, things, chosen, { manualDuration: getState().durationManual });
   // 卡片源码:交给编辑器进程照我这边的装回并传上去,成了再从表里拿掉(异步;结果另给一句气泡)
   if (r.external.length) void mergeCards(r.external);
   if (r.done.length) {

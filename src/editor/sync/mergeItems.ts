@@ -21,7 +21,8 @@
  */
 import { deepEqual } from "../../kernel/diffProject";
 import { parseCaptions, formatCaptions, isCaptionClip, type CaptionLine } from "../../kernel/captions";
-import type { Project } from "../../kernel/project";
+import type { Project, Track } from "../../kernel/project";
+import { contentEndOf, effectiveDuration } from "../../kernel/duration";
 import { getCard } from "../../kernel/registry";
 
 /* ---------------- 形状 ---------------- */
@@ -98,6 +99,20 @@ function shortHash(s: string): string {
 
 /** 项目顶层里不是「项目设置」的键(集合与运行时字段) */
 const NOT_SETTINGS = new Set(["version", "id", "media", "tracks", "cuts", "transitions", "activeCutId", "filters", "pixelMaps", "audioFx", "cardNodes"]);
+
+/**
+ * 〔裁:2026-10-22 主会话,三级〕这张表只列用户直接改的东西,不列由别的东西算出来的值。下面这些是算出来的,不进二级:
+ * - 项目设置 `duration`:总时长缺省等于内容末尾、跟着片段走(`kernel/duration.ts`;手动截断的值不落盘,只在编辑器状态里),
+ *   挪一个片段就会变,用户没直接改过它。合并之后由 `applyMerge` 按内容末尾重算。
+ * - 素材 `pending` `tiers` `hash` `ext` `size` `duration` `width` `height` `url` `path`:导入、入库、上传、补元数据时由系统写
+ *   (「素材元数据回填」那类不进撤销栈的提交),不是用户编辑出来的。素材整件的新增、删除照列;改名(`name`)照列。
+ * - 片段 `cardAudio` `embeddedAudio`:带声音的动效卡生成的声音产物与它的能力标记,由生成流程维护(`kernel/project.ts`)。
+ */
+export const DERIVED_PROPS = {
+  settings: ["duration"],
+  media: ["pending", "tiers", "hash", "ext", "size", "duration", "width", "height", "url", "path"],
+  clip: ["cardAudio", "embeddedAudio"],
+} as const;
 /** 各算一条的库集合 */
 export const LIBRARY_COLLS = ["media", "filters", "pixelMaps", "audioFx", "cardNodes"] as const;
 
@@ -163,7 +178,7 @@ export function thingKeyOf(ref: ThingRef): string {
 
 function settingsOf(p: Obj): Obj {
   const out: Obj = {};
-  for (const k of Object.keys(p)) if (!NOT_SETTINGS.has(k) && p[k] !== undefined) out[k] = p[k];
+  for (const k of Object.keys(p)) if (!NOT_SETTINGS.has(k) && !(DERIVED_PROPS.settings as readonly string[]).includes(k) && p[k] !== undefined) out[k] = p[k];
   return out;
 }
 
@@ -215,6 +230,7 @@ function clipProps(c: Obj, ref: ThingRef): Map<string, unknown> {
   out.set("@track", ref.trackId);
   for (const [k, v] of Object.entries(c)) {
     if (k === "id" || k === "start" || k === "end" || v === undefined) continue;
+    if ((DERIVED_PROPS.clip as readonly string[]).includes(k)) continue; // 算出来的(生成产物),不列
     if ((k === "params" || k === "frame") && isObj(v)) {
       for (const [sk, sv] of Object.entries(v)) {
         if (sv === undefined) continue;
@@ -242,7 +258,7 @@ function propsOf(f: Found): Map<string, unknown> {
     case "track": return plainProps(v, ["id", "clips"]);
     case "cut": return plainProps(v, ["id", "tracks", "duration", "transitions", "t"]);
     case "transition": return plainProps(v, ["id"]);
-    case "library": return plainProps(v, ["id"]);
+    case "library": return plainProps(v, f.ref.coll === "media" ? ["id", ...DERIVED_PROPS.media] : ["id"]);
     case "caption": {
       const l = f.value as CaptionLine;
       return new Map<string, unknown>([["time", [l.start, l.end]], ["zh", l.zh], ["en", l.en]]);
@@ -682,7 +698,7 @@ function overlapsIn(track: Obj, clip: Obj): boolean {
  * 在当前项目(云端现状加本页面还没确认的修改)上照我这边写选中的项。不改入参,回一份新项目。
  * `selection`:东西的键 → 选中的属性。新增要放进去的序列、剪辑、素材不在云端时,表里有它的新增就连带并进来。
  */
-export function applyMerge(project: Project, table: MergeThing[], selection: Map<string, Set<string>>): ApplyResult {
+export function applyMerge(project: Project, table: MergeThing[], selection: Map<string, Set<string>>, opts: { manualDuration?: number | null } = {}): ApplyResult {
   const p = structuredClone(project) as unknown as Obj;
   const done = new Map<string, Set<string>>();
   const failed: ApplyResult["failed"] = [];
@@ -875,6 +891,10 @@ export function applyMerge(project: Project, table: MergeThing[], selection: Map
       if (!(e instanceof Skip)) throw e;
       for (const x of t.change === "modify" ? t.props.filter((y) => props.has(y.prop)) : t.props) failed.push({ key, prop: x.prop, reason: e.message });
     }
+  }
+  // 总时长是算出来的(不进表):并了片段之后照规则跟着内容末尾重算(手动截断的值由调用方从编辑器状态给)
+  if (done.size && Array.isArray(p.tracks) && typeof p.duration === "number") {
+    p.duration = effectiveDuration(contentEndOf(p.tracks as Track[]), p.duration, opts.manualDuration ?? null);
   }
   return { project: p as unknown as Project, done: [...done].map(([key, s]) => ({ key, props: [...s] })), failed, external };
 }
