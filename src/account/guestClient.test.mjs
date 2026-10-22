@@ -139,3 +139,36 @@ test('服务端答得不成样子就报协议错，不把坏身份存下来', as
     assert.equal(store.has(GUEST_STORAGE_KEY), false);
   }
 });
+
+test('登录账号那一刻游客身份作废，之后拿的是账号的令牌', async t => {
+  const store = withStorage(t);
+  const calls = [];
+  const account = { id: 'acc_' + 'a'.repeat(24), name: 'Alice' };
+  const fetcher = async (url, init) => {
+    const body = init?.body ? JSON.parse(init.body) : undefined;
+    calls.push({ path: url.pathname, auth: init?.headers?.Authorization ?? null });
+    if (url.pathname === '/hosted/shared/account/guest') return reply({ ok: true, guestId: guestId(1), token: 'guest-tok', expiresAt: 100_000 });
+    if (url.pathname.endsWith('/me')) return reply({ ok: true, account: body === undefined ? null : account, csrfToken: 'csrf' });
+    if (url.pathname.endsWith('/login')) return reply({ ok: true, account, csrfToken: 'csrf' });
+    if (url.pathname.includes('/editor/')) return reply({ ok: true, account, loginId: 'editor-1', accessToken: 'account-tok', accessExpiresAt: 100_000 });
+    if (url.pathname.endsWith('/session')) return reply({ ok: true, connectionTicket: 'c'.repeat(43), assetTicket: 'a'.repeat(43),
+      agentDelegationTicket: 'd'.repeat(43), expiresAt: 60_000, projectId, creator: true, access: 'rw', accessRevision: 1,
+      hosted: { agent: { available: false, enabled: false, url: null } } });
+    return reply({ ok: false, code: 'no-route' });
+  };
+  // `/me` 在登录前要答「没登录」,登录后答这个账号:用一个开关代替
+  let signedIn = false;
+  const c = client(async (url, init) => {
+    if (url.pathname.endsWith('/me')) { calls.push({ path: url.pathname, auth: null });
+      return reply({ ok: true, account: signedIn ? account : null, csrfToken: 'csrf' }); }
+    if (url.pathname.endsWith('/login')) signedIn = true;
+    return fetcher(url, init);
+  });
+  await c.enterAsGuest();
+  assert.equal(c.guest?.id, guestId(1));
+  await c.login('alice', 'pw', false);
+  assert.equal(c.guest, null, '登录之后不该还是游客');
+  assert.equal(store.has(GUEST_STORAGE_KEY), false, '本机那一份也该清掉');
+  await c.session(projectId);
+  assert.equal(calls.filter(x => x.path.endsWith('/session')).at(-1).auth, 'Bearer account-tok', '该用账号的令牌，不是游客的');
+});

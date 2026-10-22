@@ -224,6 +224,8 @@ export function createAccountClient(options: AccountClientOptions) {
     async restore() { if (options.online) { await website(); if (!websiteAccount) return null; return (await ensureLogin()).account; }
       const value = await native('recover', options.device); if (value === null) return null; return accept(check(value)).account; },
     async login(identifier: string, password: string, remember: boolean, requestId: string = crypto.randomUUID()) {
+      // 登录了账号就不再是游客:`ensureLogin` 在游客模式下问的是游客令牌,不清掉的话登录完还在拿游客身份行事
+      if (guest) { guest = null; clearGuest(); }
       if (!options.online) return accept(check(await native('login', { ...options.device, name: identifier, password, requestId }))).account;
       await website(); const value = await request('/api/account/login', { name: identifier, password, remember });
       csrf = value.csrfToken || ''; websiteAccount = value.account; login = null; authChanged();
