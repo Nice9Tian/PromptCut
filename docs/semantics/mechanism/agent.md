@@ -54,6 +54,20 @@
 - **对话框**只在登录任务在跑、且服务端在任务上报了 `acceptsCode` 时，才在「打开登录网页」下面显示那一块（缺省收着）；任务一结束整块消失。
 - 码是凭证：不进日志、不进任务字段、不进出错信息。
 
+## 断网时发消息的排队（见 `../workflow/production.md`「云端对话」，2026-10-22 用户定；下面的做法与数字都是〔裁：主会话 2026-10-22，三级，`docs/archive/agent-reports/AGENT-claude-offline-agent-queue.md`〕）
+
+只管云端对话；桌面版的本机 Agent 不变。主体在 `src/ai/cloud/outbox.ts`，复用 `session.ts` 原有的本地气泡机制（加 `queued` 状态与 `resendable` 标记），没有另造一套。桌面、在线页面与手机版（`src/mobile/AgentChat.tsx`、`agentParts.tsx`）走同一套。
+
+- **什么时候转排队**：只有发送那一刻真的断网（浏览器报离线，或读告知状态因网络失败）才排队；服务端 5xx 照旧当场失败，不排队。同一对话里已有排着的，新的排在后面，顺序保住。
+- **跨刷新存活**：排着的消息存在浏览器里，键是 `pc.cloudOutbox:<账号>:<项目>:<页签>`，和冲突合并的离线存储分开存、不共用键。理由：断网时用户常会刷新，悄悄丢掉比留着更糟。
+- **防重复**：每条留着自己的请求号（服务端忽略重复），并且发出之前一定先向服务端核对一次。
+- **发出前的核对**（`outbox.ts:225` 的 `outboxVerdict`）：现问 `GET /agent/v1/conversations/<id>` 取这个对话最近一条用户消息，和排队时页面看到的那条比。一样就发；不一样就不发，气泡标「发送失败」并给「重新发送」。丢了回包、消息其实已经到服务端的情形认得出那条是自己的，不算别人发的。
+- **重试时机**：浏览器 `online` 事件、页面回到前台、事件流重连、刚排进去时各试一次；否则按 2、4、8、16、30 秒退避。浏览器报离线时不试。
+- **上限**：每账号每项目每页签最多 100 条。
+- **「重新发送」**：把那条挪到末尾重走一遍，核对以点击那一刻页面所见为准。
+- **本地气泡恒在最后**：重连后重放的历史原先会压在本地气泡下面，使排着的消息跳到对话顶部；现在本地气泡始终排在最后。
+- **离线时不弹「连不上」**：后台重读对话列表在浏览器报离线时不再弹提示。
+
 ## 桌面 APP 接入
 
 - 桌面工具经 stdio MCP 服务 `server/mcp-server.mjs` 接入。找实例的优先级为 `--port`、`PROMPTCUT_PORT`、`--port-file` / `PROMPTCUT_PORT_FILE`、公共 `%TEMP%\promptcut\port.json`；每次调用重新找。找不到、进程已退出或端口无人监听时返回说明。
@@ -273,7 +287,7 @@
 
 ### 云端：发消息被拒（挂在用户自己的气泡下，前缀「没有发出去：」）
 
-接口回非 2xx 时按回包的 `code`（没有就按 HTTP 码：401 → `unauthorized`、403 → `forbidden`、别的 → `unavailable`，`src/ai/cloud/cloudApi.ts:110`）取 `cloudErrorText`（`cloudApi.ts:60`），服务端带了话的（额度、文档服务连不上）用服务端的；再由 `session.ts:573` 拼成「没有发出去：<话>」。这一轮没开始，「Agent 操作」面板里没有这一轮。
+接口回非 2xx 时按回包的 `code`（没有就按 HTTP 码：401 → `unauthorized`、403 → `forbidden`、别的 → `unavailable`，`src/ai/cloud/cloudApi.ts:110`）取 `cloudErrorText`（`cloudApi.ts:60`），服务端带了话的（额度、文档服务连不上）用服务端的；再由 `session.ts:642` 拼成「没有发出去：<话>」。这一轮没开始，「Agent 操作」面板里没有这一轮。
 
 | 出错种类 | 怎么认出来 | 气泡里的话（原文，前面都有「没有发出去：」） | 产生的代码位置 | 排查从哪看 |
 |---|---|---|---|---|
@@ -284,7 +298,11 @@
 | 身份没通过 | 401 / `unauthorized` | 云端 Agent 暂时连不上:身份验证没有通过。请刷新页面或重新进入项目。 | `cloudApi.ts:62` | 票据、登录 |
 | 模型没配置 | `code: 'no-model-key'` | 云端 Agent 还没有配置模型,请联系托管方。 | `cloudApi.ts:69` | 节点 `config/ai.json`、`keys/custom.key` |
 | 消息太长 | `code: 'too-large'` | 消息太长了,云端 Agent 收不下。请缩短后再发。 | `cloudApi.ts:70` | 请求体上限 256 KiB |
-| 网络 | 请求没回来 | 连不上云端 Agent 服务,请检查网络。 | `cloudApi.ts:73`；`session.ts:572` | 浏览器网络面板 |
+| 网络 | 请求没回来 | 连不上云端 Agent 服务,请检查网络。 | `cloudApi.ts:73`；`session.ts:640` | 浏览器网络面板 |
+| （上一行的例外） | 断网时发送 | **桌面、在线页面与手机版的云端对话上这一行不再出现**：断网时发送改为排队，见本册同名一节，不报网络错 | `src/ai/cloud/outbox.ts:225` 的 `outboxVerdict` | 浏览器离线状态 |
+| 排队中 | 断网时发送 | 等网络恢复后发出 | `outbox.ts:61`；桌面 `src/editor/right/chat/UserBubble.tsx:99`、手机 `src/mobile/agentParts.tsx:46` | 浏览器离线状态 |
+| 排队后对话里有了新消息 | 恢复后核对不一致 | 发送失败：断网期间这个对话里有了新消息，这条没有发出。（带「重新发送」） | `outbox.ts:63`；桌面 `UserBubble.tsx:100`、`:102`，手机 `agentParts.tsx:47`、`:49` | 服务端的最近一条用户消息 |
+| 排队的那条发出时出错 | 恢复后真发失败 | 发送失败：〈原因〉（带「重新发送」） | `outbox.ts:65` | 回包的 `code` |
 | 没同意告知 | 403，`code: 'consent-required'` | 使用云端 Agent 前，请先阅读并确认告知。（页面同时弹出告知框，只弹发这条消息的那个分页） | `server/account/conversation-authority.mjs:250` → `cloudApi.ts:84` | 账号服务的告知状态；服务端每次收消息都现核 |
 | 其它代号 | 不在上面 | <服务端的话>；没有就是「云端 Agent 出错了(<代号>)。」 | `cloudApi.ts:85` | 回包的 `code` |
 | 对话数满、删除相关 | `conversation-limit`、`delete-forbidden`、`no-conversation` 等 | 见 `src/ai/cloud/chatTexts.ts`（例：「没有找到这个对话，它可能已经被删除。」，:39） | `cloudApi.ts:75`～`:82` | 对话账本 |
