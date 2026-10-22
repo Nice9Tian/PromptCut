@@ -23,6 +23,8 @@ const secs = (t: number) => `${t.toFixed(2)} s`;
 export function DetailEdit(props: {
   /** 取画面颜色用的种子:项目号或分组号 */
   seed: string;
+  /** 进专业模式:切到 PromptCut 本来那套编辑界面(用户 2026-10-23 定名,名词见 `docs/plan/user-decisions-2026-10-23.md`) */
+  onPro: () => void;
   onClose: () => void;
   /** 把一张卡引用进输入框 */
   onQuote: (text: string) => void;
@@ -84,6 +86,19 @@ export function DetailEdit(props: {
         <span className="ps-detail-title">详细编辑</span>
         <span className="ps-detail-sub">右键一张卡可以引用进下面的输入框</span>
         <span className="ps-rail-spacer" />
+        {/*
+          这一页是「Vibe 模式」——对着 Agent 说话、在这儿看一眼改一眼;
+          点这个切到「专业模式」,也就是 PromptCut 本来那套编辑界面(素材库、舞台、时间轴、AI 栏)。
+        */}
+        <button
+          type="button"
+          className="ps-pro-btn"
+          data-pc="start-enter-pro"
+          title="切到 PromptCut 本来那套编辑界面（素材库、舞台、时间轴）"
+          onClick={props.onPro}
+        >
+          进入专业模式
+        </button>
         <button type="button" className="ps-ghost-btn" data-pc="start-detail-close" onClick={props.onClose}>
           收起
         </button>

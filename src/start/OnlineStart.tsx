@@ -48,10 +48,6 @@ const projectSib = (p: MockProject) => `project:${p.groupId ?? "loose"}`;
 const chatSib = (c: MockAgentChat) => (c.on === "project" ? `chat:p:${c.projectId}` : `chat:g:${c.groupId}`);
 
 export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
-  // props.onEnterEditor 这一版没用:进编辑器要先有项目,那是业务层的事。签名保持和桌面开始页一致,
-  // 免得 `src/StartPage.tsx` 那个三元分支还要分两种 props。
-  void props;
-
   const [view, setView] = useState<"login" | "home">(initialView);
   const [scope, setScope] = useState<Scope>({ kind: "all" });
   const [notice, setNotice] = useState("");
@@ -257,6 +253,7 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
           <ChatView
             chat={openChat}
             panel={panel}
+            onPro={props.onEnterEditor}
             ext={{
               width: extWidth,
               onWidth: setExtWidth,
