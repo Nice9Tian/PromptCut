@@ -36,6 +36,7 @@
 | 以后再做：过期云端项目转本地后，独立时创建共同标记，将来从标记点合入，并用可视化界面处理冲突 | `docs/plan/account-binding-task.md`“以后再做”；具体计划另定 | 本期不做标记或独立副本合并；区别于本期暂时离线项目仍回原云端的冲突处理 |
 | 音频整体改成浏览器端 JS | `docs/plan/audio_structure_plan.md`（A0～A7）；判重测试计划 `docs/plan/audio_determine_plan.md` | 计划已写，未动工 |
 | 以后再做：桌面版给只有素材原尺寸的云端素材补转素材小尺寸；导出页装虚拟定时器 | `docs/plan/future_planning.md` | 暂缓 |
+| 以后再做：在线编辑器主页面自己读的素材也进浏览器长期缓存——声音播放、波形图（现在整份读声音文件）、素材库缩略图、导出（2026-10-23 用户定先记待办） | 还没有计划文件；舞台那条路的做法与清单见分支 `gemini/media-cache` 的 `docs/reports/AGENT-gemini-media-cache.md`（第 5 节列了主页面仍走 `?t=` 的每一处） | 舞台读素材已在 `gemini/media-cache` 做成按账号加项目固定的地址、一年不可变的私有缓存（未合 main）。主页面这些读法仍是地址带票据、`no-store`，下次打开要重下。做法方向：主站加一条和舞台 `/media-s/` 一样的同源 cookie 路由，PromptCut 的 nginx 模板与 VisuHive 官网的 landing 配置两份都要改；声音要进 Web Audio，得是同源或带跨源许可 |
 | Agent 与工作方式：创造力等级、「用户正在编辑」、多 Agent、SKILL 经 MCP 直连、后台运行（托盘与悬浮窗）、Agent 用 JS 自定义测量 | `docs/plan/agent-workflow-plan.md`（2026-09-30 写，A1～A6） | A1～A6均已合入main；A4/A5及ps1-bom、draft-lock、release-no-git本轮验收并出正式应用0.7.14/外壳0.2.7，release已从main快进（2026-10-03，REPORT-post-M8第15轮）；R1/R2/R3/R4/R5/R7/R8过，R6物理双屏待用户，草稿锁政策维持 |
 | 存储占用（二级功能项）：桌面版帧库设上限、按项目最近使用淘汰、给「清理缓存」入口；导出产物目录有列表、大小与删除 | `docs/plan/storage-plan.md`（2026-09-29 写，含语义 dry run 与接口约定）；排在 M8 之后、团队测试之前（主计划第 4 节） | 2026-09-29 用户加：帧库 `Videos\PromptCut\frame-library` 已长到 273 GB，没有上限也没有淘汰；导出产物每次一整份，连导三次就三份，没有清理入口。计划已写，按用户 2026-09-29 的 goal 不等确认开工（〔裁〕见计划第 3 节）。**已合入 main**（`fe62c17f`，2026-09-30，`docs/reports/REPORT-post-M8.md` 第 2 轮），随 0.7.3 发布（`/editor` 已部署，桌面补丁待 PC 上线） |
 
