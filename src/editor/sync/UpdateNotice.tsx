@@ -14,6 +14,7 @@ import { isStageEntryPath } from "../../online/isolation/stageGuard";
 import { startUpdateCheck, type UpdateCheckController } from "../../online/updateCheck";
 import { useSync } from "./syncManager";
 import { unsentAtRisk } from "./onlineStatus";
+import { allowNextLeave } from "./leavePrompt";
 import "../../ui/toolbar.css";
 import "./updateNotice.css";
 
@@ -48,7 +49,11 @@ function UpdateNotice({ ctl }: { ctl: UpdateCheckController }) {
             type="button"
             className="pc-btn pc-btn--primary pc-update-notice-btn"
             data-pc="update-notice-force"
-            onClick={() => location.reload()}
+            onClick={() => {
+              // 已在这里确认过会丢改动，浏览器自己的离开确认（`SyncOverlays.tsx`）这一次不再问
+              allowNextLeave();
+              location.reload();
+            }}
           >
             {UPDATE_NOTICE_TEXT.force}
           </button>
