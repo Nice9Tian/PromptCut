@@ -519,7 +519,9 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
         <>
           <div className="pc-collab-row">
             <span className="pc-collab-key">放在</span>
-            <span>{shared.where === "hosted" ? "云端" : "本机"} · {shared.mode === "free" ? "自由进入" : "限定进入"}</span>
+            {/* 账号云端项目只写「云端」:「自由进入 / 限定进入」是本地项目的说法,账号项目的 mode 恒为 free,原来这里总写「自由进入」,
+                取消下面「任何知道链接的人都可加入」后两处打架;进入方式只由那个勾选说明(〔裁〕主会话 2026-10-22,报告 AGENT-claude-join-requests.md) */}
+            <span data-pc="collab-where-text">{isAccount ? "云端" : <>{shared.where === "hosted" ? "云端" : "本机"} · {shared.mode === "free" ? "自由进入" : "限定进入"}</>}</span>
           </div>
           {/* 账号办法的云端项目没有「搬回本机」（点了必然失败，用户 2026-10-13 定先收起来）；旧办法的房间照旧显示 */}
           {shared.where === "hosted" && !ONLINE && !shared.accountId ? <button type="button" className="pc-dialog-opt" data-pc="collab-move-lan" disabled={busy} onClick={() => void moveLan()}>搬回本机</button> : null}

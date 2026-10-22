@@ -157,11 +157,11 @@ const api = (route, body, token) => edge(route, { body, token });
  * 凭登录令牌走一次 `/join`(知道链接就能进时)。刚落账的加入要等素材服务追上访问事件才发得出会话,追上之前回 503 `asset-unavailable`:
  * 用同一个请求号重试(服务端按请求号重放,不会多记一次)
  */
-async function joinApi(who, projectId, label) {
+async function joinApi(who, projectId) {
   const requestId = randomUUID(), token = await who.editorToken();
   let r;
   for (let i = 0; i < 20; i++) {
-    r = await api('/hosted/shared/account/join', { projectId, deviceId: `probe-${label}`, requestId }, token);
+    r = await api('/hosted/shared/account/join', { projectId, deviceId: `probe-${who.id.slice(-8)}`, requestId }, token);
     if (r.status !== 503) return r;
     await sleep(500);
   }
@@ -264,7 +264,24 @@ async function fill(page, sel, value) {
     el.dispatchEvent(new Event('input', { bubbles: true }));
   }, sel, value);
 }
+/**
+ * 在线页面进了云端项目会弹「使用云端 Agent 前请先了解」(与本探针无关):点「拒绝」关掉——不同意、不发任何对话。
+ * `waitMs` 给一段时间等它出来(刚进项目时它是稍后才弹的)
+ */
+async function dismissConsent(page, waitMs = 0) {
+  const t0 = Date.now();
+  do {
+    if (await has(page, '[data-pc="cloud-agent-consent"]')) {
+      await P(page, () => [...document.querySelectorAll('[data-pc="cloud-agent-consent"] button')].find(b => b.textContent?.trim() === '拒绝')?.click());
+      await waitFor(async () => !(await has(page, '[data-pc="cloud-agent-consent"]')), 10_000, '关掉云端 Agent 的说明').catch(() => null);
+      return true;
+    }
+    if (waitMs) await sleep(250);
+  } while (Date.now() - t0 < waitMs);
+  return false;
+}
 async function shot(page, name, { scrollTo } = {}) {
+  await dismissConsent(page);
   if (scrollTo) await P(page, s => document.querySelector(s)?.scrollIntoView({ block: 'center' }), scrollTo).catch(() => undefined);
   await sleep(400);
   const file = path.join(OUT, `${name}.png`);
@@ -350,7 +367,10 @@ async function scenarioDesktop(accounts) {
   const projectId = out.projectId = await waitFor(() => A.ownedProjectId(name), 30_000, '取新项目的项目号');
   const link = `${ORIGIN}/editor?project=${projectId}`;
   // 乙、K 先凭链接进来(这时还知道链接就能进);K 之后被创建者踢掉
-  for (const [who, label] of [[B, '乙'], [K, 'K']]) check((await joinApi(who, projectId, label)).status === 200, `桌面-${label} 先凭链接进来`);
+  for (const [who, label] of [[B, '乙'], [K, 'K']]) {
+    const r = await joinApi(who, projectId);
+    check(r.status === 200, `桌面-${label} 先凭链接进来`, { status: r.status, code: r.body?.code });
+  }
   await openSettings(pageA);
   await pageA.waitForSelector('[data-pc="collab-entry"][data-state="link"]', { timeout: 30_000 });
   out.order = await P(pageA, () => {
@@ -365,6 +385,16 @@ async function scenarioDesktop(accounts) {
   out.listHint = await textOf(pageA, '[data-pc="collab-entry-hint"]');
   check(/只允许账号名单（现在的 3 位成员）/.test(out.listHint ?? ''), '桌面-取消勾选后:名单就是现在的 3 位成员(创建者、乙、K)', out.listHint);
   await shot(pageA, 'desktop-2-entry-list', { scrollTo: '[data-pc="collab-entry"]' });
+  out.whereText = await textOf(pageA, '[data-pc="collab-where-text"]');
+  check(out.whereText === '云端', '桌面-取消勾选后「放在」那一行只写「云端」(不再写「自由进入」)', out.whereText);
+  // 再勾回去:那一行与勾选两边都不打架;再取消,接着走只放名单的流程
+  await click(pageA, '[data-pc="collab-entry-toggle"]', '再勾上');
+  await pageA.waitForSelector('[data-pc="collab-entry"][data-state="link"]', { timeout: 30_000 });
+  check((await textOf(pageA, '[data-pc="collab-where-text"]')) === '云端' && await P(pageA, () => document.querySelector('[data-pc="collab-entry-toggle"]').checked === true),
+    '桌面-再勾上:「放在」仍只写「云端」,勾选勾着');
+  await shot(pageA, 'desktop-2b-entry-rechecked', { scrollTo: '[data-pc="collab-entry"]' });
+  await click(pageA, '[data-pc="collab-entry-toggle"]', '再取消');
+  await pageA.waitForSelector('[data-pc="collab-entry"][data-state="list"]', { timeout: 30_000 });
   await closeSettings(pageA);
   // 项目二级密码(创建者经接口设):被通过的人进来时仍要输一次
   const secondary = `二级-${RUN}`;
@@ -470,6 +500,7 @@ async function scenarioOnline(accounts) {
   await click(pageA, '[data-pc="cloud-create"]', '新建云端项目');
   await waitFor(() => inEditor(pageA), 180_000, '创建者进入新项目');
   await waitGateGone(pageA);
+  await dismissConsent(pageA, 8000);
   await openSettings(pageA);
   await pageA.waitForSelector('[data-pc="collab-entry"][data-state="link"]', { timeout: 30_000 });
   await shot(pageA, 'online-1-entry-checked', { scrollTo: '[data-pc="collab-entry"]' });
@@ -478,6 +509,7 @@ async function scenarioOnline(accounts) {
   out.listHint = await textOf(pageA, '[data-pc="collab-entry-hint"]');
   check(/只允许账号名单（现在的 1 位成员）/.test(out.listHint ?? ''), '在线-取消勾选后名单就是现在的成员', out.listHint);
   await shot(pageA, 'online-2-entry-list', { scrollTo: '[data-pc="collab-entry"]' });
+  check((await textOf(pageA, '[data-pc="collab-where-text"]')) === '云端', '在线-「放在」那一行只写「云端」');
   await closeSettings(pageA);
   // 项目号从网站的「我创建的」里取(在线页面的地址里不带)
   out.projectId = accounts.onlineProjectId = await waitFor(() => A.ownedProjectId(name), 30_000, '取新项目的项目号');
@@ -518,6 +550,7 @@ async function scenarioOnline(accounts) {
   await pageE.bringToFront();
   await waitFor(() => inEditor(pageE), 120_000, '在线-戊被通过后直接进来');
   await waitGateGone(pageE);
+  await dismissConsent(pageE, 8000);
   check(true, '在线-通过后申请人直接能进');
   await shot(pageE, 'online-8-approved-entered');
   await pageF.bringToFront();
