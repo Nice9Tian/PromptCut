@@ -39,6 +39,17 @@
 }
 
 /*
+ * 桌面登录页的勾选框:`start.css` 没给它定 `accent-color`,浏览器就按自己的默认色画
+ * (Chrome 上是一格亮蓝),和整页的强调色对不上;手机版那边是定了的,两边看着就不是一套。
+ * 这一行按皮肤的强调色画,两边归一。
+ *
+ * **这条本该写在 `start.css` 的 `.ps-check input` 上** —— 那个文件这会儿归另一个会话,
+ * 不去动它,所以先放在这里(这个文件在桌面登录页也会加载:`OnlineLogin.tsx` 渲染 `BrandCanvas`)。
+ * 合并时把它搬进 `start.css` 即可。
+ */
+.ps-login .ps-check input { accent-color: var(--accent); }
+
+/*
  * ── 手机版(竖屏)的登录 ─────────────────────────────────
  * 用户 2026-10-23:「手机版用毛玻璃 + 背景色加深，来衬托出登录账号页面。」
  *
@@ -79,6 +90,20 @@
  * 不带 `.pcm` 就压不过它,只能靠加载顺序赌。
  */
 .pcm .ps-m-login-card {
+  /*
+   * `mobile.css` 的 `.pcm` 把整套调色板自己写死了一遍(`--accent: #26c6e6` 亮青、`--on-accent: #04222a`),
+   * 所以同一句 `var(--accent)` 在手机版和桌面不是一个颜色 —— 桌面那颗登录键是皮肤的深青,
+   * 手机版是亮青(用户 2026-10-23 对比两张截图时看到的色差就是这个)。
+   * 这里只在卡片这一层把这两个变量接回皮肤的 `--ui-*`:卡片里的按钮、勾选框、链接就和桌面同色,
+   * 卡片之外的手机版界面照旧用它自己那套。
+   */
+  --accent: var(--ui-accent);
+  --on-accent: var(--ui-accent-fg);
+  /*
+   * 行高也照桌面。`.pcm` 整体是 1.4,桌面登录页是 1.5 —— 同样的字号,每一行高出来 1~3px,
+   * 几行叠起来两边就对不齐了(桌面 12px 的那行 18px 高,手机版 16.8px)。
+   */
+  line-height: 1.5;
   width: 100%;
   max-width: 340px;
   margin: 0 auto;
@@ -99,7 +124,8 @@
   justify-content: center;
 }
 
-/* 标题:照桌面的 .ps-login-title,不要手机版那种小字宽字距 */
+/* 标题那一组:照桌面的 .ps-login-head + .ps-login-title + .ps-muted */
+.pcm .ps-m-login-head { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
 .pcm .ps-m-login-card h2.sec {
   margin: 0;
   font-size: 20px;
@@ -107,9 +133,16 @@
   letter-spacing: 0;
   color: var(--ink);
 }
+.pcm .ps-m-login-sub { font-size: 12px; color: var(--ink-muted); }
 
-.pcm .ps-m-login-card .field { display: flex; flex-direction: column; gap: 5px; }
-.pcm .ps-m-login-card .field label { font-size: 12px; color: var(--ink-muted); }
+/*
+ * 每一行的外边距必须清掉。`mobile.css` 给 `.pcm .field` 留了 `margin: 0 0 14px`、
+ * 给 `.pcm .field > label` 留了 `margin-bottom: 6px` —— 卡片本身又是 `gap: 12px` 的弹性列,
+ * 两者叠起来,手机版每个输入框之间比桌面多出 14px、标题到输入框多出 6px,
+ * 看着就是「控件排版和桌面那一套不一致」(用户 2026-10-23 指出)。
+ */
+.pcm .ps-m-login-card .field { margin: 0; display: flex; flex-direction: column; gap: 5px; }
+.pcm .ps-m-login-card .field > label { margin: 0; font-size: 12px; color: var(--ink-muted); }
 
 .pcm .ps-m-login-card .text-in {
   height: auto;
@@ -139,9 +172,56 @@
   background: var(--accent);
   color: var(--on-accent);
 }
+/* 空着时那颗键的淡法也照桌面(.ps-primary-btn:disabled 是 0.5,手机版自己那套是 0.45) */
+.pcm .ps-m-login-card .btn.primary:disabled { opacity: 0.5; }
 
-.pcm .ps-m-login-card .hint { margin: 0; font-size: 12px; }
-.pcm .ps-m-login-card .hint a { color: var(--accent); }
+/* 「注册账号」「忘记密码」:照桌面 .ps-login-alt,两头各一个,不是合成一条链接 */
+.pcm .ps-m-login-alt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+.pcm .ps-m-login-alt a { color: var(--accent); font-size: 12px; text-decoration: none; }
+
+/* 「或」:照桌面 .ps-login-sep,左右各一条细线 */
+.pcm .ps-m-login-sep {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 0;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.pcm .ps-m-login-sep::before,
+.pcm .ps-m-login-sep::after { content: ""; flex: 1 1 auto; height: 1px; background: var(--hairline); }
+
+/* 第三方登录那颗:照桌面 .ps-oauth-btn / .ps-oauth-mark。现在只占位,见 MobileStart.tsx 里的注释 */
+.pcm .ps-m-oauth-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: auto;
+  padding: 9px 12px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 9px;
+  background: var(--bg-panel);
+  color: var(--ink);
+  font-size: 13px;
+}
+.pcm .ps-m-oauth-mark {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--hairline-strong);
+  font-size: 11px;
+  font-weight: 700;
+}
 
 /* 左上角:LOGO 标记和字标并排 */
 .pcm .topbar .logo { display: flex; align-items: center; gap: 7px; }

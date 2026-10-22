@@ -48,12 +48,38 @@ export function MobileStart({ onEnterEditor }: { onEnterEditor: () => void }) {
         {error && <div className="err" role="alert" data-pcm="home-error">{error}</div>}
         {!account ? (
           <form data-pcm="login" className="ps-m-login-card" onSubmit={(e) => { e.preventDefault(); void perform(async () => { await ap.login(name, password, remember); setPassword(""); }); }}>
-            <h2 className="sec">登录网站账号</h2>
+            <div className="ps-m-login-head">
+              <h2 className="sec">登录账号</h2>
+              <span className="ps-m-login-sub">网站账号和官网通用。</span>
+            </div>
             <div className="field"><label>账号名</label><input className="text-in" name="username" autoComplete="username" required value={name} onChange={(e) => setName(e.target.value)} /></div>
             <div className="field"><label>密码</label><input className="text-in" name="password" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /></div>
             <label className="check-row"><input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />记住登录状态</label>
-            <button type="submit" className="btn primary" style={{ width: "100%" }} disabled={busy}>{busy ? "正在连接…" : "登录账号"}</button>
-            <div className="hint" style={{ marginTop: 10 }}><a href={`${ap.origin}/account`} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)" }}>注册账号 / 忘记密码</a></div>
+            {/* 两个都填了才可点,和桌面 `OnlineLogin.tsx` 的 `disabled={!name || !password}` 一致:
+                空着时那颗键是半透明的深色,不是满色的强调色(用户 2026-10-23 对比截图时看到的色差就是这个) */}
+            <button type="submit" className="btn primary" disabled={busy || !name || !password}>{busy ? "正在连接…" : "登录账号"}</button>
+            <div className="ps-m-login-alt">
+              <a href={`${ap.origin}/account`} target="_blank" rel="noopener noreferrer">注册账号</a>
+              <a href={`${ap.origin}/account`} target="_blank" rel="noopener noreferrer">忘记密码</a>
+            </div>
+            <div className="ps-m-login-sep">或</div>
+            {/*
+              第三方登录的位置,和桌面 `src/start/OnlineLogin.tsx` 里那颗是同一件事:
+              `docs/semantics/product/document-service.md` 第 66 行现在写的是「不另做第三方登录」,
+              用户还没裁(两版「修改前 / 修改后」记在 `docs/plan/user-decisions-2026-10-23.md` 第 5 节)。
+              所以这里也只占位、不接任何逻辑;裁定下来两处一起接上或者一起去掉。
+              标记用的是一个普通的「G」字,不是 Google 的官方商标。
+            */}
+            <button
+              type="button"
+              className="ps-m-oauth-btn"
+              data-pcm="login-google"
+              aria-label="用 Google 继续"
+              title="待办：OAuth 流程在 VisuHive 仓库，这里只留位置"
+            >
+              <span className="ps-m-oauth-mark" aria-hidden="true">G</span>
+              用 Google 继续
+            </button>
           </form>
         ) : (
           <>
