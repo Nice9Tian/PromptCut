@@ -38,34 +38,56 @@ import "./brandGlow.css";
  */
 const LOOK = {
   /** 飘动的快慢（每秒转多少圈）。`drift` 为 0 时这一项不起作用 */
-  speed: 0.02,
-  /** 两团光各自飘多远（CSS 像素）。0 = 和官网一样完全不动，页面也就不用逐帧重画 */
-  drift: 0,
+  speed: 0.105,
+  /** 两团光各自飘多远（CSS 像素）。0 = 完全不动，页面也就不用逐帧重画 */
+  drift: 175,
 
-  /** 第一团：官网的 `1200px 700px at 15% -10%`，浓度 .14，到 60% 处透明 */
-  ax: 0.15,
-  ay: -0.1,
-  arx: 1200,
-  ary: 700,
-  aAlpha: 0.14,
-  aStop: 0.6,
+  /**
+   * 基准视口（CSS 像素）：下面那两组位置是在**这个尺寸**上调出来的。
+   *
+   * 用户 2026-10-23 定：「以铺满屏幕版的中心对齐。」所以两团光不按当前视口的比例摆
+   * —— 那样手机和宽屏上的构图会完全不同 —— 而是换算成**相对屏幕中心的固定像素偏移**：
+   *
+   *     中心 = 视口中心 + (位置 - 0.5) × 基准视口
+   *
+   * 视口正好是基准尺寸时，这一式就还原成「位置 × 基准视口」，和调参台上看到的一模一样；
+   * 屏幕小了就是同一张构图的中心裁切，大了就是往外多露一圈。半径本来就是固定像素，不跟着缩放。
+   *
+   * 559×1290 是调参台那块「铺满宽屏」预览当时的实际尺寸。
+   */
+  refW: 559,
+  refH: 1290,
 
-  /** 第二团：官网的 `900px 600px at 100% 40%`，浓度 .08，到 60% 处透明 */
-  bx: 1,
-  by: 0.4,
-  brx: 900,
-  bry: 600,
-  bAlpha: 0.08,
-  bStop: 0.6,
+  /** 第一团（冷色，从左上压进来） */
+  ax: -0.15,
+  ay: -0.14,
+  arx: 1900,
+  ary: 2400,
+  aAlpha: 0.17,
+  aStop: 0.56,
+
+  /** 第二团（暖色，从右下压进来） */
+  bx: 0.75,
+  by: 0.68,
+  brx: 1500,
+  bry: 730,
+  bAlpha: 0.075,
+  bStop: 0.64,
 
   /** 抖动：打散色带用的噪声强度（0.004 ≈ 1/255）。grainSize 调大就从抖动变成看得见的颗粒 */
-  grain: 0.004,
-  grainSize: 1,
+  grain: 0.008,
+  grainSize: 2,
 
-  /** 颜色。留空就跟着皮肤走（底色 `--ui-bg`、两团光 `--ui-accent`），填了就用填的 */
+  /**
+   * 颜色。留空就跟着皮肤走（底色 `--ui-bg`、光 `--ui-accent`），填了就用填的。
+   *
+   * 底色和冷的那团留空：换皮肤、在设置里改强调色，这一层要跟着变。
+   * 暖的那团是用户 2026-10-23 挑定的橘色，和皮肤无关，所以写死
+   * —— 和 `BrandCanvas.tsx` 那边「冷侧跟皮肤、暖侧写死」是同一套做法。
+   */
   bg: "",
   colA: "",
-  colB: "",
+  colB: "#FF7B00",
 
   /** 内部分辨率 = min(设备像素比, 2) × 这个数。渐变很便宜，给到 1 就是一比一 */
   resScale: 1,
@@ -93,6 +115,7 @@ uniform vec3 uColB;
 uniform float uAx, uAy, uArx, uAry, uAAlpha, uAStop;
 uniform float uBx, uBy, uBrx, uBry, uBAlpha, uBStop;
 uniform float uGrain, uGrainSize, uDrift;
+uniform float uRefW, uRefH;
 
 float hash(vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
@@ -121,8 +144,16 @@ void main() {
   // 两团朝相反方向飘，错开一点才看得出是两团；drift = 0 时这一项是 0
   vec2 d = uDrift * vec2(sin(uTime * 6.2831853), cos(uTime * 4.7123890));
 
-  float aA = glow(cssPx, vec2(uAx * wCss, uAy * hCss) + d, vec2(uArx, uAry), uAStop, uAAlpha);
-  float aB = glow(cssPx, vec2(uBx * wCss, uBy * hCss) - d, vec2(uBrx, uBry), uBStop, uBAlpha);
+  /*
+   * 以屏幕中心对齐：位置不按当前视口的比例算，而是换算成相对中心的固定像素偏移
+   * （基准视口见组件里的 refW / refH）。视口正好是基准尺寸时结果和「位置 × 视口」相同；
+   * 屏幕小了就是同一张构图的中心裁切。
+   */
+  vec2 mid = vec2(wCss, hCss) * 0.5;
+  vec2 ref = vec2(max(uRefW, 1.0), max(uRefH, 1.0));
+
+  float aA = glow(cssPx, mid + (vec2(uAx, uAy) - 0.5) * ref + d, vec2(uArx, uAry), uAStop, uAAlpha);
+  float aB = glow(cssPx, mid + (vec2(uBx, uBy) - 0.5) * ref - d, vec2(uBrx, uBry), uBStop, uBAlpha);
 
   // 叠的顺序同官网：CSS 里先写的那层在上面，所以 B 先压在底色上，A 再压上去
   vec3 col = uBg;
@@ -244,6 +275,7 @@ export function BrandGlow(): JSX.Element {
       ["uBx", LOOK.bx], ["uBy", LOOK.by], ["uBrx", LOOK.brx], ["uBry", LOOK.bry],
       ["uBAlpha", LOOK.bAlpha], ["uBStop", LOOK.bStop],
       ["uGrain", LOOK.grain], ["uGrainSize", LOOK.grainSize], ["uDrift", LOOK.drift],
+      ["uRefW", LOOK.refW], ["uRefH", LOOK.refH],
     ] as const) {
       gl.uniform1f(at(name), value);
     }
