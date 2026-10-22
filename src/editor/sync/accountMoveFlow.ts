@@ -51,7 +51,8 @@ export function accountCloud(): Promise<AccountCloud | null> {
     if (!device) return null;
     let origin: string;
     try { origin = new URL((await desktopAccountBridge("configuration") as { origin: string }).origin).origin; }
-    catch (error) { if (isDesktopShellTooOld(error)) shellTooOld = true; return null; }
+    catch (error) { shellTooOld = isDesktopShellTooOld(error); return null; }
+    shellTooOld = false;
     return { origin, client: createAccountClient({ online: false, origin, device: { deviceId: device.deviceId, deviceName: device.deviceName }, native: desktopAccountBridge }) };
   })().catch(() => null);
   cloud = task;
