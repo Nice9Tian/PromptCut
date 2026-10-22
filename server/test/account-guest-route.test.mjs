@@ -1,0 +1,147 @@
+/**
+ * 游客这条路在 HTTP 层整条走一遍（2026-10-23 用户定，语义 dry run 见 `docs/plan/guest-identity-semantics-dryrun.md`）：
+ *
+ *   GR-1  领令牌 → 建项目 → 发会话票据：全程不碰账号服务，公开路由走得通
+ *   GR-2  第二个项目被拒（guest-project-limit）；换个游客身份又能建
+ *   GR-3  游客凭链接加入别人的项目：进得去，但会话里 `access` 是 `r`，`creator` 是假
+ *   GR-4  领令牌那一条不要 Bearer；别的路由没有 Bearer 照旧 401
+ *   GR-5  没配密钥的部署：领令牌回 503 guest-unavailable，账号那条路照常
+ *
+ * 跑：npm test -- server/test/account-guest-route.test.mjs
+ */
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { Readable } from 'node:stream';
+import { openAccountLedger } from '../account/ledger.mjs';
+import { createAccountHostedRuntime } from '../docservice/account-hosted.mjs';
+import { mountAccountProjects } from '../docservice/modules/account-projects.mjs';
+import { GUEST_ID_RE, GUEST_LIMITS } from '../account/guest.mjs';
+
+const A = 'acc_' + 'a'.repeat(24);
+
+async function fixture(t, { guestKey = randomBytes(32) } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-guest-route-'));
+  const ledger = openAccountLedger({ file: path.join(dir, 'doc.sqlite'), authorityId: 'doc-guest-fixture' });
+  const accountClient = {
+    verify: async (token) => {
+      if (token !== 'tok-a') throw Object.assign(new Error('login-required'), { status: 401, code: 'login-required' });
+      return { accountId: A, accountName: 'Alice', loginId: 'login-a', credentialId: 'cred-a', loginGeneration: 1,
+        expiresAt: Date.now() + 3_600_000, accountEventSeq: 0, kind: 'editor' };
+    },
+    events: async () => ({ events: [], headSeq: 0 }),
+  };
+  const runtime = createAccountHostedRuntime({ ledger, accountClient, dataDir: null, authorityUrl: 'https://fixture.invalid',
+    allowFixtureAssetReady: true, pollMs: 0, guestKey });
+  runtime.setAssetReady(true);
+  const registry = { refresh() {}, get: () => null };
+  runtime.bindService({ describe: () => ({ conns: [] }), fencePrincipals: async () => ({ actualClosed: true }) }, { registry, urls: {} });
+  await runtime.start();
+  t.after(() => { try { runtime.close(); } catch { /* 已关 */ } fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); });
+
+  const mounted = mountAccountProjects({ authority: runtime.authority, issueSession: (o) => runtime.issueSession(o) });
+  /** 打一条公开路由。`token` 给 null 就不带 Bearer（领游客令牌那一条就是这样） */
+  const post = async (token, pathname, body) => {
+    const req = Readable.from([Buffer.from(JSON.stringify(body))]);
+    Object.assign(req, { method: 'POST', url: pathname, headers: { 'content-type': 'application/json',
+      ...(token ? { authorization: `Bearer ${token}` } : {}) } });
+    let status, value;
+    assert.equal(await mounted.handlePublic(req, { writeHead: (s) => { status = s; }, end: (text) => { value = JSON.parse(text); } }, {}), true);
+    return { status, value };
+  };
+  /** 领一张游客令牌（不带 Bearer）。`previous` 给了就是续期 */
+  const guest = async (previous) => {
+    const out = await post(null, '/hosted/shared/account/guest', previous ? { token: previous } : {});
+    assert.equal(out.status, 200, JSON.stringify(out.value));
+    return out.value;
+  };
+  let serial = 0;
+  const create = (token, name = `游客的项目 ${++serial}`) =>
+    post(token, '/hosted/shared/account/create', { name, requestId: `create-${serial}`, initialProject: { tracks: [] } });
+  return { runtime, ledger, post, guest, create };
+}
+
+test('GR-1 领令牌 → 建项目 → 发会话票据，全程不碰账号服务', async t => {
+  const f = await fixture(t);
+  const g = await f.guest();
+  assert.match(g.guestId, GUEST_ID_RE);
+  assert.equal(g.renewed, false);
+  // 令牌要当 Bearer 送,所以整串只能有 `bearer()` 认的字符(带点号会被当成没登录)
+  assert.match(g.token, /^gst1[A-Za-z0-9_-]+$/);
+  assert.ok(g.token.length <= 256);
+
+  const made = await f.create(g.token);
+  assert.equal(made.status, 201, JSON.stringify(made.value));
+  const projectId = made.value.projectId;
+  assert.equal(f.ledger.read().projects[projectId].creatorAccountId, g.guestId, '项目的创建者就是这个游客');
+
+  const session = await f.post(g.token, '/hosted/shared/account/session', { projectId, deviceId: 'device-guest', requestId: 'session-1' });
+  assert.equal(session.status, 200, JSON.stringify(session.value));
+  assert.equal(session.value.creator, true);
+  assert.equal(session.value.access, 'rw', '自己建的项目里照常读写');
+  assert.ok(session.value.connectionTicket && session.value.assetTicket, '票据照常发');
+
+  // 续期:同一个编号,新令牌照样能用
+  const again = await f.guest(g.token);
+  assert.equal(again.guestId, g.guestId);
+  assert.equal(again.renewed, true);
+  assert.equal((await f.post(again.token, '/hosted/shared/account/session',
+    { projectId, deviceId: 'device-guest', requestId: 'session-2' })).status, 200);
+});
+
+test('GR-2 第二个项目被拒；换个身份又能建', async t => {
+  const f = await fixture(t);
+  const g = await f.guest();
+  assert.equal((await f.create(g.token)).status, 201);
+  const second = await f.create(g.token);
+  assert.equal(second.status, 403);
+  assert.equal(second.value.code, 'guest-project-limit');
+  assert.equal(GUEST_LIMITS.projects, 1);
+  assert.equal((await f.create((await f.guest()).token)).status, 201, '另一个游客照样建得了');
+});
+
+test('GR-3 加入别人的项目：进得去，但只读', async t => {
+  const f = await fixture(t);
+  const owner = await f.create('tok-a', '账号的项目');
+  assert.equal(owner.status, 201);
+  const projectId = owner.value.projectId;
+
+  const g = await f.guest();
+  const joined = await f.post(g.token, '/hosted/shared/account/join', { projectId, requestId: 'join-1', deviceId: 'device-guest' });
+  assert.equal(joined.status, 200, JSON.stringify(joined.value));
+  assert.equal(joined.value.membership.access, 'r');
+  assert.equal(joined.value.access, 'r', '会话里也该是只读');
+  assert.equal(joined.value.creator, false);
+  assert.ok(joined.value.connectionTicket, '只读也发票据，不然连都连不上，看不了');
+
+  // 改设置这类只有创建者能做的,照旧拒
+  const admin = await f.post(g.token, '/hosted/shared/account/admin',
+    { projectId, op: 'set-entry', allowLinkJoin: false, expectedAccessRevision: joined.value.accessRevision, requestId: 'admin-1' });
+  assert.equal(admin.status, 403);
+  assert.equal(admin.value.code, 'creator-required');
+});
+
+test('GR-4 领令牌不要 Bearer；别的路由没有 Bearer 照旧 401', async t => {
+  const f = await fixture(t);
+  const g = await f.guest();                                   // 不带 Bearer 也拿得到
+  assert.ok(g.token);
+  const noAuth = await f.post(null, '/hosted/shared/account/create', { name: '偷偷建', requestId: 'c-1', initialProject: { tracks: [] } });
+  assert.equal(noAuth.status, 401);
+  assert.equal(noAuth.value.code, 'login-required');
+  // 请求体里写编号不算数:回的编号和写的那个不一样
+  const claimed = await f.post(null, '/hosted/shared/account/guest', { guestId: 'gst_' + 'f'.repeat(24), accountId: 'gst_' + 'e'.repeat(24) });
+  assert.equal(claimed.status, 200);
+  assert.notEqual(claimed.value.guestId, 'gst_' + 'f'.repeat(24));
+  assert.notEqual(claimed.value.guestId, g.guestId);
+});
+
+test('GR-5 没配密钥的部署：游客这条路回 503，账号那条路照常', async t => {
+  const f = await fixture(t, { guestKey: null });
+  const out = await f.post(null, '/hosted/shared/account/guest', {});
+  assert.equal(out.status, 503);
+  assert.equal(out.value.code, 'guest-unavailable');
+  assert.equal((await f.create('tok-a', '账号的项目')).status, 201, '账号那条路不该受影响');
+});

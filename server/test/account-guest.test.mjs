@@ -24,7 +24,10 @@ test('签发再核对：编号是服务端给的，字段原样回来', () => {
   assert.equal(issued.expiresAt, at + GUEST_LIMITS.tokenTtlMs);
   assert.ok(looksLikeGuestToken(issued.token));
   assert.deepEqual(readGuestToken(issued.token, { key, at }),
-    { guestId: issued.guestId, issuedAt: at, expiresAt: issued.expiresAt });
+    { guestId: issued.guestId, issuedAt: at, expiresAt: issued.expiresAt, expired: false });
+  // 整串只能有 Bearer 那一层认的字符：带点号会在 `bearer()` 那里被当成没登录挡回来
+  assert.match(issued.token, /^[A-Za-z0-9_-]+$/, '令牌里不能有点号等字符');
+  assert.ok(issued.token.length <= 256, 'Bearer 那一层最多 256 个字符');
   // 续期:交回旧编号换一张新令牌,还是同一个人
   const renewed = signGuestToken({ key, guestId: issued.guestId, at: at + 1000 });
   assert.equal(renewed.guestId, issued.guestId);
@@ -56,11 +59,15 @@ test('签名改一个字符就不认；换把密钥也不认', () => {
   assert.equal(readGuestToken('g1', { key, at }), null);
 });
 
-test('过期的不认，容得下 30 秒时钟偏差', () => {
+test('过期的签名照样认得出是自己发的，只是标成过期（不能falls through 去问账号服务）', () => {
   const { token, expiresAt } = signGuestToken({ key, at, ttlMs: 60_000 });
-  assert.ok(readGuestToken(token, { key, at: expiresAt }), '没到点该认');
-  assert.ok(readGuestToken(token, { key, at: expiresAt + 29_000 }), '偏差之内该认');
-  assert.equal(readGuestToken(token, { key, at: expiresAt + 31_000 }), null, '过了偏差就不该认');
+  assert.equal(readGuestToken(token, { key, at: expiresAt })?.expired, false, '没到点该认');
+  assert.equal(readGuestToken(token, { key, at: expiresAt + 29_000 })?.expired, false, '偏差之内该认');
+  const stale = readGuestToken(token, { key, at: expiresAt + 31_000 });
+  assert.ok(stale, '签名没问题就该认出是本服务发的');
+  assert.equal(stale.expired, true, '过了偏差标成过期');
+  // null 只留给「不是本服务发的」:那种才该交给账号服务去认
+  assert.equal(readGuestToken(token, { key: other, at }), null);
 });
 
 test('账号的访问令牌不会被当成游客令牌', () => {

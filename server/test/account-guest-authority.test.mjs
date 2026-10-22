@@ -109,11 +109,11 @@ test('令牌过期、被改过、或者这台服务没配密钥，都进不来',
   const { create } = await open(t);
   const old = signGuestToken({ key: guestKey, at: Date.now() - GUEST_LIMITS.tokenTtlMs - 60_000 });
   assert.deepEqual(await code(create(old.token)), { status: 401, code: 'credential-revoked' });
+  // 改过的、别的密钥签的:签名验不过,就不是本服务发的,交给账号服务去认 —— 它也不认,照样进不来
   const g = guest();
-  const tampered = g.token.slice(0, 4) + (g.token[4] === 'a' ? 'b' : 'a') + g.token.slice(5);
-  assert.deepEqual(await code(create(tampered)), { status: 401, code: 'credential-revoked' });
-  assert.deepEqual(await code(create(signGuestToken({ key: randomBytes(32), at: Date.now() }).token)),
-    { status: 401, code: 'credential-revoked' }, '别的密钥签的不认');
+  const tampered = g.token.slice(0, 5) + (g.token[5] === 'a' ? 'b' : 'a') + g.token.slice(6);
+  assert.equal((await code(create(tampered)))?.status, 401);
+  assert.equal((await code(create(signGuestToken({ key: randomBytes(32), at: Date.now() }).token)))?.status, 401, '别的密钥签的不认');
 
   const noKey = await open(t, { key: null });
   assert.deepEqual(await code(noKey.create(guest().token)), { status: 503, code: 'guest-unavailable' });

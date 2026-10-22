@@ -291,10 +291,13 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     }
     // 游客:令牌是本服务自己签的,自己核对,不问账号服务,也不跟着它的事件流同步 ——
     // 账号服务挂了不该把游客一起挡在外面(`guest.mjs` 的开头说明)。往下的关卡(撤销表、角色、授权号)照样过。
-    if (looksLikeGuestToken(token)) {
-      if (!guestKey) reject(503, 'guest-unavailable');
-      const read = readGuestToken(token, { key: guestKey, at: now() });
-      if (!read) reject(401, 'credential-revoked');
+    //
+    // 「是不是游客令牌」由**签名**说了算:验得过就一定是本服务发的,验不过就往下交给账号服务。
+    // 这台没配密钥时验不了,只能看形状说一句人话,免得回一个像是账号出了问题的错
+    const read = guestKey ? readGuestToken(token, { key: guestKey, at: now() }) : null;
+    if (!read && !guestKey && looksLikeGuestToken(token)) reject(503, 'guest-unavailable');
+    if (read) {
+      if (read.expired) reject(401, 'credential-revoked');
       const guest = guestPrincipal(read);
       if (ledger.read().revokedLogins[`login:${guest.loginId}`]) reject(401, 'credential-revoked');
       if (ref && ['accountId', 'loginId', 'loginGeneration'].some(k => guest[k] !== ref.principal[k])) reject(401, 'principal-mismatch');
@@ -628,7 +631,9 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
   function issueGuest(previous) {
     if (!guestKey) reject(503, 'guest-unavailable');
     const at = now();
-    const old = typeof previous === 'string' ? readGuestToken(previous, { key: guestKey, at }) : null;
+    // 过期的只当没带:交回一张过期令牌就是换一个新身份(他那三天的东西本来也清掉了)
+    const read = typeof previous === 'string' ? readGuestToken(previous, { key: guestKey, at }) : null;
+    const old = read && !read.expired ? read : null;
     const issued = signGuestToken({ key: guestKey, at, ...(old ? { guestId: old.guestId } : {}) });
     return { token: issued.token, guestId: issued.guestId, expiresAt: issued.expiresAt, renewed: !!old };
   }

@@ -10,8 +10,14 @@
  *
  * 令牌是**持有即身份**的东西：编号由服务端随机生成，不收页面报上来的编号，否则谁都能自称是别人。
  * 页面把令牌存在自己那一侧（`src/account/guest.ts`），续期时把旧的交回来换一张新的；过期了就换一个新身份。
- * 形状照连接票据那一套（`server/auth/delegation.mjs`）：`g1.<base64url(JSON)>.<base64url(HMAC-SHA256)>`，
- * 先验签名再采信字段。令牌原文不进日志、不进错误信息。
+ *
+ * 形状：`gst1` + `base64url(JSON)` + 43 个字符的 `base64url(HMAC-SHA256)`，整串只有 `[A-Za-z0-9_-]`。
+ * **不带点号**是硬要求：它要当 `Authorization: Bearer` 送出去，而那一层只认这个字符集
+ * （`server/docservice/modules/account-projects.mjs` 的 `bearer`），带点号会被当成没登录挡回来。
+ * 签名段定长，所以从尾部切就分得开两段，不需要分隔符。先验签名再采信字段。
+ *
+ * 「这张是不是游客令牌」由**签名**说了算，不由前缀说了算：验得过就一定是本服务发的，
+ * 验不过就交给账号服务去认。前缀只在「这台没配密钥」时拿来说一句人话。令牌原文不进日志、不进错误信息。
  */
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { accountError } from './client.mjs';
@@ -21,7 +27,9 @@ export const GUEST_ID_RE = /^gst_[0-9a-f]{24}$/;
 export const isGuestId = value => typeof value === 'string' && GUEST_ID_RE.test(value);
 
 /** 令牌的前缀。和 `v1.`（连接票据、委托）岔开，拿错了一眼就看得出 */
-const GUEST_TOKEN_PREFIX = 'g1';
+const GUEST_TOKEN_PREFIX = 'gst1';
+/** 签名段的长度：HMAC-SHA256 的 32 字节写成 base64url 固定 43 个字符。定长才能从尾部切开 */
+const SIGNATURE_LENGTH = 43;
 /** 跟着连接票据那一套，允许 30 秒时钟偏差 */
 const CLOCK_SKEW_MS = 30_000;
 /** 令牌最长多少字节：超过的连解都不解，免得拿超大串去喂哈希 */
@@ -65,33 +73,39 @@ export function signGuestToken({ key, guestId, at, ttlMs = GUEST_LIMITS.tokenTtl
   const id = guestId === undefined ? newGuestId() : guestId;
   if (!isGuestId(id)) throw accountError(400, 'invalid-guest');
   const payload = { v: 1, k: 'gst', g: id, iat: at, exp: at + ttlMs };
-  const body = `${GUEST_TOKEN_PREFIX}.${b64url(JSON.stringify(payload))}`;
-  return { token: `${body}.${b64url(hmac(key, body))}`, guestId: id, issuedAt: payload.iat, expiresAt: payload.exp };
+  const body = `${GUEST_TOKEN_PREFIX}${b64url(JSON.stringify(payload))}`;
+  return { token: `${body}${b64url(hmac(key, body))}`, guestId: id, issuedAt: payload.iat, expiresAt: payload.exp };
 }
 
-/** 这串看着像不像游客令牌。只看前缀，用来决定「问账号服务还是自己验」，不代表它有效 */
+/**
+ * 这串看着像不像游客令牌。**只用来在「这台没配密钥」时说一句人话**：真正认不认由签名决定
+ * （`readGuestToken`），前缀谁都写得出来。
+ */
 export const looksLikeGuestToken = token =>
-  typeof token === 'string' && token.length <= MAX_TOKEN_LENGTH && token.startsWith(`${GUEST_TOKEN_PREFIX}.`);
+  typeof token === 'string' && token.length <= MAX_TOKEN_LENGTH &&
+  new RegExp(`^${GUEST_TOKEN_PREFIX}[A-Za-z0-9_-]{${SIGNATURE_LENGTH + 16},}$`).test(token);
 
 /**
  * 核一张游客令牌：先验签名，再采信里面的字段。
- * @returns {{ guestId: string, issuedAt: number, expiresAt: number } | null} 不合格一律回 null，不说是哪里不合格
+ *
+ * @returns {{ guestId: string, issuedAt: number, expiresAt: number, expired: boolean } | null}
+ *   `null` 表示「这不是本服务发的」（签名对不上、形状不对），调用方该把它交给账号服务去认；
+ *   回了对象就一定是本服务发的，`expired` 为真表示签名没问题但已经过期 —— 这时不能再放行，
+ *   但也不该拿去问账号服务（问了只会得到一个莫名其妙的错）。不说别的细节。
  */
 export function readGuestToken(token, { key, at }) {
-  if (!looksLikeGuestToken(token) || !key || !Number.isSafeInteger(at)) return null;
-  const cut = token.lastIndexOf('.');
-  if (cut <= GUEST_TOKEN_PREFIX.length) return null;
-  const body = token.slice(0, cut);
+  if (typeof token !== 'string' || token.length <= GUEST_TOKEN_PREFIX.length + SIGNATURE_LENGTH ||
+    token.length > MAX_TOKEN_LENGTH || !token.startsWith(GUEST_TOKEN_PREFIX) || !key || !Number.isSafeInteger(at)) return null;
+  const body = token.slice(0, -SIGNATURE_LENGTH);
   let given;
-  try { given = unb64url(token.slice(cut + 1)); } catch { return null; }
+  try { given = unb64url(token.slice(-SIGNATURE_LENGTH)); } catch { return null; }
   const want = hmac(key, body);
   if (given.length !== want.length || !timingSafeEqual(given, want)) return null;
   let payload;
-  try { payload = JSON.parse(unb64url(body.slice(GUEST_TOKEN_PREFIX.length + 1)).toString('utf8')); } catch { return null; }
+  try { payload = JSON.parse(unb64url(body.slice(GUEST_TOKEN_PREFIX.length)).toString('utf8')); } catch { return null; }
   if (payload?.v !== 1 || payload.k !== 'gst' || !isGuestId(payload.g)) return null;
   if (!Number.isSafeInteger(payload.iat) || !Number.isSafeInteger(payload.exp) || payload.exp <= payload.iat) return null;
-  if (at > payload.exp + CLOCK_SKEW_MS) return null;
-  return { guestId: payload.g, issuedAt: payload.iat, expiresAt: payload.exp };
+  return { guestId: payload.g, issuedAt: payload.iat, expiresAt: payload.exp, expired: at > payload.exp + CLOCK_SKEW_MS };
 }
 
 /**
