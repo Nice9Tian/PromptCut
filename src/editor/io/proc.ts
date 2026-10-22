@@ -11,6 +11,9 @@ import { getSkillSnapshot } from "../../skill/skillMode";
 import { checkAssociation, convertedFromOf, currentAssociation, noteConvertedFrom, noteLoadedAssociation, onGoneConversion, type CollaborationDescriptor, type ConvertedFrom, type CloudProjectAssociation, currentCloudAssociation, noteLoadedCloudAssociation, currentCloudSnapshot } from "../sync/recoveryAssociation";
 import { snapshotForSave } from "../sync/cloudSnapshot";
 import { UNSUPPORTED_PROC_TEXT } from "../sync/recoveryTexts";
+import { writeToHandle } from "./safeWrite";
+
+export { writeToHandle } from "./safeWrite";
 
 /**
  * 存盘时给项目盖一个「这是 SKILL 模式下的产物」的戳。不在 SKILL 模式就不写这一段。
@@ -325,9 +328,8 @@ export async function writeProcToDisk(
     }
   }
 
+  // 内容(含预渲染快照)全备齐了才打开写入流;写临时副本、close 才替换原文件,任一步出错 abort,原文件不变(`safeWrite.ts`)
   const { text, timedOut } = await collectFrameSnapshots(await produce());
-  const writable = await saveTarget.createWritable();
-  await writable.write(text);
-  await writable.close();
+  await writeToHandle(saveTarget, text);
   return { kind: "saved", where: saveTarget.name, ...(timedOut ? { snapshotsSkipped: true } : {}) };
 }

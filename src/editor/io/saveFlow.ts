@@ -16,6 +16,7 @@
 import type { SaveOutcome } from "./proc";
 import { beginSaveLock, isSaveLocked, type SaveKind, type SaveLock } from "../saveLock";
 import { LOCAL_WRITES_TIMEOUT_MS, waitForLocalWrites, type LocalWriteProbe } from "./localWrites";
+import { writeToHandle } from "./safeWrite";
 
 export { SETTLE_TIMEOUT_TEXT } from "./localWrites";
 
@@ -50,7 +51,7 @@ export interface PackDeps extends Omit<SaveDeps, "writeProc" | "serialize" | "sa
   pick(fileName: string): Promise<FileSystemFileHandle | null>;
   /** 装包 */
   pack(): Promise<PackResultLike>;
-  /** 写进挑好的落点(`proc.ts` 的 `writeToHandle`:出错丢掉临时副本,原文件不动);不给就直接用句柄写 */
+  /** 写进挑好的落点;缺省 `safeWrite.ts` 的 `writeToHandle`(出错丢掉临时副本,原文件不动) */
   writeHandle?(handle: FileSystemFileHandle, data: Blob): Promise<void>;
   /** 没有落点时退回浏览器下载 */
   download(blob: Blob, fileName: string): void;
@@ -58,10 +59,7 @@ export interface PackDeps extends Omit<SaveDeps, "writeProc" | "serialize" | "sa
   missingMessage(missing: readonly unknown[]): string;
 }
 
-/** 写盘那一步出错时的说法:原来的文件没动 */
-export function writeFailedText(reason: string): string {
-  return `写文件时出错：${reason}\n原来的文件没有改动（上一次保存的内容还在），可以继续编辑后再保存。`;
-}
+export { writeFailedText } from "./safeWrite";
 
 export const CHANGED_DURING_SAVE_TEXT = "保存期间项目又被本机改了（Agent 或后台任务）。文件里是保存开始那一刻的内容，之后的修改还没保存。";
 
@@ -132,18 +130,6 @@ export async function saveProcFile(fileName: string, deps: SaveDeps): Promise<Sa
   }
 }
 
-/** 没有 `writeHandle` 时的写法(测试用):写临时副本,出错丢掉 */
-async function writeHandleDirect(handle: FileSystemFileHandle, data: Blob): Promise<void> {
-  const writable = await handle.createWritable();
-  try {
-    await writable.write(data);
-    await writable.close();
-  } catch (e) {
-    try { await writable.abort(); } catch { /* 已经出错的流 abort 也可能抛 */ }
-    throw new Error(writeFailedText(String((e as Error)?.message ?? e)));
-  }
-}
-
 /**
  * 打包保存:.procp = 编排 + 项目用到的素材(A1)。
  *
@@ -170,7 +156,8 @@ export async function savePackedFile(fileName: string, deps: PackDeps): Promise<
     // 保存成了但要告诉用户的几件事合成一张卡片说(以前是接连两个 alert)
     const infos: string[] = [];
     if (target) {
-      await (deps.writeHandle ?? writeHandleDirect)(target, blob);
+      // 写临时副本、close 才替换原文件;出错 abort 丢掉临时副本,原来的包不变(`safeWrite.ts`)
+      await (deps.writeHandle ?? writeToHandle)(target, blob);
     } else {
       deps.download(blob, fileName);
       infos.push(`当前环境不支持选择目录，已保存到浏览器的下载位置：${fileName}`);
