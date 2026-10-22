@@ -116,9 +116,22 @@
 .ps-row-icon { flex: 0 0 auto; display: grid; place-items: center; width: 16px; color: var(--ink-muted); }
 .ps-row[aria-current="true"] .ps-row-icon { color: var(--accent); }
 
-/* 文件夹里的项目行,比文件夹缩进一层 */
-.ps-row.is-child { padding-left: 29px; font-size: 12px; color: var(--ink-muted); }
-.ps-row.is-child:hover { color: var(--ink); }
+/*
+ * 下一层。缩进加一条竖导线表示从属,不画逐行的拐角 —— 拐角要分「最后一个」和「中间的」,
+ * 行一多就容易错位。嵌套几层就套几层 .ps-sub,导线自然也就是几条。
+ */
+.ps-sub {
+  margin-left: 15px;
+  padding-left: 9px;
+  border-left: 1px solid var(--hairline);
+}
+/* 没有下一层的行不显示折叠箭头,但位置要留着,否则同一层的图标对不齐 */
+.ps-row-caret[data-empty="true"] { visibility: hidden; }
+
+/* Agent 那一行:比项目再轻一档,图标用 Agent 专属色(和编辑器 rail 上的头像同一个色) */
+.ps-row.is-agent { font-size: 12px; color: var(--ink-muted); }
+.ps-row.is-agent:hover { color: var(--ink); }
+.ps-row-icon.is-agent { color: var(--ui-agent, var(--accent)); }
 
 .ps-side-foot {
   flex: 0 0 auto;
@@ -402,21 +415,129 @@
   color: var(--ink);
   font-family: var(--font-sans);
 }
-/* 左边一整块品牌色,右边表单:浏览器里第一眼就和桌面版是同一套调性 */
+/*
+ * 左边一块、右边表单:浏览器里第一眼就和桌面版是同一套调性。
+ * 左边这块是深色底 + 参数化镂空(`BrandLattice.tsx`),品牌渐变只从镂空里透出来 ——
+ * 原来是满版高饱和的青到紫,挨着右边的深色表单太扎眼(用户 2026-10-23 说的)。
+ */
 .ps-login-art {
+  position: relative;
+  overflow: hidden;
   flex: 1 1 46%;
   min-width: 0;
   display: none;
   flex-direction: column;
   justify-content: space-between;
   padding: 40px;
-  color: var(--on-accent);
-  background: var(--ui-accent-grad, linear-gradient(145deg, var(--accent), color-mix(in srgb, var(--accent) 10%, #7b5cff)));
+  color: var(--ink);
+  background: var(--bg-panel);
+  border-right: 1px solid var(--hairline);
 }
 @media (min-width: 900px) { .ps-login-art { display: flex; } }
+/*
+ * 极光底:三团色斑在跑,上面盖一层条纹毛玻璃,最上面压一层噪点(画法与取舍见 `BrandAurora.tsx`)。
+ * 参数都在这儿 —— 改这几个数就换花样,不用动 TSX。
+ */
+.ps-aurora {
+  --aurora-blur: 64px;      /* 色斑糊到什么程度 */
+  --aurora-alpha: 0.5;      /* 色斑多浓:这一块挨着深色表单,浓了就扎眼 */
+  --stripe-width: 9px;      /* 一道磨砂条多宽 */
+  --stripe-gap: 13px;       /* 两道之间留多少(这一段是清的) */
+  --stripe-angle: 104deg;   /* 条纹的倾角 */
+  --glass-blur: 16px;       /* 磨砂糊多少 */
+  --grain-alpha: 0.055;     /* 颗粒多重 */
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  /* 色斑要糊成一片,这一层自己先定个底色,免得模糊边缘透出画布色 */
+  background: var(--bg-panel);
+}
+.ps-login-art > *:not(.ps-aurora) { position: relative; z-index: 1; }
+
+.ps-aurora-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(var(--aurora-blur));
+  opacity: var(--aurora-alpha);
+  will-change: transform;
+}
+/* 三团各走各的周期,时长互不整除,所以合起来看不出在重复 */
+.ps-aurora-blob.is-a {
+  left: -18%; top: 4%;
+  width: 78%; aspect-ratio: 1;
+  background: radial-gradient(circle at 50% 50%, var(--ui-accent, #00DBDB), transparent 68%);
+  animation: ps-drift-a 23s ease-in-out infinite alternate;
+}
+.ps-aurora-blob.is-b {
+  right: -24%; top: 26%;
+  width: 86%; aspect-ratio: 1;
+  background: radial-gradient(circle at 50% 50%, var(--ui-accent-2, #6F69FC), transparent 70%);
+  animation: ps-drift-b 31s ease-in-out infinite alternate;
+}
+.ps-aurora-blob.is-c {
+  left: 8%; bottom: -22%;
+  width: 70%; aspect-ratio: 1;
+  background: radial-gradient(circle at 50% 50%, color-mix(in oklab, var(--ui-accent, #00DBDB) 55%, var(--ui-accent-2, #6F69FC)), transparent 66%);
+  animation: ps-drift-c 19s ease-in-out infinite alternate;
+}
+@keyframes ps-drift-a {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to   { transform: translate3d(14%, 10%, 0) scale(1.18); }
+}
+@keyframes ps-drift-b {
+  from { transform: translate3d(0, 0, 0) scale(1.08); }
+  to   { transform: translate3d(-16%, -12%, 0) scale(0.92); }
+}
+@keyframes ps-drift-c {
+  from { transform: translate3d(0, 0, 0) scale(0.95); }
+  to   { transform: translate3d(10%, -16%, 0) scale(1.22); }
+}
+
+/*
+ * 条纹毛玻璃:整层 backdrop-filter 糊身后的极光,再用条纹遮罩只留一道道斜条 ——
+ * 条纹之间没有这一层,极光是清的,于是被切成明暗相间的带子。
+ * 条纹本身还加一点极淡的白,让磨砂那一侧有个边。
+ */
+.ps-aurora-glass {
+  position: absolute;
+  inset: -2%;
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
+  background: repeating-linear-gradient(
+    var(--stripe-angle),
+    rgba(255, 255, 255, 0.05) 0 var(--stripe-width),
+    transparent var(--stripe-width) calc(var(--stripe-width) + var(--stripe-gap))
+  );
+  mask-image: repeating-linear-gradient(
+    var(--stripe-angle),
+    #000 0 var(--stripe-width),
+    transparent var(--stripe-width) calc(var(--stripe-width) + var(--stripe-gap))
+  );
+  -webkit-mask-image: repeating-linear-gradient(
+    var(--stripe-angle),
+    #000 0 var(--stripe-width),
+    transparent var(--stripe-width) calc(var(--stripe-width) + var(--stripe-gap))
+  );
+}
+
+/* 噪点:滤镜生成的颗粒,压在最上面去掉大色块的塑料感 */
+.ps-aurora-grain {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: var(--grain-alpha);
+  mix-blend-mode: overlay;
+  pointer-events: none;
+}
+
+/* 关了动画的人只看静止的那一帧,构图不变 */
+@media (prefers-reduced-motion: reduce) {
+  .ps-aurora-blob { animation: none; }
+}
 .ps-login-art-title { margin: 0; font-size: 26px; font-weight: 650; line-height: 1.35; }
-.ps-login-art-sub { margin: 10px 0 0; font-size: 14px; opacity: 0.88; max-width: 34ch; line-height: 1.7; }
-.ps-login-art-foot { font-size: 12px; opacity: 0.8; }
+.ps-login-art-sub { margin: 10px 0 0; font-size: 14px; color: var(--ink-muted); max-width: 34ch; line-height: 1.7; }
+.ps-login-art-foot { font-size: 12px; color: var(--ink-faint); }
 
 .ps-login-panel {
   flex: 1 1 54%;

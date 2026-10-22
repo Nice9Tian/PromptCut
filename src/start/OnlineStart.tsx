@@ -13,7 +13,7 @@ import { OnlineLogin } from "./OnlineLogin";
 import { ProjectRail } from "./ProjectRail";
 import { ProjectSidebar, scopeKeyOf, type Scope } from "./ProjectSidebar";
 import { PromptBox } from "./PromptBox";
-import { MOCK_FOLDERS, MOCK_PROJECTS } from "./mockProjects";
+import { MOCK_AGENT_CHATS, MOCK_GROUPS, MOCK_PROJECTS } from "./mockProjects";
 import "./start.css";
 
 /** 界面预览用的地址参数:`?ui=home` 直接看开始页,`?ui=login` 看登录页。不给用户,只给开发和验收 */
@@ -43,16 +43,16 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
   );
 
   const shown = useMemo(() => {
-    if (scope.kind === "folder") return projects.filter((p) => p.folderId === scope.id);
-    if (scope.kind === "loose") return projects.filter((p) => p.folderId === null);
+    if (scope.kind === "group") return projects.filter((p) => p.groupId === scope.id);
+    if (scope.kind === "loose") return projects.filter((p) => p.groupId === null);
     return projects;
   }, [projects, scope]);
 
   const railTitle =
-    scope.kind === "folder"
-      ? (MOCK_FOLDERS.find((f) => f.id === scope.id)?.name ?? "文件夹")
+    scope.kind === "group"
+      ? (MOCK_GROUPS.find((g) => g.id === scope.id)?.name ?? "分组")
       : scope.kind === "loose"
-        ? "没放进文件夹"
+        ? "没放进分组"
         : "最近项目";
 
   if (view === "login") {
@@ -69,11 +69,13 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
   return (
     <div className="ps" data-pc="start-online">
       <ProjectSidebar
-        folders={MOCK_FOLDERS}
+        groups={MOCK_GROUPS}
         projects={projects}
+        chats={MOCK_AGENT_CHATS}
         scope={scope}
         onScope={setScope}
         accountName={account}
+        onOpenChat={(chat) => setNotice(`待办：打开 Agent 对话「${chat.title}」要接云端 Agent 服务（对话按账号归属，分共有和私有，见 product/agent.md）。`)}
         onCreate={() => setNotice("待办：新建项目要接云端文档服务（在线浏览器里一律是放云端的多用户协作项目）。")}
         onOpen={(id) => setNotice(`待办：打开项目「${projects.find((p) => p.id === id)?.name ?? id}」要接云端文档服务，再进编辑器。`)}
         onSignOut={() => {
