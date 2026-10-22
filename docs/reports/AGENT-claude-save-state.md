@@ -109,3 +109,49 @@ summary 8 项过 4
 
 截图：`out/save-state-shots/3-waiting.png`（等 Agent），`out/save-state-shots/4-timeout.png`（超时提示）。
 
+## 块三：写到一半失败不覆盖旧保存（提交 de7df888）
+
+**先验浏览器的行为成立不成立**（真 Chrome，探针 `--phases fail` 里的 `browser.swap-file-semantics` 一项，不经我们的代码）：同一个文件句柄 `createWritable()` → 写进 100 个字 → 不 close 也不 abort，期间和之后读原文件，都和原来逐字节相同；再开一个流 abort 掉，原文件仍不变。结论：**「先写临时副本、close 时才替换原文件」在 Chrome 里成立**，原代码靠它确实不会把旧保存写坏。但改前的真页面红跑同时看到两处毛病：
+
+1. 写失败后**临时副本留在了目录里**：OPFS 里列出 `失败探针.proc.crswap` 和 `失败探针.proc` 两个文件（真磁盘上它就留在用户保存的那个目录里，挨着 `.proc`）。
+2. 提示是浏览器的原话（`模拟：写到一半磁盘出错`），没说原文件怎样。
+
+（OPFS 与真磁盘走的是同一个 `FileSystemWritableFileStream`，规范也写了 close 之前改动不反映到文件；但我没法在无人值守的探针里拿到真磁盘上的文件句柄——「另存为」是系统对话框——所以真磁盘这一条没有亲手验，见「没做成的」。）
+
+**做法**：新文件 `src/editor/io/safeWrite.ts` 的 `writeToHandle(handle, data)`：内容（含预渲染快照）全备齐了才打开写入流；`createWritable` / `write` / `close` 任一步出错，`abort()` 丢掉临时副本（abort 自己再抛也不管），抛 `SaveWriteError`，说法是「写文件时出错：<原因>\n原来的文件没有改动（上一次保存的内容还在），可以继续编辑后再保存。」`.proc`（`proc.ts` 的 `writeProcToDisk`）和 `.procp`（`saveFlow.ts` 的 `savePackedFile`）都走它。
+
+**失败之后**：`saveFlow` 不清脏标记、不更新本地草稿、在 `finally` 里解锁（恢复编辑），顶部卡片「这次没有保存」+ 上面那句话。之后再存一次（写得进去）照常存成。
+
+**改前红、改后绿**
+
+`src/editor/io/procWrite.test.mjs`（假文件句柄照浏览器的规矩办：写进临时副本、close 才替换、abort 丢掉）。改前（`proc.ts`、`saveFlow.ts` 用 694ad620，即块一做完）：
+
+```
+✔ 预渲染快照收到了:随文件存进去,不另行提示
+✖ 预渲染快照等到时限没收到:项目照存(不带快照),结果里标出来,并告诉用户   ← 块二
+✖ 写到一半出错:原文件逐字节不变,临时副本丢掉(abort),没有 close
+✖ 关闭(替换原文件)那一步出错:也 abort,原文件不变
+✖ 保存流程里写到一半出错:提示说清原文件没动、不标已保存、不更新草稿、恢复编辑
+✔ 出错之后再存一次(这回写得进去):照常存成,原文件换成新内容
+✖ 打包保存写到一半出错:包文件不变、abort、提示原文件没动
+ℹ tests 7 / pass 2 / fail 5
+```
+
+（对 2bba5190 即块二做完再跑一次：打包那条已经过了——块二那次提交顺手给打包保存加了 abort，这一块把它并进 `safeWrite.ts`——其余三条照样红，`pass 4 / fail 3`。）改后 `ℹ tests 7 / pass 7 / fail 0`。
+
+真页面探针 `--phases fail`（先正常存一版，再加一条长名字的序列让新内容和旧的不同，写进一半时抛错）。改前（块二做完的代码）：
+
+```
+fail.notice                    ✖ 「这次没有保存 / 模拟：写到一半磁盘出错」，没说原文件
+fail.aborted                   ✖ log ["half-written"]，没有 abort
+fail.original-byte-identical   ✔ 3942 → 3942 字节（浏览器的临时副本规矩兜住了）
+fail.no-leftover-files         ✖ 目录里多了「失败探针.proc.crswap」
+fail.still-dirty / edit-restored ✔
+browser.swap-file-semantics    ✔
+summary 8 项过 5
+```
+
+改后 `summary 8 项过 8`：提示「这次没有保存 / 写文件时出错：模拟：写到一半磁盘出错 / 原来的文件没有改动（上一次保存的内容还在），可以继续编辑后再保存。」；log `["half-written","abort"]`、没有 close；原文件 3938 → 3938 字节逐字节相同；目录里只剩 `失败探针.proc`；项目仍是未保存；之后 Ctrl+Z 能用。
+
+截图：`out/save-state-shots/5-write-failed.png`（写失败提示）。
+
