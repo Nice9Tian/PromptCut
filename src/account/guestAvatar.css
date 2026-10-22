@@ -1,0 +1,27 @@
+/* 游客头像：圆的，和 AI 角色那个方头像（.pc-role-avatar）区分开 */
+.pc-guest-avatar {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid;
+  line-height: 1;
+  user-select: none;
+}
+
+.pc-guest-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pc-guest-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ui-fg, var(--ink-muted));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
