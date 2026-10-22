@@ -239,6 +239,41 @@
 }
 .ps-row:hover { background: var(--fill-hover); }
 .ps-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/*
+ * 其余可聚焦的元素:焦点圈同样画在**里面**(`outline-offset` 取负)。
+ *
+ * 为什么:这一页好几处的祖先是 `overflow: hidden / auto`(对话列、小窗画框、时间轴那一框、
+ * 缩略图那一排、拓展栏),而浏览器默认的焦点圈画在元素外面 —— 在这些地方会被裁掉一半,
+ * 看上去就是「发光被截断、露出半个方框」(用户 2026-10-23 报的就是这个)。画在里面就永远裁不到。
+ *
+ * 不包括:拖宽窄那条缝(`.ps-grip`)自己用一条竖线表示聚焦;几个文字输入框本身不画圈,
+ * 由外面那一圈(`:focus-within` 的强调色边框)表示聚焦,再画一个圈就重复了。
+ */
+.ps-prompt-send:focus-visible,
+.ps-chip:focus-visible,
+.ps-tile:focus-visible,
+.ps-ghost-btn:focus-visible,
+.ps-link:focus-visible,
+.ps-card-toggle:focus-visible,
+.ps-ext-action:focus-visible,
+.ps-ext-play:focus-visible,
+.ps-ext-seg-btn:focus-visible,
+.ps-ext-undo:focus-visible,
+.ps-ext-row-main:focus-visible,
+.ps-ext-scrub:focus-visible,
+.ps-detail-play:focus-visible,
+.ps-detail-scrub:focus-visible,
+.ps-detail-clip:focus-visible,
+.ps-top-home:focus-visible,
+.ps-top-collapse:focus-visible,
+.ps-chat-vis:focus-visible,
+.ps-chat-ext-btn:focus-visible,
+.ps-side-new:focus-visible,
+.ps-menu-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
 .ps-row[aria-current="true"] { background: var(--ui-accent-soft, var(--fill-subtle)); color: var(--accent); font-weight: 600; }
 .ps-row-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ps-row-count { flex: 0 0 auto; font-size: 11px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
@@ -1093,7 +1128,7 @@
   text-align: left;
   cursor: pointer;
 }
-.ps-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 12px; }
+.ps-tile { border-radius: 12px; }
 
 /* 缩略图外框是固定 16:9;项目自己的画幅按比例套在里面,所以一排高度齐平又看得出竖屏方屏 */
 .ps-frame {
