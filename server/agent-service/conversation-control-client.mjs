@@ -32,6 +32,8 @@ export const HANDOVER_RETRY_MS = 2000;
  *
  * 锁是一份 SQLite 文件上一直不提交的 `BEGIN EXCLUSIVE`（和文档服务的操作历史 `.owner` 同一个做法），在 Windows 和 Linux 上都是
  * 操作系统的文件锁。锁号存在同一份文件里，第一次建时生成、以后不变：文档服务据它核「两个实例握的是同一把锁」。
+ * 锁号绑在这一份文件上（文件号与所在的卷）：整个目录被拷走另起一份时，拷出来的那份文件号不同，拿锁时换一个新锁号，
+ * 于是拷出来的那份替不了原来那份里的实例交证据。
  * 拿不到（另一个活着的进程握着）就抛 `read-control-owner-busy`，调用方隔一会儿再试：活着的那个不会被顶替。
  */
 export function acquireDataDirLock(file) {
@@ -39,8 +41,13 @@ export function acquireDataDirLock(file) {
   const db = new DatabaseSync(file);
   try {
     db.exec('PRAGMA busy_timeout=0;');
-    db.exec('BEGIN EXCLUSIVE; CREATE TABLE IF NOT EXISTS owner(lock_id TEXT NOT NULL);');
-    if (!db.prepare('SELECT lock_id FROM owner').get()) db.prepare('INSERT INTO owner VALUES(?)').run(`lock_${randomUUID()}`);
+    db.exec('BEGIN EXCLUSIVE; CREATE TABLE IF NOT EXISTS owner(lock_id TEXT NOT NULL, file_id TEXT NOT NULL);');
+    const stat = fs.statSync(file, { bigint: true }), fileId = `${stat.dev}:${stat.ino}`;
+    const row = db.prepare('SELECT lock_id, file_id FROM owner').get();
+    if (!row || row.file_id !== fileId) {
+      db.exec('DELETE FROM owner');
+      db.prepare('INSERT INTO owner VALUES(?, ?)').run(`lock_${randomUUID()}`, fileId);
+    }
     db.exec('COMMIT; BEGIN EXCLUSIVE;');
     const lockId = db.prepare('SELECT lock_id FROM owner').get()?.lock_id;
     if (typeof lockId !== 'string' || !/^lock_[0-9a-f-]{36}$/.test(lockId)) throw accountError(503, 'read-control-owner-invalid');

@@ -1,8 +1,9 @@
 // 〔裁〕H07：Agent 数据目录的独占锁（conversation-control-client.mjs 的 acquireDataDirLock）。退出确认收口一个「不在了」的实例，
-// 凭的就是这把锁的三条性质，这里逐条验：
+// 凭的就是这把锁的这几条性质，这里逐条验：
 // 1. 一个进程握着时，别的连接（同进程或别的进程）拿不到；
 // 2. 握着它的进程被硬杀（不给它收口的机会），操作系统放开它，下一个拿得到；
-// 3. 锁号存在锁文件里，放开再拿还是同一个（文档服务据它核「两个实例握的是同一把锁」）。
+// 3. 锁号存在锁文件里，放开再拿还是同一个（文档服务据它核「两个实例握的是同一把锁」）；
+// 4. 锁文件被拷走另起一份，拷出来的那份换新锁号（拷出来的目录替不了原来那份里的实例交证据）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -53,4 +54,14 @@ test('数据目录独占锁：活着的握着就拿不到；硬杀以后拿得�
   }
   assert.equal(after.lockId, first.lockId);
   after.release();
+
+  // 整个目录拷走另起一份：拷出来的锁文件不是同一份文件，锁号换新的；原来那份不变
+  const copy = path.join(dir, 'copied', 'reads.sqlite.owner');
+  fs.mkdirSync(path.dirname(copy)); fs.copyFileSync(file, copy);
+  const copied = acquireDataDirLock(copy);
+  assert.notEqual(copied.lockId, first.lockId, '拷出来的那份换了新锁号');
+  copied.release();
+  const original = acquireDataDirLock(file);
+  assert.equal(original.lockId, first.lockId, '原来那份锁号不变');
+  original.release();
 });
