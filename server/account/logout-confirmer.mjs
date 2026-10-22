@@ -25,7 +25,7 @@ export const LOGOUT_CONFIRM_TIMEOUT_MS = 45_000;
 /** 已经超时并报过超时的退出，后台重办间隔逐次加倍，最长到这个上限；有新事件或新进展（`kick()`）时当场恢复原间隔。 */
 export const LOGOUT_CONFIRM_MAX_POLL_MS = 60_000;
 
-export function createLogoutConfirmer({ ledger, authority, transportEvidence, operations = () => null,
+export function createLogoutConfirmer({ ledger, authority, transportEvidence, operations = () => null, rollback = null,
   completeAgent = null, attestedServices = {}, now = Date.now, pollMs = 1000, maxPollMs = undefined, onDiagnostic = () => {},
   timeoutMs = LOGOUT_CONFIRM_TIMEOUT_MS, reportTimeout = null, docInstanceId = 'doc' } = {}) {
   if (![ledger?.read, ledger?.transaction, authority?.flushAccountAcknowledgements, authority?.revocationStatus,
@@ -60,8 +60,8 @@ export function createLogoutConfirmer({ ledger, authority, transportEvidence, op
       projectCursors: settled.projectCursors,
       endCursor: settled.projectCursors.reduce((max, row) => Math.max(max, row.lastAcceptedOrderSeq), 0),
       clockEvidence: { source: 'doc', docInstanceId: evidence.docInstanceId, transport: evidence.kind, recordedAt: now() },
-      // 这一版只记下区间，不撤回这段时间的修改（撤回是 0.7.20 的事）。
-      modifications: { state: 'retained', version: '0.7.18' } };
+      // 区间里的修改由 0.7.20 的逐项撤回处理（`logout-rollback.mjs`，在登记结束见证之前）；这份证据本身只记区间。
+      modifications: { state: rollback ? 'rollback' : 'retained', version: rollback ? '0.7.20' : '0.7.18' } };
     return ledger.transaction(state => {
       const rows = state.docLogoutBarriersV1 ??= {};
       rows[barrier.eventId] ??= { proof, digest: digestOf(proof) };
@@ -105,8 +105,17 @@ export function createLogoutConfirmer({ ledger, authority, transportEvidence, op
     await authority.flushAccountAcknowledgements();
     for (const barrier of barriers()) {
       const status = authority.revocationStatus(barrier.eventId);
-      if (status.pendingServices.length) note(barrier.eventId, `logout-pending:${status.pendingServices.join(',')}`);
-      else await seal(barrier);
+      if (status.pendingServices.length) { note(barrier.eventId, `logout-pending:${status.pendingServices.join(',')}`); continue; }
+      // 改密退出的逐项撤回（0.7.20，`logout-rollback.mjs`）：先撤完、把结果报给账号服务，再登记结束见证。
+      // 这样网页上「设备已退出」出现时，「N 处已撤回；M 处保留」那一行已经在账号服务那边；撤回没办完就不报办完（下一轮接着办）。
+      if (rollback) {
+        const proof = ledger.read().docLogoutBarriersV1?.[barrier.eventId]?.proof;
+        let outcome;
+        try { outcome = await rollback.run(barrier, proof); }
+        catch (error) { outcome = { done: false }; note(barrier.eventId, `logout-rollback-${error.code ?? 'failed'}`); }
+        if (!outcome.done) { note(barrier.eventId, 'logout-rollback-pending'); continue; }
+      }
+      await seal(barrier);
     }
     for (const barrier of barriers()) await timeout(barrier);
     const remaining = barriers();

@@ -33,8 +33,12 @@ function simulator(pair) {
     if (prior.state !== 'reserved') { if (action === 'seal' && prior.state === 'cancelled') throw historyError('witness-cancelled'); return prior; }
     if (action === 'cancel') { const row = signed({ ...prior, state: 'cancelled' }); rows.set(witnessId, row); return row; }
     if (revoked.has(prior.actorRef.loginId) && !body.retainedProof) throw historyError('credential-revoked', 401);
+    // 改密退出撤回的补偿操作:只能凭撤回证明定序(实际账号服务另核事件是选了退出的改密)
+    if ((prior.actorRef.rollbackEventId !== undefined) !== Boolean(body.rollbackProof)) throw historyError('credential-revoked', 401);
+    if (body.rollbackProof && body.rollbackProof.eventId !== prior.actorRef.rollbackEventId) throw historyError('bad-rollback-proof', 403);
     const proof = body.retainedProof;
-    const authorization = proof ? { kind: 'retained', projectId: prior.projectId, runGrantId: prior.actorRef.runGrantId, runId: prior.actorRef.runId, messageId: prior.actorRef.messageId, conversationId: prior.actorRef.conversationId, proof } : { kind: 'credential' };
+    const authorization = body.rollbackProof ? { kind: 'logout-rollback', eventId: body.rollbackProof.eventId, accountId: prior.actorRef.accountId }
+      : proof ? { kind: 'retained', projectId: prior.projectId, runGrantId: prior.actorRef.runGrantId, runId: prior.actorRef.runId, messageId: prior.actorRef.messageId, conversationId: prior.actorRef.conversationId, proof } : { kind: 'credential' };
     const row = signed({ ...prior, state: 'sealed', orderSeq: ++seq, utcMs: 1, authorization }); rows.set(witnessId, row); return row;
   };
   return { handle, rows, mode: 'independent-simulator', change: () => ({ accountId: actor.accountId, oldLoginIds: [actor.loginId], choice: 'pending', changeSeq: ++seq }),

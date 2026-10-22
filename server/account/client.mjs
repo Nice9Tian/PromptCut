@@ -95,6 +95,11 @@ export function createAccountClient({ origin, tls, serverFingerprint256, timeout
       requireRequestId(report.reportId);
       return request('POST', `${INTERNAL_PATHS.events}/${encodeURIComponent(eventId)}/logout-report`, report);
     },
+    /** 改密退出撤回的结果（撤了几处、保留几处、涉及几个项目），网站改密 / 重设密码页面「设备已退出」下面那一行用。 */
+    logoutModifications(eventId, report) {
+      requireRequestId(report.reportId);
+      return request('POST', `${INTERNAL_PATHS.events}/${encodeURIComponent(eventId)}/modifications`, report);
+    },
     async permissions({ accountId, group }) {
       if (!accountId || typeof accountId !== 'string') return { ok: true, allowed: false };
       const q = new URLSearchParams({ accountId, group: String(group ?? '') });

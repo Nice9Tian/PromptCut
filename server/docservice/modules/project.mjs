@@ -286,6 +286,47 @@ export function projectModule({
       const raw = store.readBlob?.(stateBlobName(projectId));
       return { projectRev: st.projectRev, value: st.body, orderProjection: raw ? JSON.parse(raw).orderProjection : null };
     },
+    /**
+     * 改密退出撤回一个项目（`server/account/logout-rollback.mjs` 经 `doc-assembly.mjs` 叫进来）。在项目锁里按当时的内容算撤回
+     * （`plan(内容)` 回 `{ ops, reverted, kept }`），有要撤的就作为一次补偿操作落地：写入身份是 `{ accountId, rollbackEventId }`，
+     * 广播给订阅了这个项目的连接（各方照常应用），并给这个项目此刻在线的成员页面各发一条气泡 `shared.notice { event: 'content-rolled-back', name }`。
+     * 不在线的不补：重启后认出已落地的同一次（`duplicate`）不再发。没有要撤的不落地、不发气泡。
+     */
+    async rollback({ projectId, eventId, accountId, attempt = 1, name = null, plan }) {
+      if (typeof plan !== 'function' || !Number.isSafeInteger(attempt) || attempt < 1) throw historyError('bad-rollback', 400);
+      const opId = `logout-rollback:${eventId}:${attempt}`;
+      const actor = { userId: accountId, deviceId: null, role: 'system', conversation: null, session: null,
+        identityVersion: 2, realm: 'account', accountId, rollbackEventId: eventId };
+      let planned = null, notified = false;
+      const out = await operationCoordinator.executeSystem({ projectId, principal: { kind: 'logout-rollback', eventId, accountId }, opId }, (binding) => {
+        const st = stateOf(projectId);
+        planned = plan(st.body);
+        if (!planned.ops.length) return null;
+        const applied = applyOps(st.body, planned.ops);
+        const at = typeof now === 'function' ? now() : (lastCtx?.now?.() ?? Date.now());
+        const record = { projectId, rev: st.projectRev + 1, opId, ops: planned.ops, actor, at, entities: entitiesOf(applied.effects, entityOpts) };
+        const next = { ...st, writers: new Map(st.writers), history: [...st.history], opIds: new Map(st.opIds) };
+        landCommit(next, record, applied.root);
+        return { ...binding, projectId, opId, expectedRev: st.projectRev, actor, ops: planned.ops,
+          beforeProjection: snapshotOf(projectId, st), projection: snapshotOf(projectId, next),
+          result: { record, overwrote: [], victims: [], used: [], rollback: { eventId, reverted: planned.reverted, kept: planned.kept } } };
+      }, ({ operation, duplicate }) => {
+        if (duplicate) return;
+        const { record } = operation.result;
+        stats.commits++;
+        lastCtx?.publish(channelOf(projectId), { type: 'project.ops', projectId, rev: record.rev, opId, ops: record.ops, actor: record.actor, at: record.at });
+        for (const [connId, principal] of principals) {
+          if (principal?.projectId !== projectId || principal.role !== 'page' || principal.scope === 'service' || typeof principal.service === 'string') continue;
+          lastCtx?.send(connId, { type: 'shared.notice', event: 'content-rolled-back', projectId, name });
+          notified = true;
+        }
+        log('project.rollback', { projectId, opId, reverted: operation.result.rollback.reverted.length, kept: operation.result.rollback.kept.length });
+      });
+      if (!out) return { state: 'done', opId: null, reverted: [], kept: planned?.kept ?? [], notified: false };
+      if (out.cancelled) return { state: 'cancelled', opId };
+      const result = out.operation.result.rollback;
+      return { state: 'done', opId, reverted: result.reverted, kept: result.kept, notified, duplicate: out.duplicate };
+    },
     materialize(operation, projection) {
       const { projectId } = operation;
       const expected = { ...operation.projection, orderProjection: { opId: operation.opId, requestId: operation.requestId,

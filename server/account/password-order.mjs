@@ -5,7 +5,8 @@ const fields = ['requestId', 'docAuthorityId', 'projectId', 'opId', 'payloadDige
 export function operationBinding(operation) {
   const result = Object.fromEntries(fields.map((field) => [field, operation[field]]));
   const actor = operation.actorRef ?? operation.actor;
-  result.actorRef = Object.fromEntries(['accountId', 'loginId', 'credentialId', 'loginGeneration', 'runGrantId', 'runId', 'messageId', 'conversationId'].filter((field) => actor[field] !== undefined).map((field) => [field, actor[field]]));
+  // `rollbackEventId`：改密退出撤回的补偿操作（0.7.20，`logout-rollback.mjs`）。它不借任何登录的身份，只有账号号和那次退出的事件号。
+  result.actorRef = Object.fromEntries(['accountId', 'loginId', 'credentialId', 'loginGeneration', 'runGrantId', 'runId', 'messageId', 'conversationId', 'rollbackEventId'].filter((field) => actor[field] !== undefined).map((field) => [field, actor[field]]));
   return result;
 }
 export function createWitnessVerifier({ keys, issuer = 'visuhive-account' } = {}) {
@@ -34,6 +35,16 @@ export function retainedOperationProof(operation, witness, grant, privateKey) {
       ['projectId', 'runId', 'messageId', 'conversationId', 'runGrantId'].some((field) => grant[field] !== (field === 'projectId' ? operation.projectId : actor[field]))) throw historyError('invalid-retained-grant', 403);
   return signDocProof({ v: 1, domain: 'promptcut.retained-operation', ...operationBinding(operation), witnessId: witness.witnessId,
     state: 'retained', visibilityAtRead: 'shared', readConfirmed: true, currentRun: true, readReceiptId: grant.readReceiptId, fenceRevision: grant.fenceRevision }, privateKey);
+}
+/** 改密退出撤回的补偿操作：文档服务用证明钥签一份「这一步是事件 X 的撤回」，账号服务据此给它定序（核对事件确实是选了退出的改密）。
+ * 这一份只能给写入身份是 `{ accountId, rollbackEventId }`、与授权里的事件和账号都对得上的操作。 */
+export function rollbackOperationProof(operation, witness, grant, privateKey) {
+  const actor = operation.actor;
+  if (!grant || typeof grant.eventId !== 'string' || !grant.eventId || grant.eventId !== actor?.rollbackEventId || grant.accountId !== actor.accountId ||
+      ['loginId', 'credentialId', 'loginGeneration', 'runGrantId', 'runId', 'messageId', 'conversationId'].some((field) => actor[field] !== undefined))
+    throw historyError('invalid-rollback-grant', 403);
+  return signDocProof({ v: 1, domain: 'promptcut.logout-rollback', ...operationBinding(operation), witnessId: witness.witnessId,
+    eventId: grant.eventId }, privateKey);
 }
 export function activeRunOperationProof(operation, witness, grant, privateKey) {
   const actor = operation.actor;
@@ -134,6 +145,10 @@ export function createPasswordOrder({ history, account, verifyWitness, checkGate
     const body = { ...binding };
     if (authorization.retainedGrant) body.retainedProof = retainedOperationProof(operation, witness, authorization.retainedGrant, docAttestationPrivateKey);
     if (authorization.activeGrant) body.activeRunProof = activeRunOperationProof(operation, witness, authorization.activeGrant, docAttestationPrivateKey);
+    if (authorization.rollbackGrant) {
+      if (!docAttestationPrivateKey) throw historyError('order-unavailable', 503);
+      body.rollbackProof = rollbackOperationProof(operation, witness, authorization.rollbackGrant, docAttestationPrivateKey);
+    }
     let sealed;
     try { sealed = await account.seal(witness.witnessId, body); }
     catch (error) {

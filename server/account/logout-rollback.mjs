@@ -19,7 +19,7 @@
  *   同一个号重来只会认出已经落地的那一次；上一次没定序就被作废的，换下一个号重新算。
  */
 import { applyOps, parsePath, isIdArray, idSegment } from '../docservice/json-ops.mjs';
-import { canonical } from '../docservice/modules/operation-history.mjs';
+import { canonical, digest, historyError } from '../docservice/modules/operation-history.mjs';
 import { accountError } from './client.mjs';
 
 export const ROLLBACK_VERSION = '0.7.20';
@@ -206,6 +206,18 @@ function reorderOps(work, item) {
   return order.map((id, index) => ({ op: 'move', path: `${item.path}/${idSegment(id)}`, index }));
 }
 
+/** 在一个项目上办撤回：交给这个项目的有序提交（`operation-wiring.mjs` 的 `rollback`，再到项目模块），
+ * 它在项目锁里回调 `plan(当前内容)`，这里按同一份操作历史逐项算。内容和操作历史对不上就不撤（等对账）。 */
+export function rollbackThrough({ history, coordinator }, { projectId, eventId, accountId, attempt, name, candidate } = {}) {
+  if (!candidate || candidate.projectId !== projectId || typeof coordinator?.rollback !== 'function') throw historyError('bad-rollback', 400);
+  const isCandidate = candidateOf(candidate);
+  return coordinator.rollback({ projectId, eventId, accountId, attempt, name, plan: (body) => {
+    const current = history.snapshot(projectId);
+    if (digest(current.value) !== digest(body)) throw historyError('needs-reconciliation');
+    return planRollback({ accepted: history.accepted(projectId), current, isCandidate });
+  } });
+}
+
 /**
  * 续办器用的撤回执行器。每次 `run(barrier, proof)` 把这次退出要撤的各项目往下办，全部办完（并把结果报给账号服务）才回 `done: true`；
  * 续办器在那之前不去登记结束见证，所以网页上「设备已退出」出现的时候，那一行撤回结果已经在账号服务那边了。
@@ -287,7 +299,8 @@ export function createLogoutRollback({ ledger, operations, report = null, now = 
         if (outcome.state === 'cancelled') target.projects[cursor.projectId] = { state: 'retry', attempt: attempt + 1 };
         else target.projects[cursor.projectId] = { state: 'done', attempt, opId: outcome.opId ?? null,
           reverted: outcome.reverted.length, kept: outcome.kept.length, gone: Boolean(outcome.gone),
-          notified: outcome.notified === true ? true : outcome.reverted.length ? 'lost' : false,
+          // 气泡：发给了此刻在线的成员 / 没人在线 / 重启后认出已落地的同一次（不补发，语义「不在线的不补弹」）
+          notice: !outcome.reverted.length ? 'none' : outcome.duplicate ? 'not-resent' : outcome.notified ? 'sent' : 'nobody-online',
           revertedPaths: outcome.reverted.slice(0, ROLLBACK_PATHS_KEPT).map((item) => item.path),
           keptPaths: outcome.kept.slice(0, ROLLBACK_PATHS_KEPT).map((item) => `${item.reason}:${item.path}`), at: now() };
       });

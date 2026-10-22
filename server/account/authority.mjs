@@ -3,6 +3,7 @@ import { newProjectId } from '../auth/store.mjs';
 import { validateAccountEvent, validateEventBatch, requireRequestId } from './protocol.mjs';
 import { accountError } from './client.mjs';
 import { canonicalJson, digestOf, appendAccessEvent } from './ledger.mjs';
+import { rollbackEventOf } from './logout-rollback.mjs';
 
 const accountIdOK = value => typeof value === 'string' && /^acc_[a-f0-9]{24}$/.test(value);
 const projectIdOK = value => typeof value === 'string' && /^(?:sp_[a-z2-7]{26}|[A-Za-z0-9_-]{8,64})$/.test(value);
@@ -855,6 +856,10 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     projectState(projectId) {
       const p = ledger.read().projects[projectId];
       return p && p.status === 'active' ? p : null;
+    },
+    /** 改密退出撤回用（只读）：这个事件号是不是一次「改密码后选了退出」、旧登录都已作废；是就回账号号、改密顺序号与旧登录。 */
+    logoutRollbackEvent(eventId) {
+      return typeof eventId === 'string' ? rollbackEventOf(ledger.read(), eventId) : null;
     },
     hasProject(projectId) {
       return typeof projectId === 'string' && Boolean(ledger.read().projects?.[projectId]);
