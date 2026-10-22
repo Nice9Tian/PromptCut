@@ -12,8 +12,9 @@ import type { CardDef } from "../kernel/types";
 import { importMediaFiles, MEDIA_ACCEPT } from "../editor/left/importAssets";
 import { useCardLibrary } from "../editor/left/library/cardGroups";
 import { accountMemberAdmin, currentAccountProjectLink, currentSharedUrl, discardOffline, pausedSummary, replayOffline, setMergeOpen, setOfflineOpen, useSync } from "../editor/sync/syncManager";
-import { AccountFailure, type AccountJoinRequestRow } from "../account/client";
+import type { AccountJoinRequestRow } from "../account/client";
 import { JOIN_REQUEST_TEXT, requestedAtText } from "../account/joinRequestText";
+import { createRequestIds } from "../account/requestIds";
 import { mergeBarText, useConflictMerge, useMergeCounts } from "../editor/sync/useConflictMerge";
 import { mergeBlockedText } from "../editor/sync/ConflictMerge";
 import { IMPORT_OFFLINE_TEXT, useImportOffline } from "../editor/sync/useImportOffline";
@@ -413,20 +414,17 @@ export function MembersSheet(props: { info: MembersInfo; onClose: () => void }) 
   const { info } = props;
   const link = currentAccountProjectLink() ?? currentSharedUrl();
   const [deciding, setDeciding] = useState<string | null>(null);
-  /** 「通过」「拒绝」没收到回包时,再点沿用原请求号(同桌面 `AccountMembersPanel.tsx`) */
-  const decisionIds = useRef(new Map<string, string>());
+  /** 「通过」「拒绝」没收到回包时,再点沿用原请求号;收到结论就丢掉(`src/account/requestIds.ts`,与桌面共用) */
+  const decisionIds = useRef(createRequestIds());
   // 申请加入(2026-10-22 用户定):创建者在成员面板里「通过」「拒绝」;服务端只认创建者本人,通过那一刻现核禁入与申请还在不在
   const decide = async (op: "approve-join" | "reject-join", row: AccountJoinRequestRow) => {
-    const key = `${op}:${row.joinRequestId}`, name = row.accountName ?? row.accountId;
-    const requestId = decisionIds.current.get(key) ?? crypto.randomUUID();
-    decisionIds.current.set(key, requestId);
+    const name = row.accountName ?? row.accountId;
     setDeciding(row.joinRequestId);
     try {
-      await accountMemberAdmin({ op, accountId: row.accountId, joinRequestId: row.joinRequestId, requestId });
-      decisionIds.current.delete(key);
-      toast(op === "approve-join" ? `已通过 ${name} 的申请` : `已拒绝 ${name} 的申请`);
+      await decisionIds.current.run(`${op}:${row.joinRequestId}`, (requestId) =>
+        accountMemberAdmin({ op, accountId: row.accountId, joinRequestId: row.joinRequestId, requestId }));
+      toast(op === "approve-join" ? JOIN_REQUEST_TEXT.approvedToast(name) : JOIN_REQUEST_TEXT.rejectedToast(name));
     } catch (e) {
-      if (e instanceof AccountFailure && e.status !== 0) decisionIds.current.delete(key);
       toast(e instanceof Error && e.message ? e.message : "暂时无法处理这条申请，请重试。");
     } finally { setDeciding(null); info.refresh(); }
   };

@@ -7,6 +7,7 @@ import { CLOUD_CHAT_TEXT } from '../ai/cloud/chatTexts';
 import { CloudError } from '../ai/cloud/cloudApi';
 import { accountMemberCountLabel, accountMemberState, cloudAgentLabel } from '../editor/sync/hostedServices';
 import { JOIN_REQUEST_TEXT, requestedAtText } from './joinRequestText';
+import { createRequestIds } from './requestIds';
 import './account.css';
 
 /** 成员列表展开 / 收着时取成员名单的间隔(毫秒) */
@@ -20,8 +21,8 @@ export function AccountMembersPanel() {
   const [open, setOpen] = useState(false), [bansOpen, setBansOpen] = useState(false);
   const [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const [attempt, setAttempt] = useState<{ operation: AccountKickOperation; name: string; retry: boolean } | null>(null);
-  /** 「通过」「拒绝」没收到回包时,再点同一个按钮沿用原来的请求号(服务端认得出是同一次);收到结论就丢掉 */
-  const decisionIds = useRef(new Map<string, string>());
+  /** 「通过」「拒绝」没收到回包时,再点同一个按钮沿用原来的请求号;收到结论就丢掉(`requestIds.ts`,桌面与手机共用) */
+  const decisionIds = useRef(createRequestIds());
   const [rect, setRect] = useState<DOMRect | null>(null);
   // 踢出时可以选「同时清除他的私有对话」(2026-10-13 用户定，缺省不选：他的共有对话一律保留)；踢出成功后再清，清不完可重试
   const cloud = useCloudAgent(), cloudApi = useCloudApi(cloud.url, cloud.projectId);
@@ -79,20 +80,16 @@ export function AccountMembersPanel() {
    * 通过以后他直接能进(设了二级密码的仍要输一次),被拒的看到「创建者没有通过你的申请」。
    */
   const decide = async (op: 'approve-join' | 'reject-join', row: AccountJoinRequestRow) => {
-    const own = generation.current, key = `${op}:${row.joinRequestId}`, name = row.accountName ?? row.accountId;
-    const requestId = decisionIds.current.get(key) ?? crypto.randomUUID();
-    decisionIds.current.set(key, requestId);
+    const own = generation.current, name = row.accountName ?? row.accountId;
     setBusy(true); setError('');
     try {
-      await accountMemberAdmin({ op, accountId: row.accountId, joinRequestId: row.joinRequestId, requestId });
-      decisionIds.current.delete(key);
+      await decisionIds.current.run(`${op}:${row.joinRequestId}`, requestId =>
+        accountMemberAdmin({ op, accountId: row.accountId, joinRequestId: row.joinRequestId, requestId }));
       if (generation.current !== own) return;
-      pushToast(op === 'approve-join' ? `已通过 ${name} 的申请。` : `已拒绝 ${name} 的申请。`, 'info');
+      pushToast(op === 'approve-join' ? JOIN_REQUEST_TEXT.approvedToast(name) : JOIN_REQUEST_TEXT.rejectedToast(name), 'info');
       await refresh().catch(() => undefined);
     } catch (e) {
       if (generation.current !== own) return;
-      // 有结论的失败(已处理过、申请不在了、没有权限……)丢掉请求号;没收到回包(网络)的留着,再点一次就是重试
-      if (e instanceof AccountFailure && e.status !== 0) decisionIds.current.delete(key);
       await refresh().catch(() => undefined);
       setError(e instanceof Error ? e.message : '暂时无法处理这条申请，请重试。');
     } finally { if (generation.current === own) setBusy(false); }

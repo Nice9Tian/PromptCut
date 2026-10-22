@@ -11,7 +11,8 @@
  *   JR-6  伪造与跨项目:请求体里写别人的账号号被拒、权威层也不认;别的项目的创建者通过不了这里的申请;
  *         申请号拿到别的项目用回 404;一个项目的通过进不了另一个项目;项目票据当登录令牌用回 401
  *   JR-7  「通过」「拒绝」只有创建者能做(服务端核):普通成员、被踢的、申请人自己、项目外的人、创建者的 Agent 身份都回 403
- *   JR-8  通过之后进项目仍过全部关卡:二级密码、禁入、登录有效、项目还在;链接作废过也不用新链接
+ *   JR-8  通过之后进项目仍过全部关卡:二级密码、禁入、登录有效、项目还在;链接作废过也不用新链接;通过那一刻就在「我加入的」里;
+ *         页面那条路(从「我加入的」点进去,真的 `client.ts`,在线页面与桌面外壳两种传输):先回 secondary-required、输对二级密码进来、之后直接进
  *   JR-9  被拒:申请人看到「被拒」;可以再发;同一个项目滚动 24 小时里最多起 3 条,到数回 429 并告诉他最早什么时候能再发,过了时间窗又能发
  *   JR-10 幂等:同一个请求号重放、换请求号再做同样的决定、相反的决定、申请号对不上、回包丢了的发申请重试
  *   JR-11 上限:一个项目挂着的条数、一个账号跨项目滚动 24 小时里的条数、被拒记录满了丢最旧的(被丢的人可以再发);缺省值
@@ -31,6 +32,8 @@ import { openAccountLedger } from '../account/ledger.mjs';
 import { createAccountAuthority, JOIN_REQUEST_LIMITS, joinRequestView } from '../account/authority.mjs';
 import { createAccountHostedRuntime } from '../docservice/account-hosted.mjs';
 import { mountAccountProjects } from '../docservice/modules/account-projects.mjs';
+import { createAccountClient } from '../../src/account/client.ts';
+import { enterOrAskPassword } from '../../src/account/entryFlow.ts';
 
 const DAY = 24 * 60 * 60 * 1000;
 const idOf = n => `acc_${n.toString(16).padStart(24, '0')}`;
@@ -119,6 +122,33 @@ async function stack(t) {
   return { ledger, time, accounts, runtime, authority, projectId, call, create, record, join, session, members, send, status, admin, decide, pendingId, rid };
 }
 const listOnly = async s => { const r = await s.admin('a', { op: 'set-entry', allowLinkJoin: false }); assert.equal(r.status, 200, JSON.stringify(r.value)); };
+/**
+ * 页面用的那一份 `client.ts`(不另写),接到这一套的公开路由上:`online` 走 fetch(在线页面);`desktop` 走外壳的账号桥
+ * (`desktop/src-tauri/src/account_vault.rs`:成功原样带回,失败只带回 `{ ok:false, status, code }`)。
+ * 登录那一段(网站 `/me`、编辑器登录、外壳的 recover)换成替身,访问令牌就是这一套认得的令牌(`PEOPLE` 的键)
+ */
+async function pageClient(s, token, mode) {
+  const [n, name] = PEOPLE[token];
+  const account = { id: idOf(n), name };
+  const credential = () => ({ ok: true, account, loginId: `login-${token}`, accessToken: token, accessExpiresAt: s.time.now() + 3_600_000 });
+  const route = path => { const m = /^\/hosted\/shared\/account\/([a-z]+)$/.exec(path); assert.ok(m, `页面打了别的路由:${path}`); return m[1]; };
+  const device = { deviceId: `page-${token}-${mode}`, deviceName: 'fixture' };
+  const client = mode === 'online'
+    ? createAccountClient({ online: true, origin: 'https://fixture.invalid', device, now: s.time.now, fetch: async (url, init) => {
+      if (url.pathname === '/api/account/me') return Response.json({ ok: true, account, csrfToken: 'csrf' });
+      if (url.pathname.startsWith('/api/account/editor/')) return Response.json(credential());
+      const { status, value } = await s.call(init.headers.Authorization.replace(/^Bearer /, ''), route(url.pathname), JSON.parse(init.body));
+      return Response.json(value, { status });
+    } })
+    : createAccountClient({ online: false, origin: 'https://fixture.invalid', device, now: s.time.now, native: async (operation, args) => {
+      if (operation === 'recover') return credential();
+      assert.equal(operation, 'request');
+      const { status, value } = await s.call(args.accessToken, route(args.path), args.body);
+      return value?.ok === true ? value : { ok: false, status, code: value?.code };
+    } });
+  await client.restore();
+  return client;
+}
 const expectCode = (r, status, code, label) => assert.deepEqual([r.status, r.value?.code], [status, code], `${label ?? ''} ${JSON.stringify(r.value)}`);
 
 test('JR-1 取消勾选:那一刻的成员都在账号名单里、照旧能进;之后的新人 not-listed;只有创建者能改勾选', async t => {
@@ -299,7 +329,7 @@ test('JR-7 「通过」「拒绝」只有创建者能做:普通成员、被踢�
   expectCode(await s.call('a', 'admin', { projectId: s.projectId, op: 'reject-join', accountId: ID.d, joinRequestId: jr, requestId: 'role', role: 'page' }), 400, 'invalid-authority-claim');
 });
 
-test('JR-8 通过之后进项目仍过全部关卡:二级密码、禁入、登录有效、项目还在;作废过的旧链接不挡被通过的人', async t => {
+test('JR-8 通过之后进项目仍过全部关卡:二级密码、禁入、登录有效、项目还在;作废过的旧链接不挡被通过的人;通过那一刻在「我加入的」里,从那里点进去先问二级密码', async t => {
   const s = await stack(t);
   await listOnly(s);
   expectCode(await s.admin('a', { op: 'set-secondary-password', password: '二级 密码' }), 200, undefined);
@@ -313,13 +343,26 @@ test('JR-8 通过之后进项目仍过全部关卡:二级密码、禁入、登�
   assert.equal(s.record().accessRevision, revision + 1, '通过改了名单:访问版本号 +1');
   assert.deepEqual((await s.status('c')).value.joinRequest, { state: 'member', entry: 'list', canApply: false });
   assert.equal(s.record().joinRequests[ID.c], undefined, '申请记录删掉,成员记录上留申请号');
+  // 被通过那一刻就在「我加入的」里(项目列表 `listProjects`:网站的「我加入的」、开始页的列表都读它),还没输二级密码也在
+  assert.deepEqual(s.authority.listProjects(ID.c).joined.map(p => p.projectId), [s.projectId], '通过那一刻就在「我加入的」里');
   // 二级密码:通过了也要输一次
   expectCode(await s.join('c'), 403, 'secondary-password-required');
   expectCode(await s.session('c'), 403, 'secondary-password-required', '/session 也拦');
   expectCode(await s.join('c', s.projectId, { secondaryPassword: '二级密码' }), 403, 'bad-secondary-password');
-  const entered = await s.join('c', s.projectId, { secondaryPassword: '二级 密码' });
-  assert.equal(entered.status, 200, '输对了就进(不用新链接:创建者通过的人不核链接口令)');
-  assert.equal(typeof entered.value.connectionTicket, 'string');
+  // 页面那条路:开始页「我加入的」里点进去 = `useAccountProjects.open` → `enterOrAskPassword` → `enterAccountProject`,后者头一个请求就是
+  // `client.session`(`syncManager.ts`,错原样抛出)。用页面那一份 `client.ts` 打这里的公开路由,在线页面、桌面外壳两种传输都走:
+  // 不当失败,回 'secondary-required'(页面据此填好链接、弹出二级密码框);输错照样拦;输对了走带密码的 `/join` 进来;之后从列表点进去直接进
+  for (const mode of ['online', 'desktop']) {
+    const page = await pageClient(s, 'c', mode);
+    assert.equal(await enterOrAskPassword(() => page.session(s.projectId)), 'secondary-required', `${mode}:点进去回 secondary-required`);
+    await assert.rejects(page.join(s.projectId, `page-bad-${mode}`, { secondaryPassword: '二级密码' }), { status: 403, code: 'bad-secondary-password' }, `${mode}:输错照样拦`);
+  }
+  const entered = await (await pageClient(s, 'c', 'online')).join(s.projectId, 'page-join-c', { secondaryPassword: '二级 密码' });
+  assert.equal(typeof entered.connectionTicket, 'string', '输对了就进(不用新链接:创建者通过的人不核链接口令)');
+  for (const mode of ['online', 'desktop']) {
+    const page = await pageClient(s, 'c', mode);
+    assert.equal(await enterOrAskPassword(() => page.session(s.projectId)), 'entered', `${mode}:输过一次以后从列表点进去直接进`);
+  }
   assert.equal((await s.session('c')).status, 200, '输过一次以后不再问');
   // 通过之后、进来之前被踢:禁入照样挡
   assert.equal((await s.send('d')).status, 200);

@@ -4,16 +4,19 @@
  *
  *   JRC-1 发申请、查状态只走 `/hosted/shared/account/join`,请求体按白名单拼;回包逐项核,形状不对按协议错
  *   JRC-2 桌面外壳的账号桥:用到的路由都在外壳写死的放行清单里(0.2.8 外壳不用换);失败时外壳只带回 status 与 code,页面照样有人话
- *   JRC-3 创建者的 set-entry、通过、拒绝:请求体白名单、本地先核形状、回包逐项核;回包丢了用同一个请求号重发,请求体一字不差
+ *   JRC-3 创建者的 set-entry、通过、拒绝:请求体白名单、本地先核形状、回包逐项核;「通过」「拒绝」的请求号由 `requestIds.ts` 管
+ *         (桌面、手机共用,测的就是页面用的那一份):没收到回包再点同号重发、请求体一字不差,收到结论(成功或明确的错)换新号
  *   JRC-4 成员投影里的申请列表:只收创建者的;一个账号一条;不能同时是成员或已禁入;多余字段丢掉
  *   JRC-5 每个新 code 都有一句话(不落到「请求失败（code）」那个兜底)
- *   JRC-6 界面上的话:被挡住、已发送、被拒(次数用完带几点以后能再申请)、通过;重开文件那条提示;何时自动再走一次加入
+ *   JRC-6 界面上的话:被挡住、已发送、被拒(次数用完带几点以后能再申请)、通过(这几句照语义原文不带句号);项目改回知道链接就能进时
+ *         那一块不显示(与重开文件那条提示一致);重开文件那条提示;何时自动再走一次加入;通过、拒绝之后的气泡
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createAccountClient, accountErrorText, AccountFailure } from './client.ts';
 import { JOIN_REQUEST_TEXT, autoJoinKey, joinRequestNotice, reopenNotice, retryAtText, requestedAtText } from './joinRequestText.ts';
+import { createRequestIds } from './requestIds.ts';
 
 const account = { id: 'acc_' + 'a'.repeat(24), name: 'Alice' };
 const other = 'acc_' + 'b'.repeat(24);
@@ -91,11 +94,13 @@ test('JRC-2 桌面外壳:用到的路由都在外壳的放行清单里;失败时
   assert.deepEqual([...new Set(used)].sort(), ['/hosted/shared/account/admin', '/hosted/shared/account/join']);
 });
 
-test('JRC-3 set-entry、通过、拒绝:请求体白名单、本地先核形状、回包逐项核;回包丢了同一个请求号重发', async () => {
-  let lose = true;
+test('JRC-3 set-entry、通过、拒绝:请求体白名单、本地先核形状、回包逐项核;「通过」「拒绝」的请求号由页面真用的那一份 createRequestIds 管:没收到回包同号重发,收到结论换新号', async () => {
+  const jr2 = 'jr_' + '2'.repeat(24);
+  let lose = 1;
   const { client, calls } = onlineClient((url, body) => {
     if (body.op === 'set-entry') return reply({ ok: true, eventId: 'access:doc:5', accessRevision: 5, completed: false, state: 'pending-services' });
-    if (body.op === 'approve-join' && lose) { lose = false; throw Error('lost-response'); }
+    if (body.op === 'approve-join' && lose > 0) { lose--; throw Error('lost-response'); }
+    if (body.op === 'reject-join' && body.joinRequestId === jr2) return reply({ ok: false, code: 'join-request-decided' }, 409);
     return reply({ ok: true, accessRevision: 6, joinRequest: { accountId: body.accountId, joinRequestId: body.joinRequestId,
       state: body.op === 'approve-join' ? 'approved' : 'rejected', leaked: 'never' } });
   });
@@ -103,12 +108,32 @@ test('JRC-3 set-entry、通过、拒绝:请求体白名单、本地先核形状�
   assert.deepEqual(await client.memberAdmin(projectId, { op: 'set-entry', allowLinkJoin: false, expectedAccessRevision: 4, requestId: 'entry-1', extra: 'x' }),
     { eventId: 'access:doc:5', accessRevision: 5, completed: false, state: 'pending-services' });
   assert.deepEqual(calls[0].body, { projectId, op: 'set-entry', allowLinkJoin: false, expectedAccessRevision: 4, requestId: 'entry-1' });
+  // 页面上的「通过」「拒绝」(桌面 AccountMembersPanel.tsx、手机 mobile/sheets.tsx 的 decisionIds)就是这样调的:同一份 createRequestIds、同一个键
+  let n = 0;
+  const ids = createRequestIds(() => `rid-${++n}`);
+  const decide = (op, joinRequestId) => ids.run(`${op}:${joinRequestId}`, requestId => client.memberAdmin(projectId, { op, accountId: other, joinRequestId, requestId }));
+  await assert.rejects(decide('approve-join', jr), { status: 0, code: 'network' });
+  assert.equal(ids.pending(`approve-join:${jr}`), 'rid-1', '没收到回包:请求号留着');
+  assert.deepEqual(await decide('approve-join', jr), { joinRequest: { accountId: other, joinRequestId: jr, state: 'approved' }, accessRevision: 6 });
+  assert.deepEqual(calls[1].body, calls[2].body, '再点一次:请求体(连同请求号)一字不差');
+  assert.deepEqual(calls[2].body, { projectId, op: 'approve-join', accountId: other, joinRequestId: jr, requestId: 'rid-1' }, '不带访问版本号、不带别的');
+  assert.equal(ids.pending(`approve-join:${jr}`), undefined, '收到结论:丢掉');
+  await decide('approve-join', jr);
+  assert.equal(calls[3].body.requestId, 'rid-2', '收到结论之后再点:算新的一次');
+  // 服务端明确拒了(409 已处理过):同样丢掉,下次是新号
+  await assert.rejects(decide('reject-join', jr2), { status: 409, code: 'join-request-decided' });
+  assert.equal(ids.pending(`reject-join:${jr2}`), undefined);
+  await assert.rejects(decide('reject-join', jr2), { status: 409 });
+  assert.deepEqual([calls[4].body.requestId, calls[5].body.requestId], ['rid-3', 'rid-4']);
+  // 别的错(请求没发出去、回包对不上协议):也丢掉,只有没收到回包(status 0)才留着
+  await assert.rejects(ids.run('other', async () => { throw new TypeError('boom'); }), TypeError);
+  await assert.rejects(ids.run('protocol', async () => { throw new AccountFailure(503, 'account-protocol'); }), { status: 503 });
+  assert.deepEqual([ids.pending('other'), ids.pending('protocol')], [undefined, undefined]);
+  n = 100;
+  // 不同的操作键各管各的:拒绝另一条不沾通过那一条的号
+  assert.deepEqual((await decide('reject-join', jr)).joinRequest.state, 'rejected');
+  assert.equal(calls[6].body.requestId, 'rid-101');
   const approve = { op: 'approve-join', accountId: other, joinRequestId: jr, requestId: 'approve-1' };
-  await assert.rejects(client.memberAdmin(projectId, approve), { status: 0, code: 'network' });
-  assert.deepEqual(await client.memberAdmin(projectId, approve), { joinRequest: { accountId: other, joinRequestId: jr, state: 'approved' }, accessRevision: 6 });
-  assert.deepEqual(calls[1].body, calls[2].body, '重发的请求体一字不差');
-  assert.deepEqual(calls[1].body, { projectId, op: 'approve-join', accountId: other, joinRequestId: jr, requestId: 'approve-1' }, '不带访问版本号、不带别的');
-  assert.deepEqual((await client.memberAdmin(projectId, { ...approve, op: 'reject-join', requestId: 'reject-1' })).joinRequest.state, 'rejected');
   // 本地先核形状:不发出去
   const before = calls.length;
   await assert.rejects(client.memberAdmin(projectId, { ...approve, joinRequestId: 'jr_bad' }), { status: 400, code: 'invalid-join-request' });
@@ -120,6 +145,17 @@ test('JRC-3 set-entry、通过、拒绝:请求体白名单、本地先核形状�
   const { client: wrong } = onlineClient((url, body) => reply({ ok: true, accessRevision: 6, joinRequest: { accountId: body.accountId, joinRequestId: body.joinRequestId, state: 'rejected' } }));
   await wrong.restore();
   await assert.rejects(wrong.memberAdmin(projectId, approve), { status: 503, code: 'account-protocol' });
+  // 桌面成员浮层、手机成员面板的「通过」「拒绝」都走上面测的这一份、气泡同一句(谁改回各自手写一套,这里红)
+  for (const file of ['./AccountMembersPanel.tsx', '../mobile/sheets.tsx']) {
+    const source = stripComments(fs.readFileSync(new URL(file, import.meta.url), 'utf8'));
+    assert.match(source, /decisionIds = useRef\(createRequestIds\(\)\)/, `${file}:请求号台账用 createRequestIds`);
+    const start = source.indexOf('const decide = async (op');
+    assert.ok(start >= 0, `${file}:找不到 decide`);
+    const body = source.slice(start, source.indexOf('finally', start));
+    assert.match(body, /decisionIds\.current\.run\(`\$\{op\}:\$\{row\.joinRequestId\}`, \(?requestId\)? =>/, `${file}:按「操作:申请号」取号`);
+    assert.doesNotMatch(body, /randomUUID|decisionIds\.current\.(get|set|delete)\(/, `${file}:不再自己发号、存号、删号`);
+    assert.match(body, /JOIN_REQUEST_TEXT\.approvedToast\(name\) : JOIN_REQUEST_TEXT\.rejectedToast\(name\)/, `${file}:通过、拒绝之后的气泡用同一句`);
+  }
 });
 
 const snapshot = (requests, creator = true) => ({ ok: true, v: 2, authorityId: 'doc', projectId, accessRevision: 3,
@@ -156,20 +192,24 @@ test('JRC-5 每个新 code 都有一句话,不落到「请求失败（code）」
       assert.ok(text && !text.includes('请求失败') && !text.includes(code), `${code} → ${text}`);
     }
   }
-  assert.equal(accountErrorText(403, 'not-listed'), JOIN_REQUEST_TEXT.notListed, '被挡住时那一句与开始页同一句');
+  assert.equal(accountErrorText(403, 'not-listed'), `${JOIN_REQUEST_TEXT.notListed}。`, '被挡住时那一句与开始页同一句(错误提示照错误的写法带句号)');
 });
 
 test('JRC-6 界面上的话:被挡住、已发送、被拒、通过;重开文件那条提示;何时自动再走一次加入', () => {
   const s = fields => ({ projectId, state: 'none', entry: 'list', canApply: true, ...fields });
-  assert.deepEqual(joinRequestNotice(s()), { text: '你不在这个项目的成员名单中。', canSend: true });
+  assert.deepEqual(joinRequestNotice(s()), { text: '你不在这个项目的成员名单中', canSend: true });
   assert.deepEqual(joinRequestNotice(s({ state: 'pending', canApply: false })), { text: '已发送，等创建者通过', canSend: false });
   assert.deepEqual(joinRequestNotice(s({ state: 'rejected' })), { text: '创建者没有通过你的申请', canSend: true });
   const at = new Date(2026, 9, 23, 9, 5).getTime();
   assert.equal(retryAtText(at), '10月23日 09:05 之后可以再申请。');
   assert.equal(requestedAtText(at), '10月23日 09:05 申请');
   assert.deepEqual(joinRequestNotice(s({ state: 'rejected', canApply: false, retryAt: at })), { text: '创建者没有通过你的申请', canSend: false, hint: '10月23日 09:05 之后可以再申请。' });
-  assert.deepEqual(joinRequestNotice(s({ state: 'member', canApply: false })), { text: '创建者已通过你的申请。', canSend: false });
-  assert.deepEqual(joinRequestNotice(s({ entry: 'link', canApply: false })), { text: '你不在这个项目的成员名单中。', canSend: false }, '知道链接就能进时不给按钮(页面直接去加入)');
+  assert.deepEqual(joinRequestNotice(s({ state: 'member', canApply: false })), { text: '创建者已通过你的申请', canSend: false });
+  assert.deepEqual(joinRequestNotice(s({ state: 'member', entry: 'link', canApply: false })), { text: '创建者已通过你的申请', canSend: false });
+  // 项目改回知道链接就能进、还不是成员:这一块整个不显示(页面直接去加入,弹着二级密码框时不能同时说「已发送」「不在名单中」)
+  for (const state of ['none', 'pending', 'rejected'])
+    assert.equal(joinRequestNotice(s({ state, entry: 'link', canApply: false })), null, `${state} + link`);
+  assert.deepEqual(['approvedToast', 'rejectedToast'].map(k => JOIN_REQUEST_TEXT[k]('Bob')), ['已通过 Bob 的申请', '已拒绝 Bob 的申请']);
   // 重开文件:语义原文「这个账号不是这个云端项目的成员」,只放名单时另有「发送申请」
   assert.deepEqual(reopenNotice(s()), { text: '这个账号不是这个云端项目的成员', canSend: true });
   assert.deepEqual(reopenNotice(s({ state: 'pending', canApply: false })), { text: '这个账号不是这个云端项目的成员。已发送，等创建者通过', canSend: false });

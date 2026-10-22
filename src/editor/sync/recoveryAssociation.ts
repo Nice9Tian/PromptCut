@@ -6,6 +6,7 @@ import { verifiedBase, type CloudSnapshot } from "./cloudSnapshot";
 // @ts-expect-error Browser-safe proof verification
 import { queryGone } from "../../../server/recovery/gone-proof.mjs";
 import { JOIN_REQUEST_TEXT, reopenNotice } from "../../account/joinRequestText";
+import { createRequestIds } from "../../account/requestIds";
 import type { JoinRequestStatus } from "../../account/client";
 
 export interface CollaborationDescriptor {
@@ -158,14 +159,18 @@ export function currentRealtimeRev(): number | null {
   return realtimeRevGetter ? realtimeRevGetter() : null;
 }
 
-type ReopenToast = (msg: string, tone?: "info" | "warn", duration?: number, action?: { label: string; run: () => void; pc?: string }) => void;
+/** `pushToast` 的样子:回这条气泡的号(关它用),带按钮的不自己消失 */
+type ReopenToast = (msg: string, tone?: "info" | "warn", duration?: number, action?: { label: string; run: () => void; pc?: string }) => number | void;
 type JoinRequestClient = { joinRequestStatus?: (projectId: string) => Promise<JoinRequestStatus>; sendJoinRequest?: (projectId: string, requestId: string) => Promise<JoinRequestStatus> };
 /**
  * 重开文件时「这个账号不是这个云端项目的成员」那条提示。只在被账号名单挡住(`not-listed`)、项目只放账号名单时另带「发送申请」按钮
  * (先问一次自己那一条申请:已经在等、被拒且次数用完的不给按钮,把现状接在后面说);被踢(`banned`)、问不到的照旧只有那一句。
- * 点了按钮发申请:没收到回包再点沿用原请求号;发出后另起一条「已发送，等创建者通过」并说明通过以后怎么连回去。
+ * 点了按钮发申请:没收到回包再点沿用原请求号(`src/account/requestIds.ts`,与开始页、成员浮层共用);一次只发一个。
+ * 发成了就把这条带按钮的提示关掉、之后再点也不再发(语义「发出后显示『已发送，等创建者通过』」;不能一直挂着让人反复发、白耗申请次数),
+ * 另起一条「已发送，等创建者通过」并说明通过以后怎么连回去。
  */
-async function notMemberToast(toast: ReopenToast, client: JoinRequestClient | null | undefined, projectId: string, code: unknown) {
+async function notMemberToast(toast: ReopenToast, dismissToast: ((id: number) => void) | undefined, client: JoinRequestClient | null | undefined,
+  projectId: string, code: unknown) {
   let status: JoinRequestStatus | null = null;
   if (code === "not-listed" && typeof client?.joinRequestStatus === "function" && typeof client.sendJoinRequest === "function") {
     try { status = await client.joinRequestStatus(projectId); } catch { status = null; }
@@ -173,16 +178,17 @@ async function notMemberToast(toast: ReopenToast, client: JoinRequestClient | nu
   const notice = status ? reopenNotice(status) : null;
   if (!notice) { toast(JOIN_REQUEST_TEXT.reopenNotMember, "warn", 10_000); return; }
   if (!notice.canSend) { toast(notice.text, "warn", 10_000); return; }
-  let requestId = crypto.randomUUID(), sending = false;
-  toast(notice.text, "warn", Infinity, { label: JOIN_REQUEST_TEXT.send, pc: "reopen-join-request", run: () => {
-    if (sending) return;
+  const ids = createRequestIds();
+  let sending = false, done = false;
+  const id = toast(notice.text, "warn", Infinity, { label: JOIN_REQUEST_TEXT.send, pc: "reopen-join-request", run: () => {
+    if (sending || done) return;
     sending = true;
-    void client!.sendJoinRequest!(projectId, requestId).then(result => {
-      requestId = crypto.randomUUID();
+    void ids.run("send", requestId => client!.sendJoinRequest!(projectId, requestId)).then(result => {
+      done = true;
+      if (typeof id === "number") dismissToast?.(id);
       const next = reopenNotice(result);
       toast(result.state === "pending" ? JOIN_REQUEST_TEXT.reopenSent : (next?.text ?? JOIN_REQUEST_TEXT.reopenNotMember), "info", 10_000);
-    }, (error: { status?: number; message?: string }) => {
-      if (error?.status !== 0) requestId = crypto.randomUUID();
+    }, (error: { message?: string }) => {
       toast(error?.message || "申请没有发出去，请重试。", "warn", 10_000);
     }).finally(() => { sending = false; });
   } });
@@ -210,7 +216,9 @@ export async function handleCloudAssociationReopen(
     isOfflineModified?: boolean;
     cloudProject?: Project;
     /** 第 4 个参数是气泡上的按钮(重开时「不是成员」那条提示的「发送申请」);`pushToast` 本来就收它 */
-    toast?: (msg: string, tone?: "info" | "warn", duration?: number, action?: { label: string; run: () => void; pc?: string }) => void;
+    toast?: (msg: string, tone?: "info" | "warn", duration?: number, action?: { label: string; run: () => void; pc?: string }) => number | void;
+    /** 关掉一条气泡(`syncManager.ts` 的 `dismissToast`):重开文件那条带「发送申请」的提示,发成了就关掉 */
+    dismissToast?: (id: number) => void;
     openAsLocal?: (p: Project) => void;
     /**
      * 连回云端项目并处理文件里的修改;回 `"pending-merge"` 表示云端在另存之后被别人改过、修改进了「冲突合并」(没直接提交)。
@@ -271,7 +279,7 @@ export async function handleCloudAssociationReopen(
       }
       // 规则 2：已登录但不是该项目成员（只放账号名单的项目另给「发送申请」）
       if (status === 403 || code === "not-listed" || code === "banned" || code === "forbidden") {
-        await notMemberToast(toast, client, assoc.projectId, code);
+        await notMemberToast(toast, options.dismissToast, client, assoc.projectId, code);
         setCloudAssociation(assoc);
         options.openAsLocal?.(project);
         return { status: "forbidden", project };

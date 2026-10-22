@@ -16,7 +16,7 @@ export function AccountProjects({ online, onEnterEditor }: { online: boolean; on
     const outcome = await ap.join(link, secondary);
     if (outcome === 'secondary-required' || outcome === 'bad-secondary') {
       setAskSecondaryPassword(true);
-      setError(outcome === 'bad-secondary' ? '项目二级密码不正确。' : '该项目设置了项目二级密码，请输入二级密码。');
+      setError(outcome === 'bad-secondary' ? '项目二级密码不正确。' : JOIN_REQUEST_TEXT.secondaryRequired);
       return;
     }
     if (outcome === 'expired') {
@@ -68,7 +68,10 @@ export function AccountProjects({ online, onEnterEditor }: { online: boolean; on
     </form>
     {lists && <div data-pc="cloud-project-lists">{(['owned', 'joined'] as const).map(kind => <div key={kind}>
       <h3>{kind === 'owned' ? '我创建的' : '我加入的'}</h3>{lists[kind].length === 0 ? <p className="sp-muted">暂无项目</p> : lists[kind].map(p =>
-        <div className="sp-account-row" key={p.projectId}><button className="sp-ghost-btn" disabled={busy} onClick={() => void perform(() => ap.enter(p.projectId, p.name))}>{p.name}</button>
+        <div className="sp-account-row" key={p.projectId}><button className="sp-ghost-btn" data-pc="cloud-project-open" data-project={p.projectId} disabled={busy} onClick={() => void perform(async () => {
+          // 设了二级密码而还没输过当前这一版(刚被通过的申请人等):不报错,链接填好、弹出二级密码框,输了走「验证二级密码并加入」
+          if (await ap.open(p.projectId, p.name) === 'secondary-required') { setAskSecondaryPassword(true); setSecondaryPassword(''); setError(JOIN_REQUEST_TEXT.secondaryRequired); }
+        })}>{p.name}</button>
           <button className="sp-ghost-btn" onClick={() => { setLink(ap.projectLink(p.projectId)); }}>显示项目链接</button></div>)}</div>)}</div>}
     {listError && <p role="status">{listError}<button className="sp-ghost-btn" disabled={busy} onClick={() => void ap.refreshLists()}>重试列表</button></p>}
     {!online && <p className="sp-muted">本机项目照常使用本地身份。账号登录用于云端；恢复凭据由桌面版安全保存。</p>}

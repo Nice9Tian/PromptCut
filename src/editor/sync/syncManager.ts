@@ -802,6 +802,8 @@ function onLoad(project: Project): Project {
     setCloudAssociation(cloudAssoc);
     void handleCloudAssociationReopen(project, cloudAssoc, {
       toast: pushToast,
+      // 「不是成员」那条带「发送申请」的提示,发成了要关掉(recoveryAssociation.ts 的 notMemberToast)
+      dismissToast,
       openAsLocal: (p) => { switchToLocal(p, { load: false }); },
       enterProject: async (opts) => {
         await enterAccountProject(opts);
