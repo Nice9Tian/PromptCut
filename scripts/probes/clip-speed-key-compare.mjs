@@ -87,7 +87,9 @@ async function measure(root, project) {
   const { CardFrameCache } = await imp('server/card-cache.mjs');
   const flat = flatPlanProject(project);
   const ids = flat.tracks.flatMap((t) => t.clips.map((c) => c.id));
-  const graph = projectCardGraph(flat, (id) => DEFS[id]);
+  // 当前工作区里出键的几处在 projectCardGraph 之后接 withMediaRates(基准没有这个函数,原样)
+  const clipTime = fs.existsSync(path.join(root, 'src/kernel/clipTime.mjs')) ? await imp('src/kernel/clipTime.mjs') : {};
+  const graph = (clipTime.withMediaRates ?? ((_p, g) => g))(flat, projectCardGraph(flat, (id) => DEFS[id]));
   const plan = new CardFrameCache({ root: 'unused', project: flat, envFingerprint: '0123456789abcdef' }).plan({
     graph, sourceVersions: Object.fromEntries(Object.keys(DEFS).map((id) => [id, `builtin:${id}-v1`])), environment: { width: 1280, height: 720, fps: 30, theme: 'dark', fontFingerprint: 'ff' },
   });

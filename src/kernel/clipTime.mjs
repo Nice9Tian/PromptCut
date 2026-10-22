@@ -98,6 +98,30 @@ export function speedKeyPart(clip) {
   return s === 1 ? null : { speed: s };
 }
 
+/**
+ * 卡片图(`kernel/cardGraph.mjs` 的 `projectCardGraph` 的结果)里变速段的素材节点补上倍率 `rate`
+ * (取帧时刻 = 片段内时间 × rate + offset,`render/cards/GraphCard.tsx`)。它进节点的身份,接这段素材的素材效果卡、
+ * 转场的预渲染键跟着变(不加就会命中旧快照、画面错了不报错)。
+ *
+ * 为什么不直接写在 `projectCardGraph` 里:`cardGraph.mjs` 在内置有声卡的源码导入闭包里,改它一个字,用户已生成的卡片声音
+ * 就全被判「已过期」(守门测试 `src/render/audioCardSourceVersion.test.mjs`,出处 `docs/plan/prerender-products-contract.md`
+ * 第 9.2 节)。所以由出画面、出键的几处在拿到图之后调这一个函数:导出页(画面与 `__pcCardPlan`)、舞台、剪辑段的嵌套场景、
+ * 在线页面的卡片计划(`editor/browserNodeHost.ts`)。
+ *
+ * 没有变速段时回**同一个对象**(图、键一个字节不变)。
+ */
+export function withMediaRates(project, graph) {
+  if (!graph || !Array.isArray(graph.nodes)) return graph;
+  const rates = new Map();
+  for (const track of Array.isArray(project?.tracks) ? project.tracks : []) {
+    for (const clip of Array.isArray(track?.clips) ? track.clips : []) {
+      if (clip?.mediaId && isSpeedChanged(clip)) rates.set(`@clip/${clip.id}/source`, clipSpeed(clip));
+    }
+  }
+  if (!rates.size) return graph;
+  return { ...graph, nodes: graph.nodes.map((node) => (node?.adapter === "media" && rates.has(node.id) ? { ...node, rate: rates.get(node.id) } : node)) };
+}
+
 /** 给人看的倍数:`2×`、`0.5×` */
 export function speedLabel(speed) {
   return `${Math.round(speed * 100) / 100}×`;

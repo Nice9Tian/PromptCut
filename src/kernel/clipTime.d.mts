@@ -16,3 +16,4 @@ export function normalizeSpeed(value: unknown): number | null;
 export function withSpeed<T extends { speed?: number }>(clip: T, speed: number): T;
 export function speedKeyPart(clip: { speed?: number } | null | undefined): { speed: number } | null;
 export function speedLabel(speed: number): string;
+export function withMediaRates<G extends { nodes: any[] } | null | undefined>(project: unknown, graph: G): G;

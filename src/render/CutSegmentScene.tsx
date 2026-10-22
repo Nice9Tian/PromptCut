@@ -1,6 +1,7 @@
 import { createContext, useContext } from "react";
 import type { CutSegmentRender } from "../kernel/cutSegments";
 import { projectCardGraph } from "../kernel/cardGraph.mjs";
+import { withMediaRates } from "../kernel/clipTime.mjs";
 import type { Timeline } from "../kernel/types";
 import { FrameScene } from "./FrameScene";
 import type { StagePlaneProps } from "./Stage";
@@ -47,7 +48,8 @@ function subGraph(project: CutSegmentRender["project"]): Timeline["graph"] | und
   if (graphMemo.has(project)) return graphMemo.get(project) ?? undefined;
   let graph: Timeline["graph"] | null = null;
   try {
-    graph = project.cardNodes?.length ? projectCardGraph(project) : null;
+    // 变速段的素材节点补上倍率(kernel/clipTime.mjs 的 withMediaRates;没有变速段时原样)
+    graph = project.cardNodes?.length ? withMediaRates(project, projectCardGraph(project)) : null;
   } catch {
     // 算不出来(悬空输入之类)时和顶层一样按「图卡不画」兜底
     graph = null;

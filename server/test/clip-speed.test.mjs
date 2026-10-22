@@ -16,6 +16,7 @@ import { projectHash } from '../../src/render/changedClips.mjs';
 import { projectCardGraph } from '../../src/kernel/cardGraph.mjs';
 import { audioPlanOf } from '../../src/kernel/audioPlan.mjs';
 import { flatPlanProject } from '../../src/kernel/cutFlatten.mjs';
+import { withMediaRates } from '../../src/kernel/clipTime.mjs';
 import { buildAudioPlan } from '../bakery/mux-audio.mjs';
 import { mediaLayersAt } from '../vision-compose.mjs';
 import { buildComposeArgs } from '../export-compose.mjs';
@@ -35,8 +36,10 @@ const fixture = () => ({
 });
 const DEFS = { 'fx-tint': { id: 'fx-tint', kind: 'filter', defaults: {}, card() {} }, 'punch-pill': { id: 'punch-pill', defaults: { text: '' } } };
 const withClip = (p, id, patch) => ({ ...p, tracks: p.tracks.map((t) => ({ ...t, clips: t.clips.map((c) => (c.id === id ? { ...c, ...patch } : c)) })) });
+// 出画面、出键的几处都是 projectCardGraph 之后接 withMediaRates(cardGraph.mjs 在有声卡的源码闭包里,不能改它)
+const graphOf = (p) => withMediaRates(p, projectCardGraph(p, (id) => DEFS[id]));
 const graphKeys = (p) => {
-  const graph = projectCardGraph(p, (id) => DEFS[id]);
+  const graph = graphOf(p);
   return { inputKeys: Object.fromEntries(cardSnapshotInputKeys(graph)), nodeIds: Object.fromEntries(cardNodeIdentities(graph)) };
 };
 
@@ -63,8 +66,10 @@ test('缺省 1:帧身份、轨道前缀、镜像哈希、输入签名、卡片�
   for (const [id, sig] of Object.entries(GOLDEN.sigs)) assert.equal(clipInputSig(p, id), sig, id);
   assert.equal(graphKeys(p).inputKeys.n1.source.key, GOLDEN.fxInputKey);
   // 素材节点上没有 rate 这一项(缺省 1 不进节点)
-  const graph = projectCardGraph(p, (id) => DEFS[id]);
+  const graph = graphOf(p);
   assert.equal('rate' in graph.nodes.find((n) => n.id === '@clip/v-fx/source'), false);
+  const raw = projectCardGraph(p, (id) => DEFS[id]);
+  assert.equal(withMediaRates(p, raw), raw, '没有变速段时回同一个对象');
 });
 
 test('变速:层表输入签名、卡片图素材节点、接它的素材效果卡上游键都跟着变;别的片段不变', () => {
@@ -72,7 +77,7 @@ test('变速:层表输入签名、卡片图素材节点、接它的素材效果�
   const fast = withClip(p, 'v-fx', { speed: 2 });
   assert.notEqual(clipInputSig(fast, 'v-fx'), clipInputSig(p, 'v-fx'), '变速段自己的签名要变');
   assert.equal(clipInputSig(fast, 'v-plain'), clipInputSig(p, 'v-plain'), '别的片段不变');
-  const node = projectCardGraph(fast, (id) => DEFS[id]).nodes.find((n) => n.id === '@clip/v-fx/source');
+  const node = graphOf(fast).nodes.find((n) => n.id === '@clip/v-fx/source');
   assert.equal(node.rate, 2, '素材节点带上倍率');
   assert.notEqual(graphKeys(fast).inputKeys.n1.source.key, GOLDEN.fxInputKey, '接变速素材的素材效果卡上游键要变(否则命中旧快照)');
   assert.notEqual(graphKeys(fast).nodeIds['@clip/v-fx/source'], graphKeys(p).nodeIds['@clip/v-fx/source']);
@@ -108,9 +113,9 @@ test('导出兼容旁路(export-compose):变速段按倍率把素材时间戳压
   assert.match(two.graph, /setpts=PTS\/2\+-0\.25\/TB,fps=30/, '时间戳除以倍率再平移:素材 m 秒落到 start + (m − off)/2');
 });
 
-test('素材效果卡的素材节点(cardGraph):取帧时刻乘倍率,缺省不带倍率', () => {
+test('素材效果卡的素材节点(withMediaRates):取帧时刻乘倍率,缺省不带倍率', () => {
   const p = withClip(fixture(), 'v-fx', { speed: 0.5 });
-  const node = projectCardGraph(p, (id) => DEFS[id]).nodes.find((n) => n.id === '@clip/v-fx/source');
+  const node = graphOf(p).nodes.find((n) => n.id === '@clip/v-fx/source');
   assert.deepEqual([node.offset, node.rate], [0.2, 0.5]);
 });
 

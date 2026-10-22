@@ -107,6 +107,7 @@ import { createPageStreams, type MeasureOutcome, type PlanState, type PublishedP
 import { setCardMeasuredHook, type CardMeasuredInfo } from "./probeRunner";
 import { pageStreamCodes, planPageStreams, type PageCardPlanValue } from "../online/pageStreamPlan";
 import { projectCardGraph } from "../kernel/cardGraph.mjs";
+import { withMediaRates } from "../kernel/clipTime.mjs";
 import { flatPlanProject, withFlatNodes } from "../kernel/cutFlatten.mjs";
 import { getCard, unknownCardClipIds } from "../kernel/registry";
 import { sourceVersionsOf } from "./costIdentity";
@@ -216,7 +217,8 @@ export function pageCardPlanValue(project: Project): PageCardPlanValue | null {
     // 剪辑段换成它里面的卡(`kernel/cutFlatten.mjs`),与导出页的 `__pcCardPlan` 同一份:两边算出同一个键
     const flat = flatPlanProject(project);
     return {
-      graph: withFlatNodes(flat, projectCardGraph(flat, getCard)) as unknown as PageCardPlanValue["graph"],
+      // 变速段的素材节点补上倍率(kernel/clipTime.mjs 的 withMediaRates),与导出页的 `__pcCardPlan` 同一份
+      graph: withFlatNodes(flat, withMediaRates(flat, projectCardGraph(flat, getCard))) as unknown as PageCardPlanValue["graph"],
       sourceVersions: sourceVersionsOf(),
       unknownClipIds: [...unknownCardClipIds(flat.tracks.flatMap((track) => track.clips))].sort(),
       environment: { width: project.width, height: project.height, fps: project.fps, theme: project.themeId, fontFingerprint: fontFingerprintOf(fonts) },

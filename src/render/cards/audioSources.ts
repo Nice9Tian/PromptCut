@@ -180,7 +180,9 @@ export async function blockOf(ctx: AudioSourceContext, ref: AudioSourceRef, star
   if (node!.adapter === "media") {
     // projectCardGraph 已经合成过的素材节点:offset 就在节点上(cardGraph.mjs:121-122)
     const media = node!.media as MediaAsset | undefined;
-    if (node!.rate !== undefined && Number(node!.rate) !== 1) fail("变速的素材段第一版不出原声,不能当音频素材效果卡的声音输入");
+    // 变速段:节点上带了倍率(`withMediaRates`),或按节点的 clipId 在项目里查到的片段变了速
+    const owner = typeof node!.clipId === "string" ? clipOf(ctx.project, node!.clipId) : undefined;
+    if ((node!.rate !== undefined && Number(node!.rate) !== 1) || (owner && clipSpeed(owner) !== 1)) fail("变速的素材段第一版不出原声,不能当音频素材效果卡的声音输入");
     if (!media?.hash) fail(`素材节点 ${node!.id} 没有内容哈希,重新导入一次素材`);
     const position = start + edge + Math.round((Number(node!.offset) || 0) * ctx.sampleRate);
     return mediaBlock(media!.hash!.toLowerCase(), position, count, ctx.sampleRate);

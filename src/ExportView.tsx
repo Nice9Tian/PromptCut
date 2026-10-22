@@ -12,6 +12,7 @@ import { setExportSyncedMount } from "./render/placeholderHost";
 import { cardSourceVersion } from "./render/cardSourceVersion.mjs";
 import { builtinCardSourceFiles } from "./render/cardSourceFiles.mjs";
 import { projectCardGraph } from "./kernel/cardGraph.mjs";
+import { withMediaRates } from "./kernel/clipTime.mjs";
 import { planFrameWindow } from "./render/frameWindow.mjs";
 import { createSnapshot } from "./render/createSnapshot";
 import { solidApi } from "./render/solid";
@@ -154,7 +155,8 @@ export default function ExportView() {
 
       if (json && Array.isArray(json.tracks)) {
         proj = json as Project;
-        try { graph = projectCardGraph(proj, getCard); } catch { graph = undefined; }
+        // 变速段的素材节点补上倍率(kernel/clipTime.mjs 的 withMediaRates;没有变速段时原样)
+        try { graph = withMediaRates(proj, projectCardGraph(proj, getCard)); } catch { graph = undefined; }
         tl = flattenOverlay(proj, graph);
       } else {
         tl = json as Timeline;
@@ -190,8 +192,8 @@ export default function ExportView() {
          */
         const flat = flatPlanProject(proj);
         let planGraph = graph;
-        if (flat !== proj) { try { planGraph = withFlatNodes(flat, projectCardGraph(flat, getCard)); } catch { planGraph = undefined; } }
-        return { graph: planGraph ?? projectCardGraph(flat, getCard), sourceVersions,
+        if (flat !== proj) { try { planGraph = withFlatNodes(flat, withMediaRates(flat, projectCardGraph(flat, getCard))); } catch { planGraph = undefined; } }
+        return { graph: planGraph ?? withMediaRates(flat, projectCardGraph(flat, getCard)), sourceVersions,
           /*
            * 这个页面的注册表里查不到定义的卡片段(未知卡片;预渲染进程里没有同步表,等于「没有定义」)。舞台不画它们,
            * `CardFrameCache.plan()` 据此不给它们出控件:不排预渲染、不进预渲染集合、层表里没有它们那一层。
