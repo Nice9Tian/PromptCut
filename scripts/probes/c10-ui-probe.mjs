@@ -77,7 +77,8 @@ const TEXT = {
   assetDown: '连不上素材服务，素材原尺寸和预渲染结果暂时显示不了。',
   recovering: '已恢复连接，正在提交离线时的修改…',
   recovered: '离线时的修改已全部提交。',
-  unsent: '当前离线，有未提交的修改。关闭页面将丢失这些操作。',
+  // 〔裁:2026-10-22 主会话〕离线常驻提示按改动存没存下来分两句;本探针进的是口令房间(在线页面不落盘)→ 「只在这个页面里」那句
+  unsent: '当前离线。你的改动只在这个页面里，关掉页面就会丢失。',
   // 时间轴徽标:2026-09-29 用户定与舞台图标同一句(原「该模式暂不支持自定义卡」)
   custom: '需要本地 PC 渲染辅助',
 };
@@ -353,24 +354,25 @@ try {
   await shot(A, 'a7-5-no-network');
   await A.setOfflineMode(false);
   px1.blockWs = false;
-  const dialog = await until('甲弹出离线对话框(第一条被拒)', () => A.$('[data-pc="offline-dialog"]'), 60_000, 500);
-  check(!!dialog, 'A7 恢复后第一条被拒 → 离线对话框(C6.5 共用)');
-  await shot(A, 'a7-6-offline-dialog');
+  // 2026-10-22 起:离线批次被拒后不再弹整份「加进去 / 不要了」的离线对话框,改成逐项的「冲突合并」窗口(conflict-merge 报告第十节)。
+  // 「不要了」对应「全勾 → 删除选中」:本机回到云端现状;整批备份照旧留在本页内存(不弹「已丢弃」气泡,在同步面板「备份 N」里下载)
+  const dialog = await until('甲弹出冲突合并窗口(第一条被拒)', () => A.$('[data-pc="conflict-merge"]'), 60_000, 500);
+  check(!!dialog, 'A7 恢复后第一条被拒 → 冲突合并窗口(与撤销冲突共用)');
+  a7.mergeRows = await A.evaluate(() => [...document.querySelectorAll('[data-pc="merge-thing"]')].map((li) => li.getAttribute('data-key')));
+  check(a7.mergeRows.includes(`offline:clip:${setup.u}`), 'A7 冲突合并窗口里列着离线时改的那一段', a7.mergeRows);
+  await shot(A, 'a7-6-conflict-merge');
   const dlBefore = downloads().length;
   const discardAt = Date.now();
-  await A.evaluate(() => [...document.querySelectorAll('[data-pc="offline-dialog"] button')].find((b) => b.textContent?.includes('不要了'))?.click());
-  const discardToast = await until('「丢弃」后当场给「下载备份」', () => A.evaluate(() => [...document.querySelectorAll('.pc-toast')].find((e) => /已丢弃/.test(e.textContent || '') && e.querySelector('[data-pc="backup-download"]'))?.textContent ?? null), 10_000);
-  a7.discardToast = discardToast;
-  check(downloads().length === dlBefore, 'A7 丢弃后不自动下载', downloads());
-  await shot(A, 'a7-7-discard-toast');
-  await A.evaluate(() => [...document.querySelectorAll('.pc-toast')].find((e) => /已丢弃/.test(e.textContent || ''))?.querySelector('[data-pc="backup-download"]')?.click());
-  const dl2 = await until('丢弃的备份下载出 JSON', () => downloads().some((f) => /离线丢弃/.test(f)) ? downloads() : null, 10_000);
-  const discardFile = dl2?.find((f) => /离线丢弃/.test(f));
-  if (discardFile) {
-    const body = JSON.parse(fs.readFileSync(path.join(DL, discardFile), 'utf8'));
-    a7.discardFile = { name: discardFile, kind: body?.backup?.kind, batch: body?.backup?.batch?.length };
-  }
-  check(a7.discardFile?.kind === 'offline-discard' && a7.discardFile.batch >= 1, 'A7 丢弃的备份是 offline-discard 的 JSON', a7.discardFile);
+  await A.evaluate(() => { for (const i of document.querySelectorAll('[data-pc="merge-thing-check"]')) if (!i.checked) i.click(); });
+  await sleep(300);
+  await A.evaluate(() => document.querySelector('[data-pc="merge-delete"]')?.click());
+  const cleared = await until('删除选中后列表清空', () => A.evaluate(() => document.querySelector('[data-pc="merge-close"]')?.textContent?.trim() === '完成'), 10_000);
+  check(!!cleared, 'A7 删除选中后列表清空、关闭按钮变「完成」');
+  const backToCloud = await until('甲回到云端现状', () => store(A, `const c = S.getState().project.tracks.flatMap((t) => t.clips).find((c) => c.id === args[0]); return c && c.start === 2;`, setup.u), 10_000);
+  check(!!backToCloud, 'A7 删除选中:保留云端现状(乙改的那一版)');
+  check(downloads().length === dlBefore, 'A7 删除选中后不自动下载', downloads());
+  await shot(A, 'a7-7-merge-cleared');
+  await A.evaluate(() => document.querySelector('[data-pc="merge-close"]')?.click());
   // 同步面板:「备份 N」列出本页内存里的全部备份,逐个下载
   a7.backupsChip = await A.evaluate(() => document.querySelector('[data-pc="sync-backups"]')?.textContent?.trim() ?? null);
   await A.click('[data-pc="sync-backups"]').catch(() => {});
@@ -386,6 +388,7 @@ try {
   await sleep(1000);
   a7.panelDownloads = { started: await A.evaluate(() => window.__probeDl), landed: downloads().length - dl3n };
   check(a7.backupRows >= 2 && a7.panelDownloads.started.length === a7.backupRows && a7.panelDownloads.started.every((d) => d.blob && /.json$/.test(d.name)), 'A7 同步面板列出全部备份、逐个下载', { chip: a7.backupsChip, rows: a7.backupRows, got: a7.panelDownloads });
+  check(a7.panelDownloads.started.some((d) => /离线丢弃/.test(d.name)), 'A7 转进冲突合并时那一下的整批备份(offline-discard)在同步面板里能下载', a7.panelDownloads.started);
   await A.evaluate(() => [...document.querySelectorAll('[data-pc="backups-dialog"] button')].find((b) => b.textContent?.trim() === '关闭')?.click());
   a7.storage = await A.evaluate(async () => ({ local: Object.keys(localStorage), session: Object.keys(sessionStorage), idb: (await indexedDB.databases?.())?.map((d) => d.name) ?? null }));
   const hasBackup = (keys) => (keys ?? []).some((k) => /backup|备份/i.test(k));
