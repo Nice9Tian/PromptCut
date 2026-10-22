@@ -326,30 +326,20 @@
 }
 .ps-ext-play:hover { background: rgba(0, 0, 0, 0.68); }
 
-/* 全屏键:和时间读数并排在播放条最右边 */
-.ps-ext-full {
+/* 段头右上角的动作按钮(「详细编辑」)。原来这儿是画框里的全屏键,用户 2026-10-23 换掉了 */
+.ps-ext-action {
   flex: 0 0 auto;
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: #fff;
+  padding: 3px 9px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 999px;
+  background: var(--fill-subtle);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 11px;
   cursor: pointer;
+  white-space: nowrap;
 }
-.ps-ext-full:hover { background: rgba(255, 255, 255, 0.18); }
-
-/* 进了全屏:画框铺满屏幕,圆角和固定比例都让开,播放条照旧叠在底部 */
-.ps-ext-frame:fullscreen {
-  width: 100vw;
-  height: 100vh;
-  aspect-ratio: auto;
-  border-radius: 0;
-}
-.ps-ext-frame:fullscreen .ps-ext-transport { padding: 16px 20px 12px; }
-.ps-ext-frame:fullscreen .ps-ext-time { font-size: 13px; }
+.ps-ext-action:hover { border-color: var(--accent); color: var(--accent); }
 
 /* 播放条叠在画面底部:压一道由下往上的暗角,白字和滑杆在任何画面上都看得清 */
 .ps-ext-transport {
@@ -617,6 +607,173 @@
   color: var(--ink-faint);
   text-align: center;
 }
+
+/*
+ * ── 详细编辑 ─────────────────────────────────────
+ * 占满聊天区(输入框在这一行之外,照旧留在下面)。上面舞台加一排传输控件,下面时间轴。
+ * 形状照软件里的编辑台。展开时有一下过渡,关了动画的人直接就位。
+ */
+.ps-chat-row.is-detail { display: block; overflow: hidden; }
+.ps-detail {
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 16px 0;
+  animation: ps-detail-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes ps-detail-in {
+  from { opacity: 0; transform: scale(0.97) translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ps-detail { animation: none; }
+}
+
+.ps-detail-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-bottom: 8px;
+}
+.ps-detail-title { font-size: 13px; font-weight: 600; }
+.ps-detail-sub { font-size: 11px; color: var(--ink-faint); }
+
+.ps-detail-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+}
+.ps-detail-screen {
+  position: relative;
+  height: 100%;
+  max-width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 8px;
+}
+/* 四个角的取景框 */
+.ps-detail-corner {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.72);
+}
+.ps-detail-corner.is-tl { left: 8px; top: 8px; border-right: 0; border-bottom: 0; }
+.ps-detail-corner.is-tr { right: 8px; top: 8px; border-left: 0; border-bottom: 0; }
+.ps-detail-corner.is-bl { left: 8px; bottom: 8px; border-right: 0; border-top: 0; }
+.ps-detail-corner.is-br { right: 8px; bottom: 8px; border-left: 0; border-top: 0; }
+
+.ps-detail-transport {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0 8px;
+}
+.ps-detail-play {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  cursor: pointer;
+}
+.ps-detail-play:hover { filter: brightness(1.08); }
+.ps-detail-scrub { flex: 1 1 auto; min-width: 0; accent-color: var(--accent); }
+.ps-detail-time {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ps-detail-tl {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 8px;
+  border-top: 1px solid var(--hairline);
+  padding-top: 8px;
+}
+.ps-detail-tlbar { display: flex; align-items: center; gap: 10px; }
+.ps-detail-tltitle {
+  padding: 3px 9px;
+  border-radius: 6px;
+  background: var(--ui-accent-soft, var(--fill-subtle));
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+.ps-detail-zoom { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--ink-muted); }
+.ps-detail-zoom input { width: 110px; accent-color: var(--accent); }
+
+/* 左边一列序列名,右边是能横向滚的轨道 */
+.ps-detail-tracks {
+  display: flex;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-panel);
+}
+.ps-detail-names {
+  flex: 0 0 92px;
+  border-right: 1px solid var(--hairline);
+}
+.ps-detail-name {
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--hairline);
+  font-size: 12px;
+  color: var(--ink-muted);
+  box-sizing: border-box;
+}
+.ps-detail-name:last-child { border-bottom: 0; }
+.ps-detail-lanes { position: relative; }
+.ps-detail-lane {
+  position: relative;
+  border-bottom: 1px solid var(--hairline);
+  box-sizing: border-box;
+}
+.ps-detail-lane:last-child { border-bottom: 0; }
+.ps-detail-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+  z-index: 2;
+  pointer-events: none;
+}
+.ps-detail-clip {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  display: flex;
+  align-items: center;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: var(--ui-agent, var(--accent));
+  color: #111016;
+  font-family: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+}
+/* 素材和卡片分两个色,一眼看得出哪条是素材 */
+.ps-detail-clip[data-kind="素材"] { background: color-mix(in oklab, var(--accent) 72%, #ffffff); }
+.ps-detail-clip[data-picked] { border-color: var(--ink); }
+.ps-detail-clip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── 行的右键菜单 ─────────────────────────────── */
 .ps-menu {

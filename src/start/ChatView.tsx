@@ -14,6 +14,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { JSX } from "react";
 import { ChatSidePanel } from "./ChatSidePanel";
+import { DetailEdit } from "./DetailEdit";
 import type { MockMessage } from "./mockChat";
 import type { MockAgentChat } from "./mockProjects";
 
@@ -35,6 +36,8 @@ export function ChatView(props: {
   const [panel, setPanel] = useState(false);
   /** 拓展栏里点出来的那句说明,显示在输入框下面 */
   const [note, setNote] = useState("");
+  /** 「详细编辑」展开了没有:展开时占满聊天区,输入框照旧留在下面 */
+  const [detail, setDetail] = useState(false);
   /** 共有 / 私有(`product/agent.md`:新建默认共有,用户可以主动改为私有)。这一版只是界面上的开关 */
   const [shared, setShared] = useState(true);
   const area = useRef<HTMLTextAreaElement>(null);
@@ -108,6 +111,23 @@ export function ChatView(props: {
         </button>
       </header>
 
+      {/*
+        「详细编辑」展开时整块换成编辑视图,占满聊天区;输入框不在这一行里(它在下面的 ps-chat-foot),
+        所以照旧留着 —— 用户就能在编辑视图里右键一张卡、把它引用进输入框。
+      */}
+      {detail ? (
+        <div className="ps-chat-row is-detail">
+          <DetailEdit
+            seed={seed}
+            onClose={() => setDetail(false)}
+            onQuote={(q) => {
+              setText((t) => (t.trim() ? `${t.trimEnd()} ${q} ` : `${q} `));
+              area.current?.focus();
+              setNote(`已把「${q}」放进输入框。`);
+            }}
+          />
+        </div>
+      ) : (
       <div className="ps-chat-row">
         <div className="ps-chat-col">
       <div className="ps-chat-scroll">
@@ -141,7 +161,13 @@ export function ChatView(props: {
           <div ref={tail} />
         </div>
       </div>
+        </div>
 
+        {panel && <ChatSidePanel chatId={props.chat.id} projectSeed={seed} onNote={setNote} onDetail={() => setDetail(true)} />}
+      </div>
+      )}
+
+      {/* 输入框在这一行之外:所以「详细编辑」展开、消息被挡住时,它照旧在下面 */}
       <div className="ps-chat-foot">
         <div className="ps-chat-box">
           <textarea
@@ -179,10 +205,6 @@ export function ChatView(props: {
         <p className="ps-chat-note" role="status" data-pc="start-chat-note">
           {note || "界面预览阶段：发出去不会真的跑 Agent，也不会改动项目。"}
         </p>
-      </div>
-        </div>
-
-        {panel && <ChatSidePanel chatId={props.chat.id} projectSeed={seed} onNote={setNote} />}
       </div>
     </main>
   );
