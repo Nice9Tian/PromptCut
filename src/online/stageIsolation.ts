@@ -71,7 +71,7 @@ export function sanitizeBreach(d: unknown): BreachKind | null {
   return BREACHES.includes(d as BreachKind) ? (d as BreachKind) : null;
 }
 
-/** 每个页面会话一个随机的会话号(不是秘密:只把 cookie 圈在一段路径上) */
+/** 生成 32 位十六进制的舞台素材路径号(按账号加项目隔离,对其它项目的舞台保密,把 cookie 与缓存圈在一段路径上) */
 export function newSid(random: (bytes: Uint8Array) => void = (b) => { crypto.getRandomValues(b); }): string {
   const bytes = new Uint8Array(16);
   random(bytes);
@@ -89,6 +89,116 @@ export interface StageMediaPlan {
   ticket: string | null;
   /** 这一台能不能执行用户卡(舞台自己还要核自检与「没见过票据」) */
   cardExec: boolean;
+  /** 舞台文档已经拿过另一个项目的路径号,调用方须整页重载这台舞台、不发策略 */
+  reload?: boolean;
+}
+
+export const STAGE_SID_STORAGE_PREFIX = "pc.stageSid.v1:";
+
+const STAGE_SID_RE = /^[0-9a-f]{32}$/;
+
+export interface StageSidScope {
+  accountId: string | null;
+  projectId: string | null;
+}
+
+export interface StageSidStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+}
+
+export interface StageSidStore {
+  sidFor(scope: StageSidScope): string;
+}
+
+function scopeKeyOf(scope: StageSidScope): { persistent: boolean; key: string } {
+  const accountId = typeof scope?.accountId === "string" && scope.accountId.length > 0 ? scope.accountId : null;
+  const projectId = typeof scope?.projectId === "string" && scope.projectId.length > 0 ? scope.projectId : null;
+  if (accountId !== null && projectId !== null) {
+    return {
+      persistent: true,
+      key: `${STAGE_SID_STORAGE_PREFIX}${encodeURIComponent(accountId)}:${encodeURIComponent(projectId)}`,
+    };
+  }
+  const aTag = scope?.accountId === null || scope?.accountId === undefined ? "n" : `s:${encodeURIComponent(String(scope.accountId))}`;
+  const pTag = scope?.projectId === null || scope?.projectId === undefined ? "n" : `s:${encodeURIComponent(String(scope.projectId))}`;
+  return {
+    persistent: false,
+    key: `mem:${aTag}:${pTag}`,
+  };
+}
+
+/**
+ * 按「账号 + 项目」分配与复用舞台素材路径号(`mechanism/platforms.md`「路径号按账号加项目固定」):
+ * 两个标识都非空时在编辑页面自己的 `localStorage` 里按 `pc.stageSid.v1:<accountId>:<projectId>` 持久化;
+ * 任一标识缺失或存储不可用时退回本页会话内存,不同作用域绝不共用同一个路径号。
+ */
+export function createStageSidStore(opts: {
+  storage?: StageSidStorage | null | (() => StageSidStorage | null);
+  random?: (bytes: Uint8Array) => void;
+} = {}): StageSidStore {
+  const random = opts.random;
+  const byKey = new Map<string, string>();
+  const usedSids = new Set<string>();
+  const freshSid = (): string => {
+    for (let i = 0; i < 16; i++) {
+      const s = newSid(random);
+      if (!usedSids.has(s)) {
+        usedSids.add(s);
+        return s;
+      }
+    }
+    const fallback = newSid(random);
+    usedSids.add(fallback);
+    return fallback;
+  };
+  const getStorage = (): StageSidStorage | null => {
+    try {
+      if ("storage" in opts) {
+        return typeof opts.storage === "function" ? opts.storage() : (opts.storage ?? null);
+      }
+      return typeof globalThis !== "undefined" ? (globalThis.localStorage ?? null) : null;
+    } catch {
+      return null;
+    }
+  };
+  return {
+    sidFor(scope: StageSidScope): string {
+      const { persistent, key } = scopeKeyOf(scope);
+      const cached = byKey.get(key);
+      if (cached !== undefined) return cached;
+      if (!persistent) {
+        const sid = freshSid();
+        byKey.set(key, sid);
+        return sid;
+      }
+      let sid: string | null = null;
+      const st = getStorage();
+      if (st) {
+        try {
+          const raw = st.getItem(key);
+          if (typeof raw === "string" && STAGE_SID_RE.test(raw) && !usedSids.has(raw)) {
+            sid = raw;
+            usedSids.add(sid);
+          }
+        } catch {
+          sid = null;
+        }
+      }
+      if (sid === null) {
+        sid = freshSid();
+        if (st) {
+          try {
+            st.setItem(key, sid);
+          } catch {
+            // 写入失败仍保留本页会话内存里的路径号
+          }
+        }
+      }
+      byKey.set(key, sid);
+      return sid;
+    },
+  };
 }
 
 export interface StageIsolationDeps {
@@ -97,6 +207,8 @@ export interface StageIsolationDeps {
   /** 向舞台源交接票据;成了回 true。缺省用 `fetch`(带凭据的跨源 POST) */
   grant?(stageOrigin: string, sid: string, ticket: string): Promise<boolean>;
   sid?: string;
+  sidStore?: StageSidStore;
+  storage?: StageSidStorage | null | (() => StageSidStorage | null);
   reportWaitMs?: number;
   setTimer?(fn: () => void, ms: number): unknown;
   clearTimer?(t: unknown): void;
@@ -108,9 +220,11 @@ interface Slot {
   /** 握手之后在等结果的人 */
   waiters: Array<(r: IsolationReport | null) => void>;
   mode: StageMediaMode | null;
-  /** 上一次交接成功时用的票据与舞台源(同一张不重复交接) */
-  granted: { ticket: string; origin: string } | null;
-  /** 正在路上的交接(同一张票据、同一个舞台源只发一次请求;取档策略短时间里会连着算几遍) */
+  /** 这一台当前文档已经拿过的路径号;握手(新文档)时清掉,一个舞台文档终生只拿一个路径号 */
+  docSid: string | null;
+  /** 上一次交接成功时用的票据、路径号与舞台源(同一组不重复交接) */
+  granted: { ticket: string; sid: string; origin: string } | null;
+  /** 正在路上的交接(同一张票据、同一个路径号、同一个舞台源只发一次请求;取档策略短时间里会连着算几遍) */
   granting: { key: string; done: Promise<boolean> } | null;
   /** 握手的代数:结果晚到时对不上代就丢 */
   gen: number;
@@ -118,6 +232,8 @@ interface Slot {
 
 export interface StageIsolationSession {
   readonly sid: string;
+  /** 切换当前账号与项目作用域;路径号变化时重算状态并通知订阅方 */
+  setScope(scope: StageSidScope): void;
   /** 这一台握手了(新文档):清掉旧的自检结果与取档方式 */
   handshake(id: StageLetter): void;
   /** 这一台发来自检结果 */
@@ -156,14 +272,16 @@ export async function grantMediaCookie(stageOrigin: string, sid: string, ticket:
 }
 
 export function createStageIsolation(deps: StageIsolationDeps): StageIsolationSession {
-  const sid = deps.sid ?? newSid();
+  const sidStore = deps.sidStore ?? createStageSidStore("storage" in deps ? { storage: deps.storage } : {});
+  let currentSid = deps.sid ?? newSid();
+  let currentScopeKey: string | null = null;
   const grant = deps.grant ?? ((origin, s, ticket) => grantMediaCookie(origin, s, ticket));
   const setTimer = deps.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
   const clearTimer = deps.clearTimer ?? ((t: unknown) => clearTimeout(t as ReturnType<typeof setTimeout>));
   const waitMs = deps.reportWaitMs ?? ISOLATION_REPORT_WAIT_MS;
   const slots: Record<StageLetter, Slot> = {
-    A: { report: null, waiters: [], mode: null, granted: null, granting: null, gen: 0 },
-    B: { report: null, waiters: [], mode: null, granted: null, granting: null, gen: 0 },
+    A: { report: null, waiters: [], mode: null, docSid: null, granted: null, granting: null, gen: 0 },
+    B: { report: null, waiters: [], mode: null, docSid: null, granted: null, granting: null, gen: 0 },
   };
   let IDS: StageLetter[] = [];
   let breached = false;
@@ -182,7 +300,7 @@ export function createStageIsolation(deps: StageIsolationDeps): StageIsolationSe
     if (breached) return off("breach");
     if (IDS.some((id) => slots[id].report && !slots[id].report!.ok)) return off("not-isolated");
     if (IDS.some((id) => slots[id].mode === "legacy")) return off(grantFailed ? "grant-failed" : "not-isolated");
-    if (IDS.some((id) => slots[id].mode !== "cookie" || !slots[id].report)) return off("pending");
+    if (IDS.some((id) => (slots[id].docSid !== null && slots[id].docSid !== currentSid) || slots[id].mode !== "cookie" || !slots[id].report || slots[id].granted?.sid !== currentSid)) return off("pending");
     const egress = "none" as const;
     return { enabled: true, reason: "ok", detail, egress };
   };
@@ -210,12 +328,24 @@ export function createStageIsolation(deps: StageIsolationDeps): StageIsolationSe
   };
 
   return {
-    sid,
+    get sid() {
+      return currentSid;
+    },
+    setScope(scope) {
+      const { key } = scopeKeyOf(scope);
+      if (key === currentScopeKey) return;
+      currentScopeKey = key;
+      const nextSid = sidStore.sidFor(scope);
+      if (nextSid === currentSid) return;
+      currentSid = nextSid;
+      update();
+    },
     handshake(id) {
       const slot = slots[id];
       slot.gen++;
       slot.report = null;
       slot.mode = null;
+      slot.docSid = null;
       slot.granted = null;
       slot.granting = null;
       for (const w of slot.waiters.splice(0)) w(null);
@@ -242,40 +372,57 @@ export function createStageIsolation(deps: StageIsolationDeps): StageIsolationSe
       if (!ctx.stageOrigin) {
         throw new Error(`[stageIsolation] 跨源隔离舞台未配置或不可用，禁止同源退回: stage ${id}`);
       }
+      const reloadPlan = (): StageMediaPlan => {
+        update();
+        return { mode: "cookie", base: null, ticket: null, cardExec: false, reload: true };
+      };
+      const needReload = (): boolean => slot.docSid !== null && slot.docSid !== currentSid;
+      const withSidBase = (cardExec: boolean): StageMediaPlan => {
+        if (needReload()) return reloadPlan();
+        slot.docSid = currentSid;
+        return { mode: "cookie", base: mediaSBase(currentSid), ticket: null, cardExec };
+      };
       const safeFallback = (): StageMediaPlan => {
+        if (needReload()) return reloadPlan();
         slot.mode = "legacy";
         update();
-        return { mode: "cookie", base: mediaSBase(sid), ticket: null, cardExec: false };
+        return withSidBase(false);
       };
+      if (needReload()) return reloadPlan();
       if (!ctx.active || !deps.enabled()) return safeFallback();
       const gen = slot.gen;
       const report = await waitReport(id);
       if (gen !== slot.gen) return safeFallback(); // 等的时候这一台又握手了:这一次作废,新的握手会再来
+      if (needReload()) return reloadPlan();
       // 等不到结果(旧版舞台页不发、或舞台卡住):按自检出错记
       if (!report) slot.report = { ok: false, crossOrigin: false, csp: "none", egress: "none", hardened: false, trustedTypes: "unsupported", reasons: ["check-error"] };
       if (!report?.ok) return safeFallback();
       if (!ctx.ticket) {
         // 还没有票据(素材服务没连上):不交接,也不退回旧办法 —— 这一台已经判为隔离,等有票据再来
-        return { mode: "cookie", base: mediaSBase(sid), ticket: null, cardExec: false };
+        return withSidBase(false);
       }
-      if (!(slot.granted && slot.granted.ticket === ctx.ticket && slot.granted.origin === ctx.stageOrigin)) {
-        const key = JSON.stringify([ctx.stageOrigin, ctx.ticket]);
-        if (slot.granting?.key !== key) slot.granting = { key, done: grant(ctx.stageOrigin, sid, ctx.ticket) };
+      const planSid = currentSid;
+      if (!(slot.granted && slot.granted.ticket === ctx.ticket && slot.granted.sid === planSid && slot.granted.origin === ctx.stageOrigin)) {
+        const key = JSON.stringify([ctx.stageOrigin, planSid, ctx.ticket]);
+        if (slot.granting?.key !== key) slot.granting = { key, done: grant(ctx.stageOrigin, planSid, ctx.ticket) };
         const flying = slot.granting;
         const ok = await flying.done;
         if (slot.granting === flying) slot.granting = null;
         if (gen !== slot.gen) return safeFallback();
+        if (currentSid !== planSid || needReload()) return reloadPlan();
         if (!ok) {
           // 续票时交接失败:留在 cookie 上(旧 cookie 还能用到过期),不退回旧办法
-          if (slot.mode === "cookie") return { mode: "cookie", base: mediaSBase(sid), ticket: null, cardExec: cached.enabled };
+          if (slot.mode === "cookie" && slot.granted?.sid === currentSid) return withSidBase(cached.enabled);
           grantFailed = true;
           return safeFallback();
         }
-        slot.granted = { ticket: ctx.ticket, origin: ctx.stageOrigin };
+        slot.granted = { ticket: ctx.ticket, sid: planSid, origin: ctx.stageOrigin };
       }
+      if (needReload()) return reloadPlan();
+      slot.docSid = currentSid;
       slot.mode = "cookie";
       update();
-      return { mode: "cookie", base: mediaSBase(sid), ticket: null, cardExec: cached.enabled };
+      return { mode: "cookie", base: mediaSBase(currentSid), ticket: null, cardExec: cached.enabled };
     },
     state: () => cached,
     subscribe(cb) {

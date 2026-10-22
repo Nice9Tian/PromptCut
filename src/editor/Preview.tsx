@@ -40,7 +40,7 @@ import { MEDIA_MARK_MS, decodeLimit, originalLoadSignature, subscribeDecodeLimit
 import { TierBubble } from "./TierBubble";
 import { GateViewer, gateViewerWanted } from "./GateViewer";
 import { setMediaTierPolicy, type MediaTierPolicy } from "../render/mediaTier";
-import { assetAuthHeaders, docRequest, hasDocLink, remoteAssetBase, remoteAssetTicket, remoteAssetTicketInfo, setNoEditorProcess, subscribeRemoteAssets } from "./media/assetTiers";
+import { assetAuthHeaders, docRequest, hasDocLink, remoteAccountProjectId, remoteAssetBase, remoteAssetTicket, remoteAssetTicketInfo, setNoEditorProcess, subscribeRemoteAssets } from "./media/assetTiers";
 import { currentDocProjectId, currentSharedLink, getSyncView, pageSession, pushToast, subscribeQueueEvents } from "./sync/syncManager";
 import { hostedStreamsOn } from "./sync/hostedServices";
 import { needsLocalPc, onlineBrowserMode, setOnlineBrowserMode } from "../render/placeholderHost";
@@ -475,6 +475,7 @@ export function Preview(props: { variant?: "mobile" } = {}) {
      */
     const iso = pageStageIsolation(() => onlineStageState().cardExec);
     iso.setStages(mountedStageIds());
+    iso.setScope({ accountId: getSyncView().shared?.accountId || null, projectId: remoteAccountProjectId() || currentDocProjectId() || null });
     const origins = stageOrigins();
     const stageBase = base ? stageAssetBase(base, location.origin) : null;
     await Promise.all(STAGE_IDS.map(async (id) => {
@@ -488,6 +489,15 @@ export function Preview(props: { variant?: "mobile" } = {}) {
           : { mode: "legacy" as const, base: null, ticket, cardExec: false };
         // 等自检与交接的时候这一台换了、或者又发起了一次更新的:这一次作废
         if (rpcRef.current[id] !== c || policySeqRef.current[id] !== seq) return;
+        if (plan.reload) {
+          const frame = (id === "A" ? frameARef : frameBRef).current;
+          releaseStageClient(c);
+          c.dispose();
+          rpcRef.current[id] = null;
+          hostCapsRef.current[id] = null;
+          if (frame) frame.src = frame.src;
+          return;
+        }
         stagePolicy = plan.mode === "cookie"
           ? { smallOnly: policy.smallOnly, decodeMaxPixels: policy.decodeMaxPixels, remote: { base: plan.base!, ticket: null }, cardExec: plan.cardExec }
           : { smallOnly: policy.smallOnly, decodeMaxPixels: policy.decodeMaxPixels, remote: { base: stageBase, ticket: plan.ticket } };
@@ -1983,7 +1993,7 @@ export function Preview(props: { variant?: "mobile" } = {}) {
       // C10:在线双舞台、按拍换快照、后台活开关、探针帧的可转移字节
       dual: dualRef.current,
       onlineStages: onlineStageState(),
-      // 在线执行用户卡与素材效果卡:本页此刻能不能执行、为什么不能、会话号(不是秘密;票据不在这里)
+      // 在线执行用户卡与素材效果卡:本页此刻能不能执行、为什么不能、路径号(按账号加项目固定,对其它项目的舞台保密;票据不在这里)
       cardExec: ONLINE ? { ...onlineCardExec(), sid: pageStageIsolation().sid } : null,
       // 首次握手过渡期之后换回双舞台那一下(盖板因为什么、多久撤下)
       handover: { ...handoverInfoRef.current },
