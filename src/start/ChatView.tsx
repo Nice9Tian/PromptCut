@@ -23,23 +23,18 @@ const MAX_H = 200;
 
 export function ChatView(props: {
   chat: MockAgentChat;
-  /** 这条对话挂在哪儿,显示在标题下面 */
-  whereText: string;
   /** 这条对话的消息。存在上层按对话号分开放,所以切走再回来还在 */
   messages: MockMessage[];
   onSend: (text: string) => void;
-  onBack: () => void;
+  /** 右边那条拓展栏开着没有。开关在顶栏上(`TopBar.tsx`),所以状态拿在 `OnlineStart` */
+  panel: boolean;
 }): JSX.Element {
   const messages = props.messages;
   const [text, setText] = useState("");
-  /** 右边那条拓展栏开着没有(标题栏右上角那颗按钮) */
-  const [panel, setPanel] = useState(false);
   /** 拓展栏里点出来的那句说明,显示在输入框下面 */
   const [note, setNote] = useState("");
   /** 「详细编辑」展开了没有:展开时占满聊天区,输入框照旧留在下面 */
   const [detail, setDetail] = useState(false);
-  /** 共有 / 私有(`product/agent.md`:新建默认共有,用户可以主动改为私有)。这一版只是界面上的开关 */
-  const [shared, setShared] = useState(true);
   const area = useRef<HTMLTextAreaElement>(null);
   const tail = useRef<HTMLDivElement>(null);
 
@@ -72,44 +67,6 @@ export function ChatView(props: {
 
   return (
     <main className="ps-main ps-chat" data-pc="start-chat" data-chat={props.chat.id}>
-      {/* 标题栏横向填满整页(用户 2026-10-23 定):拓展栏只从下面那一行里让出宽度,不切标题栏 */}
-      <header className="ps-chat-head">
-        <button type="button" className="ps-chat-back" data-pc="start-chat-back" aria-label="回到开始页" onClick={props.onBack}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M15 5l-7 7 7 7" />
-          </svg>
-        </button>
-        <div className="ps-chat-title">
-          <span className="ps-chat-name" data-pc="start-chat-name">{props.chat.name}</span>
-          <span className="ps-chat-where">{props.whereText}</span>
-        </div>
-        {/* 共有 / 私有:产品里是真开关(product/agent.md),这一版只切界面 */}
-        <button
-          type="button"
-          className="ps-chat-vis"
-          data-pc="start-chat-visibility"
-          aria-pressed={!shared}
-          title="待办：共有 / 私有要由云端文档服务记录并核对权限"
-          onClick={() => setShared((v) => !v)}
-        >
-          {shared ? "共有" : "私有"}
-        </button>
-        {/* 右边那条拓展栏的开关:看画面、看这次改动、切改前改后 */}
-        <button
-          type="button"
-          className="ps-chat-ext-btn"
-          data-pc="start-chat-ext-toggle"
-          aria-pressed={panel}
-          aria-label="右侧拓展栏"
-          title="画面、修改前 / 修改后"
-          onClick={() => setPanel((v) => !v)}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round">
-            <rect x="3" y="4.5" width="18" height="15" rx="2" />
-            <path d="M15 4.5v15" />
-          </svg>
-        </button>
-      </header>
 
       {/*
         「详细编辑」展开时整块换成编辑视图,占满聊天区;输入框不在这一行里(它在下面的 ps-chat-foot),
@@ -163,7 +120,7 @@ export function ChatView(props: {
       </div>
         </div>
 
-        {panel && <ChatSidePanel chatId={props.chat.id} projectSeed={seed} onNote={setNote} onDetail={() => setDetail(true)} />}
+        {props.panel && <ChatSidePanel chatId={props.chat.id} projectSeed={seed} onNote={setNote} onDetail={() => setDetail(true)} />}
       </div>
       )}
 

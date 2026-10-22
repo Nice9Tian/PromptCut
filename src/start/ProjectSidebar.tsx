@@ -19,8 +19,6 @@
  */
 import { useRef, useState } from "react";
 import type { JSX, PointerEvent as ReactPointerEvent } from "react";
-import { Logo } from "../ui/Logo";
-import { hueOf } from "./hue";
 import { RowMenu, type MenuAt } from "./RowMenu";
 import { SIDE_WIDTH, clampSideWidth } from "./sideWidth";
 import type { TreeKind } from "./treeKind";
@@ -122,8 +120,8 @@ export function ProjectSidebar(props: {
   onOpenChat: (chat: MockAgentChat) => void;
   /** 聊天页正开着的那条对话:它那一行标成当前项 */
   openChatId: string | null;
-  accountName: string | null;
-  onSignOut: () => void;
+  /** 收起来了没有。收起时整条滑出去、宽度收到 0,收起键在顶栏上 */
+  collapsed: boolean;
   ops: TreeOps;
   width: number;
   onWidth: (px: number) => void;
@@ -328,12 +326,15 @@ export function ProjectSidebar(props: {
   };
 
   return (
-    <aside className="ps-side" data-pc="start-side" style={{ flexBasis: `${props.width}px` }}>
-      <div className="ps-side-head">
-        {/* Logo 自带字标,这里不要再写一遍产品名 */}
-        <Logo size={20} />
-      </div>
-
+    <aside
+      className="ps-side"
+      data-pc="start-side"
+      data-collapsed={props.collapsed}
+      /* 收起就是把 flex-basis 收到 0;宽度本来就是行内样式给的,收起也得走行内,不然类选择器压不过它 */
+      style={{ flexBasis: props.collapsed ? 0 : `${props.width}px` }}
+    >
+      {/* 里面这一层钉住原来的宽度:收的时候内容整块滑出去,不会先被挤成一条再消失 */}
+      <div className="ps-side-inner" style={{ width: `${props.width}px` }}>
       <button type="button" className="ps-side-new" data-pc="start-side-new" onClick={props.onCreate}>
         <span aria-hidden="true">＋</span>新建项目
       </button>
@@ -430,25 +431,10 @@ export function ProjectSidebar(props: {
         </div>
       </div>
 
-      <div className="ps-side-foot">
-        <span
-          className="ps-avatar"
-          style={{
-            background: `hsl(${hueOf(props.accountName ?? "guest")} 45% 32%)`,
-            color: `hsl(${hueOf(props.accountName ?? "guest")} 60% 88%)`,
-          }}
-          aria-hidden="true"
-        >
-          {(props.accountName ?? "?").slice(0, 1)}
-        </span>
-        <span className="ps-row-name" data-pc="start-account-name">{props.accountName ?? "未登录"}</span>
-        <button type="button" className="ps-link" data-pc="start-sign-out" onClick={props.onSignOut}>
-          退出
-        </button>
       </div>
 
-      {/* 右边那条缝:拖着改宽度,双击回到默认;方向键也能调(只能用鼠标就把键盘用户关在门外了) */}
-      <div
+      {/* 右边那条缝:拖着改宽度,双击回到默认;方向键也能调(只能用鼠标就把键盘用户关在门外了)。收起时没有 */}
+      {!props.collapsed && <div
         className="ps-side-grip"
         data-pc="start-side-grip"
         role="separator"
@@ -466,7 +452,7 @@ export function ProjectSidebar(props: {
           if (e.key === "ArrowRight") { e.preventDefault(); props.onWidthNudge(step); }
           if (e.key === "Home") { e.preventDefault(); props.onWidthCommit(SIDE_WIDTH.def); }
         }}
-      />
+      />}
 
       {menu && (
         <RowMenu

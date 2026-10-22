@@ -39,3 +39,22 @@ export function writeSideWidth(px: number): void {
     // 存不了就只在这一次打开期间生效,不报错
   }
 }
+
+/** 侧栏收起来没有。和宽度一样记在本机:收起来的人下次打开还是收着的 */
+const COLLAPSED_KEY = "pc.start.sideCollapsed";
+
+export function readSideCollapsed(): boolean {
+  try {
+    return localStorage.getItem(COLLAPSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function writeSideCollapsed(collapsed: boolean): void {
+  try {
+    localStorage.setItem(COLLAPSED_KEY, collapsed ? "1" : "0");
+  } catch {
+    // 同上
+  }
+}
