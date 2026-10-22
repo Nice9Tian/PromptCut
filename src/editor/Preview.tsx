@@ -65,7 +65,7 @@ import { beatSwapDebug, setBeatSwap } from "./snapshotFeed";
 import { SWAP_MS } from "../render/beatSwap.mjs";
 import { layerSwapMs } from "./swapCost";
 import { markStageHandshake, onlineStageState, stageAssetBase, subscribeOnlineStages } from "../online/stageOrigins";
-import { STAGE_SANDBOX, onlineCardExec, pageStageIsolation, sanitizeBreach, sanitizeIsolationReport, subscribeOnlineCardExec } from "../online/stageIsolation";
+import { STAGE_SANDBOX, onlineCardExec, pageStageIsolation, sanitizeBreach, sanitizeIsolationReport, subscribeOnlineCardExec, type StageSidScope } from "../online/stageIsolation";
 import { sanitizeHostCapabilities } from "../online/stageMessageGuard";
 import { MEDIA_PROXY_BASE } from "../online/stagePolicy.mjs";
 import type { IsolationReport } from "../online/isolation/isolationCheck";
@@ -140,6 +140,16 @@ function mountedStageIds(): StageId[] {
   if (!ONLINE) return [...STAGE_IDS];
   if (!stageOrigins()) return [];
   return dualStage() ? [...STAGE_IDS] : ["A"];
+}
+
+/**
+ * 舞台素材路径号的作用域(`online/stageIsolation.ts` 的 `setScope`):路径号跟素材连接的项目走(cookie 里是那个项目的票据);
+ * `codeProjectId` 是此刻打开的项目(要往舞台发的卡片代码属于它)。页面原地换项目时,项目先换、素材连接后换,
+ * 中间这一段两者不同,本页不点头执行,新项目的卡片代码不进拿着上一个项目路径号的舞台文档。
+ */
+function stageSidScope(): StageSidScope {
+  const codeProjectId = currentDocProjectId() || null;
+  return { accountId: getSyncView().shared?.accountId || null, projectId: remoteAccountProjectId() || codeProjectId, codeProjectId };
 }
 
 /** 声音线程起在哪一台:双舞台实例 B(后台舞台,线程跟实例走),单舞台只有 A */
@@ -420,6 +430,8 @@ export function Preview(props: { variant?: "mobile" } = {}) {
   /** 把此刻的包发给一台(或两台)舞台。本页不能执行时发空表(舞台把已载入的撤下)。声音线程只在一台起(双舞台实例 B,单舞台 A):线程跟实例走,不跟角色走 */
   const pushCardBundles = useCallback((only?: StageId) => {
     if (!ONLINE) return;
+    // 先按此刻打开的项目重算作用域:项目换了而素材连接还没换过来(或路径号要换)时,隔离会话当场改判不执行,下面就发空表
+    pageStageIsolation(() => onlineStageState().cardExec).setScope(stageSidScope());
     const list: CardBundle[] = cardExecAvailable() ? cardBundlesRef.current.filter((b): b is Extract<BundleResult, { ok: true }> => b.ok).map((b) => b.bundle) : [];
     for (const id of STAGE_IDS) {
       if (only && only !== id) continue;
@@ -475,7 +487,7 @@ export function Preview(props: { variant?: "mobile" } = {}) {
      */
     const iso = pageStageIsolation(() => onlineStageState().cardExec);
     iso.setStages(mountedStageIds());
-    iso.setScope({ accountId: getSyncView().shared?.accountId || null, projectId: remoteAccountProjectId() || currentDocProjectId() || null });
+    iso.setScope(stageSidScope());
     const origins = stageOrigins();
     const stageBase = base ? stageAssetBase(base, location.origin) : null;
     await Promise.all(STAGE_IDS.map(async (id) => {

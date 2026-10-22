@@ -425,3 +425,70 @@ test("(f) 路径号按账号加项目固定(createStageSidStore 与会话 setSco
   assert.equal(afterBreach.ticket, null);
   assert.equal(iso.state().reason, "breach");
 });
+
+test("(g) 页面原地换项目、素材连接还没换过来:卡片代码的项目与素材的项目不同,本页当场不点头执行(新项目的代码不进拿着上一个项目路径号的舞台文档);素材换过来后路径号变、要求整页重载;Preview 发包前先重算作用域", async () => {
+  const backing = new Map();
+  const storage = { getItem: (k) => backing.get(k) ?? null, setItem: (k, v) => { backing.set(k, v); } };
+  const state = { grants: [], notifications: 0 };
+  const iso = createStageIsolation({
+    enabled: () => true,
+    storage,
+    grant: async (origin, s, ticket) => { state.grants.push({ origin, sid: s, ticket }); return true; },
+    setTimer: () => 1,
+    clearTimer: () => {},
+  });
+  iso.subscribe(() => { state.notifications++; });
+  iso.setScope({ accountId: "acct-1", projectId: "A", codeProjectId: "A" });
+  const sidA = iso.sid;
+  const { a, b } = await bothIsolated(iso);
+  assert.equal(a.base, `/media-s/${sidA}`);
+  assert.equal(b.cardExec, true);
+  assert.equal(iso.state().enabled, true);
+
+  // 项目已换成 B、素材连接仍是 A:路径号不变(cookie 里还是 A 的票据),但本页立刻不执行,并通知订阅方(Preview 据此重发策略、关掉舞台的闸门)
+  const before = state.notifications;
+  iso.setScope({ accountId: "acct-1", projectId: "A", codeProjectId: "B" });
+  assert.equal(iso.sid, sidA);
+  assert.deepEqual({ enabled: iso.state().enabled, reason: iso.state().reason }, { enabled: false, reason: "pending" });
+  assert.equal(state.notifications, before + 1);
+  const during = await iso.plan("A", { active: true, stageOrigin: S1, ticket: TICKET });
+  assert.equal(during.cardExec, false, "对不上的这一段发给舞台的策略不点头");
+  assert.equal(during.ticket, null);
+  // 同一组再报一次是空操作
+  iso.setScope({ accountId: "acct-1", projectId: "A", codeProjectId: "B" });
+  assert.equal(state.notifications, before + 1);
+
+  // 素材连接换成 B:路径号换成 B 的,拿过 A 的路径号的舞台文档要整页重载
+  iso.setScope({ accountId: "acct-1", projectId: "B", codeProjectId: "B" });
+  const sidB = iso.sid;
+  assert.notEqual(sidB, sidA);
+  assert.equal(iso.state().enabled, false);
+  assert.equal((await iso.plan("A", { active: true, stageOrigin: S1, ticket: TICKET })).reload, true);
+  assert.equal((await iso.plan("B", { active: true, stageOrigin: S2, ticket: TICKET })).reload, true);
+  iso.handshake("A"); iso.handshake("B");
+  iso.report("A", OK); iso.report("B", OK);
+  const a2 = await iso.plan("A", { active: true, stageOrigin: S1, ticket: TICKET });
+  const b2 = await iso.plan("B", { active: true, stageOrigin: S2, ticket: TICKET });
+  assert.equal(a2.base, `/media-s/${sidB}`);
+  assert.equal(b2.cardExec, true);
+  assert.equal(iso.state().enabled, true);
+
+  // 没有素材连接(本地项目、局域网项目不给账号项目号)时只按打开的项目算,不算对不上
+  iso.setScope({ accountId: null, projectId: "L", codeProjectId: "L" });
+  assert.notEqual(iso.state().reason, "ok");
+  iso.handshake("A"); iso.handshake("B");
+  iso.report("A", OK); iso.report("B", OK);
+  await iso.plan("A", { active: true, stageOrigin: S1, ticket: TICKET });
+  await iso.plan("B", { active: true, stageOrigin: S2, ticket: TICKET });
+  assert.equal(iso.state().enabled, true);
+
+  // 接线(源码核对):Preview 的作用域里带 codeProjectId,发卡片包之前先重算作用域再看能不能执行
+  const fs = await import("node:fs");
+  const preview = fs.readFileSync(new URL("../editor/Preview.tsx", import.meta.url), "utf8");
+  assert.match(preview, /codeProjectId = currentDocProjectId\(\) \|\| null/);
+  assert.match(preview, /projectId: remoteAccountProjectId\(\) \|\| codeProjectId, codeProjectId/);
+  const push = preview.indexOf("const pushCardBundles = useCallback(");
+  const scoped = preview.indexOf(".setScope(stageSidScope());", push);
+  const decided = preview.indexOf("cardExecAvailable()", push);
+  assert.ok(push > 0 && scoped > push && scoped < decided, "pushCardBundles 先 setScope 再判 cardExecAvailable");
+});

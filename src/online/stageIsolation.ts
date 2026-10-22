@@ -99,7 +99,13 @@ const STAGE_SID_RE = /^[0-9a-f]{32}$/;
 
 export interface StageSidScope {
   accountId: string | null;
+  /** 舞台读的是哪个项目的素材(路径号跟它走;编辑器页按素材连接的项目给) */
   projectId: string | null;
+  /**
+   * 舞台此刻要执行的是哪个项目的卡片代码(编辑器页按当前打开的项目给)。与 `projectId` 都给了又不同时
+   * (页面原地换项目、素材连接还没换过来的那一段),本页不点头执行:新项目的卡片不进拿着上一个项目路径号的舞台文档
+   */
+  codeProjectId?: string | null;
 }
 
 export interface StageSidStorage {
@@ -275,6 +281,8 @@ export function createStageIsolation(deps: StageIsolationDeps): StageIsolationSe
   const sidStore = deps.sidStore ?? createStageSidStore("storage" in deps ? { storage: deps.storage } : {});
   let currentSid = deps.sid ?? newSid();
   let currentScopeKey: string | null = null;
+  /** 素材的项目与卡片代码的项目对不上(见 `StageSidScope.codeProjectId`) */
+  let scopeMismatch = false;
   const grant = deps.grant ?? ((origin, s, ticket) => grantMediaCookie(origin, s, ticket));
   const setTimer = deps.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
   const clearTimer = deps.clearTimer ?? ((t: unknown) => clearTimeout(t as ReturnType<typeof setTimeout>));
@@ -300,7 +308,7 @@ export function createStageIsolation(deps: StageIsolationDeps): StageIsolationSe
     if (breached) return off("breach");
     if (IDS.some((id) => slots[id].report && !slots[id].report!.ok)) return off("not-isolated");
     if (IDS.some((id) => slots[id].mode === "legacy")) return off(grantFailed ? "grant-failed" : "not-isolated");
-    if (IDS.some((id) => (slots[id].docSid !== null && slots[id].docSid !== currentSid) || slots[id].mode !== "cookie" || !slots[id].report || slots[id].granted?.sid !== currentSid)) return off("pending");
+    if (scopeMismatch || IDS.some((id) => (slots[id].docSid !== null && slots[id].docSid !== currentSid) || slots[id].mode !== "cookie" || !slots[id].report || slots[id].granted?.sid !== currentSid)) return off("pending");
     const egress = "none" as const;
     return { enabled: true, reason: "ok", detail, egress };
   };
@@ -332,12 +340,16 @@ export function createStageIsolation(deps: StageIsolationDeps): StageIsolationSe
       return currentSid;
     },
     setScope(scope) {
+      const code = typeof scope?.codeProjectId === "string" && scope.codeProjectId.length > 0 ? scope.codeProjectId : null;
+      const media = typeof scope?.projectId === "string" && scope.projectId.length > 0 ? scope.projectId : null;
+      const mismatch = code !== null && media !== null && code !== media;
       const { key } = scopeKeyOf(scope);
-      if (key === currentScopeKey) return;
-      currentScopeKey = key;
-      const nextSid = sidStore.sidFor(scope);
-      if (nextSid === currentSid) return;
-      currentSid = nextSid;
+      if (key === currentScopeKey && mismatch === scopeMismatch) return;
+      scopeMismatch = mismatch;
+      if (key !== currentScopeKey) {
+        currentScopeKey = key;
+        currentSid = sidStore.sidFor(scope);
+      }
       update();
     },
     handshake(id) {
