@@ -98,6 +98,7 @@
 | `server/test/cut-flatten-streams.test.mjs` | 原来断言「依赖下层的卡不出流」（v1 限制），按 R01 改成「出依赖下层的流、`within` 是 `S~`、下层只有段里的 L」 |
 | `scripts/probes/cut-below-stream-probe.mjs`（新） | R01 端到端探针 |
 | `scripts/probes/cut-online-browser-probe.mjs`（新） | R02 端到端探针 |
+| `scripts/probes/cut-online-e2e-probe.mjs` | 断言 B 按 R02 改：在线来源选层表候选里实际产出来的那一份（原来写死切分方那一份），文件头同步 |
 | `docs/reports/assets/cut-stream/**` | 探针的截图与结果 JSON |
 
 ## 验证
@@ -175,9 +176,9 @@
 
 看过的图：`docs/reports/assets/cut-stream/r02/cut-stream.png`（播放中贴着页面产的流）与 `cut-live-same.png`（同一帧精确活渲）看不出差别；`top-stream.png` 与 `top-live-same.png` 同样。
 
-### 回归：`cut-online-e2e-probe.mjs`
+### 回归：`cut-online-e2e-probe.mjs`（上一轮剪辑段逐卡的在线端到端，切分方认领细任务）
 
-（结果见本节末尾的补记。）
+`node scripts/probes/cut-online-e2e-probe.mjs --dist dist-online --base-port 5910 --out out/probe-cut-online3`：第一次跑只红一条 —— 「B:在线来源选中切分方那一份」：在线来源选的是页面的指纹 `ec313bc687208b5c`。这条断言写的是 v1 的规矩（剪辑段里的卡只能由桌面产）；R02 以后切分方成对出两份（自己的、浏览器的），谁先认领谁得，这一次是页面先产出来。按 R02 改成「在线来源选层表候选里实际产出来的那一份（切分方的或页面的），键对、没有过期」，别的断言一个没动。改后重跑：退出码 0，`fails: []`；A 层表、C 播放（33 个样本 32 个在画）、D 改被引用剪辑后 6 毫秒不再发旧流平面、1543 毫秒不再判重、E 新流 1004 毫秒换上、G 长剪辑段开播 1.1 秒贴流、F 没有页面错误，都过。
 
 ## 没做成的与原因
 
