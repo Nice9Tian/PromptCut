@@ -10,6 +10,11 @@ import { soundHostModules } from "./soundModules.ts";
 import { CARD_RUNTIME_VERSION } from "./version.ts";
 import { markOnlinePage } from "../pageFlag.ts";
 import { setOnlineUserCardAudioGate } from "../soundPolicy.ts";
+import { denyPersistentStorage } from "../isolation/harden.ts";
+
+// 卡片的 `audio()` 也在舞台源上:IndexedDB、Cache Storage、源私有文件系统同样收走(与舞台文档同一个规矩,`harden.ts`)。
+// 排在任何卡片代码之前(卡片代码等消息来了才载入)
+denyPersistentStorage(self);
 
 type Scope = { postMessage(message: unknown, transfer?: Transferable[]): void; onmessage: ((event: MessageEvent) => void) | null };
 const scope = self as unknown as Scope;

@@ -34,6 +34,99 @@ export interface HardenReport {
   hooks: number;
   /** 没装上的项(诊断) */
   errors: string[];
+  /** 收走的持久存储入口(`denyPersistentStorage`;诊断) */
+  storageDenied?: string[];
+}
+
+/* ------------------------------------------------------------------ *
+ * 舞台源上的持久存储
+ * ------------------------------------------------------------------ */
+
+/**
+ * 舞台源上唯一还写进真实 `localStorage` 的键:取档的「这台浏览器能不能放这份内容」(`render/playability.ts`)。
+ * 键里只有浏览器主版本与内容哈希,值只有 `"0"` / `"1"`;别的键、别的值一律只留在本文档的内存里。
+ */
+export const STAGE_STORAGE_PASSTHROUGH_KEY = /^pc\.playable\.\d{1,6}:[0-9a-f]{64}$/;
+const PASSTHROUGH_VALUE = /^[01]$/;
+
+/** 只在本文档内存里的 `Storage`:卡片代码与运行时照常读写,文档一换就没了。真实存储只在闭包里,不对外给 */
+function memoryStorage(real: Storage | null, passthrough: boolean): Storage {
+  const map = new Map<string, string>();
+  const pass = (k: string) => passthrough && real !== null && STAGE_STORAGE_PASSTHROUGH_KEY.test(k);
+  const methods: Record<string, unknown> = {
+    key(i: number) { const k = [...map.keys()][Number(i)]; return k === undefined ? null : k; },
+    getItem(key: string) {
+      const k = String(key);
+      if (pass(k)) { try { const v = real!.getItem(k); return v !== null && PASSTHROUGH_VALUE.test(v) ? v : null; } catch { return null; } }
+      return map.has(k) ? map.get(k)! : null;
+    },
+    setItem(key: string, value: string) {
+      const k = String(key), v = String(value);
+      if (pass(k)) { if (PASSTHROUGH_VALUE.test(v)) { try { real!.setItem(k, v); } catch { /* 写不进就算了 */ } } return; }
+      map.set(k, v);
+    },
+    removeItem(key: string) { map.delete(String(key)); },
+    clear() { map.clear(); },
+  };
+  // 方法与 length 锁死(别的代码换不掉,也就截不到运行时写的东西);对象本身不冻结:`localStorage.x = 1` 这种属性写法照常,只在内存
+  const store = {};
+  for (const [k, fn] of Object.entries(methods)) Object.defineProperty(store, k, { value: fn, writable: false, configurable: false, enumerable: false });
+  Object.defineProperty(store, "length", { get: () => map.size, configurable: false, enumerable: false });
+  return store as unknown as Storage;
+}
+
+/**
+ * 收走舞台源上能「活过本文档」的存储,让同步来的卡片代码写进去的东西留不到下一个舞台文档
+ * (`docs/semantics/mechanism/platforms.md`「路径号按账号加项目固定」:路径号与素材地址不得留在舞台源的任何存储里;
+ * 卡片参数里带着 `/media-s/<路径号>/media/<哈希>`,卡片要是把参数存下来,换了项目的舞台就能拿它去读浏览器缓存)。
+ *
+ * - `localStorage`、`sessionStorage`:换成只在本文档内存里的一份(运行时与卡片照常能用,不报错);
+ *   只有 `STAGE_STORAGE_PASSTHROUGH_KEY` 那种键、值为 `"0"`/`"1"` 的写进真实存储,而且列不出、删不掉真实存储里的键;
+ * - `indexedDB`、`caches`、旧的 `webkitRequestFileSystem*`、`openDatabase`:沿原型链整条改成 `undefined`(锁死,改不回来);
+ * - 源私有文件系统 `navigator.storage.getDirectory()`、存储桶 `navigator.storageBuckets.open()`:一律拒绝。
+ *
+ * 窗口与 Worker 的全局对象都能用(舞台文档、声音线程)。卡片代码自己起的 Worker 管不到,见 AGENT 报告的余留风险。
+ * `cookie` 另在 `installStageHardening` 里只读。回收走了哪些、哪些没装上。
+ */
+export function denyPersistentStorage(scope: object, opts: { passthrough?: boolean } = {}): { denied: string[]; errors: string[] } {
+  const denied: string[] = [];
+  const errors: string[] = [];
+  const g = scope as Record<string, unknown>;
+  const lockAlongChain = (key: string, value: unknown): boolean => {
+    let hit = false;
+    for (let o: object | null = scope; o; o = Object.getPrototypeOf(o)) {
+      if (!Object.prototype.hasOwnProperty.call(o, key)) continue;
+      Object.defineProperty(o, key, { value, writable: false, configurable: false, enumerable: false });
+      hit = true;
+    }
+    if (hit && !Object.prototype.hasOwnProperty.call(scope, key)) Object.defineProperty(scope, key, { value, writable: false, configurable: false, enumerable: false });
+    return hit;
+  };
+  for (const key of ["localStorage", "sessionStorage"] as const) {
+    try {
+      if (!(key in g)) continue;
+      let real: Storage | null = null;
+      try { real = (g[key] as Storage | null | undefined) ?? null; } catch { real = null; }
+      if (lockAlongChain(key, memoryStorage(real, key === "localStorage" && opts.passthrough !== false))) denied.push(key);
+    } catch (e) { errors.push(`${key}:${(e as Error).message}`); }
+  }
+  for (const key of ["indexedDB", "caches", "webkitRequestFileSystem", "webkitRequestFileSystemSync", "webkitResolveLocalFileSystemURL", "webkitResolveLocalFileSystemSyncURL", "openDatabase", "openDatabaseSync"]) {
+    try { if (lockAlongChain(key, undefined)) denied.push(key); } catch (e) { errors.push(`${key}:${(e as Error).message}`); }
+  }
+  const refuse = (ctor: string, method: string) => {
+    try {
+      const proto = (g[ctor] as { prototype?: object } | undefined)?.prototype;
+      if (!proto || typeof (proto as Record<string, unknown>)[method] !== "function") return;
+      Object.defineProperty(proto, method, {
+        value: function () { return Promise.reject(new TypeError("PromptCut 舞台:不能用持久存储")); },
+        writable: false, configurable: false, enumerable: false,
+      });
+      denied.push(`${ctor}.${method}`);
+    } catch (e) { errors.push(`${ctor}.${method}:${(e as Error).message}`); }
+  };
+  refuse("StorageManager", "getDirectory");
+  refuse("StorageBucketManager", "open");
+  return { denied, errors };
 }
 
 export type BreachKind = "html" | "create" | "insert" | "observed" | "define";
@@ -250,6 +343,11 @@ export function installStageHardening(opts: { onBreach?: (kind: BreachKind) => v
     }
   } catch (e) { errors.push(`cookie:${(e as Error).message}`); }
 
+  /* ---------- 6b. 不给能活过本文档的存储(路径号与素材地址留不到下一个舞台文档) ---------- */
+  const storage = denyPersistentStorage(w);
+  hooks += storage.denied.length;
+  for (const e of storage.errors) errors.push(`storage:${e}`);
+
   /* ---------- 7. 兜底:真出现了就摘掉并上报 ---------- */
   try {
     const sweep = (node: Node) => {
@@ -275,7 +373,7 @@ export function installStageHardening(opts: { onBreach?: (kind: BreachKind) => v
     hooks++;
   } catch (e) { errors.push(`MutationObserver:${(e as Error).message}`); }
 
-  report = { installed: true, webrtcRemoved, trustedTypes, hooks, errors };
+  report = { installed: true, webrtcRemoved, trustedTypes, hooks, errors, storageDenied: storage.denied };
   return report;
 }
 

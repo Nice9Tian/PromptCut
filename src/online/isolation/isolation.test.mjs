@@ -5,7 +5,8 @@
  */
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { FRAME_TAGS, htmlHasFrame, isFrameName } from "./harden.ts";
+import fs from "node:fs";
+import { FRAME_TAGS, htmlHasFrame, isFrameName, denyPersistentStorage, STAGE_STORAGE_PASSTHROUGH_KEY } from "./harden.ts";
 import { judgeIsolation, ISOLATION_CHECK_BASE_PATH } from "./isolationCheck.ts";
 import { cardExecGate, subscribeCardExecGate, markIsolatedStageDocument, setIsolationReport, noteMediaPolicy, noteBreach, resetExecGateForTest } from "./execGate.ts";
 import { bootStageGuard, isStageEntryPath, announceStageIsolation, STAGE_ENTRY_FILE, resetStageGuardForTest } from "./stageGuard.ts";
@@ -149,4 +150,112 @@ test("OCS-H-08 启动钩子:不是在线构建、不在浏览器里、不是舞�
     delete globalThis.window;
     delete globalThis.location;
   }
+});
+
+/** 仿浏览器的全局对象:存储入口挂在实例或原型上(窗口在实例上,Worker 的 indexedDB / caches 在原型上),全是可改的访问器 */
+function fakeGlobal({ onProto = false } = {}) {
+  const realLocal = new Map(), realSession = new Map();
+  const storageOf = (m) => ({
+    get length() { return m.size; },
+    key: (i) => [...m.keys()][i] ?? null,
+    getItem: (k) => (m.has(k) ? m.get(k) : null),
+    setItem: (k, v) => { m.set(String(k), String(v)); },
+    removeItem: (k) => { m.delete(k); },
+    clear: () => m.clear(),
+  });
+  const proto = {};
+  const scope = Object.create(proto);
+  const host = onProto ? proto : scope;
+  const accessor = (o, k, v) => Object.defineProperty(o, k, { configurable: true, enumerable: true, get: () => v });
+  accessor(scope, "localStorage", storageOf(realLocal));
+  accessor(scope, "sessionStorage", storageOf(realSession));
+  const idb = { open: () => ({}) };
+  accessor(host, "indexedDB", idb);
+  accessor(host, "caches", { open: async () => ({}) });
+  Object.defineProperty(scope, "webkitRequestFileSystem", { configurable: true, writable: true, value: () => {} });
+  class StorageManager { async getDirectory() { return "opfs-root"; } async estimate() { return {}; } }
+  class StorageBucketManager { async open() { return "bucket"; } }
+  scope.StorageManager = StorageManager;
+  scope.StorageBucketManager = StorageBucketManager;
+  scope.navigator = { storage: new StorageManager(), storageBuckets: new StorageBucketManager() };
+  return { scope, proto, realLocal, realSession, idb };
+}
+
+test("OCS-H-09 舞台源的持久存储收走:卡片写的 localStorage / sessionStorage 只留在本文档内存;IndexedDB、Cache Storage、旧文件系统、源私有文件系统、存储桶都用不了,也改不回来", async () => {
+  const { scope, realLocal, realSession } = fakeGlobal();
+  realLocal.set("old-key", "old-value");
+  const r = denyPersistentStorage(scope);
+  assert.deepEqual(r.errors, []);
+  for (const k of ["localStorage", "sessionStorage", "indexedDB", "caches", "webkitRequestFileSystem", "StorageManager.getDirectory", "StorageBucketManager.open"]) assert.ok(r.denied.includes(k), k);
+
+  // 「卡片」把参数里的素材地址(带路径号)存下来:本文档里读得回,真实存储里没有
+  const leak = "/media-s/0123456789abcdef0123456789abcdef/media/" + "a".repeat(64);
+  scope.localStorage.setItem("params", leak);
+  scope.sessionStorage.setItem("params", leak);
+  scope.localStorage.leakProp = leak; // 属性写法同样只在内存
+  assert.equal(scope.localStorage.leakProp, leak);
+  assert.equal(realLocal.has("leakProp"), false);
+  assert.equal(scope.localStorage.getItem("params"), leak);
+  assert.equal(scope.sessionStorage.getItem("params"), leak);
+  assert.equal(realLocal.has("params"), false);
+  assert.equal(realSession.has("params"), false);
+  // 真实存储里原有的键列不出、读不到、删不掉
+  assert.equal(scope.localStorage.getItem("old-key"), null);
+  assert.equal(scope.localStorage.length, 1);
+  assert.deepEqual([0, 1].map((i) => scope.localStorage.key(i)), ["params", null]);
+  scope.localStorage.removeItem("old-key"); scope.localStorage.clear();
+  assert.equal(realLocal.get("old-key"), "old-value");
+
+  // 唯一放行的:取档的「能不能放」结论,键形状与值都要对
+  const hash = "b".repeat(64);
+  assert.ok(STAGE_STORAGE_PASSTHROUGH_KEY.test(`pc.playable.152:${hash}`));
+  scope.localStorage.setItem(`pc.playable.152:${hash}`, "1");
+  assert.equal(realLocal.get(`pc.playable.152:${hash}`), "1");
+  assert.equal(scope.localStorage.getItem(`pc.playable.152:${hash}`), "1");
+  scope.localStorage.setItem(`pc.playable.152:${"c".repeat(64)}`, leak); // 值不对:不写真实存储,也不留内存
+  assert.equal(realLocal.has(`pc.playable.152:${"c".repeat(64)}`), false);
+  assert.equal(scope.localStorage.getItem(`pc.playable.152:${"c".repeat(64)}`), null);
+  for (const bad of [`pc.playable.152:${hash}x`, `pc.playable.x:${hash}`, `pc.playable.152:${"B".repeat(64)}`, `pc.stageSid.v1:a:b`, `xpc.playable.152:${hash}`]) {
+    scope.localStorage.setItem(bad, "1");
+    assert.equal(realLocal.has(bad), false, bad);
+  }
+  realLocal.set(`pc.playable.152:${"d".repeat(64)}`, leak); // 真实存储里形状不对的值读出来也当没有
+  assert.equal(scope.localStorage.getItem(`pc.playable.152:${"d".repeat(64)}`), null);
+  // 放行的键不能删掉真实存储里的结论
+  scope.localStorage.removeItem(`pc.playable.152:${hash}`);
+  assert.equal(realLocal.get(`pc.playable.152:${hash}`), "1");
+
+  assert.equal(scope.indexedDB, undefined);
+  assert.equal(scope.caches, undefined);
+  assert.equal(scope.webkitRequestFileSystem, undefined);
+  await assert.rejects(scope.navigator.storage.getDirectory(), /持久存储/);
+  await assert.rejects(scope.navigator.storageBuckets.open("x"), /持久存储/);
+  assert.deepEqual(await scope.navigator.storage.estimate(), {}, "不相干的方法照旧");
+
+  // 卡片代码想改回来:重新定义、赋值、删除都不成
+  for (const k of ["localStorage", "sessionStorage", "indexedDB", "caches"]) {
+    assert.throws(() => Object.defineProperty(scope, k, { value: {} }), TypeError, k);
+    assert.equal(Reflect.set(scope, k, {}), false, k);
+    assert.equal(Reflect.deleteProperty(scope, k), false, k);
+  }
+  assert.throws(() => Object.defineProperty(scope.StorageManager.prototype, "getDirectory", { value: async () => "x" }), TypeError);
+  assert.throws(() => { scope.localStorage.getItem = () => leak; }, TypeError, "内存那一份的方法锁死");
+  assert.throws(() => Object.defineProperty(scope.localStorage, "setItem", { value: () => {} }), TypeError);
+});
+
+test("OCS-H-10 Worker 的全局对象(入口在原型上)同样收走,原型上的原访问器拿不回来;声音线程与舞台加固都调用它", () => {
+  const { scope, proto, idb } = fakeGlobal({ onProto: true });
+  denyPersistentStorage(scope);
+  assert.equal(scope.indexedDB, undefined);
+  assert.equal(scope.caches, undefined);
+  const d = Object.getOwnPropertyDescriptor(proto, "indexedDB");
+  assert.equal(d.get, undefined, "原型上的访问器换成了值");
+  assert.equal(d.value, undefined);
+  assert.notEqual(scope.indexedDB, idb);
+  // 接线:舞台加固与声音线程都调它(源码核对;真实浏览器里的行为由 media-cache-probe 核)
+  const harden = fs.readFileSync(new URL("./harden.ts", import.meta.url), "utf8");
+  assert.match(harden, /const storage = denyPersistentStorage\(w\);/);
+  const worker = fs.readFileSync(new URL("../cardRuntime/soundWorker.ts", import.meta.url), "utf8");
+  const call = worker.indexOf("denyPersistentStorage(self);");
+  assert.ok(call > 0 && call < worker.indexOf("createSoundThread({"), "声音线程在建线程(载入卡片代码)之前收走存储");
 });
