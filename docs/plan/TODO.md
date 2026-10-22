@@ -159,6 +159,8 @@
   - 剪辑段里的卡做通产流（〔裁〕R01、R02）：毛玻璃这类依赖下层的卡带着下层一起产轨道流；在线浏览器也替剪辑段里的重卡产流。现状与卡点在 `docs/archive/agent-reports/AGENT-cut-flatten.md`「没做成的与原因」。
   - 「放弃这次搬迁」按钮（〔裁〕H04）：删掉搬到云端失败留下的半成品项目。
   - 顺带发现（2026-10-22，手机版真画面那一块报的，与该任务无关，没改）：在线页面导入视频后这段视频已经在时间轴上了，再点素材格子会成为第二段。请用户判断是不是有意的。
+  - **文案待用户过目（不挡 0.7.19）**：云端 Agent 消息断网排队那一块，气泡上两句话是会话拟的——「发送失败：断网期间这个对话里有了新消息，这条没有发出。」和「发送失败：〈原因〉」。用户 2026-10-22 在 `workflow/production.md` 里已经定了气泡标「发送失败」、带「重新发送」按钮，这两句是在那个框架内把话说清楚，先照这个发；用户要改随时改。
+  - **断网时的两处原有行为，这一版没动**（2026-10-22 消息断网排队那一块报的，判为原有行为，主会话同意）：① 页面在断网时打开，面板会停在「正在确认对话权限」、要等对话列表加载出来才能发；② 账号模式下断网时对话正文会清空、重连后重放（在 `out/offline-queue/01-queued.png` 里看得到）。要不要改，请定。
   - **`reopen-e2e.mjs --matrix` 在 main 上本来就不过**（2026-10-22 主会话实测，与冲突合并那一块无关）：在 `claude/conflict-merge` 和 `main` `f00424ef` 上各跑一遍，**失败在同一个阶段、错误逐字相同**——`{"ok":false,"phase":"member first authentication","error":"member reopen state {\"reopen\":\"rejected\",\"status\":\"idle\",\"shared\":null,\"registration\":null}"}`。失败点在公共设置段，远早于 `--matrix` 那一段（`reopen-e2e.mjs` 第 328 行才进 `runRecoveryMatrix`）。
     - **后果**：冲突合并那一块对 `reopen-matrix.mjs` 改的 5 处断言**跑不到、没验过**，按「未跑」记，不冒称通过。改了哪 5 处、各自理由写在 `docs/archive/agent-reports/AGENT-claude-conflict-merge.md` 第十一-三节，等这支探针修好后照着核。
     - **另记一个坑**：`scripts/probes/reopen-matrix.mjs` 是**模块不是脚本**（文件头写明 `Invoked by reopen-e2e --matrix`，只导出 `runRecoveryMatrix`）。直接 `node scripts/probes/reopen-matrix.mjs` 会**空输出、退出码 0**——那是假通过，别当证据。正确入口是 `node scripts/probes/reopen-e2e.mjs --matrix`。
