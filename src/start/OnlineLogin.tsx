@@ -11,8 +11,9 @@
  * - 接 `src/account/useAccountProjects.ts` 的 `login`(账号服务在 VisuHive 仓库,见 `architecture.md` 的角色表);
  * - 「记住登录状态」是在线页面才有的那个勾(`workflow/project.md`「在线浏览器和官网共用登录」);
  * - 官网已登录时这一页应该直接跳过,不再问一遍;
- * - 游客身份(进入时随机分配 ID 和头像)的入口如果要做,位置就在下面「或」那一段 —— 这条正由另一个
- *   会话(`游客身份随机分配`)定方案,这里先不摆按钮,免得两边各做一套。
+ * - 游客身份(进入时随机分配 ID 和头像)的入口摆在下面「或」那一段(用户 2026-10-23 要求两个登录页
+ *   都摆上)。**按钮只是入口,随机 ID 和头像那套逻辑仍归另一个会话**(`游客身份随机分配`);
+ *   在它接上之前,这颗键和这一页的其余部分一样走 `onDone()` —— 这一页现在整体是界面桩,登录也不发请求。
  */
 import { useState } from "react";
 import type { JSX } from "react";
@@ -104,6 +105,16 @@ export function OnlineLogin(props: { onDone: () => void }): JSX.Element {
               用 Google 继续
             </button>
           </div>
+
+          {/* 游客身份的入口(用户 2026-10-23)。和上面那颗用同一套长相,两行对齐 */}
+          <button type="button" className="ps-oauth-btn" data-pc="start-login-guest" onClick={props.onDone}>
+            <span className="ps-oauth-mark" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor">
+                <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm0 1.8c-4 0-7 2-7 4.4V20h14v-1.8c0-2.4-3-4.4-7-4.4Z" />
+              </svg>
+            </span>
+            以游客身份进入
+          </button>
 
           {byLink ? (
             <label className="ps-field">

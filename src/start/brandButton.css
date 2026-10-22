@@ -59,16 +59,28 @@
 }
 
 /*
- * 按不动的时候别流动也别扫光：那是「可以点」的信号，灰着还在动会让人以为在加载。
- * 变淡仍由各自登录样式里的 `:disabled { opacity: .5 }` 管。
+ * 按不动的时候：停掉流动和扫光（那是「可以点」的信号，灰着还在动会让人以为在加载），
+ * 并且**换成平的一块**，不是把渐变调半透明。
+ *
+ * 原来沿用的是各自登录样式里的 `:disabled { opacity: .5 }`。那一条配纯色按钮没问题，
+ * 配这个渐变就成了一块「颜色还在、整体发虚」的东西，看着像没加载好、或者像透明度被调错了
+ * （用户 2026-10-23 看到的就是这个：「感觉透明度只有 60% 的样子」）。
+ * 改成不透明的灰底 + 淡字：一眼就是「还不能点」，填完账号密码再亮起来。
  */
 .ps-brand-btn:disabled,
-.ps-brand-btn:disabled::after,
 .ps-login .ps-login-form .ps-primary-btn:disabled,
+.pcm .ps-m-login-form .btn.primary:disabled {
+  opacity: 1;
+  background: var(--fill-subtle);
+  color: var(--ink-faint);
+  box-shadow: none;
+  animation-play-state: paused;
+}
+.ps-brand-btn:disabled::after,
 .ps-login .ps-login-form .ps-primary-btn:disabled::after,
-.pcm .ps-m-login-form .btn.primary:disabled,
 .pcm .ps-m-login-form .btn.primary:disabled::after {
   animation-play-state: paused;
+  opacity: 0;
 }
 
 @keyframes ps-brand-flow {

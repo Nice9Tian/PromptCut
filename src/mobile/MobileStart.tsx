@@ -82,6 +82,28 @@ export function MobileStart({ onEnterEditor }: { onEnterEditor: () => void }) {
               <span className="ps-m-oauth-mark" aria-hidden="true">G</span>
               用 Google 继续
             </button>
+            {/*
+              游客身份的入口（用户 2026-10-23 要求两个登录页都摆上）。和桌面
+              `src/start/OnlineLogin.tsx` 里那颗是同一件事：随机分配 ID 和头像那套逻辑归
+              「游客身份随机分配」那个会话，这里只摆入口。
+
+              **桌面那颗点了会直接进开始页，这颗不接** —— 桌面那一页整体是界面桩（登录都不发请求），
+              手机版这一页的登录是真会发请求的，给一颗点了真能进去的假入口会让人以为账号已经建好了。
+              账号层出了游客接口（`src/account/useAccountProjects.ts` 现在没有）就接上。
+            */}
+            <button
+              type="button"
+              className="ps-m-oauth-btn"
+              data-pcm="login-guest"
+              title="待办：游客身份（随机 ID 和头像）还没接，见这里的注释"
+            >
+              <span className="ps-m-oauth-mark" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor">
+                  <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm0 1.8c-4 0-7 2-7 4.4V20h14v-1.8c0-2.4-3-4.4-7-4.4Z" />
+                </svg>
+              </span>
+              以游客身份进入
+            </button>
           </form>
         ) : (
           <>

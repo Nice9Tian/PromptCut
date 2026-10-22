@@ -129,8 +129,7 @@
   font-size: 13px;
   font-weight: 600;
 }
-/* 空着时那颗键的淡法也照桌面（.ps-primary-btn:disabled 是 0.5，手机版自己那套是 0.45） */
-.pcm .ps-m-login-form .btn.primary:disabled { opacity: 0.5; }
+/* 空着时那颗键的样子在 `../start/brandButton.css` 里（平的灰底，不是半透明的渐变），两边共用 */
 
 /* 「注册账号」「忘记密码」：照桌面 .ps-login-alt，两头各一个，不是合成一条链接 */
 .pcm .ps-m-login-alt {
