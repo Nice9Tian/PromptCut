@@ -360,3 +360,25 @@ test("向服务端现问:GET 对话 → 取 meta.messages 的消息号、请求�
   const offline = createCloudApi({ baseUrl: () => "http://agent/v1", ticket: async () => "t", fetchImpl: async () => { throw new TypeError("Failed to fetch"); } });
   await assert.rejects(offline.conversationMessages("c1"), (err) => err.code === "network" && isOfflineError(err));
 });
+
+test("本地气泡(排着、发送失败)一直排在最后:断流后从头重放回来的记录排在它们前面", async () => {
+  const f = fakeApi();
+  const store = fakeStore();
+  const session = createCloudSession({ api: f.api, store, accountMode: true, flushMs: 0, backoff: () => 30 });
+  session.open("c1");
+  await until(f.ready);
+  f.push(userEv(1, "m1", "一"));
+  await until(() => store.get().some((m) => m.id === "cq-m1"));
+  f.push({ type: "__end" }); // 断了:正文清空,只剩本地气泡
+  await until(() => !store.get().some((m) => m.id === "cq-m1"));
+  const box = createOutbox();
+  session.stage("排着的", undefined, "rq");
+  box.add(item({ requestId: "rq", text: "排着的", baseline: session.seenBaseline() }));
+  session.showOutbox(box.items);
+  await sleep(60); // 重连,从头重放
+  f.push(userEv(1, "m1", "一"));
+  f.push(userEv(2, "m2", "别人发的"));
+  await until(() => store.get().some((m) => m.id === "cq-m2"));
+  assert.deepEqual(store.get().map((m) => m.text), ["一", "别人发的", "排着的"]);
+  session.close();
+});

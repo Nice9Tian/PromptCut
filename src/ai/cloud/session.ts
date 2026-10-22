@@ -222,6 +222,16 @@ export function createCloudSession(deps: CloudSessionDeps) {
       return add.length ? [...prev, ...add] : prev;
     });
   }
+  /**
+   * 本地气泡(还没被服务端记录换掉的)一直排在最后:账号模式断流后正文从头重放,重放回来的记录要排在它们前面,
+   * 不然断网时排着、发送失败的那条会跑到整段对话的最上面。
+   */
+  function stagedLast(list: ChatMessage[]): ChatMessage[] {
+    if (!staged.size) return list;
+    const locals = list.filter((m) => staged.has(m.id));
+    if (!locals.length || list.slice(list.length - locals.length).every((m) => staged.has(m.id))) return list;
+    return [...list.filter((m) => !staged.has(m.id)), ...locals];
+  }
   function patchStaged(id: string, patch: Partial<ChatMessage> & { cloudMessageId?: string; outbox?: boolean }) {
     const cur = staged.get(id);
     if (!cur) return;
@@ -299,7 +309,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
     if (!queued.length) return;
     const batch = queued;
     queued = [];
-    store.set((prev) => applyCloudEvents(prev, batch));
+    store.set((prev) => stagedLast(applyCloudEvents(prev, batch)));
   }
 
   /** 账号共享读取失效后，丢弃这条授权下的正文、待折增量和附件关联，再从 seq 0 请求完整授权重放。 */
@@ -354,7 +364,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
       flush();
       if (ev.type === 'user' && typeof ev.messageId === 'string' && typeof ev.senderAccountId === 'string' && typeof ev.senderNameAtSend === 'string')
         senders = { ...senders, [accountMessageId(ev.messageId)]: { accountId: ev.senderAccountId, name: ev.senderNameAtSend } };
-      store.set((prev) => markWaitingFromQueue(settleFromQueue(applyCloudEvent(prev, ev), queue), queue));
+      store.set((prev) => stagedLast(markWaitingFromQueue(settleFromQueue(applyCloudEvent(prev, ev), queue), queue)));
       if (ev.type === "user" && typeof ev.runId === "string") applyPendingAttachments(ev.runId);
       if (ev.type === "user" && typeof ev.messageId === "string") settleStaged(ev.messageId);
     }

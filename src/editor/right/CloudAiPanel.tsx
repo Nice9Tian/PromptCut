@@ -195,8 +195,10 @@ export function CloudAiPanel(props: {
   useEffect(() => {
     if (!cloud.accountMode || !hasMessages) return;
     let live = true;
-    void chat.history.refresh().then(ok => { if (live && ok) setMetadataReadyKey(metadataKey); });
+    // 断着网时(比如刚排了一条等网络恢复的)静默读:读不到不弹「连不上」,发消息这件事不报错(2026-10-22 用户定)
+    void chat.history.refresh(chat.outbox.offline()).then(ok => { if (live && ok) setMetadataReadyKey(metadataKey); });
     return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cloud.accountMode, consent.accepted, chat.conversationId, hasMessages, chat.history.refresh, metadataKey]);
 
   // 创建者关了开关:成员列表通知过来的(`cloud.enabled`)或 info 报的
