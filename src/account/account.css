@@ -1,0 +1,43 @@
+/*
+ * 申请加入(2026-10-22 用户定,`docs/semantics/workflow/project.md`「多用户协作」):开始页被账号名单挡住时那一块
+ * (`AccountProjects.tsx`)、顶栏成员按钮上的数字角标与成员浮层里的申请列表(`AccountMembersPanel.tsx`)。
+ * 只用两处已有的颜色变量:开始页的 --accent / --danger / --hairline,编辑器的 --ui-*;几何照已有的同类控件
+ * (角标照「冲突合并」按钮上的 .pc-merge-badge,按钮照成员浮层里确认框的按钮)。
+ */
+.sp-join-request {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  flex: 1 1 100%;
+  padding: 8px 10px;
+  font-size: 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+.sp-join-request[data-state="none"],
+.sp-join-request[data-state="rejected"] { color: var(--danger); border-color: var(--danger); }
+.sp-join-request[data-state="pending"],
+.sp-join-request[data-state="member"] { color: var(--accent); border-color: var(--accent); }
+.sp-join-request .sp-primary-btn { padding: 6px 12px; }
+
+.pc-members-badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--ui-accent);
+  color: var(--ui-accent-fg, #fff);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+.pc-account-requests-title { padding: 8px 10px 2px; font-size: 12px; font-weight: 600; color: var(--ui-fg); }
+.pc-account-request-actions { display: flex; gap: 6px; padding: 2px 8px 0; }
+/* 几何照成员行上的「踢出账号」(.pc-members-kick),只是一直显示:「通过」用主色,「拒绝」用中性色 */
+.pc-account-request-actions button { margin: 4px 0 0; border: 0; border-radius: 4px; padding: 2px 10px; font: inherit; font-size: 11.5px; cursor: pointer; }
+.pc-account-request-actions .pc-account-request-approve { background: var(--ui-accent); color: var(--ui-accent-fg, #fff); }
+.pc-account-request-actions .pc-account-request-reject { background: var(--ui-panel-2); color: var(--ui-fg); box-shadow: inset 0 0 0 1px var(--ui-border-strong); }
+.pc-account-request-actions button:disabled { opacity: .5; cursor: default; }

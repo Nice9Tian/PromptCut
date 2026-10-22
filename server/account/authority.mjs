@@ -70,6 +70,67 @@ const sameSecret = (a, b) => {
 const secondaryHash = (password, salt) => scryptSync(password, salt, 32).toString('base64url');
 /** 项目二级密码最长几个字(只防超长输入拖慢哈希;不限字符种类) */
 const SECONDARY_PASSWORD_MAX = 256;
+/**
+ * 这个账号还没输过项目二级密码的当前这一版:项目设了二级密码、他不是创建者、成员记录上的版本号与当前不符
+ * (从没输过的——设密码之前进来的老成员、刚被通过的申请人——没有版本号;改过密码之后旧版本号也不算)。
+ * 二级密码挡的是「进这个项目」,读成员名单也算:`/session`(`entryState`)与 `/members`(`project-members.mjs`)用这同一条判,
+ * 不各写一份(两处给两种答案正是漏洞长出来的地方,2026-10-22 主会话定;`/join` 另在 `joinProject` 里凭密码核)。
+ */
+export const secondaryPasswordPending = (p, accountId) => !!p?.secondaryPassword && accountId !== p.creatorAccountId &&
+  p.members?.[accountId]?.secondaryPasswordRev !== p.secondaryPassword.rev;
+
+/**
+ * 申请加入(2026-10-22 用户定,`docs/semantics/workflow/project.md`「多用户协作」):项目只放账号名单时,被名单挡住的账号可以发申请,
+ * 创建者在成员浮层里「通过」「拒绝」。下面几个上限是三级机制的数(报告 `docs/reports/AGENT-claude-join-requests.md`「三级数字」):
+ *   projectPending      一个项目同时挂着的申请最多几条;满了新申请回 429 `join-request-full`(创建者处理掉一条就又能收)
+ *   accountProjectSends 同一个账号对同一个项目,任意连续 `windowMs` 里最多起几条新申请(被拒后可以再发);到数回 429 `join-request-limit`。
+ *                       按时间窗数,不是一辈子的额度:「不提供输入账号名加人」,创建者没有别的办法把人拉进来,终身额度会让误拒几次的人永远进不来
+ *   accountSends        同一个账号向这台文档服务上所有项目,任意连续 `windowMs` 里最多起几条新申请;到数回 429 `join-request-account-limit`
+ *   windowMs            上面两个数的时间窗(滚动的 24 小时)。数的是「起了一条新申请」:已在等时再点、同一个请求号的重试都不算
+ *   rejectedKept        每个项目留几条被拒的记录;超出按拒绝时间从旧到新删。被拒记录只是给申请人看「没有通过」、数时间窗用的,
+ *                       不是凭据:删掉的那人看到的是「没申请过」,可以再发(要再有 `rejectedKept` 条更晚的拒绝才会轮到删它)
+ */
+export const JOIN_REQUEST_LIMITS = Object.freeze({ projectPending: 50, accountProjectSends: 3, accountSends: 20,
+  windowMs: 24 * 60 * 60 * 1000, rejectedKept: 200 });
+const validJoinRequestLimits = limits => limits !== null && typeof limits === 'object' &&
+  ['projectPending', 'accountProjectSends', 'accountSends', 'windowMs', 'rejectedKept'].every(k => Number.isSafeInteger(limits[k]) && limits[k] >= 1);
+/** 一条申请记录里,还落在时间窗里的那几次发起时刻(从早到晚) */
+const recentSends = (record, at, limits) => (Array.isArray(record?.sends) ? record.sends : [])
+  .filter(t => Number.isSafeInteger(t) && t > at - limits.windowMs).sort((x, y) => x - y);
+const joinRequestIdOK = value => typeof value === 'string' && /^jr_[a-f0-9]{24}$/.test(value);
+/** 账号名只按白名单收(与成员名单 `project-members.mjs` 的 `nameOf` 同一个口径);不合格记 null,界面显示账号号 */
+const shownName = name => typeof name === 'string' && name.length > 0 && name.length <= 200 && !/[\u0000-\u001f]/.test(name) ? name : null;
+/** 去掉一个账号在项目里的申请记录(换新对象,不原地删) */
+const withoutJoinRequest = (requests, accountId) => {
+  if (!requests || !Object.hasOwn(requests, accountId)) return requests;
+  const { [accountId]: _gone, ...rest } = requests;
+  return rest;
+};
+/** 被拒的记录最多留 `keep` 条:超出的按拒绝时间从旧到新删(挂着的申请不删) */
+const pruneRejected = (requests, keep) => {
+  const rejected = Object.entries(requests).filter(([, r]) => r?.state === 'rejected');
+  if (rejected.length <= keep) return requests;
+  rejected.sort((a, b) => (a[1].decidedAt ?? 0) - (b[1].decidedAt ?? 0));
+  const drop = new Set(rejected.slice(0, rejected.length - keep).map(([accountId]) => accountId));
+  return Object.fromEntries(Object.entries(requests).filter(([accountId]) => !drop.has(accountId)));
+};
+/**
+ * 申请人自己看的那一份:只有自己这一条的状态、项目现在的进入方式、还能不能再发。不带别人的申请、不带成员名单、不带申请号。
+ * `state`:`none` 没申请过(或记录已清)/ `pending` 等创建者 / `rejected` 被拒 / `member` 已经是成员(含刚被通过)。
+ * `entry`:`list` 只放账号名单 / `link` 知道链接就能进。`canApply`:这个项目这边现在点「发送申请」会不会被收下
+ * (项目只放名单、没在等、时间窗里的次数没用完;跨项目那个数不在这里算,超了由发申请时的 429 说明)。
+ * 被时间窗挡住时另带 `retryAt`:最早什么时候能再发(毫秒时间戳,只由他自己发起的时刻算出)。
+ */
+export function joinRequestView(p, accountId, limits = JOIN_REQUEST_LIMITS, at = Date.now()) {
+  const entry = p.allowLinkJoin ? 'link' : 'list';
+  if (accountId === p.creatorAccountId || p.members?.[accountId]) return { state: 'member', entry, canApply: false };
+  const record = p.joinRequests?.[accountId];
+  const state = record?.state === 'pending' || record?.state === 'rejected' ? record.state : 'none';
+  const recent = recentSends(record, at, limits);
+  const spent = recent.length >= limits.accountProjectSends;
+  return { state, entry, canApply: entry === 'list' && state !== 'pending' && !spent,
+    ...(entry === 'list' && state !== 'pending' && spent ? { retryAt: recent[recent.length - limits.accountProjectSends] + limits.windowMs } : {}) };
+}
 
 /**
  * 「谁可以新建云端项目、每人能建多少」的判断口子（online-browser-task.md 第一步第 4 条）。
@@ -101,8 +162,10 @@ const validCreatePolicy = policy => policy !== null && typeof policy === 'object
  */
 export function createAccountAuthority({ ledger, accountClient, initializeProject, authorityUrl,
   signingKey, keyId, now = Date.now, pollMs = 0, onDiagnostic = () => {}, getDocBarrier, verifyDocBarrier,
-  runHooks = null, createPolicy = {} }) {
+  runHooks = null, createPolicy = {}, joinRequestLimits = JOIN_REQUEST_LIMITS }) {
   if (!validCreatePolicy(createPolicy)) reject(503, 'create-policy-configuration');
+  if (!validJoinRequestLimits(joinRequestLimits)) reject(503, 'join-request-configuration');
+  const limits = Object.freeze({ ...joinRequestLimits });
   if (runHooks !== null && typeof runHooks?.fenceInState !== 'function') reject(503, 'run-authority-unavailable');
   const refs = new Map(); const subscriptions = new Set(); const creating = new Map();
   const projectSubscriptions = new Set();
@@ -150,6 +213,9 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
       state.accountEvents[event.seq] = { event, digest: digestOf(event) };
       state.accountHead = event.seq;
       if (!['credentials-revoked', 'logout', 'account-deleted'].includes(event.type)) return { duplicate: false, event: null };
+      // 账号删了:他在各项目里挂着的、被拒的申请一并清掉(创建者的列表里不再有这个账号,「通过」点到它回 404 `no-join-request`)
+      if (event.type === 'account-deleted') for (const p of Object.values(state.projects))
+        if (p.joinRequests && Object.hasOwn(p.joinRequests, event.accountId)) p.joinRequests = withoutJoinRequest(p.joinRequests, event.accountId);
       const loginIds = event.revokedLoginIds ?? event.oldLoginIds;
       for (const loginId of loginIds) state.revokedLogins[`login:${loginId}`] = { eventId: event.eventId, seq: event.seq, accountId: event.accountId };
       const accessEvent = appendAccessEvent(state, { type: 'login-revoked', accountEventId: event.eventId,
@@ -399,6 +465,8 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
       if (p.secondaryPassword) {
         p.members[actor.accountId].secondaryPasswordRev = p.secondaryPassword.rev;
       }
+      // 进来了:他在这个项目里的申请记录作废(创建者改回「知道链接就能进」之后他自己进来的那种),不再留在创建者的申请列表里
+      p.joinRequests = withoutJoinRequest(p.joinRequests, actor.accountId);
       const result = { projectId: p.projectId, authorityId: ledger.authorityId, accessRevision: p.accessRevision,
         access: p.members[actor.accountId].access };
       state.requests[key] = { digest, result, state: 'complete' };
@@ -418,7 +486,7 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
   function entryState({ accountId, projectId } = {}) {
     const p = projectOf(ledger.read(), projectId); active(p);
     if (accountId === p.creatorAccountId) return { linkToken: typeof p.linkToken === 'string' ? p.linkToken : null, secondaryPassword: !!p.secondaryPassword };
-    if (p.secondaryPassword && p.members[accountId]?.secondaryPasswordRev !== p.secondaryPassword.rev) reject(403, 'secondary-password-required');
+    if (secondaryPasswordPending(p, accountId)) reject(403, 'secondary-password-required');
     return {};
   }
   async function adminProject(input, body) {
@@ -458,16 +526,23 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
             next[member.accountId] = { access: member.access, joinedAt: p.members[member.accountId]?.joinedAt ?? null };
           }
           for (const [id, old] of Object.entries(p.members)) if (!next[id] || (old.access === 'rw' && next[id].access === 'r')) affected.push(id);
-          p.members = next; break;
+          p.members = next;
+          // 名单里有了的账号,挂着的申请作废(成员不留申请记录)
+          if (p.joinRequests) p.joinRequests = Object.fromEntries(Object.entries(p.joinRequests).filter(([id]) => !next[id]));
+          break;
         }
         case 'kick': {
           if (!accountIdOK(body.accountId) || body.accountId === p.creatorAccountId) reject(400, 'invalid-member');
           const accountNameAtJoin = p.members[body.accountId]?.accountNameAtJoin;
-          delete p.members[body.accountId]; p.bans[body.accountId] = { reason: 'kick', requestId: body.requestId, accountNameAtJoin }; affected.push(body.accountId); break;
+          delete p.members[body.accountId]; p.bans[body.accountId] = { reason: 'kick', requestId: body.requestId, accountNameAtJoin }; affected.push(body.accountId);
+          // 被踢(禁入)的账号不能申请:他挂着的、被拒的申请记录一并清掉;解除禁入后要重新申请
+          p.joinRequests = withoutJoinRequest(p.joinRequests, body.accountId);
+          break;
         }
         case 'unban':
           if (!accountIdOK(body.accountId)) reject(400, 'invalid-member'); delete p.bans[body.accountId]; break;
-        case 'delete': p.status = 'deleted'; affected.push(...Object.keys(p.members)); break;
+        // 删项目:申请记录(申请人的账号号与名字)不留在墓碑里
+        case 'delete': p.status = 'deleted'; affected.push(...Object.keys(p.members)); delete p.joinRequests; break;
         case 'regen-link':
           // 作废并重新生成项目链接:旧链接失效(新人要带新口令),已经进来的成员不受影响,所以不动成员、不停任务
           p.linkToken = randomBytes(16).toString('base64url');
@@ -508,6 +583,100 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     });
     if (committed.event) notify(committed.event, committed.control);
     notifyProjectChanged(body.projectId, body.op);
+    return committed.result;
+  }
+  /**
+   * 申请加入,申请人这一侧(公开路由 `/hosted/shared/account/join` 带 `joinRequest` 字段,不另开路由:桌面外壳的账号桥只放行
+   * create / join / session / admin / members 五条,`desktop/src-tauri/src/account_vault.rs`)。
+   *   `joinRequest: 'status'`:读自己这一条(`joinRequestView`),不落账。
+   *   `joinRequest: 'send'`:发申请。身份只认登录令牌(账号号、名字取自核过的登录,请求体里写的一律不认);被踢的账号回 403 `banned`;
+   *     已经是成员回 `member`;项目知道链接就能进时回 409 `entry-open`;已经在等的不另起一条;条数、时间窗里的次数有上限(`JOIN_REQUEST_LIMITS`)。
+   *     同一个请求号重试不算第二次;换项目号重用请求号回 409 `request-mismatch`。
+   * 不动访问版本号、不记访问事件:申请不改任何人的权限。
+   */
+  async function joinRequest(input, body) {
+    const actor = await verify(input);
+    if (actor.role !== 'page') reject(403, 'invalid-role');
+    if (body?.joinRequest === 'status') {
+      const p = projectOf(ledger.read(), body.projectId); active(p);
+      if (Object.hasOwn(p.bans, actor.accountId)) reject(403, 'banned');
+      return { projectId: p.projectId, joinRequest: joinRequestView(p, actor.accountId, limits, now()) };
+    }
+    if (body?.joinRequest !== 'send') reject(400, 'invalid-join-request');
+    const key = requestKey(actor.accountId, body.requestId);
+    const digest = digestOf({ op: 'join-request', projectId: body.projectId });
+    return ledger.transaction(state => {
+      const p = projectOf(state, body.projectId); active(p);
+      if (Object.hasOwn(p.bans, actor.accountId)) reject(403, 'banned');
+      const at = now();
+      const view = () => ({ projectId: p.projectId, joinRequest: joinRequestView(p, actor.accountId, limits, at) });
+      if (actor.accountId === p.creatorAccountId || p.members[actor.accountId]) return view();
+      if (p.allowLinkJoin) reject(409, 'entry-open');
+      // 同一个请求号已经办过(回包丢了的重试):不再起一条,回现在的状态(这期间被拒了就是被拒)
+      if (replay(state, key, digest)) return view();
+      const existing = p.joinRequests?.[actor.accountId];
+      if (existing?.state === 'pending') return view();
+      const recent = recentSends(existing, at, limits);
+      if (recent.length >= limits.accountProjectSends) reject(429, 'join-request-limit');
+      if (Object.values(p.joinRequests ?? {}).filter(r => r?.state === 'pending').length >= limits.projectPending) reject(429, 'join-request-full');
+      let sent = 0;
+      for (const other of Object.values(state.projects)) sent += recentSends(other.joinRequests?.[actor.accountId], at, limits).length;
+      if (sent >= limits.accountSends) reject(429, 'join-request-account-limit');
+      const record = { id: `jr_${randomBytes(12).toString('hex')}`, accountName: shownName(actor.accountName), createdAt: at, state: 'pending',
+        sends: [...recent, at] };
+      p.joinRequests = { ...(p.joinRequests ?? {}), [actor.accountId]: record };
+      state.requests[key] = { digest, state: 'complete', result: { joinRequestId: record.id } };
+      return view();
+    });
+  }
+  /**
+   * 申请加入,创建者这一侧:「通过」(`op: 'approve-join'`)、「拒绝」(`op: 'reject-join'`),走 `/hosted/shared/account/admin`。
+   * 只有创建者本人的页面能办(服务端核,与踢人同一个判据);点名的是「哪个账号的哪一条申请」(`accountId` + `joinRequestId`),
+   * 所以不核访问版本号:别人这时加入、改了别的设置都不影响这一条。
+   *   通过:在通过这一笔落账的那一刻现核(不凭页面上那一眼):项目还在、创建者本人登录有效、申请还挂着(被踢、账号删了都会清掉申请)、
+   *     申请人不在禁入名单里。申请人成为成员(可写,`joinedAt` 记通过的时刻,「我加入的」里看得到),申请记录删掉、成员记录上留申请号;
+   *     访问版本号 +1。进项目仍走原来的全部关卡:`/join`、`/session` 照旧核申请人的登录、禁入、二级密码,通过不跳过任何一道。
+   *   拒绝:记录标成被拒(申请人看到「创建者没有通过你的申请」);不动成员与访问版本号。
+   *   幂等:同一个请求号重放回原结果;换了请求号再做同样的决定(另一台设备也点了、网络重试)回同样的结果、不再改账;
+   *     相反的决定回 409 `join-request-decided`;申请号对不上(已撤、已清、别的项目的)回 404 `no-join-request`。
+   */
+  async function decideJoinRequest(input, body) {
+    const actor = await verify(input);
+    const decision = body?.op === 'approve-join' ? 'approved' : body?.op === 'reject-join' ? 'rejected' : null;
+    if (!decision) reject(400, 'invalid-operation');
+    const key = requestKey(actor.accountId, body.requestId);
+    const digest = digestOf({ op: body.op, projectId: body.projectId, accountId: body.accountId, joinRequestId: body.joinRequestId });
+    const committed = ledger.transaction(state => {
+      const p = projectOf(state, body.projectId);
+      if (actor.role !== 'page' || actor.accountId !== p.creatorAccountId) reject(403, 'creator-required');
+      const previous = replay(state, key, digest); if (previous) return { result: previous.result, approved: false };
+      permission(p, actor.accountId, 'admin');
+      if (!accountIdOK(body.accountId) || !joinRequestIdOK(body.joinRequestId)) reject(400, 'invalid-join-request');
+      const record = p.joinRequests?.[body.accountId];
+      const settled = record?.id === body.joinRequestId && record.state === 'rejected' ? 'rejected'
+        : p.members[body.accountId]?.joinRequestId === body.joinRequestId ? 'approved' : null;
+      let approved = false;
+      if (settled) {
+        if (settled !== decision) reject(409, 'join-request-decided');
+      } else {
+        if (record?.id !== body.joinRequestId || record.state !== 'pending') reject(404, 'no-join-request');
+        if (Object.hasOwn(p.bans, body.accountId)) reject(409, 'join-request-banned');
+        if (p.members[body.accountId]) reject(409, 'already-member');
+        if (decision === 'approved') {
+          p.joinRequests = withoutJoinRequest(p.joinRequests, body.accountId);
+          p.members[body.accountId] = { access: 'rw', joinedAt: now(),
+            ...(record.accountName ? { accountNameAtJoin: record.accountName } : {}), joinRequestId: record.id };
+          p.accessRevision = ++state.revision;
+          approved = true;
+        } else {
+          p.joinRequests = pruneRejected({ ...p.joinRequests, [body.accountId]: { ...record, state: 'rejected', decidedAt: now() } }, limits.rejectedKept);
+        }
+      }
+      const result = { joinRequest: { accountId: body.accountId, joinRequestId: body.joinRequestId, state: decision }, accessRevision: p.accessRevision };
+      state.requests[key] = { digest, state: 'complete', result };
+      return { result, approved };
+    });
+    if (committed.approved) notifyProjectChanged(body.projectId, body.op);
     return committed.result;
   }
   function eventsSince(after = 0) {
@@ -674,7 +843,7 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     return agentReadClosureComplete(state, eventId, state.accessAcks[`ack:${eventId}:agent`]);
   }
   return { authorityId: ledger.authorityId, synchronize, applyRevocation, applyRevocationNotification, authorizePrincipal, checkAccess,
-    createProject, joinProject, entryState, adminProject, listProjects, status, statusForPrincipal, legacyGoneStatus, eventsSince, ackAccessEvent, hasAgentReadClosure, revocationStatus, completeLogoutBarrier, recordLogoutTimeout, flushAccountAcknowledgements,
+    createProject, joinProject, joinRequest, decideJoinRequest, entryState, adminProject, listProjects, status, statusForPrincipal, legacyGoneStatus, eventsSince, ackAccessEvent, hasAgentReadClosure, revocationStatus, completeLogoutBarrier, recordLogoutTimeout, flushAccountAcknowledgements,
     subscribeProjectChanges(callback) {
       if (typeof callback !== 'function') reject(400, 'invalid-subscription');
       projectSubscriptions.add(callback);

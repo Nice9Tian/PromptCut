@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { AccountFailure, type AccountMembersSnapshot, type AccountMemberOperation } from './client';
+import { AccountFailure, type AccountJoinRequestRow, type AccountMembersSnapshot, type AccountKickOperation } from './client';
 import { accountProjectMembers, accountMemberAdmin, returnToAccountProjectHome, pushToast, useSync } from '../editor/sync/syncManager';
 import { useCloudAgent, useCloudApi } from '../ai/cloud/useCloud';
 import { CLOUD_CHAT_TEXT } from '../ai/cloud/chatTexts';
 import { CloudError } from '../ai/cloud/cloudApi';
 import { accountMemberCountLabel, accountMemberState, cloudAgentLabel } from '../editor/sync/hostedServices';
+import { JOIN_REQUEST_TEXT, requestedAtText } from './joinRequestText';
+import { createRequestIds } from './requestIds';
+import './account.css';
 
 /** 成员列表展开 / 收着时取成员名单的间隔(毫秒) */
 export const MEMBERS_POLL_OPEN_MS = 3000;
@@ -17,7 +20,9 @@ export function AccountMembersPanel() {
   const [snapshot, setSnapshot] = useState<AccountMembersSnapshot | null>(null);
   const [open, setOpen] = useState(false), [bansOpen, setBansOpen] = useState(false);
   const [error, setError] = useState(''), [busy, setBusy] = useState(false);
-  const [attempt, setAttempt] = useState<{ operation: AccountMemberOperation; name: string; retry: boolean } | null>(null);
+  const [attempt, setAttempt] = useState<{ operation: AccountKickOperation; name: string; retry: boolean } | null>(null);
+  /** 「通过」「拒绝」没收到回包时,再点同一个按钮沿用原来的请求号;收到结论就丢掉(`requestIds.ts`,桌面与手机共用) */
+  const decisionIds = useRef(createRequestIds());
   const [rect, setRect] = useState<DOMRect | null>(null);
   // 踢出时可以选「同时清除他的私有对话」(2026-10-13 用户定，缺省不选：他的共有对话一律保留)；踢出成功后再清，清不完可重试
   const cloud = useCloudAgent(), cloudApi = useCloudApi(cloud.url, cloud.projectId);
@@ -70,6 +75,25 @@ export function AccountMembersPanel() {
     } catch (e) { if (generation.current === own) setError(e instanceof Error ? e.message : '暂时无法确认成员状态。'); }
     finally { if (generation.current === own) setBusy(false); }
   };
+  /**
+   * 申请加入(2026-10-22 用户定):创建者在成员浮层里「通过」「拒绝」。服务端只认创建者本人的页面,通过那一刻现核禁入与申请还在不在;
+   * 通过以后他直接能进(设了二级密码的仍要输一次),被拒的看到「创建者没有通过你的申请」。
+   */
+  const decide = async (op: 'approve-join' | 'reject-join', row: AccountJoinRequestRow) => {
+    const own = generation.current, name = row.accountName ?? row.accountId;
+    setBusy(true); setError('');
+    try {
+      await decisionIds.current.run(`${op}:${row.joinRequestId}`, requestId =>
+        accountMemberAdmin({ op, accountId: row.accountId, joinRequestId: row.joinRequestId, requestId }));
+      if (generation.current !== own) return;
+      pushToast(op === 'approve-join' ? JOIN_REQUEST_TEXT.approvedToast(name) : JOIN_REQUEST_TEXT.rejectedToast(name), 'info');
+      await refresh().catch(() => undefined);
+    } catch (e) {
+      if (generation.current !== own) return;
+      await refresh().catch(() => undefined);
+      setError(e instanceof Error ? e.message : '暂时无法处理这条申请，请重试。');
+    } finally { if (generation.current === own) setBusy(false); }
+  };
   const runClear = async (accountId: string, name: string, requestId: string) => {
     setClearing({ accountId, name, requestId, stage: 'working', text: CLOUD_CHAT_TEXT.clearPrivateWorking });
     try {
@@ -104,15 +128,30 @@ export function AccountMembersPanel() {
   // Only actual connections are displayed. Persisted queued messages are never Agents.
   // 计数口径与「离线，Agent 在跑」见 `hostedServices.ts` 的 `accountMemberState`(语义 `product/agent.md`「成员列表怎么数」)
   const stateOf = (accountId: string) => accountMemberState(accountId, snapshot?.devices ?? []);
+  // 挂着的申请只有创建者的投影里有;有就在成员按钮上出数字角标
+  const requests = snapshot?.self.creator ? snapshot.requests ?? [] : [];
   if (!shared?.accountId) return null;
   return <>
-    <button ref={button} type="button" className="pc-sync-chip" data-pc="members-button" title="成员" onClick={() => {
+    <button ref={button} type="button" className="pc-sync-chip" data-pc="members-button" title={requests.length ? `成员 · ${requests.length} 条申请加入` : '成员'} onClick={() => {
       setRect(button.current?.getBoundingClientRect() ?? null); setOpen(!open); void refresh().catch(() => undefined);
-    }}><span data-pc="members-count">{snapshot ? accountMemberCountLabel(snapshot) : '成员：暂不可用'}</span></button>
+    }}><span data-pc="members-count">{snapshot ? accountMemberCountLabel(snapshot) : '成员：暂不可用'}</span>
+      {requests.length > 0 && <span className="pc-members-badge" data-pc="members-request-badge">{requests.length}</span>}</button>
     {open && createPortal(<div ref={pop} className="pc-members-pop pc-account-members" data-pc="members-pop"
       style={{ top: (rect?.bottom ?? 40) + 6, left: Math.max(8, Math.min((rect?.right ?? 340) - 360, window.innerWidth - 368)) }}>
       <div className="pc-account-members-heading">项目成员 <button type="button" disabled={busy} onClick={() => { void refresh().catch(() => undefined); }}>刷新</button></div>
       {error && <div role="alert" className="pc-account-members-error" data-pc="account-members-error">{error}</div>}
+      {requests.length > 0 && <div data-pc="account-join-requests">
+        <div className="pc-account-requests-title">{JOIN_REQUEST_TEXT.requestsTitle(requests.length)}</div>
+        {requests.map(row => <div className="pc-account-member" key={row.joinRequestId} data-pc="account-join-request" data-account-id={row.accountId}>
+          <div className="pc-members-row-main"><span className="pc-members-name">{row.accountName ?? row.accountId}</span></div>
+          <small className="pc-account-member-id">{row.accountId} · {requestedAtText(row.createdAt)}</small>
+          <div className="pc-account-request-actions">
+            <button type="button" className="pc-account-request-approve" data-pc="account-join-approve" disabled={busy || !!attempt} onClick={() => { void decide('approve-join', row); }}>{JOIN_REQUEST_TEXT.approve}</button>
+            <button type="button" className="pc-account-request-reject" data-pc="account-join-reject" disabled={busy || !!attempt} onClick={() => { void decide('reject-join', row); }}>{JOIN_REQUEST_TEXT.reject}</button>
+          </div>
+        </div>)}
+        <div className="pc-members-sep" />
+      </div>}
       {snapshot?.members.map(member => { const state = stateOf(member.accountId), name = member.accountName ?? member.accountId;
         return <div className="pc-account-member pc-members-row" key={member.accountId} data-pc="account-member" data-account-id={member.accountId}>
         <div className="pc-members-row-main"><span className={`pc-members-name${member.accountId === shared.accountId ? ' is-me' : ''}`}>

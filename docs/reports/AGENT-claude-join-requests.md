@@ -1,0 +1,399 @@
+# AGENT 报告：claude/join-requests（进入方式的勾选、账号名单、申请加入）
+
+- 分支：`claude/join-requests`（从 main `e27d36b4` 切）；worktree：`.worktrees/join-requests`
+- 端口：编辑器 5940（舞台 5941、5942），本机隔离的托管组合（夹具）5943～5949（入口 5949）。夹具里云端 Agent 的入口探针用不到，给 0 由系统挑临时端口（见「端口」一节）。
+- 任务：补云端项目的「任何知道链接的人都可加入」勾选和账号名单界面，做通「申请加入」。语义：`docs/semantics/workflow/project.md` 第 26、27、44 行一带（2026-10-22 用户定），照做，语义文档一字未动。
+- 代号：JR-1～JR-15 是服务端测试 `server/test/account-join-requests.test.mjs` 的用例号；JRC-1～JRC-7 是页面侧测试 `src/account/joinRequest.test.mjs` 的用例号；RJR-1～RJR-4 是重开文件那条提示的测试 `src/account/reopenJoinRequest.test.mjs` 的用例号。〔裁〕表示执行中我定、主会话认可、待用户合入前审的三级做法。F1、F2 是安全专审提的两处问题（「十四」）；「必改 1～4」是 Argon 交叉审查提的四处必改（「十六」）。
+- 最新的闸门结果在「十六」最后一节（交叉审查改完之后重跑）；「十」里是交叉审查之前的结果。
+
+## 一、做了什么（逐文件）
+
+### 服务端
+
+| 文件 | 改了什么 |
+|---|---|
+| `server/account/authority.mjs` | 新增 `joinRequest`（申请人：`send` 发申请、`status` 查自己那一条）与 `decideJoinRequest`（创建者：`approve-join` 通过、`reject-join` 拒绝）；上限 `JOIN_REQUEST_LIMITS`；纯函数 `joinRequestView`。`joinProject` 进来后清掉他的申请记录；`set-list` 把名单里有了的账号的申请清掉；`kick` 清掉被踢者的申请；`delete` 不在墓碑里留申请；账号删除事件（`account-deleted`）到达时清掉他在各项目的申请。`set-entry` 本身没改（0.7.18 已有，只认创建者，按访问版本号防并发）。 |
+| `server/account/project-members.mjs` | 创建者的成员投影里多一项 `requests`（挂着的申请，按申请时间排；每条只有账号号、申请时的账号名、申请号、申请时间）。普通成员的投影里没有这一项。 |
+| `server/docservice/modules/account-projects.mjs`（不在清单、不在禁区） | 申请走现有路由：`/join` 带 `joinRequest` 字段时转给 `authority.joinRequest`（不进项目、不发票据）；`/admin` 的 `approve-join` / `reject-join` 转给 `authority.decideJoinRequest`。理由见「二、设计决定」。 |
+| `server/test/account-join-requests.test.mjs`（新） | JR-1～JR-15，真的 SQLite 账本、真的权威与成员投影、真的公开路由；账号服务换成可控替身。 |
+
+### 页面
+
+| 文件 | 改了什么 |
+|---|---|
+| `src/account/client.ts` | `joinRequestStatus` / `sendJoinRequest`（都走 `/hosted/shared/account/join`）；`memberAdmin` 支持 `set-entry`、`approve-join`、`reject-join`（请求体按白名单拼、本地先核形状、回包逐项核）；成员投影里 `requests` 的严格核对（只收创建者的、一个账号一条、不能同时是成员或已禁入）；新 code 的人话（见「五」）；常量 `JOIN_REQUEST_POLL_MS`。 |
+| `src/account/joinRequestText.ts`（新） | 各处共用的话（语义原文几句逐字）、`joinRequestNotice`（被挡住那一块说什么、给不给按钮）、`reopenNotice`（重开文件那条提示）、`retryAtText` / `requestedAtText`、`autoJoinKey`（何时自动再走一次加入）。 |
+| `src/account/AccountEntryOption.tsx`（新） | 「任何知道链接的人都可加入」勾选。改之前重读成员投影拿当前访问版本号；中间有人进来回 409 时再读一次再改（只重来一次）。勾着／取消各一句说明。 |
+| `src/editor/sync/CollabSection.tsx`（主会话授权） | 两处：① 在「作废并重新生成项目链接」「项目二级密码」两个按钮（以及按了「项目二级密码」展开的那一段）下面挂 `AccountEntryOption`，只在创建者那一段、只对账号项目，外加一行 import；② 「放在」那一行账号云端项目只写「云端」（〔裁〕，见「九」第 2 条）。 |
+| `src/account/useAccountProjects.ts` | `join` 被名单挡住时回 `not-listed` 并读自己那一条申请；`sendRequest`（没收到回包再点沿用原请求号）；等创建者时每 10 秒问一次（页面看不见时不问，回前台马上问；项目改回知道链接就能进后不再问）；读到被通过时马上重取项目列表；`open`（从列表点进项目，遇到要二级密码时把链接填好、回 `'secondary-required'`）；`clearRequest`。 |
+| `src/account/AccountProjects.tsx` | 桌面与在线的开始页：被挡住时那一块（「你不在这个项目的成员名单中」+「发送申请」→「已发送，等创建者通过」/「创建者没有通过你的申请」，次数用完说几点之后能再申请）；被通过或项目改回知道链接就能进时自动再走一次加入（设了二级密码的接着问密码）；从「我加入的」点进设了二级密码的项目时弹出二级密码框。 |
+| `src/account/AccountMembersPanel.tsx` | 成员按钮上的数字角标（创建者有挂着的申请时）；成员浮层顶上「申请加入（N）」列表，每条「通过」「拒绝」；没收到回包再点沿用原请求号（`requestIds.ts`）。 |
+| `src/account/requestIds.ts`（新，交叉审查后加） | 「没收到回包再点沿用原请求号」的小账本 `createRequestIds`，成员浮层、手机成员面板、开始页与重开文件那条提示的「发送申请」四处共用（「十六」必改 4）。 |
+| `src/account/entryFlow.ts`（新，交叉审查后加） | `enterOrAskPassword`：从列表进项目遇到 `secondary-password-required` 时回 `'secondary-required'`，页面据此问二级密码（「十六」必改 1）。 |
+| `src/account/account.css`（新） | 上面两处的样式，只用已有的颜色变量，几何照已有同类控件。 |
+| `src/editor/sync/recoveryAssociation.ts`（主会话授权） | 重开文件「这个账号不是这个云端项目的成员」：被账号名单挡住（`not-listed`）且项目只放账号名单时，提示里另有「发送申请」按钮；在等的、次数用完的不给按钮、把现状接在后面说；被踢的、问不到的照旧只有那一句。发成以后关掉那条提示、之后再点不再发（「十六」必改 2）。 |
+| `src/editor/sync/syncManager.ts`（主会话授权的那一处） | 调 `handleCloudAssociationReopen` 时多传 `dismissToast`（一行注释、一行代码），供上面那条提示发成以后关掉自己。 |
+| `src/mobile/MobileStart.tsx`、`src/mobile/useMembers.ts`、`src/mobile/sheets.tsx`、`src/mobile/MobileEditor.tsx`、`src/mobile/mobile.css`（主会话授权） | 手机：加入面板里被挡住那一块与「发送申请」、自动再走一次加入；从「我的项目」点进设了二级密码的项目时打开「加入」面板、弹出二级密码框；成员面板顶上「申请加入（N）」与「通过」「拒绝」；成员按钮上的数字角标（外观照页签上已有的 `.badge-n`）。 |
+| `src/account/joinRequest.test.mjs`（新）、`src/account/reopenJoinRequest.test.mjs`（新） | JRC-1～7、RJR-1～4。 |
+| `scripts/probes/account-join-request-probe.mjs`（新，不在清单） | 验收要的界面证据：本机隔离的托管组合 + 桌面（开发服务器 + 外壳账号桥替身）+ 在线（在线构建由夹具入口同源下发）+ 手机（同一份在线构建、`?layout=mobile`），三处走一遍并截图。 |
+
+## 二、设计决定：申请只走现有的五条路由，不给外壳加路由
+
+桌面外壳的账号桥（`desktop/src-tauri/src/account_vault.rs` 第 89 行）把能转发的项目路由写死成五条：`/hosted/shared/account/create`、`/join`、`/session`、`/admin`、`/members`，其余 `throw 'bad-path'`。加一条新路由就要发新外壳，而外壳换不了补丁，用户得装完整安装包——这与刚合进 main 的「0.2.8 以前的外壳打补丁后账号入口只给一句说明」反方向。所以：
+
+- 发申请、查自己那一条：`POST /hosted/shared/account/join`，请求体带 `joinRequest: 'send' | 'status'`；
+- 通过、拒绝：`POST /hosted/shared/account/admin`，`op: 'approve-join' | 'reject-join'`；
+- 创建者看申请列表：`POST /hosted/shared/account/members` 的投影里（只给创建者）；
+- 勾选：`POST /hosted/shared/account/admin` 的 `set-entry`（0.7.18 已有）。
+
+外壳失败时只带回 `status` 和 `code`（`@{ok=$false;status=...;code=...}`），成功时整段回包透传。所以失败一律用闭集的短 `code`，人话由页面按对照表给（见「五」）；要额外信息（项目是不是只放名单、还能不能再发、几点之后能再发）都放在成功回包里（查状态那一次）。
+
+**0.2.8 外壳不用换就能用申请加入**：v0.7.18 发版提交 `d767698e`（shell 0.2.8）里的 `account_vault.rs` 与 HEAD 逐字相同（`git diff d767698e HEAD -- desktop/src-tauri/src/account_vault.rs` 为空；主会话另比了 `41b6d335`，也相同），放行清单正是上面五条。0.2.8 之前的外壳没有账号桥，本来就只给一句说明。
+
+**守门测试**：JRC-2 直接读 `account_vault.rs`，抽出放行清单，断言它仍是这五条，并让外壳替身对清单外的路由报错——页面侧申请加入用到的每条路由都在清单里；以后谁给申请加入加新路由，这条当场变红。端到端探针里的外壳替身同样只放行这五条（另有一项核对「账号桥只用到外壳放行的路由」）。
+
+## 三、名单快照规则（第 4 问）
+
+- **名单就是项目成员。** 取消勾选（`set-entry` 落账）那一刻 `members` 里的人都在名单里；之后的新人只能申请。没有「输入账号名加人」（页面没有这一项；服务端 `set-list` 仍在，见「七」）。
+- **以账本里落账的先后为准，不以请求先到为准。** 账本写入是串行的（SQLite `BEGIN IMMEDIATE`，事务函数同步执行），加入（`joinProject`）与取消勾选（`set-entry`）是两笔各自的写入，必有先后：加入那一笔先落账的，算在名单里；取消勾选先落账的，之后到的加入在它自己的事务里读到「只放名单」，回 403 `not-listed`，只能发申请。加入在核对登录（异步）时卡住、期间取消勾选落账，也按落账时判（JR-2 (a)）。
+- **创建者拿旧版本号取消勾选回 409。** `set-entry` 带页面读到的访问版本号；那之后有人凭链接进来了（版本号 +1），取消勾选被拒（`access-revision-mismatch`），什么都不改；页面重读后再取消，名单里含刚进来的人（JR-2 (b)(c)）。页面这一侧自动重读重来一次（`AccountEntryOption`），名单照落账那一刻算，取消后勾选下面写明「现在的 N 位成员」。
+
+测试：JR-1（取消那一刻的成员照旧能进、之后的新人 not-listed、只有创建者能改）、JR-2（三种交错）。
+
+## 四、安全论证（六问）
+
+### 1. 申请本身能不能被滥用
+
+| 问 | 答 | 测试 |
+|---|---|---|
+| 没登录的人能发吗 | 不能。公开路由先要 `Bearer` 登录令牌（没有回 401 `login-required`，带网站 cookie 的回 400 `bearer-required`）；权威层再经账号服务核登录（不认的令牌 401、作废的 401 `credential-revoked`）。查状态同样要登录。 | JR-4 |
+| 被踢的账号能绕过「先解除禁入」吗 | 不能。发申请、查状态在同一笔事务里先查禁入名单，回 403 `banned`；被踢时他挂着的申请一并清掉；创建者解除禁入后他也不是直接回名单，要重新申请。页面上被踢的人只看到「你已被禁止加入这个项目。」，没有「发送申请」。 | JR-5、JR-7、JR-14 |
+| 同一个账号能刷多少条 | 同一个项目同一时刻只有一条（已在等时再点回原来那一条，不另起、不算次数）；同一个账号对同一个项目滚动 24 小时里最多起 3 条新申请，跨项目滚动 24 小时里最多 20 条；一个项目同时最多挂 50 条。都是时间窗或会被创建者处理掉，不会把人永久卡死（〔裁〕，见「六」）。 | JR-3、JR-9、JR-11 |
+| 别的项目的人能往这个项目发申请吗 | 能发（知道项目号、登录了、没被这个项目踢，就是本功能本身），但只落在这个项目里：申请号按项目各是各的，别的项目的创建者通过不了（403 `creator-required`），把那边的申请号拿到这边用回 404 `no-join-request`，那边的通过进不了这边（403 `not-listed`）；项目里的票据（连接票据、素材票据）当登录令牌用回 401。 | JR-6 |
+| 能伪造成别人发的吗 | 不能。申请人的账号号和名字只取自账号服务核过的登录；公开路由不收请求体里的 `accountId`、`role`、`principal`、`loginId`、`credentialId`、`authorizationId`、`creator`（400 `invalid-authority-claim`）；权威层即使收到请求体里的 `accountId`/`accountName` 也不用。云端 Agent 等非页面身份发不了（403 `invalid-role`）。 | JR-6、JR-7 |
+
+### 2. 「通过」只有创建者能点（服务端核）
+
+`decideJoinRequest` 在账本事务里第一件事核「这是创建者本人的页面」（`actor.role === 'page' && actor.accountId === creatorAccountId`，与踢人同一个判据），之后才看重放、权限与申请。普通成员、被踢的人、申请人自己、另一个申请人、项目外的人，「通过」「拒绝」都回 403 `creator-required`，账本一个字节不变；创建者本人的云端 Agent 身份也回 403（创建者特权 Agent 一律做不了）；公开路由不能自报角色。界面上只有创建者看得到申请列表（投影里只给创建者），但这不是防线，防线在服务端。测试：JR-7（逐一身份）、JR-6（别的项目的创建者）、JR-3（普通成员的投影里没有申请）。
+
+### 3. 通过之后的进入仍走全部关卡
+
+通过只是把账号放进成员名单（可写，`joinedAt` 记通过时刻，成员记录留申请号）；进项目仍走原来的 `/join`、`/session`（读成员名单的 `/members` 也一样，见「十四」F1）：核申请人的登录（作废的 401）、禁入（通过后被踢的 403 `banned`）、二级密码（设了的要输一次，没输 403 `secondary-password-required`、输错 403 `bad-secondary-password`，输过一次后不再问）、项目还在（删了 404）。唯一的放宽：被通过的人不核「作废并重新生成」后的链接口令——他是创建者点名放进来的，与「已经进来的成员不受影响」同理；没被通过的人拿着最新口令在只放名单时也进不来。
+
+**通过那一刻现核，不凭页面那一眼。** 通过这一笔在同一笔账本事务里现核四样：项目还在、创建者本人登录有效（`verify` 走账号服务）、申请还挂着、申请人不在禁入名单里。申请人在创建者看到申请之后被踢：踢人时申请已清掉，停在旧页面上点「通过」回 404 `no-join-request`；账本里万一人被禁入而申请还在，回 409 `join-request-banned`；账号删了，账号事件到达时申请清掉，再点回 404。测试：JR-8、JR-14。
+
+### 4. 名单快照
+
+见「三」。
+
+### 5. 申请记录存在哪、谁能读
+
+- 存在云端文档服务的账本里（与成员、禁入同一本，`projects[项目号].joinRequests[账号号]`）。每条只有：申请号（`jr_` + 24 位十六进制随机数）、申请时的账号名、申请时间、状态（挂着／被拒）、拒绝时间、时间窗里的几次发起时刻。**不存**邮箱、登录号、凭证号、设备号、令牌（账号服务回的登录里有邮箱，JR-12 专门放了一个，账本和所有回包里都找不到）。
+- 申请人只读得到自己那一条的状态（`state`、`entry`、`canApply`，次数用完时另带 `retryAt`），读不到别人的申请、成员名单、申请号。
+- 创建者在成员投影里读到挂着的申请：每条只有账号号、申请时的账号名、申请号、申请时间。普通成员读不到。
+- 通过后申请记录删掉（成员记录上留申请号作幂等凭据）；被拒的留着给申请人看（每项目最多 200 条，满了丢最旧的）；被踢、账号删除、删项目都清掉；访问事件里不写申请（各服务都读得到访问事件）。
+- 测试：JR-3、JR-12。
+
+### 6. 通过、拒绝是不是幂等
+
+- 同一个请求号重放：原样回，不再改账（JR-10）；同一个请求号换了内容：409 `request-mismatch`。
+- 换了请求号再做同样的决定（另一台设备也点了、网络重试换了号）：照样成功，不再改账、访问版本号不变（JR-10）。
+- 相反的决定（通过后再拒、拒后再通过）：409 `join-request-decided`（JR-10）。
+- 对面已经处理过、申请不在了（被踢、账号删、拿错项目的号）：404 `no-join-request`（JR-6、JR-14）。
+- 页面：「通过」「拒绝」没收到回包（网络断）时再点沿用原请求号；收到明确结论就丢掉（JRC-3 核重发的请求体一字不差）。
+- 发申请：回包丢了用同一个请求号重试，不算又发了一次；这期间被拒了，重试回「被拒」（JR-10）。
+
+## 五、code 与三端显示的话
+
+失败时外壳只带回 `status` 和 `code`；`code` 是下表的闭集，人话由 `src/account/client.ts` 的 `accountErrorText` 给，三端用同一张表（JRC-5 核每个 code 都有人话、不落到「请求失败（code）」兜底；JRC-2 核外壳替身只回 `status`、`code` 时人话照样出来）。表里「界面上」一栏写的是三端一样的显示位置：桌面与在线是开始页的错误条（`sp-error`）或成员浮层的错误行，手机是加入面板里的 `.err` 或成员面板的提示气泡。
+
+| code | HTTP | 什么时候 | 界面上显示的话 |
+|---|---|---|---|
+| `not-listed` | 403 | 被账号名单挡住（`/join`、`/session`） | 开始页、手机加入面板：**不弹错误条**，换成申请那一块「你不在这个项目的成员名单中」（照语义原文不带句号）+「发送申请」；其余地方（如成员浮层里自己被移出）照错误提示的写法「你不在这个项目的成员名单中。」 |
+| `banned` | 403 | 被踢的人加入、发申请、查状态 | 「你已被禁止加入这个项目。」（没有「发送申请」） |
+| `entry-open` | 409 | 发申请时项目已改回知道链接就能进 | 页面不显示，读状态后自动再走一次加入；兜底「这个项目现在知道链接就能加入，请直接加入。」 |
+| `join-request-limit` | 429 | 同一项目滚动 24 小时里第 4 次 | 「这个项目你最近申请得太多了，请过一段时间再申请。」（申请那一块另按 `retryAt` 写「10月23日 09:05 之后可以再申请。」） |
+| `join-request-full` | 429 | 项目挂着 50 条 | 「这个项目等待处理的申请太多了，请稍后再申请。」 |
+| `join-request-account-limit` | 429 | 账号滚动 24 小时里第 21 条 | 「你最近发出的申请太多了，请过一段时间再申请。」 |
+| `no-join-request` | 404 | 通过／拒绝的那条已不在 | 「这条申请已经不在了，请刷新。」 |
+| `join-request-decided` | 409 | 通过后再拒、拒后再通过 | 「这条申请已经处理过了，请刷新。」 |
+| `join-request-banned` | 409 | 通过时申请人在禁入名单里 | 「这个账号已被禁入，要先在「已禁入的账号」里解除。」 |
+| `already-member` | 409 | 申请人已是成员 | 「这个账号已经是项目成员。」 |
+| `creator-required` | 403 | 非创建者改勾选、通过、拒绝 | 「只有项目创建者可以管理成员。」 |
+| `access-revision-mismatch` | 409 | 改勾选时名单变了（页面自动重来一次后仍变） | 「成员状态已变化，请刷新并重新选择操作。」 |
+| `invalid-entry` | 400 | 勾选值不对 | 「进入方式的设置没有保存成功，请刷新后重试。」 |
+| `invalid-join-request` | 400 | 申请请求形状不对 | 「申请信息不完整，请刷新后重试。」 |
+| `invalid-member` | 400 | 成员操作形状不对 | 「成员信息不完整，请刷新后重试。」 |
+| `request-mismatch` | 409 | 同一请求号换了内容 | 「这次操作和之前的记录对不上，请刷新后重试。」 |
+| `no-project` | 404 | 项目已删 | 「这个云端项目已不存在。」 |
+| `relocating` | 409 | 项目在搬 | 「这个项目正在搬迁，请稍后再试。」 |
+| `login-required` | 401 | 没登录 | 「请先登录账号。」 |
+| `credential-revoked` | 401 | 登录作废 | 「登录已失效，请重新登录。」 |
+| `bad-request-id`、`invalid-authority-claim` | 400 | 页面正常用不会碰到 | 「请求不完整，请刷新后重试。」 |
+| `invalid-project` | 400 | 项目号形状不对 | 「请输入有效的云端项目链接。」 |
+| `invalid-role` | 403 | 非页面身份 | 「没有访问这个项目的权限。」 |
+| `secondary-password-required` | 403 | 项目设了二级密码而这个账号没输过当前这一版：进项目、续会话、读成员名单（F1 起） | 「这个项目要输入项目二级密码才能进。请用项目链接加入，按提示输入二级密码。」（开始页、手机加入面板走自己那句「该项目设置了项目二级密码，请输入二级密码。」并弹出密码框；从「我加入的」点进去时也是这样，链接自动填好，「十六」必改 1） |
+| `bad-secondary-password` | 403 | 二级密码输错 | 「项目二级密码不正确。」 |
+| `invalid-device` | 400 | 设备号形状不对（页面正常用不会碰到，设备号恒为 ASCII） | 「这台设备的身份信息不对，请重新打开软件后再试。」 |
+
+`no-project`、`relocating`、`invalid-project`、`invalid-role`、`invalid-device`、`bad-request-id`、`invalid-authority-claim`、`request-mismatch`、`invalid-member` 这几条原来没有对照，落到「请求失败（code）」兜底；这次一并补了人话，影响到所有用 `accountErrorText` 的地方（只是把兜底换成人话）。
+
+## 六、三级数字
+
+| 数 | 值 | 放在哪 | 说明 |
+|---|---|---|---|
+| 一个项目同时挂着的申请上限 | 50 | `JOIN_REQUEST_LIMITS.projectPending` | 满了回 429 `join-request-full`；创建者处理掉一条就又能收 |
+| 同一账号对同一项目的发起次数 | 滚动 24 小时 3 次 | `accountProjectSends`、`windowMs` | 〔裁〕主会话 2026-10-22：按时间窗，不是终身额度（「不提供输入账号名加人」，终身额度会让误拒几次的人永远进不来）。数「起了一条新申请」：已在等时再点、同一请求号重试都不算；创建者处理掉不退还 |
+| 同一账号跨项目的发起次数 | 滚动 24 小时 20 次 | `accountSends`、`windowMs` | 〔裁〕原先定的是「同时挂着 20 条」，没人理的项目会把申请人卡死，一并改成时间窗 |
+| 每项目留的被拒记录 | 200 条，满了丢最旧的 | `rejectedKept` | 被拒记录只是给人看的，不是凭据；被丢的人看到「没申请过」、可以再发 |
+| 申请人等创建者时问的间隔 | 10 秒（页面看不见时不问，回前台马上问） | `src/account/client.ts` 的 `JOIN_REQUEST_POLL_MS` | 被通过后最多约 10 秒自动进 |
+| 创建者那边角标的刷新 | 沿用成员列表的 3 秒（展开）/ 15 秒（收着） | `MEMBERS_POLL_OPEN_MS` / `MEMBERS_POLL_CLOSED_MS`（已有） | 有新申请后最多约 15 秒出角标 |
+| 重开文件那条带「发送申请」的提示 | 不自己消失（用户关）；发成以后由页面关掉 | `recoveryAssociation.ts` | 与别的带按钮的提示一样；不带按钮的照旧 10 秒 |
+| 申请号 | `jr_` + 24 位十六进制（96 位随机） | `authority.mjs` | |
+
+## 七、语义里说不通或缺的地方（交给主会话）
+
+1. **被拒后能不能再申请**：语义只说被拒显示「创建者没有通过你的申请」。我做成能再申请，按「三级数字」的时间窗限次（主会话已认可）；次数用完时界面说几点之后能再申请。
+2. **「有新申请时」的数字角标数什么**：我数的是挂着的申请条数（处理掉就少），不是「没看过的」条数。
+3. **普通成员看不看得到那个勾选**：语义说「只有创建者能改」，勾选在两个只给创建者的按钮下面，所以我只给创建者显示；普通成员看不到（若要像「云端 Agent」那样让成员看得到、不能改，需要另挂一处）。
+4. **作废并重新生成项目链接之后，旧链接能不能发申请**：能。重开文件那一条（第 44 行）要求在提示里给「发送申请」，而文件里只有项目号、没有链接口令；作废链接管的是「凭链接直接进」。被通过的人进来时也不核链接口令。
+5. **服务端的 `set-list`（按账号号整份设名单）还在**：只有创建者能调，页面没有入口，所以「不提供输入账号名加人」在界面上成立；要在接口层也成立，需要删掉这个操作（删接口按规则要用户定）。
+6. **被通过的人马上出现在「我加入的」里**：通过时记 `joinedAt`，网站「我加入的」与开始页列表立刻看得到（申请人页面读到被通过时马上重取列表）；进项目时仍过二级密码等全部关卡，从列表点进设了二级密码的项目先问密码（「十六」必改 1）。
+7. **重开文件 + 二级密码**：被通过的人重开另存的文件时，若项目设了二级密码，`/session` 回 403 `secondary-password-required`，`recoveryAssociation.ts` 原有的分支把所有 403 都说成「这个账号不是这个云端项目的成员」（老问题，改密码后的老成员同样会碰到）。主会话只授权我在那条提示里加按钮，这个没改，建议另开一项：重开时遇到 `secondary-password-required` 要问密码。
+8. **界面上新加的、语义里没有原文的几句**：「创建者已通过你的申请」「知道项目链接的人登录网站账号后就能加入。」「只允许账号名单（现在的 N 位成员）。新人要发申请，由你在顶栏「成员」里通过。」「申请加入（N）」「…之后可以再申请。」「…申请」（时间）、重开文件发出后「已发送，等创建者通过。通过以后重新打开这个文件，就能连回云端项目。」、创建者点了之后的气泡「已通过 X 的申请」「已拒绝 X 的申请」（桌面、手机同一句），以及「五」里新补的人话。请审文字。
+9. **挂着的申请不过期**：创建者一直不处理，申请人一直看到「已发送，等创建者通过」；因为跨项目的数也是时间窗，他不会因此被卡住、仍能申请别的项目。
+
+## 八、端口
+
+主会话给的段是 5940～5949。编辑器 5940 占 5940～5942（舞台 +1、+2），夹具七个固定端口 5943～5949（入口 5949），都在段内。夹具还有一个云端 Agent 的入口端口，探针用不到它，段里也放不下第 11 个，所以给 0、由系统挑一个空闲的临时端口（Windows 的临时端口在 49152 以上，不会落在任何人分到的段里）。没碰 5190～5192、5203、5210～5212、5870～5939。
+
+## 九、〔裁〕清单（三级，待用户合入前审）
+
+| # | 改了什么 | 修改前 | 修改后 | 理由 |
+|---|---|---|---|---|
+| 1 | 申请次数的上限按时间窗数 | 同一账号对同一项目一共 3 次（终身）；同一账号跨项目同时挂着 20 条 | 同一账号对同一项目滚动 24 小时 3 次；同一账号跨项目滚动 24 小时 20 次 | 主会话 2026-10-22：「不提供输入账号名加人」，终身额度会让被误拒几次的人永远进不来，创建者也无法补救；「同时挂着 20 条」在没人理的项目里同样会把申请人卡死 |
+| 2 | 项目设置「多用户协作」里「放在」那一行：账号云端项目只写「云端」（`src/editor/sync/CollabSection.tsx`，主会话授权的第二处） | 「云端 · 自由进入」（账号项目恒为这句） | 「云端」 | 主会话 2026-10-22：这不是新增功能，是现有文案在新功能下暴露的错。「自由进入／限定进入」本是本地项目的说法（本地自报身份和进入方式不变），云端项目的进入方式只有「知道链接且登录了就能进」和「只放账号名单」两种。`syncManager` 进账号项目时把 `mode` 写死成 `'free'`，那一行就永远写「自由进入」，取消勾选后与紧下面没勾的「任何知道链接的人都可加入」直接矛盾。显示错的东西比最小改动更要紧；只写「云端」、不把进入方式也写进那一行，进入方式只由勾选说明，免得两处日后又不一致。本地项目那一行照旧。端到端探针核了取消勾选、再勾回去两种状态（`desktop-2-entry-list.png`、`desktop-2b-entry-rechecked.png`） |
+
+## 十、验证
+
+（这一节是交叉审查之前、e20c8212 上的结果；交叉审查改完之后重跑的闸门见「十六」最后一节。）
+
+全在本 worktree 上跑；跑 `npm test` 前按任务书设了 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT`、`PROMPTCUT_PASSWORD_ORDER_MODULE`（本机值，没写进任何文件）。
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 类型检查 | `npx tsc -b --force` | **终版提交 e20c8212 上退出码 0，零错误**（`out/join-requests/tsc-final2.txt`）；之前每一块提交后也都跑过、都是 0 |
+| 新的服务端测试 | `node --test server/test/account-join-requests.test.mjs` | `tests 15 / pass 15 / fail 0`（JR-15 是安全专审 F1 之后加的） |
+| 新的页面侧测试 | `node --test src/account/joinRequest.test.mjs src/account/reopenJoinRequest.test.mjs` | JRC `tests 7 / pass 7`（JRC-7 是 F2 之后加的）；RJR `tests 4 / pass 4` |
+| 相关旧测试（改动后先跑的一遍） | 服务端 `account-member-*`、`account-hosted-option`、`account-projects-*`、`account-create-policy`、`accept-018-auth-*`、`accept-018-conv-*`、`account-move`；页面 `src/account/*.test.mjs`、`src/editor/sync/accountMove.test.mjs`、`src/mobile/*.test.mjs` | 服务端 `tests 93 / pass 93 / fail 0`；页面 `tests 136 / pass 136 / fail 0` |
+| 全量测试 | `npm test` | **终版提交 e20c8212 上：`tests 7598 / pass 7583 / fail 0 / cancelled 0 / skipped 15`，「npm test 最终结果：零失败」，退出码 0**，日志 8546 行、有 `ℹ tests 7598` 汇总行（`out/join-requests/npm-test-final3.txt`；比安全专审前多的 2 条是 JR-15、JRC-7）。安全专审之前在 2e5d9c64 上跑过两遍：一遍 7580 过、1 条被取消（`server/test/asset-project-workers.test.mjs` 的真 ffmpeg 转码 20 秒超时，机器忙；**单跑那个文件 11/11 过、那一条 292 毫秒**，`out/join-requests/rerun-asset-project-workers.txt`，与本分支无关），另一遍 7596 / 7581 / 0 / 0 / 15 零失败（`npm-test-final2.txt`） |
+| 构建 | `npm run build` | **终版提交 e20c8212 上退出码 0**（`out/join-requests/build-final2.txt`，`tsc -b && vite build`） |
+| 在线构建（探针用） | `npx vite build --mode online` | 退出码 0 |
+| 端到端（改二级密码、桌面、在线、手机） | `node scripts/probes/account-join-request-probe.mjs --only password,desktop,online,mobile --out out/join-requests/final3` | **终版代码上退出码 0，37 项核对全过、0 失败，30 张截图**（改二级密码 2、桌面 12、在线 9、手机 7）。安全专审前的 `final2`（34 项、28 张）同样全过 |
+
+端到端探针用本机隔离的托管组合（`server/test/fixtures/cloud-queue-user-path.mjs`：真的账号后端、文档服务、独立的素材服务进程、TLS 入口），没碰节点。三处：
+
+- **桌面**：本工作区起的开发服务器（桌面那一份）；页面里的外壳账号桥由探针照外壳接口代答，同样只放行那五条路由、失败时同样只带回 `status` 与 `code`。不是真的外壳进程（见「十二」）。
+- **在线**：`dist-online/` 由夹具的入口在 `/editor/` 下发，与 `/api/account`、`/hosted` 同源（与生产的摆法一样），页面凭网站登录（cookie）走，没有替身。
+- **手机**：同一份在线构建，`?layout=mobile`、390×844 视口、触屏、手机 UA。
+- 在线页面进了云端项目会弹「使用云端 Agent 前请先了解」，与本任务无关：探针截图前点的是**「拒绝」**（不同意、不发任何对话）。截图里看不到这个弹窗，不代表那几个项目同意过这份告知。
+- 网站每个 IP 一小时只许注册 5 个账号（`RATES.registerPerIp`），夹具已注册 2 个，探针只再注册 3 个，三处轮着用（在线那一遍的申请人是桌面那一遍的丙、丁，申请的是另一个项目；手机那一遍是 K 和乙）。
+
+### 设备名带中文（主会话追问）
+
+探针早先几遍里「乙凭链接进项目」回 400 `invalid-device`：被拒的是**设备号**（`deviceId`，内部标识），不是设备名。那是探针自己拼的设备号 `probe-乙` 带了中文。文档服务 `/join`、`/session` 只核设备号（`server/docservice/modules/account-projects.mjs` 第 58 行，`/^[A-Za-z0-9_.:-]{1,128}$/`）；产品里的设备号由 `server/auth/device.mjs` 生成（`pc-` + 22 位 base64url），恒为 ASCII，所以设备号限 ASCII 合理，改探针是对的，不是绕过。
+
+设备名（`deviceName`，给人看的）不经 `/join`、`/session`，只在编辑器登录时交给账号服务（VisuHive `account/credentials.mjs` 第 100 行只限长度不超过 128，不限字符；本仓库 `server/auth/protocol.mjs` 的 `isDeviceName` 也收中文）。实测：探针把桌面编辑器的设备名设成中文 `申请加入探针的电脑`、设备号保持 ASCII，创建者、两个申请人、被踢的人都用它登录：四个账号都登录成功（`evidence.json` 的 `loginDeviceNames` 四条都是设备名「申请加入探针的电脑」、`ok: true`），之后发申请、被通过后输二级密码进项目、被拒、被踢各步照常，核对项「桌面-设备名「申请加入探针的电脑」照样登录、申请、进项目」通过——带中文的设备名没有挡住云端项目的加入。云端项目里的用户名是账号名，不取设备名；「创建者用户名取设备名」是本地项目勾上「多用户协作」时的缺省，本地项目这次没动、没测。另给 `invalid-device` 补了人话（页面正常用不会碰到）。
+
+### 看过的截图（`out/join-requests/final2/` 逐张看过；终版那一遍 `out/join-requests/final3/` 同名截图内容相同，另多 `password-1-member-before.png`、`password-2-member-after.png` 两张，见「十四」F1；`final/` 是设备名改中文之前那一遍）
+
+| 截图 | 内容 |
+|---|---|
+| `desktop-1-entry-checked.png` | 桌面创建者的项目设置：「任何知道链接的人都可加入」在「作废并重新生成项目链接」「项目二级密码」下面，缺省勾着，下面一句「知道项目链接的人登录网站账号后就能加入。」；「放在」只写「云端」 |
+| `desktop-2-entry-list.png` | 取消勾选后：「只允许账号名单（现在的 3 位成员）。新人要发申请，由你在顶栏「成员」里通过。」；「放在」仍是「云端」 |
+| `desktop-2b-entry-rechecked.png` | 再勾回去：勾着，「放在」仍是「云端」，两边不打架 |
+| `desktop-3-blocked.png` | 申请人凭链接加入被挡住：「你不在这个项目的成员名单中。」+「发送申请」，不另弹错误条 |
+| `desktop-4-sent.png` | 点了以后：「已发送，等创建者通过」 |
+| `desktop-5-badge.png` | 创建者顶栏「成员」按钮上的数字角标 2 |
+| `desktop-6-requests.png` | 成员浮层顶上「申请加入（2）」，每条账号名、账号号、申请时间、「通过」「拒绝」 |
+| `desktop-7-approved-creator.png` | 通过丙之后：申请剩 1 条、角标 1，丙出现在成员里，气泡「已通过 … 的申请。」 |
+| `desktop-8-approved-password.png` | 丙那边自动再走一次加入：「创建者已通过你的申请。」；项目设了二级密码，出现密码框和「该项目设置了项目二级密码，请输入二级密码。」 |
+| `desktop-9-approved-entered.png` | 丙输了二级密码，进了项目（成员 2 人） |
+| `desktop-10-rejected.png` | 丁被拒：「创建者没有通过你的申请」+「发送申请」 |
+| `desktop-11-banned.png` | 被踢的 K 再加入：「你已被禁止加入这个项目。」，没有「发送申请」 |
+| `online-1-entry-checked.png`、`online-2-entry-list.png` | 在线：同样的勾选与取消（现在的 1 位成员），「放在」只写「云端」 |
+| `online-3-blocked.png`、`online-4-sent.png` | 在线申请人：被挡住 +「发送申请」→「已发送，等创建者通过」 |
+| `online-5-badge.png`、`online-6-requests.png` | 在线创建者：角标 2、浮层里的申请列表 |
+| `online-7-after-decisions.png` | 通过一个、拒绝一个之后：申请列表空了 |
+| `online-8-approved-entered.png` | 被通过的人自己进来了（没设二级密码，不用输） |
+| `online-9-rejected.png` | 被拒的人：「创建者没有通过你的申请」+「发送申请」 |
+| `mobile-1-blocked.png`、`mobile-2-sent.png` | 手机「加入别人的项目」面板：被挡住那句 +「发送申请」→「已发送，等创建者通过」 |
+| `mobile-3-badge.png` | 手机创建者：预览右上角成员按钮上的数字角标 2（照页签角标的样子） |
+| `mobile-4-requests.png` | 手机成员面板：「申请加入（2）」，每条「通过」「拒绝」，下面「项目成员」 |
+| `mobile-5-after-decisions.png` | 处理完以后面板里只剩成员 |
+| `mobile-6-approved-entered.png` | 被通过的人在手机上自己进来了（2 人） |
+| `mobile-7-rejected.png` | 被拒的人：「创建者没有通过你的申请」+「发送申请」 |
+
+证据：`out/join-requests/final2/evidence.json`（每项核对、截图清单、外壳替身实际用到的路由 `bridgeRoutes`、勾选与两个按钮的先后 `order`、设备名登录结果 `loginDeviceNames`），过程日志 `out/join-requests/final2.err`。`out/` 不入库。
+
+探针跑过的几遍（都在 `out/join-requests/` 下）：`run1`、`run2` 桌面那一遍没进项目——夹具自带的项目内容只有 `{ tracks: [] }`，编辑器一打开就报 `Cannot read properties of undefined (reading 'toFixed')`、整页空白（`run2/debug-fail-0.png`），改成在开始页新建云端项目；`run3`、`run4` 只剩「乙先凭链接进来」一项不过（探针拼的设备号带中文，见上）；`final`、`final2` 全过。
+
+## 十一、不在原清单里改过的文件
+
+| 文件 | 为什么 |
+|---|---|
+| `server/docservice/modules/account-projects.mjs` | 申请要走现有的 `/join`、`/admin`（见「二」），路由分发在这里。主会话已认可 |
+| `src/editor/sync/CollabSection.tsx` | 主会话授权两处：挂勾选（语义要它在那两个按钮下面）；「放在」那一行（〔裁〕2） |
+| `src/editor/sync/recoveryAssociation.ts` | 主会话授权：重开文件那条提示补「发送申请」 |
+| `src/editor/sync/syncManager.ts` | 主会话授权的那一处：调 `handleCloudAssociationReopen` 时多传 `dismissToast`（「十六」必改 2） |
+| `src/mobile/MobileStart.tsx`、`useMembers.ts`、`sheets.tsx`、`MobileEditor.tsx`、`mobile.css` | 主会话授权：手机也做 |
+| `scripts/probes/account-join-request-probe.mjs` | 验收要的界面证据（三处走一遍并截图） |
+
+没动：`server/account/agent-read-control.mjs`、`server/agent-service/**`、`server/agent/**`、`src/online/**`、低内存档与三道闸门相关的文件、`syncManager.ts` 里上面那一处以外的地方、`docs/semantics/**`、`docs/plan/**`。
+
+## 十二、没做成的、没测到的
+
+- **真的桌面外壳没跑。** 桌面那一遍用外壳账号桥的替身（同样的五条白名单、同样的失败形状）；`account_vault.rs` 本身由 JRC-2 读源码守门。「0.2.8 外壳能用」来自源码比对（「二」），没有装真外壳实测。
+- **重开文件那条提示的「发送申请」没进端到端探针**，只有 RJR-1～4 单测（按钮的请求号重用、在等与次数用完时不给按钮、被踢与问不到时照旧、发成以后关掉且不再发）。
+- **真实网络验证没跑**：没往节点部署，按 `verification.md` 不是合入前提。
+- **两轮审查**都已做（Opus 对抗性安全专审、Argon 交叉审查，由主会话安排）：要改的分别见「十四」「十六」。
+
+## 十三、发现的问题（不在本任务范围，没改）
+
+1. `server/account/authority.mjs` 的 `verify`：每次凭登录令牌的调用（页面的 `/session`、`/members`、`/join` 都是）都往 `refs` 里加一项、从不清理，而且每次都把整张表扫一遍。文档服务长跑时内存与 CPU 会慢慢涨。这次申请人等创建者时每 10 秒问一次，会让它涨得快一点（与成员列表每 3～15 秒一次同一量级）。建议另开一项按到期或数量清理。
+2. 夹具 `cloud-queue-user-path.mjs` 自带的项目内容是 `{ tracks: [] }`，编辑器打开会崩（见「十」）。拿它做界面验收的探针要自己新建项目。
+3. 刚凭链接进来的那一次 `/join`，紧接着发会话偶尔回 503 `asset-unavailable`（发会话要等素材服务追上全局访问事件，刚落账的加入本身就是一条新事件）。页面用户一般重试就过去；脚本要同请求号重试。
+4. 重开另存的文件时，项目设了二级密码而这个账号还没输过，`/session` 回 403 `secondary-password-required`，`recoveryAssociation.ts` 原有分支把所有 403 都说成「这个账号不是这个云端项目的成员」（改过二级密码后的老成员同样碰到）。见「七」第 7 条。
+
+## 十四、安全专审之后的两处修改（F1、F2）
+
+Opus 对抗性安全专审结论：没有让不该进的人进项目的路径（被踢、项目外、未登录、过期凭证、别的项目的创建者、创建者的 Agent 身份、自己通过自己、请求体写别人账号号、重放、各种并发都试过），二级密码也绕不过。要改的两处如下，都已改并提交（`76340337`）。
+
+### F1：没输过当前二级密码的人读得到成员名单
+
+- **问题**：项目设了二级密码、取消勾选后，申请人被通过但没输密码，直接 `POST /members` 回 200，拿到全体成员的账号号、名字、权限、加入时间、在线设备、连接角色、Agent 对话号；同一时刻 `/join`、`/session` 都正确回 403。根子：`project-members.mjs` 只核「是不是成员」，二级密码只在 `authority.entryState()` 里核，而只有 `/session` 调它。老成员在创建者改过密码之后本来就有这个缺口；这一块的「通过」让一类新的人（刚被通过、还没输密码）落进了缺口。
+- **先实测再改**（脚本 `scratchpad/measure-f1.mjs`，结果 `out/join-requests/f1-measure-before.json`、`f1-measure-after.json`）。`secondaryPasswordRev` 只在「项目已有二级密码时走 `/join`」才写（`authority.mjs` 写进成员记录的那一行），设密码不回写老成员，所以「设密码之前进来的老成员」记录里根本没有这个字段，和刚被通过的人一样：
+
+  | 身份 | 成员记录里的 `secondaryPasswordRev` | 改前 `/members` | 改后 `/members` | `/session`（改前改后一样） | 输对当前这一版之后 |
+  |---|---|---|---|---|---|
+  | ① 设密码之前进来的老成员 | 没有这个字段 | 200 | **403** `secondary-password-required` | 403 | `/members` 200、`/session` 200 |
+  | ② 输过旧密码、创建者又改了密码的老成员 | 3（当前 6） | 200 | **403** | 403 | 200 |
+  | ③ 刚被通过、没输密码 | 没有这个字段 | 200 | **403** | 403 | 200 |
+  | 创建者 | （不用输） | 200 | 200 | 200 | — |
+
+- **改法（主会话定 (b)）**：照 `entryState` 的条件办，版本不符就挡，①②③都挡。抽出 `authority.mjs` 的 `secondaryPasswordPending(p, accountId)`，`entryState`（`/session`）与 `project-members.mjs`（`/members`）用同一条判，不各写一份。理由（主会话）：`/session`、`/join` 已经按这个条件拒，`/members` 不该是第三种答案，三个接口对同一件事给三种答案正是 F1 长出来的地方；按语义二级密码挡的是「进这个项目」，读成员名单也算，创建者改了密码成员本来就该重新输一次。**(b) 把①②原有的缺口也一并堵了**（改前他们读得到名单），修的比这一块弄坏的更多。没取 (c)「只挡凭申请被通过的人」：那会故意把①②读得到名单的路留着。
+- **「不是新退步」的实测依据**（`node scripts/probes/account-join-request-probe.mjs --only password`，证据 `out/join-requests/password/evidence.json`，截图 `password-1-member-before.png`、`password-2-member-after.png`）：乙在设密码之前凭链接进来、在编辑器里、成员浮层开着；创建者设二级密码之后——
+  - 第 2.7 秒：浮层下一次取名单（展开时每 3 秒一次）回 403，浮层里的名单清空，显示「这个项目要输入项目二级密码才能进。请用项目链接加入，按提示输入二级密码。」
+  - 第 14.2 秒：页面续会话（每 15 秒一次，每 3 秒看一眼）回 403，整条连接停掉：状态变「离线」，顶栏「成员：暂不可用」，弹出一条不自己消失的提示，话同上。
+  - 和读代码的结论一致（约 15 秒内断）。也就是说①②这类在线老成员本来就会在十几秒内因 `/session` 被拒而断开，「本来好好的、被这次改坏了」不成立；这次只是让浮层早约 12 秒说出同一句话。
+  - 另见一处原有的小问题（没改，`syncManager.ts` 不在授权范围）：连接停掉之后再刷新浮层，它显示「登录已失效，请重新登录。」——`syncManager` 把账号项目连接停掉之后取名单一律当成登录作废；提示气泡说的是对的。建议另开一项。
+- **人话**：`secondary-password-required` 原来落到 403 的兜底「没有访问这个项目的权限。」（像是被移出了项目），现在是「这个项目要输入项目二级密码才能进。请用项目链接加入，按提示输入二级密码。」；`bad-secondary-password` 补「项目二级密码不正确。」。开始页与手机加入面板走自己那两句（「该项目设置了项目二级密码，请输入二级密码。」「项目二级密码不正确。」），不受影响。「五」那张表加这两行。
+- **测试**：JR-15（三种身份 `/members` 与 `/session` 都 403、创建者 200、旧版本的密码不算、输对当前这一版后恢复 200、清掉密码后谁都不用输）。把这次的改动拿掉跑 JR-15 是红的（1 条失败），装回去是绿的。
+
+### F2：路由守门测试有洞
+
+- **问题**：JRC-2 只看测试走到的那几个函数用了哪些路由；审查者在 `client.ts` 里新加一个走 `/join-cancel` 的函数，10 条全绿，没拦住。
+- **改法**：新增 JRC-7，扫 `client.ts` 和整个 `src`（测试文件除外，先去掉注释）里所有 `/hosted/shared/account` 开头的字面量（末尾的 `/` 去掉再比；拼出来只剩前缀的也算），不在外壳放行的五条里就红；同时核外壳那份清单本身仍是这五条；另有扫法自检（注释里的不算，字符串里的算）。
+- **照审查者的三种改法各试一次**（脚本 `scratchpad/mutate-f2.mjs`，结果 `out/join-requests/f2-mutations.json`；每次改完跑 `node --test src/account/joinRequest.test.mjs`，再 `git checkout` 还原、确认 `git status` 干净）：
+
+  | 改法 | 结果 | 变红的用例 | 还原后工作区 |
+  |---|---|---|---|
+  | M1 把现有函数 `joinRequestStatus` 改走 `/hosted/shared/account/join-status` | 退出码 1，7 条里 3 条失败 | JRC-1、JRC-2、JRC-7 | 干净 |
+  | M2 在外壳放行清单里加 `/hosted/shared/account/join-cancel` | 退出码 1，2 条失败 | JRC-2、JRC-7 | 干净 |
+  | M3 在 `client.ts` 里新加一个走 `/hosted/shared/account/join-cancel` 的函数（测试不调它） | 退出码 1，1 条失败 | JRC-7（原先的洞，现在拦住了） | 干净 |
+  | 都还原之后 | 退出码 0，7/7 通过 | — | — |
+
+### 主会话定的、本分支不做的
+
+- U1 服务端 `set-list` 不删：外人调它回 403，不是外人绕进来的路；创建者凭接口能加人，所以「不提供加人」只在界面上成立。属改对外接口，记成待用户项。
+- U4 `authority.verify` 的 `refs` 只增不减（「十三」第 1 条）：审查者升级成可用性问题（任何登录的账号狂刷 `/join {joinRequest:'status'}` 就能让文档服务内存和每次调用的 CPU 一直涨），原有问题，不挡合入，主会话另排。
+- U2、U3、U5 按审查者的判断不动。
+
+## 十五、结论
+
+- 语义第 26、27、44 行的各条都做了，桌面、在线、手机三处走通；安全六问每问有服务端测试；名单快照规则写清并有交错测试；申请全走外壳已放行的五条路由，0.2.8 外壳不用换。
+- 两轮审查都已做，要改的都改了并有测试（安全专审 F1、F2 见「十四」；交叉审查四处必改见「十六」，每处的改法拿掉都会让对应的测试变红）。
+- 合入前要做的：用户审「七」里的语义缺口与新增文字、「九」里的两条〔裁〕、「六」里的三级数字。
+- 分支 `claude/join-requests` 上的提交见 `git log e27d36b4..claude/join-requests`；没有推送、没有合并。
+
+## 十六、交叉审查（Argon）之后的四处修改
+
+Argon 交叉审查列了四条必改和一处标点，都已改并提交（代码与测试 `d6e83a82`，探针 `c6b8ea22`）；主会话定不做的一条照记。下面「必改 N」就是审查意见里的第 N 条。
+
+### 必改 1：被通过的人从「我加入的」点进设了二级密码的项目，只看到一条错、没处输密码
+
+- **问题**：被通过那一刻他就在「我加入的」里（通过时记了 `joinedAt`），但列表那条路走 `/session`（`useAccountProjects.enter` → `enterAccountProject` → `client.session`），`/session` 不收二级密码，回 403 `secondary-password-required`，开始页只显示一条错，没有输二级密码的框。创建者改过密码之后的老成员从列表点进去也一样。
+- **改法（照审查的方案 A，没取方案 B）**：新增 `src/account/entryFlow.ts` 的 `enterOrAskPassword`：进项目遇到 `secondary-password-required` 不当失败，回 `'secondary-required'`，其余错照常抛。`useAccountProjects` 新增 `open`，列表那条路改走它：回 `'secondary-required'` 时把这个项目的链接填进「凭链接加入」那一栏。桌面与在线开始页、手机开始页据此弹出二级密码框，只说「该项目设置了项目二级密码，请输入二级密码。」，输了走带密码的 `/join`（按钮变「验证二级密码并加入」）。另外，申请人页面一读到「已通过」就重取项目列表，这个项目当场出现在「我加入的」里，不用刷新。
+- **测试**：JR-8 加了页面那条路：用页面那一份 `client.ts`（在线页面的 fetch、桌面外壳账号桥两种传输各走一遍，外壳那一种失败时只带回 `status` 与 `code`）打真的公开路由——通过那一刻 `listProjects` 的「我加入的」里就有它；`enterOrAskPassword(() => client.session(…))` 回 `'secondary-required'`；输错照样 403 `bad-secondary-password`；输对走 `/join` 进来；之后再从列表点进去直接 `'entered'`。端到端见下面「重跑的闸门」：在线、手机两处换一个干净的开始页，从「我加入的」点进去。
+
+### 必改 2：重开文件那条带「发送申请」的提示，发成以后还挂着、能一直点
+
+- **改法**：`recoveryAssociation.ts` 的 `notMemberToast` 记下那条提示的号（`pushToast` 本来就回号），发成以后用 `dismissToast` 关掉它，并记一个「已发成」：就算界面还拿着那个按钮，再点也不再发、不再起提示，不白耗申请次数。没发成（网络断、次数用完）时那条留着，可以再点。`syncManager.ts` 只在调 `handleCloudAssociationReopen` 的那一处多传 `dismissToast`（主会话授权的那一处：一行注释、一行代码）。
+- **测试**：RJR-1 核发成以后第一条被关掉、已经不在，再点两次不再发、不再起提示；调用方没给 `dismissToast`（老的调用方）时，发成以后照样不再发。RJR-2 核没发成时那条留着、发成了才关、之后不再发。
+
+### 必改 3：项目改回「知道链接就能进」时，申请那一块还在说话、还在问
+
+- **问题**：`joinRequestNotice` 对 `entry: 'link'` 仍回「你不在这个项目的成员名单中」或「已发送，等创建者通过」，而页面这时正自动去加入、可能正弹着二级密码框；轮询只看是不是 `pending`，改回之后还每 10 秒问一次。JRC-6 有一条断言把这个行为当成了对的。
+- **改法**：`joinRequestNotice` 在 `entry: 'link'`、还不是成员时回 null，这一块整个不显示（与 `reopenNotice` 一致）；轮询条件加 `entry === 'list'`，依赖里加 `entry`。改正 JRC-6 那条断言，并核 none／pending／rejected 三种状态遇上 link 都回 null、member 遇上 link 仍说「创建者已通过你的申请」。
+
+### 必改 4：JRC-3 测的是测试自己写的一套请求号逻辑
+
+- **问题**：桌面成员浮层、手机成员面板各自手写一份「按操作键存请求号」的 Map，JRC-3 只在测试里照样写一遍调用顺序，页面那两份改坏了它也不红。
+- **改法**：抽成 `src/account/requestIds.ts` 的 `createRequestIds`：按操作键取号；没收到回包（`status` 为 0，网络断、超时）留着，再点就是同号重试；其余一律丢掉，下次点算新的一次（成功、服务端明确回的错、请求没发出去或回包对不上协议）。四处共用这一份：桌面 `AccountMembersPanel.tsx`、手机 `src/mobile/sheets.tsx` 的「通过」「拒绝」，开始页的「发送申请」（`useAccountProjects.ts`），重开文件那条提示的「发送申请」（`recoveryAssociation.ts`）。
+  - 顺带统一了规矩：原来桌面是「`AccountFailure` 且状态不是 0 才丢号」，重开文件那条是「状态不是 0 就丢号」，两套；现在只有一套，就是主会话说的「成功或非网络错时清除、网络错保留」。
+- **测试**：JRC-3 直接测这一份，用真的 `client.memberAdmin` 走一遍：网络断留号、再点同号重发且请求体一字不差、成功换号、409 换号、别的错（`TypeError`、回包对不上协议的 503）换号、不同的键各管各的；再读桌面、手机两份源码，核 `decide` 走的是它（`useRef(createRequestIds())`、按「操作:申请号」取号、不自己发号存号删号）、气泡用同一句。RJR-2 测重开文件那条（同一份）。
+- **「删掉就变红」**（脚本 `scratchpad/mutate-argon.mjs`，结果 `out/join-requests/argon-mutations.json`；每种改法改一次、跑相关测试、`git checkout` 还原、核 `git status` 干净）：
+
+  | 改法 | 跑的测试 | 结果 | 变红的用例与第一句 | 还原后工作区 |
+  |---|---|---|---|---|
+  | M4-0 删掉 `src/account/requestIds.ts` | JRC、RJR 两个文件 | 退出码 1，两个文件都在加载时失败（`ERR_MODULE_NOT_FOUND`），一条都跑不起来 | JRC-3 在内全红 | 干净 |
+  | M4-1 台账不留号（每次都起新号） | 同上 | 退出码 1，11 条里 2 条失败 | JRC-3「再点一次:请求体(连同请求号)一字不差」；RJR-2 | 干净 |
+  | M4-2 成功之后不丢号 | 同上 | 退出码 1，1 条失败 | JRC-3「收到结论:丢掉」 | 干净 |
+  | M4-3 网络错也丢号 | 同上 | 退出码 1，2 条失败 | JRC-3「没收到回包:请求号留着」；RJR-2 | 干净 |
+  | M4-4 明确的错也留号 | 同上 | 退出码 1，2 条失败 | JRC-3（409 之后该换号）；RJR-2 | 干净 |
+  | M4-5 桌面成员浮层的键每次都变（等于不重用） | 同上 | 退出码 1，1 条失败 | JRC-3「./AccountMembersPanel.tsx:按「操作:申请号」取号」 | 干净 |
+  | M4-6 手机成员面板「通过」的气泡另写一句 | 同上 | 退出码 1，1 条失败 | JRC-3「../mobile/sheets.tsx:通过、拒绝之后的气泡用同一句」 | 干净 |
+  | M1 列表点进去遇到要二级密码时照旧报错（`enterOrAskPassword` 不接） | JR | 退出码 1，15 条里 1 条失败 | JR-8（抛出「这个项目要输入项目二级密码才能进。…」） | 干净 |
+  | M2a 重开文件那条发成后不关 | JRC、RJR | 退出码 1，2 条失败 | RJR-1「发成了:带「发送申请」的那条关掉」；RJR-2 | 干净 |
+  | M2b 重开文件那条发成后还能再发 | 同上 | 退出码 1，2 条失败 | RJR-1、RJR-2 | 干净 |
+  | M3 改回知道链接就能进时申请那一块照旧显示 | 同上 | 退出码 1，1 条失败 | JRC-6「none + link」 | 干净 |
+  | 全部还原之后 | JRC、RJR、JR | 退出码 0，26/26 通过 | — | 干净 |
+
+### 标点与气泡
+
+- 被挡住那一块的几句（「你不在这个项目的成员名单中」「已发送，等创建者通过」「创建者没有通过你的申请」「创建者已通过你的申请」）照语义原文不带句号；错误条上的 `not-listed`（如成员浮层里自己被移出）照错误提示的写法带句号，JRC-5 核两句只差这一个句号。
+- 「通过」「拒绝」之后的气泡桌面、手机同一句：「已通过 X 的申请」「已拒绝 X 的申请」（`JOIN_REQUEST_TEXT.approvedToast`、`rejectedToast`）。原来桌面带句号、手机不带。
+
+### 照主会话的决定不做的
+
+- `recoveryAssociation.ts` 把重开时所有的 403 都说成「这个账号不是这个云端项目的成员」（「七」第 7 条、「十三」第 4 条）：记待办，这次不改。
+
+### 重跑的闸门（c6b8ea22 上：d6e83a82 的代码与测试、c6b8ea22 的探针）
+
+门槛照旧，全在本 worktree 上跑；`npm test` 与探针前照任务书设了那两个环境变量（本机值，没写进任何文件）。
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 类型检查 | `npx tsc -b --force` | 退出码 0，零错误（`out/join-requests/tsc-argon.txt` 是空的） |
+| 这一块的三个测试文件 | `node --test src/account/joinRequest.test.mjs src/account/reopenJoinRequest.test.mjs server/test/account-join-requests.test.mjs` | 退出码 0，`tests 26 / pass 26 / fail 0`（JRC 7、RJR 4、JR 15） |
+| 全量测试 | `npm test` | 退出码 0，`tests 7598 / pass 7583 / fail 0 / cancelled 0 / skipped 15`，末行「✓ npm test 最终结果：零失败」；日志 8541 行、有 `ℹ tests 7598` 汇总行（`out/join-requests/npm-test-argon.txt`）。用例总数与交叉审查之前相同：这次没加新用例，是在 JR-8、JRC-3、JRC-5、JRC-6、RJR-1、RJR-2 里加了断言。这一遍没有失败、没有取消，不用单跑哪个文件 |
+| 构建 | `npm run build`（`tsc -b && vite build`） | 退出码 0（`out/join-requests/build-argon.txt`） |
+| 在线构建（探针用） | `npx vite build --mode online` | 退出码 0 |
+| 端到端（桌面、在线、手机） | `node scripts/probes/account-join-request-probe.mjs --only desktop,online,mobile --out out/join-requests-argon` | 退出码 0，**42 项核对全过、0 失败，32 张截图**（桌面 12、在线 11、手机 9）。与交叉审查之前那一遍（`final2`，34 项、28 张）比：多 10 项（在线 6、手机 4，都是必改 1 那条路：设二级密码、被通过后先问密码、当场出现在「我加入的」里、干净的开始页、从列表点进去先问密码、输对就进），少 2 项（在线、手机的「通过后申请人直接能进」，项目现在设了二级密码，换成上面那几项）；多 4 张截图 |
+| 端到端（创建者改二级密码后在线老成员） | `node scripts/probes/account-join-request-probe.mjs --only password --out out/join-requests-argon-password` | 退出码 0，3 项全过；成员浮层第 2.7 秒、提示与离线第 14.5 秒（之前两遍是 2.6～2.7 秒、14.2～14.3 秒），说的都是「这个项目要输入项目二级密码才能进。…」 |
+
+### 这一遍看过的截图（`out/join-requests-argon/`，32 张里逐张看过下表这 10 张：新加的 4 张、改成先输二级密码再进的 2 张、文字变了的 4 张；其余 22 张这一遍没逐张再看，对应的核对项全过）
+
+| 截图 | 内容 |
+|---|---|
+| `online-8a-approved-asks-password.png` | 在线申请人被通过后自动再走一次加入：链接已填好，弹出二级密码框，按钮「验证二级密码并加入」，错误条「该项目设置了项目二级密码，请输入二级密码。」，申请那一块「创建者已通过你的申请」；下面「我加入的」里当场有了这个项目（没刷新） |
+| `online-8b-list-click-asks-password.png` | 换一个不带链接的开始页，从「我加入的」点这个项目：链接填好、弹出二级密码框、按钮「验证二级密码并加入」，只有「请输入二级密码」那一句，没有申请那一块 |
+| `online-8-approved-entered.png` | 输对二级密码后进了项目（成员 2 人） |
+| `mobile-6a-approved-asks-password.png` | 手机申请人被通过后：「加入别人的项目」面板里弹出二级密码框，「该项目设置了项目二级密码，请输入二级密码。」「创建者已通过你的申请」；后面「我的项目」里当场有了这个项目、标着「我加入的」 |
+| `mobile-6b-list-click-asks-password.png` | 换一个干净的开始页，点「我的项目」里那一条：打开「加入」面板、链接填好、弹出二级密码框、按钮「验证二级密码并加入」 |
+| `mobile-6-approved-entered.png` | 输对后进了项目（2 人） |
+| `desktop-3-blocked.png`、`mobile-1-blocked.png` | 被挡住那一句不带句号：「你不在这个项目的成员名单中」+「发送申请」 |
+| `desktop-7-approved-creator.png` | 创建者点了「通过」后的气泡「已通过 joinC… 的申请」（不带句号，与手机同一句） |
+| `desktop-8-approved-password.png` | 「创建者已通过你的申请」（不带句号）+ 二级密码框 |
+
+证据：`out/join-requests-argon/evidence.json`（每项核对；`online.listOpen`、`mobile.listOpen` 是从列表点进去之后链接栏、错误条、按钮上的字）、`out/join-requests-argon-password/evidence.json`、`out/join-requests/argon-mutations.json`。`out/` 不入库。

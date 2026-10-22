@@ -2,18 +2,31 @@
  * 手机版开始页(项目列表,演示稿第一屏):新建云端项目、加入别人的项目、我的项目。
  * 账号与项目的动作和桌面在线开始页同一份(`src/account/useAccountProjects.ts`);在线页面没有本机存储,「存储」一块不显示。
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAccountProjects } from "../account/useAccountProjects";
+import { JOIN_REQUEST_TEXT, autoJoinKey, joinRequestNotice } from "../account/joinRequestText";
 import { Icon } from "./icons";
 import { Sheet } from "./ui";
 
 export function MobileStart({ onEnterEditor }: { onEnterEditor: () => void }) {
   const ap = useAccountProjects({ online: true, onEnterEditor });
-  const { account, busy, error, setError, lists, listError, perform } = ap;
+  const { account, busy, error, setError, lists, listError, perform, request } = ap;
   const [name, setName] = useState(""), [password, setPassword] = useState(""), [remember, setRemember] = useState(false);
   const [sheet, setSheet] = useState<"new" | "join" | null>(null);
   const [projectName, setProjectName] = useState("未命名");
   const [secondary, setSecondary] = useState(""), [askSecondary, setAskSecondary] = useState(false);
+  /** 凭链接加入(表单提交、申请被通过后自动再试都走这里);被账号名单挡住时不弹错误,由面板里申请那一块说明(同桌面 `AccountProjects.tsx`) */
+  const submitJoin = (secondaryValue: string | undefined) => perform(async () => {
+    const r = await ap.join(ap.link, secondaryValue);
+    if (r === "secondary-required" || r === "bad-secondary") { setAskSecondary(true); setError(r === "bad-secondary" ? "项目二级密码不正确。" : JOIN_REQUEST_TEXT.secondaryRequired); return; }
+    if (r === "expired") { setError("该项目链接已失效，请联系创建者获取最新链接。"); return; }
+    if (r === "not-listed") return;
+    setAskSecondary(false); setSecondary("");
+  });
+  // 申请被创建者通过、或项目改回「知道链接就能进」:打开「加入」面板,自动再走一次加入(设了二级密码的接着问密码)
+  const autoJoin = autoJoinKey(request);
+  useEffect(() => { if (autoJoin) { setSheet("join"); void submitJoin(undefined); } }, [autoJoin]); // eslint-disable-line react-hooks/exhaustive-deps
+  const notice = request && account ? joinRequestNotice(request) : null;
   const rows = lists ? [...lists.owned.map((p) => ({ ...p, mine: true })), ...lists.joined.map((p) => ({ ...p, mine: false }))] : [];
 
   return (
@@ -48,7 +61,10 @@ export function MobileStart({ onEnterEditor }: { onEnterEditor: () => void }) {
             {listError && <div className="hint">{listError} <button type="button" style={{ color: "var(--accent)" }} onClick={() => void ap.refreshLists()}>重试</button></div>}
             {lists && rows.length === 0 && <div className="hint">还没有云端项目。</div>}
             {rows.map((p) => (
-              <button key={p.projectId} type="button" className="proj" data-pcm="proj" data-project={p.projectId} disabled={busy} onClick={() => void perform(() => ap.enter(p.projectId, p.name))}>
+              <button key={p.projectId} type="button" className="proj" data-pcm="proj" data-project={p.projectId} disabled={busy} onClick={() => void perform(async () => {
+                // 设了二级密码而还没输过当前这一版(刚被通过的申请人等):不报错,打开「加入」面板、链接填好、弹出二级密码框
+                if (await ap.open(p.projectId, p.name) === "secondary-required") { setSheet("join"); setAskSecondary(true); setSecondary(""); setError(JOIN_REQUEST_TEXT.secondaryRequired); }
+              })}>
                 <div className="th" />
                 <div className="meta"><div className="name">{p.name}</div><div className="sub">{p.mine ? "我创建的" : "我加入的"}</div>
                   <div className="tags"><span className="chip">云端</span></div></div>
@@ -70,16 +86,18 @@ export function MobileStart({ onEnterEditor }: { onEnterEditor: () => void }) {
       )}
       {sheet === "join" && (
         <Sheet id="join" title="加入别人的项目" onClose={() => setSheet(null)}>
-          <form onSubmit={(e) => { e.preventDefault(); void perform(async () => {
-            const r = await ap.join(ap.link, askSecondary ? secondary : (secondary || undefined));
-            if (r === "secondary-required" || r === "bad-secondary") { setAskSecondary(true); setError(r === "bad-secondary" ? "项目二级密码不正确。" : "该项目设置了项目二级密码，请输入二级密码。"); return; }
-            if (r === "expired") { setError("该项目链接已失效，请联系创建者获取最新链接。"); return; }
-            setAskSecondary(false); setSecondary("");
-          }); }}>
-            <div className="field"><label>项目链接</label><input className="text-in" data-pcm="join-link" required placeholder="粘贴云端项目链接" value={ap.link} onChange={(e) => { ap.setLink(e.target.value); setAskSecondary(false); }} /></div>
-            {askSecondary && <div className="field"><label>项目二级密码</label><input className="text-in" type="password" required value={secondary} onChange={(e) => setSecondary(e.target.value)} /></div>}
+          <form onSubmit={(e) => { e.preventDefault(); void submitJoin(askSecondary ? secondary : (secondary || undefined)); }}>
+            <div className="field"><label>项目链接</label><input className="text-in" data-pcm="join-link" required placeholder="粘贴云端项目链接" value={ap.link} onChange={(e) => { ap.setLink(e.target.value); setAskSecondary(false); ap.clearRequest(); }} /></div>
+            {askSecondary && <div className="field"><label>项目二级密码</label><input className="text-in" data-pcm="join-secondary" type="password" required value={secondary} onChange={(e) => setSecondary(e.target.value)} /></div>}
             <div className="hint">云端项目需要先登录网站账号。</div>
             {error && <div className="err">{error}</div>}
+            {/* 被账号名单挡住(2026-10-22 用户定):「你不在这个项目的成员名单中」+「发送申请」;发出后「已发送，等创建者通过」;被拒「创建者没有通过你的申请」 */}
+            {notice && request && <div data-pcm="join-request" data-state={request.state} role="status">
+              <div className={request.state === "pending" || request.state === "member" ? "hint" : "err"} data-pcm="join-request-text">{notice.text}</div>
+              {notice.hint && <div className="hint" data-pcm="join-request-hint">{notice.hint}</div>}
+              {notice.canSend && <button type="button" className="btn" style={{ width: "100%", marginBottom: 10 }} data-pcm="join-request-send" disabled={busy}
+                onClick={() => void perform(ap.sendRequest)}>{JOIN_REQUEST_TEXT.send}</button>}
+            </div>}
             <button type="submit" className="btn primary" style={{ width: "100%" }} data-pcm="join-submit" disabled={busy}>{askSecondary ? "验证二级密码并加入" : "加入"}</button>
           </form>
         </Sheet>

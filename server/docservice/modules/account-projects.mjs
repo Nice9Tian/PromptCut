@@ -117,10 +117,17 @@ export function mountAccountProjects({ authority, services = [], issueSession, r
             result = await authority.createProject(actor, body); status = 201;
           }
           else if (url.pathname === `${PUBLIC}/join`) {
-            if (typeof issueSession !== 'function') bad(503, 'session-unavailable');
-            const membership = await authority.joinProject(actor, body); result = { membership, ...await session(actor, body, context?.readiness) };
+            // 申请加入(发申请、查自己那一条)也走这条路由,不另开:桌面外壳的账号桥只放行 create / join / session / admin / members
+            // 五条(`desktop/src-tauri/src/account_vault.rs`),新路由要换外壳。带 `joinRequest` 的请求不进项目、不发票据
+            if (body.joinRequest !== undefined) result = await authority.joinRequest(actor, body);
+            else {
+              if (typeof issueSession !== 'function') bad(503, 'session-unavailable');
+              const membership = await authority.joinProject(actor, body); result = { membership, ...await session(actor, body, context?.readiness) };
+            }
           }
-          else if (url.pathname === `${PUBLIC}/admin`) result = await authority.adminProject(actor, body);
+          // 创建者「通过」「拒绝」申请也走 `/admin`(同上,不另开路由);只核点名的那一条申请,不核访问版本号(`authority.decideJoinRequest`)
+          else if (url.pathname === `${PUBLIC}/admin`) result = ['approve-join', 'reject-join'].includes(body.op)
+            ? await authority.decideJoinRequest(actor, body) : await authority.adminProject(actor, body);
           else if (url.pathname === `${PUBLIC}/members`) {
             if (typeof membersSnapshot !== 'function') bad(503, 'members-unavailable');
             result = await membersSnapshot(actor, body);

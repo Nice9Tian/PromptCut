@@ -4,7 +4,7 @@
  * 凭口令的共享项目取同步状态里的成员行(`MembersPanel` 的同一套过滤)。
  */
 import { useCallback, useEffect, useState } from "react";
-import type { AccountMembersSnapshot } from "../account/client";
+import type { AccountJoinRequestRow, AccountMembersSnapshot } from "../account/client";
 import { MEMBERS_POLL_CLOSED_MS, MEMBERS_POLL_OPEN_MS } from "../account/AccountMembersPanel";
 import { accountProjectMembers, useSync } from "../editor/sync/syncManager";
 import { accountMemberCounts, accountMemberState, cloudAgentConns, cloudAgentLabel, isCloudAgentOnly, isCloudAgentRunning, splitMembers, visibleMembers } from "../editor/sync/hostedServices";
@@ -26,6 +26,10 @@ export interface MembersInfo {
   people: number;
   agents: number;
   lines: MemberLine[];
+  /** 挂着的申请加入(只有创建者看得到;别人和凭口令的共享项目都是空的)。成员按钮上的数字角标就是它的条数 */
+  requests: AccountJoinRequestRow[];
+  /** 马上重取一次(创建者通过、拒绝之后) */
+  refresh: () => void;
 }
 
 export function useMembers(open: boolean): MembersInfo {
@@ -46,9 +50,9 @@ export function useMembers(open: boolean): MembersInfo {
     return () => window.clearInterval(id);
   }, [account, open, refresh]);
 
-  if (!shared) return { unavailable: true, people: 0, agents: 0, lines: [] };
+  if (!shared) return { unavailable: true, people: 0, agents: 0, lines: [], requests: [], refresh };
   if (account) {
-    if (!snap) return { unavailable: true, people: 0, agents: 0, lines: [] };
+    if (!snap) return { unavailable: true, people: 0, agents: 0, lines: [], requests: [], refresh };
     // 口径同桌面版 `AccountMembersPanel`(`accountMemberState`;语义 `product/agent.md`「成员列表怎么数」)
     const lines: MemberLine[] = [];
     for (const m of snap.members) {
@@ -60,7 +64,7 @@ export function useMembers(open: boolean): MembersInfo {
       if (s.cloudRunning) lines.push({ key: `${m.accountId}:cloud`, name: cloudAgentLabel(name), sub: "云端", me: false, creator: false, online: true, agent: true });
     }
     const counts = accountMemberCounts(snap);
-    return { unavailable: false, people: counts.people, agents: counts.agents, lines };
+    return { unavailable: false, people: counts.people, agents: counts.agents, lines, requests: snap.self.creator ? snap.requests ?? [] : [], refresh };
   }
   const people = visibleMembers(splitMembers(rows).people, running);
   const lines: MemberLine[] = [];
@@ -74,5 +78,5 @@ export function useMembers(open: boolean): MembersInfo {
     local.forEach((c, i) => { agents++; lines.push({ key: `${r.username}@${r.deviceId}:a${i}`, name: `${r.displayName || r.username} · Agent${c.conversation !== undefined ? ` · 第 ${c.conversation} 个对话` : ""}`, sub: "本机", me: false, creator: false, online: true, agent: true }); });
     cloud.forEach((_c, i) => { agents++; lines.push({ key: `${r.username}@${r.deviceId}:c${i}`, name: cloudAgentLabel(r.displayName || r.username), sub: "云端", me: false, creator: false, online: true, agent: true }); });
   }
-  return { unavailable: false, people: Math.max(1, lines.filter((l) => !l.agent && l.online).length), agents, lines };
+  return { unavailable: false, people: Math.max(1, lines.filter((l) => !l.agent && l.online).length), agents, lines, requests: [], refresh };
 }
