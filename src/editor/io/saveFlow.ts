@@ -6,8 +6,11 @@
  *   - 用户在「另存为」里点取消就整个不算保存:草稿不写、脏标记不清。
  *
  * 依赖都从参数进来(`SaveDeps`),缺省接真东西的那一份在 TopBar 里拼。
+ *
+ * 挑好落点之后上锁(`../saveLock.ts`:前台编辑暂停),到保存结束(成功、超时、失败)解锁、恢复编辑。
  */
 import type { SaveOutcome } from "./proc";
+import { beginSaveLock, isSaveLocked, type SaveKind, type SaveLock } from "../saveLock";
 
 export interface PackResultLike {
   blob: Blob;
@@ -25,8 +28,8 @@ export interface SaveDeps {
   saveDraft(): Promise<void>;
   /** 清脏标记、记下文件名 */
   markSaved(fileName: string): void;
-  /** 给用户的一句话(成功的附带说明、失败的原因) */
-  notify(message: string): void;
+  /** 给用户的一句话:`error` 是这次没保存成的原因,`info` 是保存成了但要告诉用户的事 */
+  notify(message: string, tone?: "error" | "info"): void;
 }
 
 export interface PackDeps extends Omit<SaveDeps, "writeProc" | "serialize" | "saveDraft" | "markSaved"> {
@@ -54,14 +57,34 @@ async function settledOrExplain(deps: Pick<SaveDeps, "settle">): Promise<void> {
   }
 }
 
-export type SaveResult = "saved" | "downloaded" | "cancelled" | "failed";
+/** `busy`:上一次保存还没结束,这一次不另起 */
+export type SaveResult = "saved" | "downloaded" | "cancelled" | "failed" | "busy";
+
+/** 保存进行中又点了一次:不另起,也不报错(「正在保存」那一层还在) */
+class SaveBusy extends Error {
+  constructor() { super("正在保存"); this.name = "SaveBusy"; }
+}
+
+/** 锁放在一个小盒子里:上锁发生在交给 writeProc 的回调里,外面的 finally 要拿得到 */
+interface LockBox { lock: SaveLock | null }
+
+function lockFor(box: LockBox, kind: SaveKind): SaveLock {
+  const lock = beginSaveLock(kind);
+  if (!lock) throw new SaveBusy();
+  box.lock = lock;
+  return lock;
+}
 
 /** 保存 `.proc` */
 export async function saveProcFile(fileName: string, deps: SaveDeps): Promise<SaveResult> {
+  if (isSaveLocked()) return "busy";
+  const box: LockBox = { lock: null };
   try {
-    // 挑好落点之后、写之前:等文档服务确认完所有本地修改(语义「页面只在拿到确认之后才写」),再序列化
+    // 挑好落点之后上锁;写之前等文档服务确认完所有本地修改(语义「页面只在拿到确认之后才写」),再序列化
     const outcome = await deps.writeProc(async () => {
+      const lock = lockFor(box, "proc");
       await settledOrExplain(deps);
+      lock.writing();
       return deps.serialize();
     }, fileName);
     if (outcome.kind === "cancelled") return "cancelled";
@@ -70,13 +93,16 @@ export async function saveProcFile(fileName: string, deps: SaveDeps): Promise<Sa
     deps.markSaved(fileName);
     if (outcome.kind === "downloaded") {
       // 这个 WebView 没有文件选择 API,至少告诉用户文件去哪了
-      deps.notify(`当前环境不支持选择目录，已保存到浏览器的下载位置：${outcome.where}`);
+      deps.notify(`当前环境不支持选择目录，已保存到浏览器的下载位置：${outcome.where}`, "info");
       return "downloaded";
     }
     return "saved";
   } catch (e) {
+    if (e instanceof SaveBusy) return "busy";
     deps.notify(String((e as Error).message));
     return "failed";
+  } finally {
+    box.lock?.end();
   }
 }
 
@@ -86,6 +112,7 @@ export async function saveProcFile(fileName: string, deps: SaveDeps): Promise<Sa
  * 和保存项目同一条规矩 —— 挑落点必须是第一个 await,装包(从本地内容库按哈希取素材)只能排在挑好落点之后。
  */
 export async function savePackedFile(fileName: string, deps: PackDeps): Promise<SaveResult> {
+  if (isSaveLocked()) return "busy";
   let target: FileSystemFileHandle | null = null;
   try {
     target = await deps.pick(fileName);
@@ -94,24 +121,33 @@ export async function savePackedFile(fileName: string, deps: PackDeps): Promise<
     deps.notify(String((e as Error).message));
     return "failed";
   }
+  const box: LockBox = { lock: null };
   try {
+    const lock = lockFor(box, "procp");
     await settledOrExplain(deps);
+    lock.writing();
     // 没有哈希的老素材先补入库;补完仍进不了包的(文件真的不在了)在最后列给用户,不许悄悄漏掉
     const { blob, missing } = await deps.pack();
     let result: SaveResult = "saved";
+    // 保存成了但要告诉用户的几件事合成一张卡片说(以前是接连两个 alert)
+    const infos: string[] = [];
     if (target) {
       const writable = await target.createWritable();
       await writable.write(blob);
       await writable.close();
     } else {
       deps.download(blob, fileName);
-      deps.notify(`当前环境不支持选择目录，已保存到浏览器的下载位置：${fileName}`);
+      infos.push(`当前环境不支持选择目录，已保存到浏览器的下载位置：${fileName}`);
       result = "downloaded";
     }
-    if (missing.length) deps.notify(deps.missingMessage(missing));
+    if (missing.length) infos.push(deps.missingMessage(missing));
+    if (infos.length) deps.notify(infos.join("\n\n"), "info");
     return result;
   } catch (e) {
+    if (e instanceof SaveBusy) return "busy";
     deps.notify(String((e as Error).message));
     return "failed";
+  } finally {
+    box.lock?.end();
   }
 }

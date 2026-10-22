@@ -12,6 +12,8 @@ import { exportGateNow } from "./media/assetTiers";
 import { awaitingUploaderMessage } from "../render/mediaTier";
 import { ensureActiveDraftId, saveDraft, setActiveDraftId } from "./io/drafts";
 import { saveProcFile, savePackedFile } from "./io/saveFlow";
+import { showSaveNotice } from "./saveLock";
+import { SaveStatusLayer } from "./SaveStatusLayer";
 import { Logo } from "../ui/Logo";
 import {
   IconExport,
@@ -335,6 +337,11 @@ export function TopBar() {
    * await;先去存草稿再弹窗,手势就过期了,浏览器会直接抛 SecurityError。
    * 用户点取消就整个不算保存:草稿不写、脏标记不清,和「我没保存」一致。
    */
+  /** 保存的结果说给用户(顶部那张卡片,`SaveStatusLayer`):没保存成的是 error,保存成了但有话要说的是 info */
+  const notifySave = (message: string, tone: "error" | "info" = "error") => {
+    showSaveNotice({ tone, title: tone === "error" ? "这次没有保存" : "已保存", message });
+  };
+
   const saveProject = ONLINE_BUILD ? async () => {} : async () => {
     await saveProcFile(`${name}${PROC_EXT}`, {
       writeProc: (produce, fileName) => writeProcToDisk(produce, fileName),
@@ -342,7 +349,7 @@ export function TopBar() {
       serialize: () => serializeProc(),
       saveDraft: async () => { await saveDraft(ensureActiveDraftId()); },
       markSaved: (fileName) => actions.markSaved(fileName),
-      notify: (message) => alert(message),
+      notify: notifySave,
     });
   };
 
@@ -367,7 +374,7 @@ export function TopBar() {
         URL.revokeObjectURL(a.href);
       },
       missingMessage: (missing) => packMissingMessage(missing as Parameters<typeof packMissingMessage>[0]),
-      notify: (message) => alert(message),
+      notify: notifySave,
     });
   };
 
@@ -783,6 +790,7 @@ export function TopBar() {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
       />
+      <SaveStatusLayer />
       <ExportDialog
         state={exportState}
         onCancel={() => {
