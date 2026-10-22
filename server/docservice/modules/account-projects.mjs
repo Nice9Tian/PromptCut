@@ -103,6 +103,13 @@ export function mountAccountProjects({ authority, services = [], issueSession, r
         // 回的是签名过的证明，桌面版的页面跨源来问，所以连同错误一起放开只读的跨源读取（不带凭证）。
         cors = true;
         result = authority.legacyGoneStatus({ authorityId: url.searchParams.get('authorityId'), projectId: url.searchParams.get('projectId') });
+      } else if (req.method === 'POST' && url.pathname === `${PUBLIC}/guest`) {
+        // 领一张游客令牌（`docs/semantics/product/document-service.md`「游客」）。这一条**不要** Bearer：
+        // 他还没有身份，要的就是这一张。带着旧令牌来就续期、编号不变；不带或者过期就随机一个新身份。
+        // 编号只由服务端生成，请求体里写什么都不收（`authority.issueGuest`）。
+        if (typeof authority.issueGuest !== 'function') bad(503, 'guest-unavailable');
+        const body = await readBody(req);
+        result = authority.issueGuest(typeof body.token === 'string' ? body.token : null);
       } else {
         const actor = bearer(req);
         if (req.method === 'POST') {

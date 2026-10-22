@@ -4,7 +4,7 @@ import { validateAccountEvent, validateEventBatch, requireRequestId } from './pr
 import { accountError } from './client.mjs';
 import { canonicalJson, digestOf, appendAccessEvent } from './ledger.mjs';
 import { rollbackEventOf } from './logout-rollback.mjs';
-import { guestExpired, guestPrincipal, guestProjectLimitReached, isGuestId, looksLikeGuestToken, readGuestToken } from './guest.mjs';
+import { guestExpired, guestPrincipal, guestProjectLimitReached, isGuestId, looksLikeGuestToken, readGuestToken, signGuestToken } from './guest.mjs';
 
 /**
  * 主体编号：账号是 `acc_` + 24 位十六进制，游客是 `gst_` + 24 位（`guest.mjs`）。两种在成员名单、禁入表、
@@ -618,6 +618,22 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     return committed.result;
   }
   /**
+   * 发一张游客令牌（公开路由 `/hosted/shared/account/guest`，不要登录 —— 他还没有身份）。
+   *
+   * 带着旧令牌来就续期，编号不变（同一台浏览器回来还是同一个人）；不带、过期了或者改过，就随机一个新身份。
+   * 编号只由这里生成，不收请求体里写的：收了的话谁都能自称是别人（`guest.mjs` 开头说明）。
+   *
+   * @param {string | null} previous 页面手里那一张，没有就给 null
+   */
+  function issueGuest(previous) {
+    if (!guestKey) reject(503, 'guest-unavailable');
+    const at = now();
+    const old = typeof previous === 'string' ? readGuestToken(previous, { key: guestKey, at }) : null;
+    const issued = signGuestToken({ key: guestKey, at, ...(old ? { guestId: old.guestId } : {}) });
+    return { token: issued.token, guestId: issued.guestId, expiresAt: issued.expiresAt, renewed: !!old };
+  }
+
+  /**
    * 游客建的项目三天就清（2026-10-23 用户定，天数在 `guest.mjs` 的 `GUEST_LIMITS.ttlMs`）。
    *
    * 清的办法和创建者自己点「删项目」完全一样（上面 `adminProject` 的 `delete` 分支）：标成已删除、落墓碑、
@@ -909,7 +925,7 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     return agentReadClosureComplete(state, eventId, state.accessAcks[`ack:${eventId}:agent`]);
   }
   return { authorityId: ledger.authorityId, synchronize, applyRevocation, applyRevocationNotification, authorizePrincipal, checkAccess,
-    sweepExpiredGuestProjects,
+    issueGuest, sweepExpiredGuestProjects,
     createProject, joinProject, joinRequest, decideJoinRequest, entryState, adminProject, listProjects, status, statusForPrincipal, legacyGoneStatus, eventsSince, ackAccessEvent, hasAgentReadClosure, revocationStatus, completeLogoutBarrier, recordLogoutTimeout, flushAccountAcknowledgements,
     subscribeProjectChanges(callback) {
       if (typeof callback !== 'function') reject(400, 'invalid-subscription');

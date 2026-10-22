@@ -343,9 +343,10 @@ export async function startHostedCombo({
   if (account) {
     try {
       const [{ createAccountClient }, { openAccountLedger }, { createAccountHostedRuntime },
-        { mountAccountProjects }] = await Promise.all([
+        { mountAccountProjects }, { openGuestKey }] = await Promise.all([
         import('../account/client.mjs'), import('../account/ledger.mjs'),
         import('../docservice/account-hosted.mjs'), import('../docservice/modules/account-projects.mjs'),
+        import('../account/guest-key.mjs'),
       ]);
       const ledger = openAccountLedger({ file: account.ledgerFile || path.join(paths.docservice, 'account-v2.sqlite'), authorityId: account.authorityId });
       const client = createAccountClient({ origin: account.origin, tls: account.clientTls,
@@ -353,6 +354,9 @@ export async function startHostedCombo({
       accountRuntime = createAccountHostedRuntime({ ledger, accountClient: client, dataDir: paths.docservice,
         authorityUrl: account.authorityUrl, signingKey: account.signingKey, keyId: account.keyId, now,
         assetReadyProbe, assetInstanceId: assetStatus?.instanceId,
+        // 游客令牌的签名密钥（`server/account/guest-key.mjs`）：第一次跑生成一把存在 secrets/ 下，
+        // 之后每次读同一把。拿不到就是 null，游客这条路关掉，账号那条路不受影响
+        guestKey: openGuestKey(paths.docservice, event => say('account.diagnostic', event)),
         ...(account.agent ? { runHooks: { fenceInState(state, fence) {
           if (!docAgentAssembly) throw new HostedConfigError('run-authority-unavailable');
           return docAgentAssembly.runHooks.fenceInState(state, fence);

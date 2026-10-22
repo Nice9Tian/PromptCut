@@ -167,3 +167,25 @@ test('三天清理：这条规矩之前建的老项目没有生日，一律不�
   assert.deepEqual(authority.sweepExpiredGuestProjects(Date.now() + GUEST_LIMITS.ttlMs * 10), [], '生日不详就不猜，不误删');
   assert.equal(ledger.read().projects[mine.projectId].status, 'active');
 });
+
+test('领令牌：不带旧的就给新身份，带着没过期的旧令牌就续期、编号不变', async t => {
+  const { authority } = await open(t);
+  const first = authority.issueGuest(null);
+  assert.match(first.guestId, /^gst_[0-9a-f]{24}$/);
+  assert.equal(first.renewed, false);
+  const again = authority.issueGuest(null);
+  assert.notEqual(again.guestId, first.guestId, '不带旧令牌就是另一个人');
+
+  const renewed = authority.issueGuest(first.token);
+  assert.equal(renewed.guestId, first.guestId, '带着旧令牌回来还是同一个人');
+  assert.equal(renewed.renewed, true);
+  // 过期的、改过的、别人密钥签的,都只当没带:给新身份,不报错
+  const expired = signGuestToken({ key: guestKey, at: Date.now() - GUEST_LIMITS.tokenTtlMs - 60_000 });
+  assert.notEqual(authority.issueGuest(expired.token).guestId, expired.guestId);
+  assert.notEqual(authority.issueGuest(signGuestToken({ key: randomBytes(32), at: Date.now() }).token).guestId, first.guestId);
+  // 请求体里写什么编号都不收:只有令牌说了算
+  assert.notEqual(authority.issueGuest('gst_' + 'f'.repeat(24)).guestId, 'gst_' + 'f'.repeat(24));
+
+  const noKey = await open(t, { key: null });
+  assert.throws(() => noKey.authority.issueGuest(null), e => e.code === 'guest-unavailable' && e.status === 503);
+});
