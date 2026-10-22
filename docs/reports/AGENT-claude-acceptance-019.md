@@ -8,16 +8,24 @@
 
 ## 进度
 
-- [x] 第 1 步：只读盘查，三分类表（本节下方）
-- [ ] 第 2 步：改写清单
-- [ ] 第 3 步：新增条目
-- [ ] 第 4 步：`--check-coverage`
-- [ ] 第 5 步：`--list`、`--dry-run`、tsc、npm test
+- [x] 第 1 步：只读盘查，三分类表（「第 1 步」一节）
+- [x] 第 2 步：改写清单（「改了什么」一节）
+- [x] 第 3 步：新增条目（同上）
+- [x] 第 4 步：`--check-coverage` 过（「验证」一节）
+- [x] 第 5 步：`--list`、`--dry-run`、tsc、npm test（「验证」一节）
+
+## 结论（给主会话）
+
+- 清单从 **236 项（本地 210、真实网络 26）变成 283 项（本地 257、真实网络 26）**：新增 47 项（类别 `V19`），恢复 16 项被误记「不适用」的在线探针（不适用从 20 项降到 7 项），新标不适用 3 项（另有 2 项「在线浏览器合入后不适用」）。缺省本地一级（不带补充项）将跑 201 项。
+- 加了一张 **0.7.19 要求表（49 条）**，`--check-coverage` 新增第 ⑤ 类核它，`--v19-map` 打印每条要求由哪些项支撑。守门通过（退出码 0）。
+- **在线浏览器那一块没进 main**（不是任务书说的「第二、三步已成」），它的 6 项全写成「等分支合入」，合入后自己会跑；撤档后失去意义的 2 项合入后自动记「不适用」。已对着 `claude/online-browser` 的文件树模拟过：6 项里 5 项变「会跑」，第 6 项（残留检查）只差本分支自己的脚本，两条分支都合入后就跑。
+- 没有真跑任何验收项。tsc 0 错误；runner 单测 38/38；`npm test` 见「验证」。
+- 要主会话改的探针与单测 7 处，见「要主会话改的探针与测试」。
 
 ## 盘查时先发现的三件事（影响怎么改）
 
 1. **在线浏览器那一块一行都还没进 main。** 任务书说「第二、三步已成」，但 `git log main..claude/online-browser` 有 16 个提交、`git merge-base` 是 `5f4523d0`，main 上 `src/online/lowMemory.ts` 还在、`stage-gate-probe.mjs` 还是旧的「舞台端口白名单」那一支。所以「按已合入 main 的部分改」落到实处是：撤档、三道闸门、四档气泡的**全部**条目（第二、三、四步）都写成 wait 项（`waitFor: claude/online-browser`），撤档后失去意义的老条目用「合入后不适用」，合入前它们照旧在 main 上跑（main 上它们描述的行为还在），合入后自动记不适用。
-2. **0.7.18 的 `STALE_OLD_ENTRY`（17 项「旧入口已废，不适用」）已经过时。** 它写于 2026-10-13；2026-10-17 合入的 `8b09add4`（gemini/v18-online-probes）把这些在线探针改走「会话恢复入口」，报告 `docs/reports/AGENT-v18-online-probes.md` 第 2 节里 S1-4、S1-5、S2-1～S2-5、P-online-user-cards、P-c10-ui、P-online-stage-watch、P-online-stage-handshake、P-online-nav-stress 实跑全过（退出码 0）。不改的话 0.7.19 整套会把这些项记「不适用」，等于没人验「原有在线页面探针不退步」（`online-browser-task.md` 做完的标准第 4 条）。
+2. **0.7.18 的 `STALE_OLD_ENTRY`（18 项「旧入口已废，不适用」）已经过时。** 它写于 2026-10-13；2026-10-17 合入的 `8b09add4`（gemini/v18-online-probes）把这些在线探针改走「会话恢复入口」，报告 `docs/reports/AGENT-v18-online-probes.md` 第 2 节里 S1-4、S1-5、S2-1～S2-5、P-online-user-cards、P-c10-ui、P-online-stage-watch、P-online-stage-handshake、P-online-nav-stress 实跑全过（退出码 0）。不改的话 0.7.19 整套会把这些项记「不适用」，等于没人验「原有在线页面探针不退步」（`online-browser-task.md` 做完的标准第 4 条）。
 3. **单测把「老清单的真实网络验证项」钉死为 16 项**（`server/test/four-stage-acceptance.test.mjs` FSA-07 第 156 行、FSA-26 第 364 行：`category !== 'V18'` 的 network 项必须恰好 16）。我不许改 `server/**`，所以 0.7.19 的新条目一律是本地验证级；0.7.19 要在节点上验的东西改写进已有的网络项（S1-r2、S3-r2、S3-r3、S3-r5、V18-queue-node-pressure），不新增网络项。建议主会话把这两处断言改成 `!['V18','V19'].includes(category)`。
 
 ## 第 1 步：三分类表
@@ -87,3 +95,151 @@
 | X-small-tier「预渲染小尺寸」 | 不适用（现在就是） | `product/rendering.md` 第 44 行：预渲染小尺寸随每张卡的 HTML 快照作废停产（2026-10-13）；探针断言的正是「每个 `<帧>.html` 旁有 `.small.webp`」 |
 | X-c10a-demo-local | 仍不适用，依据改写 | 入口 8b09add4 已迁，但在线浏览器分支在文件头标明第 2、2c、4 步按低内存档与已停产的预渲染小尺寸写，撤档后失效，整支要重写主干 |
 | X-online-join | 仍不适用，依据不变 | 这支就是测开始页的加入表单，开始页已没有 |
+
+另：同一张表上 V18-na-offline-conflict、V18-na-save-state 两项（0.7.18 表的 2.1-10、2.1-11 行）照旧不适用——它们是 0.7.18 的行；依据里补了「0.7.19 的验收见 V19-cm-*」。
+
+## 改了什么（第 2、3 步）
+
+提交：`c76fd2a4`（运行器）、`273845f3`（清单）、本报告的几次提交。
+
+### 运行器（`acceptance-lib.mjs`、`four-stage-acceptance.mjs`）
+
+- 类别加 `V19`；`V19` 类的项必须写 `v19`（指到要求表）。
+- 新字段 `retiredWhen: { missing: 文件 } | { file, text }` 加 `why`：标记出现时运行器把这一项记 `na` 并写明依据，`--list` 与 `--dry-run` 里也标出来；合入前照旧跑。已经 `notApplicable` 的项不许再写它。
+- 新字段 `v19`，`validateManifest` 核它指到的要求在表里。
+- `--check-coverage` 加第 ⑤ 类：要求表每条至少有一项、项里指到的要求都在表里；顺带报等分支合入的项数与合入后不适用的项数。
+- 新 `--v19-map`：每条要求由哪些项支撑、每项在哪能跑（等哪条分支、合入后是否不适用、是否补充项）。
+- 没改判定、续跑、端口平移、服务管理的任何逻辑。
+
+### 清单
+
+- 新文件 `scripts/acceptance/v19-manifest.mjs`：要求表 `V19_REQS`（49 条，8 组，每条写出处）、47 个 `V19` 项、`V19_TAGS`（给 50 个老项补 `v19`）。由 `four-stage-manifest.mjs` 接进总清单，并导出 `V19_REQS`。
+- 新文件 `scripts/acceptance/v19-lowmem-residue.mjs`：低内存档残留检查（R1 删掉的 5 个模块文件不在；R2 没有 import 它们；R3 引号里没有「低内存」；R4 没有 `'low-memory'`、`DisplayTierPicker`、`__pcBackfill`）。只读；`--ref` 可对着别的分支查。实测：对 main 四条全不过（退出码 1，23 处引号字样、13 处 import 等），对 `claude/online-browser`（`d31659d0`）四条全过（退出码 0）——判得出撤档做没做完。
+- `four-stage-manifest.mjs`、`v18-manifest.mjs`：A 表与 C 表的全部改动。`STALE_OLD_ENTRY` 只剩 X-online-join、X-c10a-demo-local；恢复的 16 项在 `OLD_ITEM_KNOWN` 里写明迁移提交与当时的实跑结果（或「迁移后没有实跑记录」）。
+
+### 新增的 47 项
+
+| 组 | 编号 | 命令要点 | 前置服务 | 通过标准 |
+|---|---|---|---|---|
+| 在线浏览器（wait） | V19-ob-tests | `scripts/test-suite.mjs` 11 个测试文件 | — | 零失败、零跳过、无失败的 todo |
+| | V19-ob-stage-gate | `stage-gate-probe --dist {dist} --base-port 5690 --out {item} --only S1…S14` | online-build | 退出码 0、`"ok":true` |
+| | V19-ob-lowest | 同上 `--only S15` | online-build | 同上 |
+| | V19-ob-instant-gate | 同上 `--only S16,S17,S20` | online-build | 同上 |
+| | V19-ob-media-gate | 同上 `--only S18,S19` | online-build | 同上 |
+| | V19-ob-residue | `scripts/acceptance/v19-lowmem-residue.mjs` | — | 退出码 0、`"ok":true` |
+| | V19-ob-device | 人工（真机） | — | — |
+| 多项目 | V19-mp-tests | 多项目 4 个 + hosted-render 一组 + 看画面接线测试 | — | 零失败、零跳过 |
+| | V19-mp-expand | `multi-project-expand-probe --url {dev.origin} --out {item}` | dev | `"ok":true`、`"diffPixels":0` |
+| | V19-mp-stream | `multi-project-stream-probe --url {dev.origin} --out {item}` | dev | 同上 |
+| | V19-mp-turn-bench（补充、记耗时） | `multi-project-turn-bench --base-port 5690 --doc-port 8760 --asset-port 8761` | — | 退出码 0（只出数字） |
+| 冲突合并 | V19-cm-tests | mergeItems、offlineMerge、pending-merge、cloudSnapshot、onlineSync、card-sync、accountMove、c10-ui-gates | — | 零失败、零跳过 |
+| | V19-cm-probe | `conflict-merge-probe --dist {dist} --out {item} --base-port 5690 --base2-port 5693 --doc-port 8760 --asset-port 8761` | online-build | `"ok":true` |
+| | V19-cm-card | `card-conflict-probe --port 5690 --doc-port 8760 --out {item}` | — | `"ok":true` |
+| | V19-save-state | 人工（三处没有探针） | — | — |
+| 断网排队 | V19-oq-tests | outbox、consent-once | — | 零失败、零跳过 |
+| | V19-oq-probe | `cloud-offline-queue-probe --port 5690` | — | `"ok": true` |
+| 老外壳 | V19-os-tests | desktopShellOld、oldShellFlow | — | 零失败、零跳过 |
+| | V19-os-probe | `old-shell-account-probe --port 5690 --out {item}` | — | 退出码 0、结果行 fails 为空 |
+| | V19-os-real-shell | 人工（安装包，待用户） | — | — |
+| 前置项 | V19-mobile-entries | `mobile-entries-probe --dist {dist} --out {item} --base-port 5690 --doc-port 8760 --asset-port 8761` | online-build | `"ok":true` |
+| | V19-stall-audio | `playback-probe --port 5690 --only 停顿声音` | — | `"fails":[]` |
+| | V19-pre-tests | cli-setup、consent-once、hosted-migrate、legacy-gone-proof、sp-route、sp-routing、account-move、accountMove（要账号环境变量） | — | 零失败、零跳过 |
+| 随版合入 | V19-cut-tests | 剪辑段 19 个测试文件 | — | 零失败、零跳过 |
+| | V19-cut-nesting-ui、V19-cut-panel、V19-number-input-undo | `… --origin {dev.origin} --out {item}` | dev | 退出码 0 |
+| | V19-cut-flatten、V19-cut-look、V19-cut-audio、V19-cut-card-sound、V19-cut-ffmpeg-media | `… --port 5690 --out {item}`（自己起编辑器） | — | 退出码 0 |
+| | V19-cut-online-e2e | `cut-online-e2e-probe --dist {dist} --base-port 5690 --out {item}` | online-build | 退出码 0 |
+| | V19-mobile-tests | src/mobile 三个测试文件 | — | 零失败、零跳过 |
+| | V19-mobile-ui、V19-mobile-business | `… --dist {dist} --out {item} --base-port 5690 --base2-port 5693 --doc-port 8760 --asset-port 8761` | online-build | `"ok":true` |
+| | V19-mobile-input-zoom、V19-mobile-agent、V19-agent-tabs-start-mobile | `… --dist {dist} --base-port 5690 --doc-port 8760 --asset-port 8761` | online-build | `"ok":true` 或退出码 0 |
+| | V19-mobile-agent-view、V19-agent-tabs-start | `… --port 5690 --out {item}` | — | 退出码 0 |
+| | V19-agent-panel-smooth（记耗时，要账号环境变量） | `agent-panel-smooth-probe --dist {dist} --site-root {visuhive}/site --out {item} --base-port 5690` | online-build | `"completed":true`、`"failed":0` |
+| | V19-mobile-account（补充，要账号环境变量） | `mobile-account-probe --dist {dist} --site-root {visuhive}/site --out {item} --base-port 5690` | online-build | `"ok":true` |
+| 发版动作 | V19-release-timings、V19-installer、V19-patch、V19-release-merge | 人工 | — | — |
+
+端口都按清单原约定（探针自己起的东西用 5690 段、串行用，文档与素材服务 8760 段），单测 FSA-05 核过不踩禁区（5190～5192、5203～5205、5210～5212、5720～5839、8770～8799）。端口写死、不随这段走的只有 V19-mobile-account（舞台源 6341、6342），所以标了补充项。
+
+## 项数
+
+| | 改前（main `c7831156`） | 改后 |
+|---|---|---|
+| `--list` 总数 | 236 | **283** |
+| 本地验证 | 210 | **257** |
+| 真实网络验证 | 26 | **26**（不变，原因见开头第 3 件） |
+| 其中 V19 类 | — | 47（补充项 2、人工 7、等分支合入 6） |
+| 不适用 | 20 | 7（另 2 项在线浏览器合入后不适用） |
+| 带 `v19` 的项 | — | 97（47 个新项 + 50 个老项） |
+| 缺省本地一级将跑（`--dry-run`） | — | 201 项（其中 3 项记不适用） |
+| 本地一级连补充项（`--dry-run --include-optional`） | — | 257 项 |
+| 真实网络一级（`--dry-run --level network`） | — | 26 项 |
+
+## 验证
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 类型检查 | `npx tsc -b --force` | 退出码 0，零错误 |
+| 全量测试 | `npm test`（设好两个账号环境变量） | 退出码 0；`ℹ tests 7585`、pass 7570、**fail 0**、cancelled 0、skipped 15、200 秒；末行「npm test 最终结果：零失败」；日志 8530 行（有汇总行，不是短日志） |
+| 运行器单测 | `node scripts/test-suite.mjs server/test/four-stage-acceptance.test.mjs server/test/four-stage-acceptance-v18.test.mjs` | 38/38 过（含 FSA-05 端口禁区、FSA-06 类别都有项、FSA-07 网络项 16、V18-06 真清单合格） |
+| `--list` | `node scripts/acceptance/four-stage-acceptance.mjs --list` | 退出码 0；`共 283 项:本地验证 257,真实网络验证 26` |
+| `--dry-run` | `--dry-run --out <scratchpad>` | 退出码 0；`将跑 201 项`（3 项标 [不适用]）；`--include-optional` 257 项；`--level network` 26 项 |
+| `--check-coverage` | 见下 | 退出码 0，守门：通过 |
+| `--v19-map` | `--v19-map` | 退出码 0，49 条每条都有项 |
+| 残留检查脚本 | `v19-lowmem-residue.mjs` / `--ref claude/online-browser` | main 退出码 1（四条不过）；分支退出码 0（四条全过） |
+| 合入前后模拟 | 用 `retiredReason` 与 wait 判据分别对 `HEAD`、`claude/online-browser` 文件树求值 | HEAD：RR-stage-gate、S2-m2 照跑，6 个 V19-ob 等合入；分支：前两项不适用，V19-ob 五项会跑，V19-ob-residue 只差本分支脚本 |
+
+`--check-coverage` 输出：
+
+```
+① scripts/probes 下 322 个文件
+都登记了或写明了排除原因
+② 0.7.18 的 38 行:每行至少有一条清单项
+③ 清单项引用的测试文件与探针脚本:都在仓库里
+标了「等分支合入」的项,缺的文件单列(11 个,预期缺):
+  等 claude/online-browser(11):
+    V19-ob-tests  src/online/stageGate.test.mjs、onlineTier.test.mjs、mediaGate.test.mjs、src/editor/costSearch.test.mjs、
+                  src/render/settleFrame.test.mjs、src/render/mediaTierSmallOnly.test.mjs
+    V19-ob-stage-gate / -lowest / -instant-gate / -media-gate / -residue  src/online/stageGate.ts
+④ 全量测试的跳过名单(G0-2):14 条;每条都写了名字、所在文件、原因
+⑤ 0.7.19 的要求 49 条:每条至少有一项
+其中等分支合入的 6 项(claude/online-browser);某分支合入后不适用的 2 项,本检出上已经不适用 0 项
+守门:通过
+```
+
+（改前 main 上同一命令退出码 1：28 个探针没登记，全是 0.7.18 发版后新加的。）
+
+没跑的：整套验收的任何一项（按任务书不跑）。
+
+## 要主会话改的探针与测试（我没改，不归我）
+
+1. **舞台端口白名单这件事合入后没有探针了。** `claude/online-browser` 把 `scripts/probes/stage-gate-probe.mjs` 整个改写成舞台闸门探针（`git diff --stat` 918 行），原来那支验 `server/stage-gate.mjs`「舞台端口来的请求缺省全拒、只放白名单」（用户卡用卡片模块里的 fetch/WebSocket 逐个调 Agent 绑定、项目写入、素材写入、`/@fs/` 等全部 403）的探针没了，清单里 RR-stage-gate 只能合入后标不适用。建议合入前把 main 上的旧版本另存成新文件名（例如 `stage-port-gate-probe.mjs`），我这边再加一项指向它。这是安全一带的回归缺口。
+2. **素材闸门有两条没有探针场景**：「压低网速先拉小尺寸、恢复后改回」「导入更大的素材不重测、直接拿上限比」（`online-browser-task.md` 做完的标准第 3 条第 4 点）。`stage-gate-probe` 的 S18、S19 只验载入原尺寸时崩与解码上限；这两条现在只有 `mediaGate.test.mjs` 的单测。建议在 `stage-gate-probe` 加场景（网速可用 CDP `Network.emulateNetworkConditions` 在应用层压，不碰宿主机网络）。
+3. **单测钉死老清单的网络项数**：`server/test/four-stage-acceptance.test.mjs` 第 156 行与第 364 行断言 `category !== 'V18'` 的网络项恰好 16。0.7.19 若要新增节点上的验收项，要先把它改成 `!['V18','V19'].includes(category)`。
+4. **`cloud-offline-queue-probe.mjs` 没有 `--out`**，截图写死在仓库的 `out/offline-queue/`。建议加 `--out`，清单再改成 `{item}`。
+5. **`mobile-account-probe.mjs` 两个舞台源写死 6341、6342**，不随 `--base-port` 走；建议随 `--base-port` 走，清单就能去掉「补充」。
+6. **`c10-cost-probe.mjs`、`c10a-demo-probe.mjs` 要重写主干或正式退役**：前者成员一半还走 0.7.18 起没有的 `join-invite-project`，后者第 2、2c、4 步按低内存档与已停产的预渲染小尺寸写。
+7. **保存与修改状态检查**里「暂停前台编辑、等本机写完、保存中断后恢复编辑且保留旧保存」三处没有任何探针或单测指得上（冲突合并那一块的报告只写了固定非本机快照），清单里先是人工项 V19-save-state。请主会话判：已实现就补测，未实现记未达成。
+
+另记两条现状（不用改探针）：`reopen-e2e.mjs --matrix` 在 main 上更早一步失败（原有），所以冲突合并改的 5 处断言没验，排除表里写明了；`hosted-render-isolation-probe` 的残余面「非账号模式下凭本项目票据按哈希读得到别的项目的块」是语义待定（多项目渲染报告第 5 条），不是探针问题。
+
+## 依赖在线浏览器合入才能跑的条目
+
+| 编号 | 现在 | 合入后 |
+|---|---|---|
+| V19-ob-tests | 等分支合入（缺 6 个测试文件） | 跑 |
+| V19-ob-stage-gate | 等分支合入（缺 `src/online/stageGate.ts`、探针里没有 `Page.crash`） | 跑 |
+| V19-ob-lowest（第四步） | 同上 | 跑 |
+| V19-ob-instant-gate（第四步） | 同上 | 跑 |
+| V19-ob-media-gate（第四步） | 同上 | 跑 |
+| V19-ob-residue | 等分支合入（缺 `src/online/stageGate.ts`） | 跑 |
+| RR-stage-gate | 照跑（旧白名单探针） | 不适用 |
+| S2-m2 | 人工（低内存档表现） | 不适用 |
+| S1-5、S2-1、S2-2、P-online-user-cards、RR-page-stream、S4-4、P-m7-browser | 跑 main 上的探针 | 跑分支改写后的同名探针（断言按撤档改过；名字与已知里写明了两种状态） |
+
+模拟结果（对 `HEAD` 与 `claude/online-browser` 两棵文件树分别求值，见「验证」）：合入后 RR-stage-gate、S2-m2 记不适用；5 个 wait 项变「会跑」；V19-ob-residue 只差本分支的脚本，两条分支都合入后就跑。
+
+## 对任务书的更正
+
+1. 任务书说在线浏览器「第二、三步已成」：在分支上是成了，但 **main 上一行都没有**（`git log main..claude/online-browser` 16 个提交）。所以第 1 项的条目全按 wait 处理，不是「按已合入 main 的部分」。
+2. 任务书说「清单里凡提低内存档的条目 10 处」：按名字与命令数，直接以低内存档为前提的是 RR-page-stream、X-c10-cost、X-lowmem-export-compare（名字是旧的，实际与低内存档无关）、S1-5、S1-r3（普通档字样）、S2-m2、S3-r2、S3-r3（普通档字样）、排除表的 lowmem-online-probe、S4-4（手机占位），另有 P-c10-browser-* 的「在线普通档」字样。都处理了。
+3. 「速度」入口（`three-versions-progress.md` 前置项第 1 件的后一半）不在 main、定了不先进 main，清单里没有它的项；进 main 后再补。
+4. `hosted-render-queue-probe` 改写后是 **13 条**（不是清单原先写的 14 条）。
+
