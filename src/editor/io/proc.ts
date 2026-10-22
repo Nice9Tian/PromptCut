@@ -8,7 +8,8 @@ import { restoreMediaUrls } from "./mediaUrls";
 import { dropPythonNodes, publishPythonDrop } from "./pythonDrop";
 import { collectProjectAi, applyProjectAi, resetProjectAi, type ProjectAi } from "../../ai/projectAi";
 import { getSkillSnapshot } from "../../skill/skillMode";
-import { checkAssociation, convertedFromOf, currentAssociation, noteConvertedFrom, noteLoadedAssociation, onGoneConversion, type CollaborationDescriptor, type ConvertedFrom, type CloudProjectAssociation, currentCloudAssociation, noteLoadedCloudAssociation, currentRealtimeRev } from "../sync/recoveryAssociation";
+import { checkAssociation, convertedFromOf, currentAssociation, noteConvertedFrom, noteLoadedAssociation, onGoneConversion, type CollaborationDescriptor, type ConvertedFrom, type CloudProjectAssociation, currentCloudAssociation, noteLoadedCloudAssociation, currentCloudSnapshot } from "../sync/recoveryAssociation";
+import { snapshotForSave } from "../sync/cloudSnapshot";
 import { UNSUPPORTED_PROC_TEXT } from "../sync/recoveryTexts";
 
 /**
@@ -93,13 +94,10 @@ export function serializeProc(thumbnail: string | null = null): string {
   const project = JSON.parse(exportProjectJson()) as Project;
   const cards = collectProjectCards(project);
   const currentAssoc = currentCloudAssociation();
-  const realTimeRev = currentRealtimeRev() ?? currentAssoc?.savedRev ?? (project as any).rev ?? 1;
+  // 固定非本机快照(`sync/cloudSnapshot.ts`):连着这个云端项目时记下当下确认过的那一版(基准内容 + 哈希 + 序号 + 时间);
+  // 没连着(以本地副本打开、断网)时沿用文件里原来的基准与序号。不再取「当前连接的序号」:以本地副本打开时那是本机空间的序号
   const cloudAssoc: CloudProjectAssociation | undefined = currentAssoc
-    ? {
-        ...currentAssoc,
-        savedRev: realTimeRev,
-        savedAt: new Date().toISOString(),
-      }
+    ? { ...currentAssoc, ...snapshotForSave(currentAssoc, currentCloudSnapshot(currentAssoc.projectId)) }
     : undefined;
   const doc: ProcFile = {
     format: PROC_FORMAT,

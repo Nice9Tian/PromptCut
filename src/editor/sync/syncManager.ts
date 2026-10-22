@@ -21,7 +21,8 @@ import { isViewOnly } from "../io/viewOnly";
 import { SyncLink, type AnyMsg, type CloseInfo } from "./link";
 import { classifyEnterFailure, classifyProtocolError } from "./enterFailure";
 import { client, errorStatus, route, hosted, type Candidate, type SharedMode, type Where } from "./sharedApi";
-import { currentAssociation, noteConvertedFrom, publishGoneConversion, setAssociation, takeLoadedAssociation, type CollaborationDescriptor, type CloudProjectAssociation, currentCloudAssociation, setCloudAssociation, takeLoadedCloudAssociation, handleCloudAssociationReopen, setRealtimeRevGetter } from "./recoveryAssociation";
+import { currentAssociation, noteConvertedFrom, publishGoneConversion, setAssociation, takeLoadedAssociation, type CollaborationDescriptor, type CloudProjectAssociation, currentCloudAssociation, setCloudAssociation, takeLoadedCloudAssociation, handleCloudAssociationReopen, setRealtimeRevGetter, setCloudSnapshotGetter } from "./recoveryAssociation";
+import { reopenPlan } from "./cloudSnapshot";
 import { convertGoneProject, restoreOfflineEdits, type GoneProof } from "./cloudGone";
 // @ts-expect-error Browser-safe proof verification, shared with the server-side tooling.
 import { queryGone } from "../../../server/recovery/gone-proof.mjs";
@@ -797,9 +798,23 @@ function onLoad(project: Project): Project {
       enterProject: async (opts) => {
         await enterAccountProject(opts);
         const ds = cur?.link.ds;
-        if (ds && ds.confirmedProject && JSON.stringify(project) !== JSON.stringify(ds.confirmedProject)) {
-          ds.mergeOffline(project, cloudAssoc.savedRev);
+        if (!ds || !ds.confirmedProject) return;
+        // 固定非本机快照(`cloudSnapshot.ts`):文件里带着另存时的基准,就拿它和文件内容逐项比 ——
+        // 云端没人动过直接提交;被别人改过进「冲突合并」,别人后来的改动不会被当成「我撤销的」
+        const plan = reopenPlan(cloudAssoc, project, ds.rev, { batch: newBatchId(), at: Date.now() });
+        if (plan.kind === "none") return;
+        if (plan.kind === "table") {
+          if (mergeTable) {
+            void mergeTable.add(plan.things);
+            patch({ mergeOpen: true });
+            return "pending-merge";
+          }
+        } else if (plan.kind === "commit") {
+          ds.mergeOffline(project, ds.rev);
+          return;
         }
+        // 老文件没有基准:照旧以连回时的云端为基准合上去(有冲突照离线批次办)
+        if (JSON.stringify(project) !== JSON.stringify(ds.confirmedProject)) ds.mergeOffline(project, cloudAssoc.savedRev);
       },
     });
     return switchToLocal(project, { load: false });
@@ -2045,6 +2060,11 @@ function holdRecovery(project: Project, descriptor: CollaborationDescriptor) {
 function releaseHolding() { holding?.off(); holding = null; }
 setProjectLoader(onLoad);
 setRealtimeRevGetter(() => cur?.link?.ds?.rev ?? null);
+// 另存 .proc 时的「非本机内容确定快照」:只在连着这个云端项目时给(以本地副本打开时 cur 是本机空间,不能拿它的序号与内容)
+setCloudSnapshotGetter((projectId) => {
+  const ds = cur?.kind === "shared" && cur.docProjectId === projectId ? cur.link.ds : null;
+  return ds?.confirmedProject ? { rev: ds.rev, project: ds.confirmedProject } : null;
+});
 
 /** A choice binds an existing device identity; file role fields never participate. */
 export async function recoveryIdentities(): Promise<{ as: "creator" | "member"; username: string; profile?: string }[]> {
