@@ -56,22 +56,43 @@
  * 手机版是另一套页面(`src/mobile/MobileStart.tsx`),不走桌面那个 `OnlineLogin`。
  * 这里只在**没登录**时铺一层整屏的渐变,登录表单浮在毛玻璃卡片上;登录之后这一层不渲染。
  */
+/*
+ * 画面只占顶上一条,下面是纯 `--bg-canvas` 的表单区 —— 和桌面是同一个两区关系,
+ * 桌面左右分,手机竖屏改成上下分。
+ *
+ * 原来是满屏铺画面、卡片浮在上头,画面从卡片的上下左右各露一截,四段互不相干、不成构图
+ * (用户 2026-10-23:「手机版效果不好」)。
+ */
+.editor[data-pcm="home"] { --ps-m-art-h: 30vh; }
+
 .ps-m-login-bg {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--ps-m-art-h);
   z-index: 0;
   pointer-events: none;
 }
 
-/* 压暗:上浅下深,让下半屏的表单区更沉,文字压得住 */
+/*
+ * 底边化进整页底色,不是被一条线切断 —— 同桌面(那边靠着色器自己的 alpha 渐隐)。
+ * 顶上压一点点暗,是为了顶栏那行白字压得住画面最亮的地方。
+ */
 .ps-m-login-bg::after {
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0.18) 0%, rgba(0, 0, 0, 0.42) 45%, rgba(0, 0, 0, 0.62) 100%);
+  background: linear-gradient(
+    180deg,
+    rgba(0, 0, 0, 0.32) 0%,
+    rgba(0, 0, 0, 0.08) 30%,
+    color-mix(in srgb, var(--bg-canvas) 55%, transparent) 62%,
+    var(--bg-canvas) 88%
+  );
 }
 
-/* 顶栏和正文要压在渐变之上,否则会被盖住 */
+/* 顶栏和正文要压在画面之上,否则会被盖住 */
 .editor[data-pcm="home"] > .topbar,
 .editor[data-pcm="home"] > .home-body {
   position: relative;
@@ -117,11 +138,28 @@
   box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5);
 }
 
-/* 垂直居中:这一屏只有登录块时,整组在屏幕中间 */
+/* 垂直居中:画面占了顶上那一条(顶栏 44px 压在它上面),表单在剩下的高度里居中 */
 .pcm .home-body:has(.ps-m-login-card) {
   display: flex;
   flex-direction: column;
   justify-content: center;
+  padding-top: calc(var(--ps-m-art-h, 30vh) - 44px);
+}
+
+/*
+ * 登录页上那条说明:照桌面的 `.ps-login-note` —— 一行淡字,不是一块灰底方框。
+ * 灰框(`.note-mobile`)是登录**之后**那张首页用的,摆在登录卡片下面会和卡片抢。
+ */
+.pcm .home-body:has(.ps-m-login-card) .note-mobile {
+  width: 100%;
+  max-width: 340px;
+  margin: 12px auto 0;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--ink-faint);
 }
 
 /* 标题那一组:照桌面的 .ps-login-head + .ps-login-title + .ps-muted */
