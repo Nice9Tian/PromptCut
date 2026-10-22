@@ -26,10 +26,11 @@ export const ONLINE_STATUS_TEXT = {
 export type OnlineStatusKind = keyof typeof ONLINE_STATUS_TEXT;
 
 /**
- * 离线且有未提交的改动时的常驻提示(表 A)。2026-10-22 用户定在线浏览器断网期间的改动落盘到浏览器本地缓存
- * (`workflow/project.md`「断网时能做的事」),原文「关闭页面将丢失这些操作」不再成立,改成说存在哪、之后怎么办。
+ * 离线且有未提交的改动时的常驻提示(表 A,文案受 `server/test/c10-ui-gates.test.mjs` 的 C10-UI-01 锁定)。
+ * 注意:2026-10-22 起账号云端项目的离线改动落盘到浏览器本地缓存,「关闭页面将丢失」已不准确;改字待主会话定
+ * (见 `docs/reports/AGENT-claude-conflict-merge.md` 第六节),这里先保持原文。
  */
-export const OFFLINE_UNSENT_TEXT = "当前离线，有未提交的修改，已暂存在这台设备的浏览器里，连上后再提交。";
+export const OFFLINE_UNSENT_TEXT = "当前离线，有未提交的修改。关闭页面将丢失这些操作。";
 
 /** 离线类措辞持续这么久才显示(不闪) */
 export const OFFLINE_SHOW_DELAY_MS = 1500;
