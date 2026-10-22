@@ -2,7 +2,8 @@
  * 只有一个舞台时的轻重判定:共享成本记录加界限搜索(语义 `product/platforms.md`「在线浏览器」的「轻重判定」与「即时渲染闸门」、
  * `mechanism/rendering.md`「界限搜索与成本记录」;契约 `docs/plan/c10-contract.md` 第 3 节)。纯的部分在 `src/render/boundarySearch.mjs`,
  * 这里是页面一侧的驱动:取记录、在唯一那个舞台里测、把结果交给分派(`planDispatch.setPlanSearchLight`)、测完写进文档服务。
- * 舞台闸门停在第一级(精简模式、低配模式)或握手失败退回单舞台时由 `Preview` 起;两个舞台的照旧由 `ProbeGate` 在后台舞台逐张测。
+ * 只有一个舞台(舞台闸门停在第一级、握手失败退回)时借可见舞台测;两个舞台、项目里已有别的机器测好的记录时在后台舞台里测(`borrow: false`),
+ * 划好线之后常驻探针(`probeRunner.ts`)在后台把其余的卡补测完、不挡界面;两个舞台而一条记录都没有的,照旧由常驻探针在遮罩下逐张实测。
  *
  * # 流程
  *
@@ -207,8 +208,10 @@ export interface CostSearchDeps {
   capabilities: ReadonlyMap<string, Record<string, unknown>>;
   /** 本页跑不了的片段(没载入成功的用户卡、素材效果卡):不参加、按重卡 */
   unsupported: (clip: Clip) => boolean;
-  /** 唯一那个舞台 */
+  /** 测量用的舞台:只有一个舞台时是唯一那个(借它,`borrow` 缺省真);两个舞台时是后台舞台(`borrow: false`,不切角色、不重灌、不盖可见舞台) */
   stage: () => StageRpcClient | null;
+  /** 借可见舞台来测(只有一个舞台)。两个舞台在后台舞台里测时给 false */
+  borrow?: boolean;
   /** 往这个舞台整份重灌一个项目(`stageBridge.pushProject('front', p, { reset: true })`) */
   pushProject: (project: Project) => Promise<void>;
   /** 测完:切回 `front` 之后调,由调用方把整份项目、时间、抑制与快照重投一遍 */
@@ -298,7 +301,7 @@ function createLease(deps: CostSearchDeps, estimate: number, jobs: Map<string, M
     if (!job || !stage) return null;
     if (!leased) {
       setState({ measuring: true, done: 0, estimate, card: job.cardId });
-      try { await stage.setRole("back", { job: "probe" }); } catch { return null; }
+      if (deps.borrow !== false) { try { await stage.setRole("back", { job: "probe" }); } catch { return null; } }
       leased = stage;
     }
     setState({ card: job.cardId, done });
@@ -323,6 +326,7 @@ function createLease(deps: CostSearchDeps, estimate: number, jobs: Map<string, M
     if (!leased) return;
     const stage: StageRpcClient = leased;
     leased = null;
+    if (deps.borrow === false) { setState({ measuring: false, card: null }); return; }
     try { await stage.setRole("front"); } catch { /* iframe 换了:新的握手会重设角色 */ }
     try { await deps.pushProject(deps.currentProject()); } catch { /* 同上 */ }
     setState({ measuring: false, card: null });

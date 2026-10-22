@@ -57,7 +57,7 @@ import { currentCosts, currentPlan, judgedPlan, lightCostAt, onPlanUpdated, plan
 import { benchmarkVerdict, costSearchMeasuring, costSearchState, measureNewCards, reclassify, runBenchmark, runCostSearch, type BenchmarkOutcome, type CostSearchOutcome } from "./costSearch";
 import { runBackJob } from "./stageJobs";
 import { CostSearchGate } from "./CostSearchGate";
-import { SHARED_COST_RELAY_MS, SharedCostRelay, publishSharedCosts, toSharedInput, type SharedCostInput } from "./sharedCosts";
+import { SHARED_COST_RELAY_MS, SharedCostRelay, listSharedCosts, publishSharedCosts, toSharedInput, type SharedCostInput } from "./sharedCosts";
 import { clipIdentityOf } from "./costIdentity";
 import { pageEnvironment } from "./pageEnvironment.mjs";
 import { createMemoryCostStore, type CostStore } from "../render/boundarySearch.mjs";
@@ -84,7 +84,7 @@ import { createPlanPublisher, type PlanPublisher } from "../online/planPublisher
 import { CODE_VERSION } from "../online/buildInfo";
 import { backWorkDiag, startBackWorkGate } from "./backWorkGate";
 import { backStage } from "./stageBridge";
-import { onCostRecords, onProbeProgress, probeFrameDiag, probeProgress, probeRunDiag, probeSettledFor, setCostBackend, setProbeMeasureHooks } from "./probeRunner";
+import { holdProbe, onCostRecords, onProbeProgress, probeFrameDiag, probeProgress, probeRunDiag, probeSettledFor, releaseProbe, setCostBackend, setProbeMeasureHooks } from "./probeRunner";
 import { browserNodeReady, keepConfirmedProject, startBrowserNodeHost, subscribeBrowserNodeReady } from "./browserNodeHost";
 import type { SettleResult } from "../render/settleFrame";
 
@@ -552,10 +552,12 @@ export function Preview(props: { variant?: "mobile" } = {}) {
    * 只有一个舞台时轻重按共享成本记录加界限搜索判(下面那个 effect);最低一档播放时不做任何即时渲染(显示用的表全部判重)。
    * 判定的表决定清单计划发哪些片段、导出时谁本机渲(语义 `product/platforms.md`「在线浏览器」的「轻重判定」与「最低一档」)。
    */
+  /** 两个舞台、项目里有别的机器测好的记录:打开时按界限搜索判(在后台舞台里只测几张),常驻探针补测完再改按成本记录(下面那个 effect) */
+  const [dualSearch, setDualSearch] = useState(false);
   useEffect(() => {
-    setPlanSearch(single);
+    setPlanSearch(single || dualSearch);
     return () => setPlanSearch(false);
-  }, [single]);
+  }, [single, dualSearch]);
   useEffect(() => {
     setPlanLowest(lowest);
     return () => setPlanLowest(false);
@@ -1620,6 +1622,76 @@ export function Preview(props: { variant?: "mobile" } = {}) {
   useEffect(() => { onlineSourceRef.current?.setProject(project.id || null); }, [project.id]);
 
   /*
+   * 两个舞台时的轻重判定(即时渲染闸门;语义 `product/platforms.md`「轻重判定」:项目里已经有别的机器测好的耗时时,按它排序、用二分法只测几张来划线):
+   * 打开项目时常驻探针先等着(`holdProbe`)。基准卡测完、卡片源码同步完、连上共享项目后读本项目的成本记录:
+   * - 一条都对不上项目里的卡:常驻探针照旧在遮罩下逐张实测(`releaseProbe({ blocking: true })`);
+   * - 有记录:界限搜索在后台舞台里只测几张(遮罩下,`borrow: false`,排进后台舞台的单飞队列),划好线就按它判轻重;常驻探针随后在后台
+   *   把其余的卡补测完(不挡界面,K3/K5 要的记录由它补齐),补测完分派表改按成本记录判。
+   * 读不到记录(没连上、被拒)隔一拍再试,40 拍之后照旧让常驻探针逐张测。
+   */
+  const dualSearchRef = useRef<"idle" | "deciding" | "searched" | "probe">("idle");
+  useEffect(() => {
+    if (!online || !dual || lowest) return;
+    if (dualSearchRef.current !== "idle") return;
+    dualSearchRef.current = "deciding";
+    holdProbe();
+    let disposed = false;
+    let waited = 0;
+    const release = (blocking: boolean, next: "searched" | "probe") => { dualSearchRef.current = next; releaseProbe({ blocking }); };
+    const tick = async () => {
+      if (disposed || dualSearchRef.current !== "deciding") return;
+      if (++waited > 40 && waited < 1000) { waited = 1000; release(true, "probe"); return; }
+      const t = tierState();
+      if (t.gate !== "done" || t.benchmark === "pending" || !measureGateOpen()) return;
+      if (t.lowest) { release(true, "probe"); return; }
+      const shared = currentSharedLink();
+      const projectId = currentDocProjectId();
+      if (!shared || !hasDocLink() || !projectId || !((shared.ds?.rev ?? 0) > 0) || !backStage()) return;
+      dualSearchRef.current = "searched"; // 这一拍在做,别的拍不进来
+      const project = getState().project;
+      const identity = clipIdentityOf(project);
+      let listed: Awaited<ReturnType<typeof listSharedCosts>>;
+      try { listed = await listSharedCosts({ request: docRequest, projectId, environment: pageEnvironment() }); }
+      catch { dualSearchRef.current = "deciding"; return; }
+      const keys = new Set(Object.values(identity.identityKeys));
+      if (!listed.records.some((r) => keys.has(r.identityKey))) { release(true, "probe"); return; }
+      const crashed = crashedCards();
+      const unsupported = (clip: { id?: string; cardId?: string }) => needsLocalPc(clip.cardId, clip.cardId ? getCard(clip.cardId) : undefined)
+        || (!!clip.id && crashed.has(identity.identityKeys[clip.id] ?? ""));
+      setSearchCostStore(l2SearchCostStore());
+      setDualSearch(true);
+      try {
+        const outcome = await runBackJob("measure", (ctx) => runCostSearch({
+          request: docRequest, projectId, project, environment: pageEnvironment(), identityKeys: identity.identityKeys, capabilities: identity.capabilities, unsupported,
+          stage: () => ctx.stage, borrow: false, pushProject: (p) => pushProject("back", p, { reset: true }), currentProject: () => getState().project, restore: () => {},
+          store: searchCostStore, mode: import.meta.env.DEV ? "dev" : "build",
+          beforeMeasure: searchMeasureHooks.before, afterMeasure: searchMeasureHooks.after,
+          publish: (records) => publishSharedCosts({ request: docRequest, projectId, environment: pageEnvironment(), records }),
+        }));
+        if (disposed) return;
+        const latest = getState().project;
+        setPlanSearchLight(latest === project ? outcome.light : reclassify(outcome, latest, clipIdentityOf(latest).identityKeys, unsupported));
+        (window as unknown as Record<string, unknown>).__pcDualSearch = () => ({ keys: outcome.keys, light: [...outcome.light].sort(), measurements: outcome.result.measurements, records: outcome.records.length, boundary: outcome.result.boundary });
+        release(false, "searched");
+      } catch {
+        setDualSearch(false);
+        release(true, "probe");
+      }
+    };
+    const timer = window.setInterval(() => { void tick(); }, 1000);
+    void tick();
+    return () => { disposed = true; window.clearInterval(timer); if (dualSearchRef.current === "deciding") release(true, "probe"); };
+  }, [online, dual, lowest]);
+  /* 常驻探针在后台把其余的卡补测完了:分派表改按成本记录判(两个舞台的界限搜索只管打开的那一下) */
+  useEffect(() => {
+    if (!dualSearch) return;
+    const check = () => { if (!probeProgress().running && probeSettledFor(getState().project)) setDualSearch(false); };
+    const off = onProbeProgress(check);
+    check();
+    return off;
+  }, [dualSearch]);
+
+  /*
    * 只有一个舞台时的轻重判定(即时渲染闸门):共享成本记录加界限搜索(`costSearch.ts`;语义 `mechanism/rendering.md`「界限搜索与成本记录」)。
    * 连上共享项目、项目到了、舞台就绪后,每个共享项目搜一次(有记录的二分只测几张,没有记录的逐张实测);之后项目变了(加卡、改参数):
    * 没有记录的新卡补测那几张,其余按已有的界限判。取不到记录(没连上、被拒)隔一拍再试;真要测时 `CostSearchGate` 盖遮罩。
@@ -2543,7 +2615,7 @@ export function Preview(props: { variant?: "mobile" } = {}) {
           </button>
         ))}
       </div>}
-      {online && single && <CostSearchGate />}
+      {online && <CostSearchGate />}
       {online && gateViewerWanted() && <GateViewer />}
 
       {view === "2d" && !mobile && <ToolBar tool={tool} onToolChange={setTool} zoom={cam.scale} fitted={cam.auto} onFit={fitToWindow} />}
