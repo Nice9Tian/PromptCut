@@ -152,6 +152,8 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
   return (
     <div className="ps" data-pc="start-online">
       <TopBar
+        atHome={!openChat}
+        onHome={() => setChatId(null)}
         collapsed={collapsed}
         onToggleSide={() =>
           setCollapsed((v) => {
@@ -166,23 +168,10 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
         }}
         center={
           openChat ? (
-            <>
-              <button
-                type="button"
-                className="ps-top-back"
-                data-pc="start-chat-back"
-                aria-label="回到开始页"
-                onClick={() => setChatId(null)}
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M15 5l-7 7 7 7" />
-                </svg>
-              </button>
-              <div className="ps-top-title">
-                <span className="ps-top-name" data-pc="start-chat-name">{openChat.name}</span>
-                <span className="ps-top-where">{whereOf(openChat)}</span>
-              </div>
-            </>
+            <div className="ps-top-title">
+              <span className="ps-top-name" data-pc="start-chat-name">{openChat.name}</span>
+              <span className="ps-top-where">{whereOf(openChat)}</span>
+            </div>
           ) : null
         }
         right={

@@ -2,7 +2,7 @@
  * 横向贯穿整页的顶栏(用户 2026-10-23 定):压在侧栏和主区之上,所以**收起键和产品标识的位置是固定的** ——
  * 侧栏收起来、换页、进聊天都不会动。
  *
- * 左边恒定是「收起侧栏」加 Logo;中间 `center` 由页面给(聊天页放返回键和对话名);
+ * 左边恒定是「回首页」「收起侧栏」加 Logo,三样的位置不随页面变;中间 `center` 由页面给(聊天页放对话名);
  * 右边先是账号(用户要求摆在「共有」左边),再是 `right` 由页面给的那几颗。
  */
 import type { JSX, ReactNode } from "react";
@@ -10,6 +10,9 @@ import { Logo } from "../ui/Logo";
 import { hueOf } from "./hue";
 
 export function TopBar(props: {
+  /** 现在就在开始页(首页按钮标成当前项) */
+  atHome: boolean;
+  onHome: () => void;
   collapsed: boolean;
   onToggleSide: () => void;
   accountName: string | null;
@@ -20,6 +23,23 @@ export function TopBar(props: {
   const seed = props.accountName ?? "guest";
   return (
     <header className="ps-top" data-pc="start-top">
+      {/* 首页:原来聊天页那颗返回键,用户 2026-10-23 换成小房子并挪到收起键左边 */}
+      <button
+        type="button"
+        className="ps-top-home"
+        data-pc="start-home"
+        aria-label="回到开始页"
+        aria-current={props.atHome ? "page" : undefined}
+        title="开始页"
+        onClick={props.onHome}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M3.5 10.6 12 3.8l8.5 6.8" />
+          <path d="M5.6 9.2v10h12.8v-10" />
+          <path d="M9.9 19.2v-5.4h4.2v5.4" />
+        </svg>
+      </button>
+
       <button
         type="button"
         className="ps-top-collapse"
