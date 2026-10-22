@@ -199,6 +199,8 @@
 
 - **canvas 卡的预渲染产物经 WebCodecs 直出，不再经截图与三次 PNG 往返**（2026-10-01 用户加，档位未定）。现状：canvas 卡的像素先在生成快照时读回 CPU、`toDataURL()` 压成 PNG、把 canvas 换成 `<img>` 写进快照（`src/render/snapshot/rasterizeCanvas.ts`）；预渲染进程再把快照在 Chrome 里重放、整帧截图成 PNG，管道给 ffmpeg 编成 ProRes MOV 或 H.264 轨道流（`server/bakery/ffmpeg.mjs`）。一张 canvas 卡的像素因此走了「GPU 画布 → 读回 → PNG → HTML → Chrome 重渲 → 截图 → PNG → ffmpeg 解 PNG → 编码」，中间三次 PNG 编解码是纯开销，画布越大越慢。方向：canvas 卡的画面本来就在画布里，可以 `new VideoFrame(canvas)` 直接送 `VideoEncoder`（在线导出 `src/export/frameCompositor.ts` 已经这样用），共享 WebGL 渲染器（R9）落地后画布卡的像素来自 Worker 交回的位图，改造点集中在 `rasterizeCanvas.ts` 与产物那一侧。留意两处：① 轨道流要带 alpha，WebCodecs 编 H.264 不带 alpha，上下拼合那一步得在画布里自己做（做法同现在）；② 快照仍要生成，DOM 卡与判重靠它，canvas 卡改直出只是产物不再经截图，快照里那张 PNG 缩略可留作占位。验收：同一张 canvas 卡两条路的产物逐像素比对（允许编码器差异时先比 PNG 阶段）、预渲染耗时前后对比在笔记本量（`guide_files/verification.md`「性能基准机」）、G0-R 全过、像素基线不变（导出整帧仍走截图，不在本项范围）。
 
+- **一次改动很长的带 id 数组里的大量元素是平方级的**（2026-10-22 查出，未排期）。出处：`server/docservice/json-ops.mjs`。一批里增删同一条很长的带 id 数组的许多元素时，每个元素都要在当前数组里按 id 找位置，于是整批是 O(n²)。实测：在一条 16000 个片段的序列上撤销 16000 处改动要 **11.7 秒**。**不是 0.7.20 引入的**——页面提交走的是同一条路，有同样的代价；是查改密退出撤回的耗时（安全专审 SEC-03）时顺带量出来的。撤回那一侧已经按每批最多 1000 项、256 KiB 分批落地绕开，页面提交本来就受一次提交 256 KiB 的上限约束，所以眼下不致命。方向：给带 id 数组建一次 id → 下标的索引再整批套用，而不是每个元素各找一遍。验收：同样的 16000 片段 × 16000 改动的用例耗时从 11.7 秒降下来，`src/store/*.test.mjs`、`server/test/docservice-json-ops*` 与撤回那几条全过。
+
 ## 以后研究（未排期）
 
 只是想弄明白、还没决定要不要做的事放这里。
