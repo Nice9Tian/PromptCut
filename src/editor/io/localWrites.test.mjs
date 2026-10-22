@@ -159,3 +159,22 @@ test("缺省的探测:Agent 工具在跑时 agentToolProbe 记 1;本机正在导
   assert.equal(probe.count(), 1);
   assert.equal(probe.label(1), "正在导入的素材（1 个）");
 });
+
+test("序列化之后协作者的修改到了(不是本机落的):不标「已保存」,但也不另外提示", async () => {
+  fresh();
+  const core = await import(srcUrl("store/core.ts"));
+  const { d, written, marked, notes } = deps({
+    probes: [],
+    writeProc: async (produce, fileName) => {
+      const text = await produce();
+      // 别的设备的修改经文档服务到了:docsync 直接换 state.project 并标脏(src/store/docsync.ts 的 bindStore)
+      core.set({ project: { ...getState().project, name: "协作者改的" }, dirty: true });
+      written.push(JSON.parse(text));
+      return { kind: "saved", where: fileName };
+    },
+  });
+  assert.equal(await saveProcFile("a.proc", d), "saved");
+  assert.equal(written[0].name, "起点");
+  assert.equal(marked.length, 0, "文件里没有协作者那一笔,不能标已保存");
+  assert.deepEqual(notes, [], "协作者的修改本来就随时把项目标脏,不另说");
+});

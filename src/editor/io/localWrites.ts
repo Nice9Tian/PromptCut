@@ -68,6 +68,11 @@ export function lastLocalCommitAt(): number {
   return lastCommitAt;
 }
 
+/** 本页面落地过几次修改(只增不减;比两次读数就知道这之间本机改没改过) */
+export function localCommitSeq(): number {
+  return commitSeq;
+}
+
 /* ── 各样本机写入 ── */
 
 /** 本机 Agent:有工具正在跑 */

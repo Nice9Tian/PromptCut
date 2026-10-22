@@ -15,7 +15,7 @@
  */
 import type { SaveOutcome } from "./proc";
 import { beginSaveLock, isSaveLocked, type SaveKind, type SaveLock } from "../saveLock";
-import { LOCAL_WRITES_TIMEOUT_MS, waitForLocalWrites, type LocalWriteProbe } from "./localWrites";
+import { LOCAL_WRITES_TIMEOUT_MS, localCommitSeq, waitForLocalWrites, type LocalWriteProbe } from "./localWrites";
 import { writeToHandle } from "./safeWrite";
 
 export { SETTLE_TIMEOUT_TEXT } from "./localWrites";
@@ -98,21 +98,25 @@ export async function saveProcFile(fileName: string, deps: SaveDeps): Promise<Sa
   if (isSaveLocked()) return "busy";
   const box: LockBox = { lock: null };
   let serialized: unknown = undefined;
+  let commitsAtSerialize = 0;
   try {
     const outcome = await deps.writeProc(async () => {
       const lock = lockFor(box, "proc");
       await waitLocal(deps, lock);
       lock.writing();
       serialized = deps.currentProject?.();
+      commitsAtSerialize = localCommitSeq();
       return deps.serialize();
     }, fileName);
     if (outcome.kind === "cancelled") return "cancelled";
     await deps.saveDraft();
     const infos: string[] = [];
-    // 存完就不脏了,否则「首页」「新建项目」每次都要多问一句。但序列化之后项目又被本机改了(Agent、后台任务),
-    // 文件里没有那几笔:不能标「已保存」
-    if (deps.currentProject && deps.currentProject() !== serialized) infos.push(CHANGED_DURING_SAVE_TEXT);
-    else deps.markSaved(fileName);
+    // 存完就不脏了,否则「首页」「新建项目」每次都要多问一句。但序列化之后项目又变了(本机的 Agent、后台任务,
+    // 或协作者),文件里没有那几笔:不能标「已保存」。是本机改的就告诉用户;协作者的修改本来就随时把项目标脏,不另说
+    const changed = !!deps.currentProject && deps.currentProject() !== serialized;
+    if (changed) {
+      if (localCommitSeq() !== commitsAtSerialize) infos.push(CHANGED_DURING_SAVE_TEXT);
+    } else deps.markSaved(fileName);
     if (outcome.kind === "downloaded") {
       // 这个 WebView 没有文件选择 API,至少告诉用户文件去哪了
       infos.unshift(`当前环境不支持选择目录，已保存到浏览器的下载位置：${outcome.where}`);
