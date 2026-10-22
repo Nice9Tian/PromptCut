@@ -214,8 +214,8 @@ export const V19_ITEMS = [
     ['--port', B, '--doc-port', DOC(0), '--out', '{item}'],
     { must: [OK_TRUE], timeoutMin: 20, known: '不点「合并」(会写进本仓库 src/cards/user/),合并规则由 card-sync.test.mjs T8-8 覆盖;冲突通知经开发钩子喂给页面(两个编辑器共用 src/cards/user/,造不出真的跨编辑器冲突)' }),
   MANUAL('V19-save-state', '保存与修改状态检查里没有探针的几处:暂停前台编辑、等本机写完、保存中断后能恢复编辑且保留旧保存', ['AB-2'], 'manual',
-    '对口径:mechanism/document-service.md「保存基准与修改状态检查」与 account-binding-task.md「逐项验收」保存一行;已有证据是 V19-cm-tests 的 CS-01～06(另存带基准与哈希、老文件照旧打开、哈希对不上当没有基准、未连接时不编造基准)与 V18-gap-file-association(重开四规则)。「暂停前台编辑、等待本机写完、保存中断」三处要主会话判:已实现就补一支探针或单测,未实现记未达成',
-    { known: '冲突合并那一块的报告只写了固定非本机快照,没写这三处' }),
+    '2026-10-22 查代码的结论(详见 docs/reports/AGENT-claude-acceptance-019.md「保存与修改状态检查查到的」):① 保存时暂停前台编辑——未实现(src/editor/TopBar.tsx 的 saveProject 等待期间不锁任何编辑);② 等本机写完——部分实现:只等文档服务确认所有本地操作(syncManager.ts whenSaved → DocSync.whenSettled,10 秒,超时不写并提示)与恢复日志落盘,不等素材入库/上传、本机 Agent、渲染、后台写入(mechanism/document-service.md 第 36 行要求的其余几样);③ 失败不覆盖上次有效保存并恢复编辑——部分实现:等确认失败时在写文件之前就退出、旧文件不动;写到一半失败只靠 File System Access API 的 createWritable 先写临时副本、close 才替换的行为,代码里没有显式处理,也没有任何测试;「恢复编辑」因为从没禁用而无从谈起。固定非本机快照(CS-01～06)已实现。语义两处都还写着「待实施」。整行按未达成处理,除非用户另定',
+    { known: '在线浏览器里 saveProject 是空函数(ONLINE_BUILD),这一行只对桌面版的 .proc/.procp 保存有意义' }),
 
   /* ============================== 云端 Agent 消息断网排队 ============================== */
   T('V19-oq-tests', '断网排队与告知的单测(outbox 18 条、告知只核一次)', ['OQ-1', 'OQ-2', 'OQ-3', 'OQ-4', 'PRE-4'],
