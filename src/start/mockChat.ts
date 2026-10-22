@@ -64,6 +64,43 @@ export function messagesOf(chatId: string): MockMessage[] {
   return SCRIPTS[chatId] ?? OPENING;
 }
 
+/**
+ * 一次操作。类别用的是软件里那一套说法(`src/editor/right/chat/iconRuns.ts` 的 `KIND_LABEL`:
+ * 新增 / 删除 / 修改 / 读取 / 查看 / 收集 / 界面操作 / 多 Agent / 等待 / 处理),
+ * 一行写「类别 · 工具名 · 耗时」,和编辑器里操作详情的头一行同一个写法。
+ */
+export interface MockChange {
+  id: string;
+  kind: "新增" | "删除" | "修改" | "读取" | "查看" | "收集" | "界面操作" | "处理";
+  tool: string;
+  /** 耗时(毫秒) */
+  ms: number;
+  /** 结果里的那句话 */
+  note?: string;
+  /** 有改前改后画面可比的才给 true */
+  hasDiff?: boolean;
+}
+
+const CHANGES: Record<string, MockChange[]> = {
+  "a-01": [
+    { id: "c1", kind: "查看", tool: "look_frame", ms: 820, note: "第 3 秒：字幕压在浅色产品图上" },
+    { id: "c2", kind: "修改", tool: "edit_card", ms: 310, note: "字幕卡：字色换成青蓝浅一档", hasDiff: true },
+    { id: "c3", kind: "修改", tool: "edit_card", ms: 290, note: "描边改成同色系的深色", hasDiff: true },
+    { id: "c4", kind: "修改", tool: "edit_card", ms: 240, note: "去掉底色，重点词改成加粗", hasDiff: true },
+  ],
+  "a-02": [
+    { id: "c1", kind: "读取", tool: "read_timeline", ms: 90, note: "结尾三秒：一个镜头加一张店铺名卡" },
+    { id: "c2", kind: "处理", tool: "make_variant", ms: 1460, note: "做了两版收尾", hasDiff: true },
+  ],
+  "a-07": [
+    { id: "c1", kind: "读取", tool: "read_timeline", ms: 160, note: "四个项目的末尾用的是同一张卡" },
+  ],
+};
+
+export function changesOf(chatId: string): MockChange[] {
+  return CHANGES[chatId] ?? [];
+}
+
 /** 发出去之后顶上来的那一条:只说明这一版不会真的回复,不编造 Agent 的回答 */
 export const PENDING_REPLY =
   "待办：这里要接云端 Agent 服务（`product/agent.md`「运行位置」）。界面预览阶段不会真的回复，也不会改动任何项目。";

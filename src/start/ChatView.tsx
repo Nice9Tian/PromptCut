@@ -13,6 +13,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { JSX } from "react";
+import { ChatSidePanel } from "./ChatSidePanel";
 import type { MockMessage } from "./mockChat";
 import type { MockAgentChat } from "./mockProjects";
 
@@ -30,6 +31,10 @@ export function ChatView(props: {
 }): JSX.Element {
   const messages = props.messages;
   const [text, setText] = useState("");
+  /** 右边那条拓展栏开着没有(标题栏右上角那颗按钮) */
+  const [panel, setPanel] = useState(false);
+  /** 拓展栏里点出来的那句说明,显示在输入框下面 */
+  const [note, setNote] = useState("");
   /** 共有 / 私有(`product/agent.md`:新建默认共有,用户可以主动改为私有)。这一版只是界面上的开关 */
   const [shared, setShared] = useState(true);
   const area = useRef<HTMLTextAreaElement>(null);
@@ -60,8 +65,11 @@ export function ChatView(props: {
     requestAnimationFrame(fit);
   };
 
+  const seed = props.chat.on === "project" ? props.chat.projectId : props.chat.groupId;
+
   return (
     <main className="ps-main ps-chat" data-pc="start-chat" data-chat={props.chat.id}>
+      <div className="ps-chat-col">
       <header className="ps-chat-head">
         <button type="button" className="ps-chat-back" data-pc="start-chat-back" aria-label="回到开始页" onClick={props.onBack}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -82,6 +90,21 @@ export function ChatView(props: {
           onClick={() => setShared((v) => !v)}
         >
           {shared ? "共有" : "私有"}
+        </button>
+        {/* 右边那条拓展栏的开关:看画面、看这次改动、切改前改后 */}
+        <button
+          type="button"
+          className="ps-chat-ext-btn"
+          data-pc="start-chat-ext-toggle"
+          aria-pressed={panel}
+          aria-label="右侧拓展栏"
+          title="画面、这次改动、修改前 / 修改后"
+          onClick={() => setPanel((v) => !v)}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round">
+            <rect x="3" y="4.5" width="18" height="15" rx="2" />
+            <path d="M15 4.5v15" />
+          </svg>
         </button>
       </header>
 
@@ -151,8 +174,13 @@ export function ChatView(props: {
             </svg>
           </button>
         </div>
-        <p className="ps-chat-note">界面预览阶段：发出去不会真的跑 Agent，也不会改动项目。</p>
+        <p className="ps-chat-note" role="status" data-pc="start-chat-note">
+          {note || "界面预览阶段：发出去不会真的跑 Agent，也不会改动项目。"}
+        </p>
       </div>
+      </div>
+
+      {panel && <ChatSidePanel chatId={props.chat.id} projectSeed={seed} onNote={setNote} />}
     </main>
   );
 }

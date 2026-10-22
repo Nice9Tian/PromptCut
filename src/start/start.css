@@ -202,8 +202,182 @@
 }
 
 /* ── 聊天页 ───────────────────────────────────── */
-/* 三段:标题栏、滚动的消息、贴底的输入框。整页不滚,只有中间那段滚 */
-.ps-chat { display: flex; flex-direction: column; overflow: hidden; }
+/*
+ * 左右两块:对话那一列 + 右边的拓展栏。对话列自己分三段(标题栏、滚动的消息、贴底的输入框)。
+ * 选择器写成 `.ps-main.ps-chat`:`.ps-main` 在这张表里排在后面、它是 column,单写 `.ps-chat`
+ * 同样是一个类,比不过它,拓展栏就被排到对话下面去了。
+ */
+.ps-main.ps-chat { display: flex; flex-direction: row; overflow: hidden; }
+.ps-chat-col {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── 右侧拓展栏 ───────────────────────────────── */
+.ps-ext {
+  flex: 0 0 320px;
+  min-height: 0;
+  overflow-y: auto;
+  border-left: 1px solid var(--hairline);
+  background: var(--bg-panel);
+}
+.ps-chat-ext-btn {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--fill-subtle);
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+.ps-chat-ext-btn:hover { border-color: var(--hairline-strong); color: var(--ink); }
+.ps-chat-ext-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+
+.ps-ext-sec { border-bottom: 1px solid var(--hairline); }
+.ps-ext-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 0 4px;
+}
+.ps-ext-toggle {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.ps-ext-caret {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  color: var(--ink-muted);
+  transition: transform 120ms;
+}
+.ps-ext-caret[data-open="true"] { transform: rotate(90deg); }
+.ps-ext-count { font-size: 11px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.ps-ext-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+
+/* 占位画面 */
+.ps-ext-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 8px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+.ps-ext-frame-tag {
+  position: absolute;
+  left: 6px;
+  top: 6px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 11px;
+}
+.ps-ext-play {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  cursor: pointer;
+}
+.ps-ext-play:hover { background: rgba(0, 0, 0, 0.68); }
+
+.ps-ext-transport { display: flex; align-items: center; gap: 8px; }
+.ps-ext-scrub { flex: 1 1 auto; min-width: 0; accent-color: var(--accent); }
+.ps-ext-time { font-size: 11px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.ps-ext-todo { margin: 0; font-size: 11px; line-height: 1.7; color: var(--ink-faint); }
+
+/* 改动那一段:一行一次操作 */
+.ps-ext-rows { display: flex; flex-direction: column; gap: 4px; }
+.ps-ext-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--fill-subtle);
+}
+.ps-ext-row[data-picked] { border-color: var(--accent); }
+.ps-ext-row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ps-ext-row-top { display: flex; align-items: baseline; gap: 6px; font-size: 12px; }
+.ps-ext-kind { color: var(--ui-agent, var(--accent)); font-weight: 600; }
+.ps-ext-tool { color: var(--ink-muted); font-family: var(--font-mono); font-size: 11px; }
+.ps-ext-ms { margin-left: auto; color: var(--ink-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+.ps-ext-note { margin: 0; font-size: 11px; line-height: 1.6; color: var(--ink-muted); overflow-wrap: anywhere; }
+.ps-ext-undo {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-muted);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ps-ext-undo:hover:not(:disabled) { border-color: var(--hairline-strong); color: var(--ink); }
+.ps-ext-undo:disabled { opacity: 0.5; cursor: default; }
+
+/* 改前 / 改后的那个二选一 */
+.ps-ext-seg {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--fill-subtle);
+}
+.ps-ext-seg-btn {
+  flex: 1 1 0;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-muted);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ps-ext-seg-btn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); font-weight: 600; }
 
 .ps-chat-head {
   flex: 0 0 auto;
