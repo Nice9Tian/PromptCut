@@ -250,6 +250,39 @@ try {
   check('改 Array.prototype[Symbol.iterator] 丢不掉守卫', isGuarded(escape.viaIter), escape.viaIter);
   check('改数组迭代器的 next 丢不掉守卫', isGuarded(escape.viaNext), escape.viaNext);
 
+  /*
+   * 经典脚本的顶层声明比拼在前面的守卫还早(2026-10-23 审查 P1):`function self(){}` 曾让守卫装到假对象上,
+   * `function JSON(){}` 曾让包 Worker 那段报错被咽下、线程里再起的线程是原生的。修后:守卫装在顶层 this 上;
+   * 核对不过(Reflect/JSON 不是对象、要用的接口对象被换过)整段脚本不执行。探针只用裸名字读全局(不经 self)。
+   */
+  const PROBE = `(async () => { const out = { idb: typeof indexedDB, bc: typeof BroadcastChannel, caches: typeof caches };
+    try { out.open = await new Promise((res) => { const r = indexedDB.open('pc-shadow-leak', 1); r.onsuccess = () => res('opened'); r.onerror = () => res('err'); }); } catch (e) { out.open = 'threw'; }
+    postMessage(out); })();`;
+  const shut = (r) => r && r.idb === 'undefined' && r.bc === 'undefined' && r.caches === 'undefined' && r.open === 'threw';
+  const aborted = (r) => r && typeof r.error === 'string' && r.error !== 'timeout';
+  const withNested = (outerPre, innerSrc) => `${outerPre}
+    const u = URL.createObjectURL(new Blob([${JSON.stringify(innerSrc)}], { type: 'text/javascript' }));
+    const nw = new Worker(u);
+    nw.onmessage = (e) => postMessage({ nested: e.data, idbOuter: typeof indexedDB });
+    nw.onerror = (e) => { e.preventDefault(); postMessage({ nested: { error: e.message || 'error' }, idbOuter: typeof indexedDB }); };`;
+  const shadowSelf = await call('A', spawn(`function self() {}\n${PROBE}`));
+  check('P1 经典线程顶层 function self(){}:守卫照样装在真全局上,IndexedDB、Cache、BroadcastChannel 都没有、开不了库', shut(shadowSelf), shadowSelf);
+  const shadowJSON = await call('A', spawn(`function JSON() {}\n${PROBE}`));
+  check('P1 经典线程顶层 function JSON(){}:核对不过,整段脚本不执行', aborted(shadowJSON), shadowJSON);
+  const shadowIface = {};
+  for (const name of ['Reflect', 'Blob', 'URL', 'Worker', 'LockManager', 'BroadcastChannel']) shadowIface[name] = await call('A', spawn(`function ${name}() {}\n${PROBE}`));
+  check('P1 经典线程顶层声明遮住 Reflect、Blob、URL、Worker、LockManager、BroadcastChannel:都整段不执行', Object.values(shadowIface).every(aborted), shadowIface);
+  const shadowLex = await call('A', spawn(`const JSON = {};\n${PROBE}`));
+  check('P1 经典线程顶层 const JSON:守卫读到暂时死区,整段不执行', aborted(shadowLex), shadowLex);
+  const nestOuterJSON = await call('A', spawn(withNested('function JSON() {}', PROBE)));
+  check('P1 嵌套:外层 function JSON(){} 再起线程 —— 外层整段不执行(再起的线程起不来)', aborted(nestOuterJSON), nestOuterJSON);
+  const nestInnerSelf = await call('A', spawn(withNested('', `function self() {}\n${PROBE}`)));
+  check('P1 嵌套:线程里再起的线程顶层 function self(){} 同样收住', shut(nestInnerSelf.nested) && nestInnerSelf.idbOuter === 'undefined', nestInnerSelf);
+  const nestInnerJSON = await call('A', spawn(withNested('', `function JSON() {}\n${PROBE}`)));
+  check('P1 嵌套:线程里再起的线程顶层 function JSON(){} 同样整段不执行', aborted(nestInnerJSON.nested), nestInnerJSON);
+  const shadowD = await call('D', spawn(`function JSON() {}\n${PROBE}`));
+  check('对照(没装加固):同样的 function JSON(){} 线程能开 IndexedDB(说明上面几条测得出泄漏)', shadowD.open === 'opened', shadowD);
+
   const rt = await call('A', spawn(`importScripts(${JSON.stringify(`${STAGE}/runtime-worker.js`)});`));
   check('运行时那种「blob 引导 + importScripts 同源脚本」的线程照常跑,里面也装了守卫', rt.t === 'runtime-ok' && rt.idb === 'undefined' && rt.bc === 'undefined', rt);
   const dps = await call('A', spawn(`importScripts(${JSON.stringify(`${STAGE}/dps-worker.js`)});`));
