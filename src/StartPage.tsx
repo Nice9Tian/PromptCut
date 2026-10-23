@@ -82,29 +82,26 @@ function JoinSection(props: { onEnterEditor: () => void }): JSX.Element {
   );
 }
 
-/** 地址里有没有点名要 Vibe 模式那一套新界面。`home` / `login` 是它自己的预览入口,一并认 */
-function wantsVibe(): boolean {
+/** 地址里点名要原来那一块账号表单(`?ui=classic`):只留给排障和还认老页面的探针,界面上没有入口 */
+function wantsClassic(): boolean {
   try {
-    const ui = new URLSearchParams(location.search).get("ui");
-    return ui === "vibe" || ui === "home" || ui === "login";
+    return new URLSearchParams(location.search).get("ui") === "classic";
   } catch {
     return false;
   }
 }
 
 /**
- * 在线浏览器(电脑身份)的首屏。
+ * 在线浏览器(电脑身份)的首屏:**缺省是 Vibe 模式**(`user-workflow.md`「工作方式」:在线浏览器登录后的默认界面),
+ * 整套在 `src/start/`,已接上真账号、真云端项目、真云端 Agent(`src/start/OnlineStart.tsx` 文件头逐块写了接到哪)。
  *
- * **缺省仍是原来那一页**:一块账号表单(`AccountProjects`)—— 真的账号登录、真的云端项目列表、
- * 凭链接加入。Vibe 模式(`user-workflow.md`「工作方式」)那一套新界面(`src/start/`)**还在跑界面、
- * 用的是假数据**,所以只有地址里点名要(`?ui=vibe`)时才进。这样它能进 main、随时打开看,
- * 线上的真开始页不受影响。
- *
- * 〔裁:发版会话 V21-12,2026-10-23 —— 0.7.21 要部署到生产,不能把线上的开始页默认换成原型〕
- * 等 `src/start/` 接上业务层(真实项目列表、真实对话)之后,把这道门去掉、缺省换成新界面。
+ * 原先这里有一道门(〔裁 V21-12〕:新界面只跑界面、用假数据时,只有带 `?ui=vibe` 才进,缺省仍是老的账号表单),
+ * 用户 2026-10-23 验收时指出判错了:要的是把新界面接上业务层并成为缺省。门已去掉(返工分支 `claude/vibe-wire`)。
+ * `?ui=vibe` / `?ui=home` / `?ui=login` 不再有特别的意思(进的都是缺省这一页,`?ui=home` 不再跳过登录)。
+ * 老的那一块账号表单(`AccountProjects`)只在 `?ui=classic` 下还能打开,界面上没有入口。
  */
 function OnlineStartPage(props: { onEnterEditor: () => void }): JSX.Element {
-  if (!wantsVibe()) {
+  if (wantsClassic()) {
     return (
       <div className="sp">
         <header className="sp-bar">

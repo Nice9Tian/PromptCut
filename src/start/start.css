@@ -1487,3 +1487,124 @@
   .ps-body { padding: 0 16px 32px; }
   .ps-hero-title { font-size: 24px; }
 }
+
+/*
+ * ── 接业务层补的几样(2026-10-23,`docs/reports/AGENT-claude-vibe-wire.md`)───────────
+ * 界面形状用户已定稿,这里只补真数据才有的几种状态:发送状态、出错、空态、加载中、真画面、已归档、用链接加入。
+ * 一律用已有的主题变量,长相跟着旁边已有的那一档(小字跟 `.ps-chat-note`、卡片跟 `.ps-menu`)。
+ */
+
+/* 登录页外壳:错误与「正在连接」浮在页面顶上;原型里那行「界面预览阶段……不会真的发请求」已经不是真的,藏起来(正式删除在 OnlineLogin.tsx,见报告) */
+.ps-vibe-login { position: relative; height: 100%; min-height: 0; }
+.ps-vibe-login .ps-login-note { display: none; }
+.ps-vibe-login[data-busy] .ps-login-form { opacity: 0.6; pointer-events: none; }
+.ps-vibe-login-error,
+.ps-vibe-login-busy {
+  position: absolute;
+  z-index: 5;
+  top: 14px;
+  right: 14px;
+  max-width: min(420px, calc(100% - 28px));
+  padding: 9px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--bg-panel);
+  color: var(--ink);
+  font-size: 13px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+.ps-vibe-login-error { border-color: var(--danger); color: var(--danger); }
+.ps-vibe-loading {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  background: var(--bg-canvas);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 13px;
+}
+
+/* 开始页那行小字出错时 */
+.ps-prompt-note.is-err { color: var(--danger); }
+
+/* 侧栏:一行状态 / 提示;新建不可用时 */
+.ps-side-hint {
+  margin: 4px 8px 6px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-faint);
+}
+.ps-side-hint .ps-link { margin-left: 6px; }
+.ps-side-new:disabled { opacity: 0.5; cursor: default; filter: none; }
+.ps-row.is-archived .ps-row-icon { opacity: 0.55; }
+.ps-tile:disabled { opacity: 0.5; cursor: default; }
+
+/* 缩略图:真画面盖满那一格,画幅框照旧 */
+.ps-shot { position: relative; overflow: hidden; }
+.ps-shot-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+
+/* 真画面(编辑界面的预览,手机版那一种只出画面的样子):铺满容器,播放键与播放条压在上面 */
+.ps-stage { position: relative; overflow: hidden; background: #000; }
+.ps-stage .pc-pv--mobile { position: absolute; inset: 0; padding: 0; gap: 0; height: auto; }
+.ps-stage .pc-pv--mobile .pc-pv-stage { border-radius: 0; }
+.ps-stage .pc-pv--mobile .pc-pv-corner { display: none; }
+.ps-stage-over { position: absolute; inset: 0; z-index: 3; display: grid; place-items: center; }
+.ps-ext-frame-img { background: var(--fill-subtle); }
+.ps-ext-frame-img img { width: 100%; height: 100%; object-fit: contain; }
+
+/* 聊天:自己那一侧的发送状态、发送者;Agent 那一侧的进行中、出错;空对话的示例句;顶上那条提示 */
+.ps-me-col { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-width: 85%; }
+.ps-me-col .ps-bubble { max-width: 100%; }
+.ps-msg-sender { font-size: 11px; color: var(--ink-faint); }
+.ps-msg-state { font-size: 11px; color: var(--ink-faint); }
+.ps-msg-state.is-err { color: var(--danger); }
+.ps-md > :first-child { margin-top: 0; }
+.ps-md > :last-child { margin-bottom: 0; }
+.ps-md p { margin: 0 0 6px; }
+.ps-msg-live { color: var(--ink-muted); font-size: 12px; }
+.ps-msg-err { color: var(--danger); }
+.ps-actions-list { list-style: none; padding-left: 0; }
+.ps-actions-list li[data-state="err"],
+.ps-actions-list li[data-state="ask"] { color: var(--danger); }
+.ps-op-mark { display: inline-block; width: 14px; color: var(--ui-agent, var(--accent)); }
+.ps-op-report { margin-top: 4px; font-weight: 600; color: var(--ink); }
+.ps-chat-empty { display: grid; place-items: center; padding: 48px 0; }
+.ps-chat-example {
+  padding: 9px 14px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 999px;
+  background: var(--bg-panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.ps-chat-example:hover { border-color: var(--accent); color: var(--accent); }
+.ps-chat-banner {
+  flex: 0 0 auto;
+  max-width: 760px;
+  width: calc(100% - 48px);
+  margin: 10px auto 0;
+  padding: 8px 12px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 10px;
+  background: var(--fill-subtle);
+  color: var(--ink);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ps-chat-input:disabled { cursor: not-allowed; }
+
+/* 用链接加入:借右键菜单那一套长相,钉在顶栏右下 */
+.ps-menu.ps-join {
+  position: fixed;
+  top: 52px;
+  right: 16px;
+  left: auto;
+  width: min(340px, calc(100vw - 32px));
+  z-index: 40;
+}
+.ps-join-form { display: flex; flex-direction: column; gap: 10px; padding: 6px 10px 10px; }
+.ps-join-msg { margin: 0; font-size: 12px; line-height: 1.6; color: var(--ink-muted); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ps-join-msg[role="alert"] { color: var(--danger); }
+.ps-join-actions { display: flex; justify-content: flex-end; gap: 8px; }
