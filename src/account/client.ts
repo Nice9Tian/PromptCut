@@ -118,6 +118,7 @@ export function accountErrorText(status: number, code: string): string {
     'org-unavailable': '这台云端现在不能保存分组。',
     'org-version-mismatch': '云端的分组刚被另一台设备改过。',
     'bad-org': '分组信息不完整，没有保存。',
+    'org-rate-limited': '分组改得太频繁了，过一会儿会自动同步。',
     'org-too-large': '分组、置顶和归档的记录太多了，没有保存。可以删掉一些不用的分组。',
     'guest-video-limit': `游客最多上传 ${GUEST_LIMITS.videos} 条视频。要传更多，请注册一个账号。`,
     'guest-file-too-large': `游客上传的每一条源文件不能超过 ${GUEST_LIMITS.assetMB} MB。`,
@@ -201,7 +202,13 @@ export function createAccountClient(options: AccountClientOptions) {
     catch { throw new AccountFailure(0, 'network'); }
     let result: Record<string, any>;
     try { result = await response.json(); } catch (error) { throw (error as { name?: string })?.name === 'TimeoutError' ? new AccountFailure(0, 'network') : new AccountFailure(response.status, 'account-protocol'); }
-    if (!response.ok || result.ok !== true) throw new AccountFailure(response.status, String(result.code || result.error || 'account-unavailable'), undefined, result);
+    if (!response.ok || result.ok !== true) {
+      const failure = new AccountFailure(response.status, String(result.code || result.error || 'account-unavailable'), undefined, result);
+      // 限流(429)带 Retry-After:调用方(云端分组同步)照它的时间再试,不自己乱猜
+      const wait = Number(response.headers.get('retry-after'));
+      if (Number.isFinite(wait) && wait > 0) Object.assign(failure, { retryAfterSec: wait });
+      throw failure;
+    }
     return result;
   }
   function accept(value: Record<string, any>): EditorLogin {

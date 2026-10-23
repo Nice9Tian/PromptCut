@@ -29,6 +29,15 @@ export const ORG_LIMITS = Object.freeze({
 /** 账号编号:只认网站账号(`acc_` + 24 位十六进制);游客 `gst_…` 不在内 */
 export const ORG_ACCOUNT_RE = /^acc_[0-9a-f]{24}$/;
 
+/**
+ * `put` 的按账号写入限流(裁定 V22-10,三级):同一个账号任意连续 `windowMs` 里最多写 `max` 次;`get` 不限。
+ * 数的由来:页面改动有 1 秒防抖(连着改只传一次),正常使用一分钟里传不了几次(改名、拖几下排序、各一次);
+ * 冲突时一次同步最多多出几次重传(最多 5 次)。30 次 / 分钟 = 平均每 2 秒一次,正常用户碰不到,
+ * 一个已登录账号想反复狂写同一个文件就被挡住。超了回 429 `org-rate-limited`(带 Retry-After),页面把这次改动标「待同步」稍后自动重试,不丢。
+ * 限流件就是领游客令牌那条路由用的 `createGuestRateLimit`(`server/account/guest-rate.mjs`,滑动窗口、只在内存、按键各算各的),这里键是账号编号。
+ */
+export const ORG_WRITE_RATE = Object.freeze({ max: 30, windowMs: 60 * 1000 });
+
 export class OrgRefused extends Error {
   constructor(status, code, message) { super(message); this.status = status; this.code = code; }
 }

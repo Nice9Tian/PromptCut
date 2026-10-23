@@ -73,7 +73,7 @@ POST /hosted/shared/account/start-org
   成功  { ok:true, version, org, updatedAt }       get 没存过：version 0、org null
   冲突  409 { ok:false, code:"org-version-mismatch", version, org, updatedAt }   带回云端当前那一份
   拒绝  403 guest-org-unavailable（游客）、400 bad-org（形状不对 / baseVersion 不是整数 / 不认识的 op）、
-        413 org-too-large（超限）、503 org-unavailable（这台部署没配存储）、401 照现有；
+        413 org-too-large（超限）、429 org-rate-limited（put 写得太频繁，带 Retry-After）、503 org-unavailable（这台部署没配存储）、401 照现有；
         请求体里带 accountId 等身份字段一律 400 invalid-authority-claim（沿用这一排路由已有的检查）
 ```
 
@@ -81,6 +81,7 @@ POST /hosted/shared/account/start-org
 
 - `server/docservice/modules/account-org.mjs`（新）：`checkOrg`（形状与大小检查，**只保留已知字段**，多余的丢掉）、`createAccountOrgStore`（`get` / `put`，版本号比较并替换）。上限：整份 ≤ 256 KB、分组 ≤ 200、项目条目 ≤ 5000、对话条目 ≤ 20000、名字与编号 ≤ 200 字符。存储接口是同步的、Node 单线程，读-比-写之间不会插进别的请求，所以不需要另加锁。
 - 文件是文档服务数据目录下的 `accounts/<账号编号>.json`（`store.writeBlob`：先写临时文件、刷盘、改名），**不进授权账本**。内容里带账号编号，文件被换成别人的读出来当没有，不把别人的整理信息给出去。
+- **`put` 按账号写入限流**（〔裁〕V22-10，三级）：沿用领游客令牌那条路由用的限流件 `createGuestRateLimit`（`server/account/guest-rate.mjs`，滑动窗口、只在内存、按键各算各的），键是账号编号，`get` 不限。数是 **30 次 / 分钟**（常量 `ORG_WRITE_RATE`，`account-org.mjs`）。理由：页面改动本来就有 1 秒防抖（连着改只传一次），正常使用一分钟里传不了几次（改名、拖几下排序各一次），冲突时一次同步最多多出 5 次重传；30 次 / 分钟约每 2 秒一次，正常用户碰不到，一个已登录账号反复狂写同一个文件才会被挡。超了回 429 `org-rate-limited` 并带 `Retry-After`；被拒的这一次不计入窗口，所以冷却一过马上又能写；限流件只在内存里，文档服务重启就清零（和游客限流同一个取舍）。`mountAccountProjects` 多收一个可选的 `orgWriteLimit`（单测换小数字、换假时钟用）。
 - `server/account/authority.mjs`：暴露一个很薄的 `identify(input)`，回 `{ accountId, guest }`（内部用已有的 `verify`；验完把验证时临时记的授权引用丢掉，不给高频调用留垃圾）。
 - `server/docservice/modules/account-projects.mjs`：公开路由加 `start-org` 一支；`mountAccountProjects` 多收一个可选的 `orgStore`，没传就 503 `org-unavailable`（所以别的部署、旧测试不受影响）。409 单独回，带 `version`、`org`。
 - `server/hosted/combo.mjs`：把 `createAccountOrgStore({ store: createFileStore({ dir: paths.docservice }) })` 传给公开那份 `mountAccountProjects`（内部 mTLS 那份不挂，账号服务不碰它）。
@@ -90,6 +91,7 @@ POST /hosted/shared/account/start-org
 - `src/account/client.ts`：`getStartOrg()`、`putStartOrg(baseVersion, org)`（只在线、只账号；游客在客户端就抛 `guest-org-unavailable`；409 当结果返回而不是抛；`AccountFailure` 多带服务端整个回包 `body`）；错误提示补了五条中文。
 - `src/start/orgMerge.ts`（新，纯函数）：**三方合并** `mergeOrg(base, mine, theirs)`。规则：字段只我改听我的、只对方改听对方的、两边改同一字段我的赢；增取并集（同编号两边都加，整条听我的）；删——一边删、另一边没改过才算删，改过的留下；顺序——我动过用我的，没动过用对方的，另一边新增的条目插在它在那一边的前一个邻居后面（所以「新建分组」仍在最后、「新出现的项目」仍在最前，这比方案里写的「对方新增的排最前」更准，已按它实现）；连带——对方删了某个分组而我把项目放进了它，项目回到「没放进分组」。
 - `src/start/orgSync.ts`（新）：同步引擎，网络、存储、计时器都注入，不碰 React，所以可以单测。本机缓存优先；拉（打开、登录、重新可见、网络恢复）；改动防抖 1 秒后传；传的过程中又有新改动则传完再排一次；409 用带回的那份三方合并后重传（最多 5 次）；离线、5xx → `pending`，间隔 2 秒起逐次加倍到 60 秒封顶；**老服务端（404 / 405 / 501 / no-route / org-unavailable）→ `unsupported`：不报错、不重试，改动留本机，下次打开页面再探一次**；云端比本机记的版本还旧（云端被重置）→ 以云端为出发点把本机整份再传；**一台设备第一次连云端、本机已有云端存储接上之前做的分组时，当作「有没传的改动」和云端那份取并集**，不会被另一台设备传上去的那份顶掉。同步记录（`{version, base, dirty}`）和整理信息分两个键存本机（`pc.start.orgsync.cloud.<账号>`）。
+- 被限流时页面**不弹错**：`client.ts` 把 429 的 `Retry-After` 挂到 `AccountFailure.retryAfterSec` 上，同步引擎当「待同步」，**不早于服务端说的时间**再试（比自己的退避长就听服务端的），改动一直留在本机、`dirty` 不清，不丢；译成人话的那句「分组改得太频繁了，过一会儿会自动同步。」只在 `AccountFailure` 的文字里（侧栏只显示统一的「云端分组没同步上……」）。
 - `src/start/orgTransport.ts`（新）：把客户端接成引擎要的传输，只负责把「没有这条路由」翻成 `OrgUnsupportedError`。
 - `src/start/useCloudOrg.ts`（新）：React 一层，持有整理信息 state、写本机缓存、驱动引擎、监听页面重新可见与 `online` 事件。
 - `src/account/useAccountProjects.ts`：多给一个稳定的 `orgApi`。
@@ -103,9 +105,10 @@ POST /hosted/shared/account/start-org
 
 云端那一半（第二批提交）：
 
-- 服务端：`server/docservice/modules/account-org.mjs`（新）、`account-projects.mjs`、`server/account/authority.mjs`（加 `identify`）、`server/hosted/combo.mjs`（传 `orgStore`）。
+- 服务端：`server/docservice/modules/account-org.mjs`（新，含 `ORG_WRITE_RATE`）、`account-projects.mjs`（含 `put` 限流）、`server/account/authority.mjs`（加 `identify`）、`server/hosted/combo.mjs`（传 `orgStore`）。
 - 客户端：`src/account/client.ts`、`useAccountProjects.ts`、`src/start/orgMerge.ts`、`orgSync.ts`、`orgTransport.ts`、`useCloudOrg.ts`（均新）；`vibeOrg.ts`、`OnlineStart.tsx`、`ProjectSidebar.tsx`（加 `groupStatus` 一行）。
-- 测试与探针：`server/test/account-org-route.test.mjs`、`src/start/orgMerge.test.mjs`、`orgSync.test.mjs`、`orgTransport.test.mjs`（均新）；`orgRealm.test.mjs`（加 ORGR-09、10）；`src/account/joinRequest.test.mjs`（JRC-7 清单加一条）；`scripts/probes/vibe-groups-cloud-probe.mjs`（新，真服务端双设备探针）。
+- 截图：`docs/reports/AGENT-claude-groups-local-cloud-shots/` 下七张（探针重跑落在这里，已提交）。
+- 测试与探针：`server/test/account-org-route.test.mjs`（含 ORG-9）、`src/start/orgMerge.test.mjs`、`orgSync.test.mjs`、`orgTransport.test.mjs`（均新）；`orgRealm.test.mjs`（加 ORGR-09、10）；`src/account/joinRequest.test.mjs`（JRC-7 清单加一条）；`scripts/probes/vibe-groups-cloud-probe.mjs`（新，真服务端双设备探针）。
 
 没碰：`server/bakery/` 七个文件、`src/render/createSnapshot.ts`、`src/render/snapshot/*`、`src/render/snapshotRename.ts`、`src/render/gl/canvasGrab.ts`；`treeState.ts`；`OnlineStart.tsx` 里 `openProject` 那条路一个字没动。
 
@@ -125,6 +128,7 @@ POST /hosted/shared/account/start-org
   - `account-org-route.test.mjs`：ORG-1 get/put 往返与版本递增；ORG-2 版本冲突回 409 且带回云端那份、不写、用带回的版本重传就成；ORG-3 超大小与超条数（分组、项目、对话各一）413、形状不对 400、被拒的不改云端；**ORG-4 游客令牌被拒 403 且不落文件**（存储层自己也拒）；**ORG-5 别的账号读不到你的那份**、请求体里写别人的账号编号 400；ORG-6 落在数据目录下独立文件、重开存储还在、文件被换成别人的内容当没有；ORG-7 没配存储 503、没 Bearer 401、不认识的 op 400；ORG-8 只存已知字段。
   - `orgMerge.test.mjs`：ORGM-01 两边各加一个分组；ORGM-02 两边改同一个项目的归属（我的赢）、改不同字段（两边都留）；ORGM-03 一边删一边改（改过的留下、没改过才删、删分组连带项目回到没放进分组）；ORGM-04 顺序；ORGM-05 没有 base；ORGM-06 对话按项目+对话对齐；ORGM-07 回包丢了原样重传幂等、输入不被原地改。
   - `orgSync.test.mjs`：SYNC-01～11（第一次连上整份上传、采用云端、防抖、先拉后合并、拉传之间 409、离线退避与补传、**老服务端安静退回**、传的过程中又改、云端被重置、stop、两台设备首次连云端取并集、同步记录读写）。
+  - `account-org-route.test.mjs` 的 **ORG-9**（限流）：连打超过上限被拒、状态 429、错误码 `org-rate-limited`、带 `Retry-After`；被拒的那次没写（版本不变、内容不变）；`get` 被限流时照读（连读 10 次全 200）；冷却之后又能写；**不同账号各算各的**（A 被限时 B 照写）；缺省的数就是 30 次 / 分钟。`orgSync.test.mjs` 的 **SYNC-12**：被限流时标待同步、改动留着、按服务端说的 30 秒再试（比自己 2 秒的退避长）、不报错、之后补上。
   - `orgTransport.test.mjs`：TRN-01～03（老服务端 404 → `unsupported` 不抛；网络错 → `pending`）。
 - **真服务端双设备探针**（`scripts/probes/vibe-groups-cloud-probe.mjs`，在我这一段端口里跑通，退出码 0，最后一行 `{"ok":true,"steps":11,"fails":[]}`）：服务端是真的 `mountAccountProjects` + 真权威 + 真整理信息存储（临时目录），只有账号服务那三个接口是页面请求拦截造的假数据。结果：
   - 设备甲建分组「客户组」并把项目放进去，服务端真存下了（`version 1`）；
@@ -132,7 +136,7 @@ POST /hosted/shared/account/start-org
   - 两台设备各改一处不刷新（甲新建「第二组」、乙给另一个项目置顶），服务端 `version 3`，两处改动都在，两边刷新后看到同一份；
   - 老服务端（路由 404）下页面没有提示条、没有脚本错误、分组照常能建、提示改口成「暂时只记在这台浏览器里」；
   - 云端 503 时侧栏出现「云端分组没同步上：…」，断线期间服务端没有这条、界面上还在；恢复后自动补上、提示消失。
-  - 看了截图（`…\scratchpad\shots\2-B-sees-group.png`、`5-C-pending.png` 等六张），没有页面脚本错误。
+  - 截图已提交在 `docs/reports/AGENT-claude-groups-local-cloud-shots/`（`1-A-group-made`、`2-B-sees-group`、`3-A-converged`、`3-B-converged`、`4-C-old-server`、`5-C-pending`、`6-C-healed` 七张），没有页面脚本错误。加限流之后又重跑了一遍，仍是 `ok: true`、11 步、`fails: []`。
 - 没跑：`vibe-start-probe.mjs`（真账号那一整套，6500～6509 十个端口，不在我这一段；协调者说整套验收会跑它）、`vibe-desktop-probe.mjs`（要真 Tauri 桌面壳）。没有改渲染，不跑导出确定性与快照重放。真实网络验证（节点上）没做：服务端没部署。
 
 ## 没做成的与原因
@@ -140,7 +144,7 @@ POST /hosted/shared/account/start-org
 1. **服务端没有部署到托管节点**：`start-org` 只在本分支的代码里，线上的文档服务还是老的。**部署前**线上页面碰到它回 404，已验证安静退回「只记在这台浏览器里」，不会报错；部署后才真正跨设备。部署要重启文档服务，按 `verification.md` 的「真实网络验证」在节点上跑一遍（测试账号：A 设备建分组、B 设备看到），这一步需要用户同意部署，我没做。
 2. **拖拽放进分组的入口**：现状没有，没有新增；底层函数已经拦住。
 3. **侧栏同时出现两套分组的界面**：这一版每屏只有一套；`realm` 标记、置灰的「另一套的分组」、同级键都已留好，只有单测覆盖（ORGR-04）。
-4. **服务端限流**：`start-org` 没有单独限流（和 `create/join/admin` 一样靠令牌核对、请求体 1 MB 上限）；每次保存是一次文件写。防抖 1 秒、页面可见时才拉，正常用量很小；要防恶意账号狂写可以另加一道，这是新增的三级机制，我没擅自加。
+4. （原「服务端限流没做」已由 V22-10 做完，见上。）限流只在内存里、按账号，没有全局总量上限；`get` 不限，所以一个账号可以狂读（读是读一个小文件，没有写放大），这一条没另行处理。
 5. 真账号服务的在线探针没跑（见上）。
 
 ## 对任务书与语义的更正建议

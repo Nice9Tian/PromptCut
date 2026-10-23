@@ -10,6 +10,8 @@
  *   ORG-6  存在文档服务数据目录下独立的文件里,重开存储还在;文件被换成别人的内容读出来当没有
  *   ORG-7  没配整理信息存储的部署:503 org-unavailable;没有 Bearer 照旧 401;不认识的 op 400
  *   ORG-8  只存已知字段:多余字段丢掉
+ *   ORG-9  put 按账号限流(V22-10):连打超过上限被拒 429 org-rate-limited(带 Retry-After)、被拒的没写、
+ *          冷却后又能写、不同账号各算各的、get 不限;缺省的数是 30 次 / 分钟
  *
  * 跑:npm test -- server/test/account-org-route.test.mjs
  */
@@ -23,7 +25,8 @@ import { Readable } from 'node:stream';
 import { openAccountLedger } from '../account/ledger.mjs';
 import { createAccountHostedRuntime } from '../docservice/account-hosted.mjs';
 import { mountAccountProjects } from '../docservice/modules/account-projects.mjs';
-import { createAccountOrgStore, ORG_LIMITS, checkOrg } from '../docservice/modules/account-org.mjs';
+import { createAccountOrgStore, ORG_LIMITS, ORG_WRITE_RATE, checkOrg } from '../docservice/modules/account-org.mjs';
+import { createGuestRateLimit } from '../account/guest-rate.mjs';
 import { createFileStore } from '../docservice/store/index.mjs';
 
 const A = 'acc_' + 'a'.repeat(24);
@@ -32,7 +35,7 @@ const ROUTE = '/hosted/shared/account/start-org';
 
 const orgOf = (extra = {}) => ({ v: 1, realm: 'cloud', groups: [], projects: [], chats: [], ...extra });
 
-async function fixture(t, { withStore = true, limits } = {}) {
+async function fixture(t, { withStore = true, limits, orgWriteLimit } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-org-route-'));
   const ledger = openAccountLedger({ file: path.join(dir, 'doc.sqlite'), authorityId: 'doc-org-fixture' });
   const people = { 'tok-a': { accountId: A, accountName: 'Alice', loginId: 'login-a' }, 'tok-b': { accountId: B, accountName: 'Bob', loginId: 'login-b' } };
@@ -53,14 +56,14 @@ async function fixture(t, { withStore = true, limits } = {}) {
   const fileStore = createFileStore({ dir: dataDir, log: () => {} });
   const orgStore = createAccountOrgStore({ store: fileStore, ...(limits ? { limits } : {}) });
   t.after(() => { try { runtime.close(); } catch { /* 已关 */ } fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); });
-  const mounted = mountAccountProjects({ authority: runtime.authority, issueSession: (o) => runtime.issueSession(o), ...(withStore ? { orgStore } : {}) });
+  const mounted = mountAccountProjects({ authority: runtime.authority, issueSession: (o) => runtime.issueSession(o), ...(withStore ? { orgStore } : {}), ...(orgWriteLimit ? { orgWriteLimit } : {}) });
   const post = async (token, body, { raw = false } = {}) => {
     const req = Readable.from([Buffer.from(raw ? body : JSON.stringify(body))]);
     Object.assign(req, { method: 'POST', url: ROUTE, socket: { remoteAddress: '203.0.113.1' },
       headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) } });
-    let status, value;
-    assert.equal(await mounted.handlePublic(req, { writeHead: (s) => { status = s; }, end: (text) => { value = JSON.parse(text); } }, {}), true);
-    return { status, value };
+    let status, value, headers;
+    assert.equal(await mounted.handlePublic(req, { writeHead: (s, h) => { status = s; headers = h; }, end: (text) => { value = JSON.parse(text); } }, {}), true);
+    return { status, value, headers };
   };
   const guest = async () => {
     const req = Readable.from([Buffer.from('{}')]);
@@ -243,4 +246,37 @@ test('ORG-8 只存已知字段:多余字段丢掉;标记只认 true', async (t) 
   assert.deepEqual(w.value.org, orgOf({ groups: [{ id: 'g', name: 'n', archived: true }], projects: [{ id: 'p', groupId: 'g', pinned: true }], chats: [{ id: 'c', projectId: 'p' }] }));
   // 纯函数同样
   assert.deepEqual(Object.keys(checkOrg(orgOf({ x: 1 }))).sort(), ['chats', 'groups', 'projects', 'realm', 'v']);
+});
+
+test('ORG-9 put 按账号限流:连打超过上限被拒 429 org-rate-limited、被拒的没写;冷却后又能写;不同账号各算各的;get 不限', async (t) => {
+  const clock = { t: 1_000_000 };
+  const orgWriteLimit = createGuestRateLimit({ max: 3, windowMs: 60_000, now: () => clock.t });
+  const f = await fixture(t, { orgWriteLimit });
+  const doc = (n) => orgOf({ groups: [{ id: 'g', name: `第${n}次` }] });
+  let version = 0;
+  for (let i = 1; i <= 3; i++) {
+    const w = await f.put('tok-a', version, doc(i));
+    assert.equal(w.status, 200, `第 ${i} 次该收`);
+    version = w.value.version;
+  }
+  const refused = await f.put('tok-a', version, doc(4));
+  assert.equal(refused.status, 429);
+  assert.equal(refused.value.code, 'org-rate-limited');
+  assert.ok(Number(refused.headers['retry-after']) >= 1, '带 Retry-After');
+  assert.equal((await f.get('tok-a')).value.version, 3, '被拒的那次没写');
+  assert.equal((await f.get('tok-a')).value.org.groups[0].name, '第3次');
+  // get 不限:被限流时照读
+  for (let i = 0; i < 10; i++) assert.equal((await f.get('tok-a')).status, 200);
+  // 被拒的这一次不算数:冷却一过就又能写
+  clock.t += 61_000;
+  const again = await f.put('tok-a', version, doc(4));
+  assert.equal(again.status, 200);
+  assert.equal(again.value.version, 4);
+  // 不同账号各算各的:A 被限时,B 照写(A 的次数没有算到 B 头上)
+  for (let i = 0; i < 2; i++) await f.put('tok-a', 4 + i, doc(5 + i));
+  assert.equal((await f.put('tok-a', 6, doc(7))).status, 429, 'A 又满了');
+  const b = await f.put('tok-b', 0, orgOf({ groups: [{ id: 'gb', name: 'B 的' }] }));
+  assert.equal(b.status, 200, 'B 不受 A 的限流影响');
+  // 缺省的数:30 次 / 分钟(三级,理由在 ORG_WRITE_RATE 的注释里)
+  assert.deepEqual({ ...ORG_WRITE_RATE }, { max: 30, windowMs: 60_000 });
 });

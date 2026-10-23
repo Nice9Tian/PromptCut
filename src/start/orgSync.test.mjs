@@ -14,6 +14,7 @@
  *   SYNC-08 云端比本机记的版本还旧(云端被重置):以云端为出发点,把本机整份再传上去
  *   SYNC-10 两台设备各自在存储接上之前做过分组、第一次连云端:取并集,谁的都不丢
  *   SYNC-11 同步记录坏了读出来当没记过;存下去读回来一致
+ *   SYNC-12 服务端限流(429 带 Retry-After):标待同步、改动留着、不早于它说的时间再试,不报错
  *   SYNC-09 stop 之后不再排任务、不再回调
  */
 import test from 'node:test';
@@ -283,4 +284,23 @@ test('SYNC-11 同步记录坏了读出来当没记过;存下去读回来一致',
   const local = parseSyncMeta(JSON.stringify({ version: 1, base: { v: 1, realm: 'local', groups: [{ id: 'g', name: 'x' }], projects: [], chats: [] }, dirty: false }));
   assert.deepEqual(local.base, emptyOrg('cloud'));
   assert.match(syncMetaKey('acc:x'), /^pc\.start\.orgsync\.cloud\./);
+});
+
+test('SYNC-12 服务端限流(429 带 Retry-After):标待同步、改动留着、不早于它说的时间再试,不报错', async () => {
+  const server = fakeServer();
+  const limited = Object.assign(new Error('org-rate-limited'), { status: 429, code: 'org-rate-limited', retryAfterSec: 30 });
+  let limit = true;
+  const transport = { get: server.transport.get, async put(v, o) { if (limit) throw limited; return server.transport.put(v, o); } };
+  const h = harness({ server, transport });
+  await h.sync.refresh();
+  h.edit(org({ groups: [{ id: 'a', name: '限流时改的' }] }));
+  await h.fire(); // 防抖到了,被限流
+  assert.equal(h.sync.status(), 'pending');
+  assert.equal(h.state.meta.dirty, true, '改动没丢');
+  assert.deepEqual(names(h.state.org), ['限流时改的']);
+  assert.equal(h.live()[0].ms, 30_000, '按服务端说的时间再试(比自己的 2 秒退避长)');
+  limit = false;
+  await h.fire();
+  assert.equal(h.sync.status(), 'synced');
+  assert.deepEqual(names(server.org), ['限流时改的']);
 });

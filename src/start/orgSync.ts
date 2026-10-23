@@ -211,7 +211,10 @@ export function createOrgSync(options: OrgSyncOptions): OrgSync {
       }
       failures += 1;
       setStatus("pending");
-      later(Math.min(opt.maxRetryMs, opt.retryMs * 2 ** (failures - 1)));
+      // 服务端说了多久以后再来(429 的 Retry-After,云端分组写入限流):不早于它;不丢改动,dirty 还在
+      const hint = (e as { retryAfterSec?: unknown } | null)?.retryAfterSec;
+      const asked = typeof hint === "number" && hint > 0 ? hint * 1000 : 0;
+      later(Math.max(asked, Math.min(opt.maxRetryMs, opt.retryMs * 2 ** (failures - 1))));
     }
   }
 
