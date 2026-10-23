@@ -5,7 +5,7 @@
  * 按某个 clipId 改好名的话,两个片段同文档就撞 id —— growth-curve.tsx:104 的 <linearGradient id={gradId}>
  * 按 id 解析到第一个,后挂的那片渐变整片错掉。所以预渲染侧保留原 id,挂哪个片段就按哪个片段改名。
  *
- * ── 探针结论(scripts/probes/svg-url-serialize-probe.mjs,2026-09-17,Chrome 152 headless)──
+ * ── 探针结论(scripts/archive/probes/svg-url-serialize-probe.mjs,2026-09-17,Chrome 152 headless)──
  * 疑点是当年 export-frames.mjs 的 `[^)"'&]*` 把 `&` 排除在外,而导出页地址含 `&`
  * (frame-pipeline.mjs:183 的 '/?export=1&timeline='),怕 outerHTML 把它序列化成 `&amp;` 后漏掉。
  * 实测(一条 growth-curve 片段,页面地址 http://127.0.0.1:5208/?export=1&timeline=data%3A…):

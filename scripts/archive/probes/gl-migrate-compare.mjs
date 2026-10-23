@@ -21,8 +21,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { PNG } from 'pngjs';
-import { exportFrames } from '../../server/bakery/index.mjs';
-import { flagArg } from './probe-connect.mjs';
+import { exportFrames } from '../../../server/bakery/index.mjs';
+import { flagArg } from '../../probes/probe-connect.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..');
 const base = flagArg('base');

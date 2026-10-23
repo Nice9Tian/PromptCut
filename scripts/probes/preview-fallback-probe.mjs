@@ -14,7 +14,7 @@
  *
  * 端口按分配的端口段:dev server 用 `npx vite --port 5230 --strictPort --host 127.0.0.1`(舞台端口 5231 / 5232)。
  *
- * 流程(和 `stream-editor-e2e.mjs` 同一套打法:编辑台 `?preview=stage`,探针自己按 `{ session, localRev }`
+ * 流程(和 `scripts/archive/probes/stream-editor-e2e.mjs`（已归档） 同一套打法:编辑台 `?preview=stage`,探针自己按 `{ session, localRev }`
  * 调预渲染进程的 preload,不等页面的防抖;`--page-preload` 时改由页面自己触发):
  *   0. 换空项目,加一张长粒子卡(重卡:按追帧上界判重),等它的轨道流满密度、快照铺上一截;
  *      再加两张金句药丸(一张旋转 25°、一张缩放 0.6),在父页的分派表里钉成重卡、**不给它们预渲染** ——

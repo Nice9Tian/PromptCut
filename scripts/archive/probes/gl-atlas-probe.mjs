@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { flagArg, openBrowser, serve, closeAll, listTargets } from './probe-connect.mjs';
+import { flagArg, openBrowser, serve, closeAll, listTargets } from '../../probes/probe-connect.mjs';
 
 const parentPort = Number(flagArg('parent-port', '5240'));
 const childPort = Number(flagArg('child-port', '5241'));

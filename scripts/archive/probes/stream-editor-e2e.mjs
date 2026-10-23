@@ -22,8 +22,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import puppeteer from 'puppeteer';
-import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
-import { devOrigin, flagArg } from './probe-connect.mjs';
+import { PROBE_CHROME_ARGS } from '../../probes/probe-chrome.mjs';
+import { devOrigin, flagArg } from '../../probes/probe-connect.mjs';
 
 const args = process.argv.slice(2);
 const origin = devOrigin(args);

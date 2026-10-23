@@ -49,3 +49,15 @@
 音频素材效果卡判重方案的前提实测（2026-09，排除表早就标着「历史」）：量「一次渲完 vs 分段 + 预滚」的接缝误差，
 为的是定分块参数。它不调用产品的判重逻辑、没有产品断言，实验里用的 24000 帧一块、随机抽样也已被正式语义里的
 4096 帧一块、顺序抽样取代。挪进来时改了一处仓库根的相对路径（多一层）。
+
+## 原型与迁移对账（6 支，2026-09～10）
+
+| 文件 | 它是什么 | 为什么归档 |
+|---|---|---|
+| `backdrop-probe.mjs` | 浏览器 `backdrop-filter` 能不能采样兄弟画布的可行性原型 | 不调产品代码、没有退出码断言；结论已落进毛玻璃的实现与 `docs/plan/r8-streams-task.md`、`r9-webgl-task.md` |
+| `gl-atlas-probe.mjs`、`gl-atlas-harness.html` | R9 共享渲染器的独立 Blob Worker 图集原型与它的夹具页 | 不调产品代码；真实产品那一侧由 `scripts/probes/gl-stage-probe.mjs` 验 |
+| `gl-migrate-compare.mjs` | R9 迁移期「迁移前 vs 迁移后」的对账件 | R9 已合入 main（`eff2011`），迁移对账做完即无用 |
+| `svg-url-serialize-probe.mjs` | SVG 里 `url(...)` 怎么序列化的一次性观测（2026-09-17，Chrome 152） | 全文 0 条断言、恒以 0 退出；结论已固化进 `src/render/snapshotRename.ts` 的文件头与 `snapshotRename.test.mjs` |
+| `stream-editor-e2e.mjs` | R8 轨道流在真编辑台里的端到端探针 | 文件头自己写明「只对打过 `r8-glue.patch` 的 dev server 有意义」，那个补丁在仓库和任何分支上都不存在，没打补丁时它会卡在「等流生产完」超时；R8 已合入 main，现在这条链由 `scrub-stream-probe.mjs` 等守门 |
+
+指向它们的散文指针已改到归档路径：`src/render/snapshotRename.ts`、`scripts/probes/preview-fallback-probe.mjs`、`scripts/probes/probe-connect.mjs`。

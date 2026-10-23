@@ -22,7 +22,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { connectArg, flagArg, openBrowser, pageFactory, listTargets, serve, closeAll, sleep }
-  from './probe-connect.mjs';
+  from '../../probes/probe-connect.mjs';
 
 const connect = connectArg();
 const jsonOut = flagArg('json');

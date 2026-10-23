@@ -319,7 +319,8 @@ export const V18_EXCLUDED = {
   'account-public-user-pages-probe.test.mjs': '公网网页探针自己的单测,由 npm test 扫(放在探针目录里)',
   'cloud-tools-c1-site.mjs': '网页采集探针 cloud-tools-c1-probe 的本机站点夹具,不单独跑',
   'below-diff-measure-probe.mjs': RENDER_REFACTOR, 'below-stream-common.mjs': RENDER_REFACTOR, 'browser-stream-e2e-probe.mjs': RENDER_REFACTOR, 'browser-stream-node-probe.mjs': RENDER_REFACTOR,
-  'canvas-encode-paths-probe.mjs': RENDER_REFACTOR, 'card-plan-key-compare.mjs': RENDER_REFACTOR, 'card-policy-particles-probe.mjs': RENDER_REFACTOR, 'card-policy-probe.mjs': RENDER_REFACTOR,
+  'canvas-encode-paths-probe.mjs': RENDER_REFACTOR, 'card-plan-key-compare.mjs': RENDER_REFACTOR, 'card-policy-particles-probe.mjs': RENDER_REFACTOR,
+  // card-policy-probe.mjs 已由清单项 S2-8 点名（2026-10-23 探针总审把 S2-8 从 6 行的转发壳改指它），不再写排除原因
   'merged-stream-common.mjs': RENDER_REFACTOR, // 合并流探针的公共件;本体已归档,但 stream-budget-probe 仍 import 它(2026-10-23 探针总审)
   'card-source-version-compare.mjs': RENDER_REFACTOR, 'card-table-digest-compare.mjs': RENDER_REFACTOR, 'emphasis-key-probe.mjs': RENDER_REFACTOR, 'export-paths-measure.mjs': RENDER_REFACTOR,
   'framework-card-pipeline-probe.mjs': RENDER_REFACTOR, 'guide-blind-check.mjs': '建卡指南的盲写验收(派不带上下文的子 Agent),渲染重构「丙」的验收,不是 0.7.18 的依据',
