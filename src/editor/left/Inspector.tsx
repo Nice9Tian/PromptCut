@@ -9,6 +9,7 @@ import { isComposite } from "../../kernel/envelope";
 import { CodeTab } from "./CodeTab";
 import { Frame3DForm } from "./Frame3DForm";
 import { ClipFilterForm } from "./ClipFilterForm";
+import { ClipSpeedForm } from "./ClipSpeedForm";
 import { ClipAudioFxForm } from "./ClipAudioFxForm";
 import { SoundEffectForm, TypingSoundControls } from "./SoundEffectForm";
 import { CardAudioForm } from "./CardAudioForm";
@@ -58,6 +59,7 @@ export function Inspector({ tab }: { tab: "form" | "code" }) {
           <span className="pc-left-faint">{(clip.end - clip.start).toFixed(2)}s</span>
         </div>
         {clip.soundEffect && <SoundEffectForm key={clip.id} clip={clip} />}
+        {(media?.kind === "video" || media?.kind === "audio") && <ClipSpeedForm key={clip.id} clip={clip} />}
         {media && (media.kind === "video" || media.kind === "image") && <ClipFilterForm clip={clip} />}
         {media && (media.kind === "video" || media.kind === "audio") && <ClipAudioFxForm clip={clip} />}
         </ReadOnlyFence>
@@ -114,6 +116,8 @@ export function Inspector({ tab }: { tab: "form" | "code" }) {
           <NumberField attrs={{ "data-pc": "clip-end" }} step={0.1} min={0} value={clip.end} onCommit={v => actions.moveClip(clip.id, { end: v })} className="w-16 pc-left-input is-sm" />
           <span className="pc-left-faint ml-auto">{(clip.end - clip.start).toFixed(2)}s</span>
         </div>
+        {/* 套了素材效果卡的视频段(片段同时带 cardId 和 mediaId):速度照样能改,取帧走素材节点的倍率 */}
+        {clip.mediaId && project.media.find(m => m.id === clip.mediaId)?.kind === "video" && <ClipSpeedForm key={`speed-${clip.id}`} clip={clip} />}
       </div>
       </ReadOnlyFence>
 

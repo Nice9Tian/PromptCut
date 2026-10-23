@@ -26,6 +26,8 @@
 /** 虚拟片段 id 的分隔符。片段 id 由 `newId` 生成(字母、数字、`-`),不会出现它 */
 export const FLAT_SEP = '~';
 
+import { clipSpeed } from "./clipTime.mjs";
+
 const FALLBACK_CUT_DURATION = 30;
 const MAX_DEPTH = 32;
 const EPS = 1e-9;
@@ -92,7 +94,8 @@ function expandSegment(project, seg, ctx, out, trackIdPrefix) {
       if (!(ve > vs + EPS)) continue;
       const lead = vs - s;
       const v = { ...c, id: `${idPrefix}${c.id}`, start: vs, end: ve, flat: { lead, chain, mount } };
-      if (c.mediaId && lead > 0) v.mediaOffset = (Number(c.mediaOffset) || 0) + lead;
+      // 截掉的那一截按片段速度推进素材起点(kernel/clipTime.mjs;缺省 1 时 lead × 1 = lead,逐位不变)
+      if (c.mediaId && lead > 0) v.mediaOffset = (Number(c.mediaOffset) || 0) + lead * clipSpeed(c);
       clips.push(v);
     }
     if (clips.length) out.push({ ...track, id: trackId, clips });

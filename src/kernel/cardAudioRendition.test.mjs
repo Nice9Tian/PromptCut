@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isAudiovisualCard, clipHasEmbeddedAudio, clipHasAudio, cardAudioIdentity, resolveCardAudioRendition } from './cardAudioRendition.mjs';
+import { isAudiovisualCard, clipHasEmbeddedAudio, clipHasAudio, clipHasCardAudio, clipGoesSilentBySpeed, cardAudioIdentity, resolveCardAudioRendition } from './cardAudioRendition.mjs';
 import { projectCardGraph } from './cardGraph.mjs';
 import { applyCardDefinition, cloneCardClipInstance } from './cardAuthoring.mjs';
 import { audioPlanOf } from './audioPlan.mjs';
@@ -105,4 +105,56 @@ test('剪辑段展开出来的有声卡:按被引用剪辑里的原片段核身�
   // 被引用剪辑里改了参数:展开出来的同样判过期,报的是原片段 id
   const stale = structuredClone(root); stale.cuts[1].tracks[0].clips[1].params = { gain: .9 };
   assert.throws(() => audioPlanOf(stale), /^Error: c 的卡片声音已过期|c 的卡片声音已过期/);
+});
+
+/*
+ * 时间轴角标的判据（2026-10-23 用户放开两件事之后，语义 `product/project-model.md`「声音」）：
+ * 变速段不出原声，但声画一体卡挂上去照常出声、变速段也能当音频素材效果卡的输入，
+ * 所以「变速」不再等于「没声音」—— 只有原声不出且没有卡片声音挂在它上面才算哑的。
+ * 这几条守的就是「别把正在出声的段标成没声音」。
+ */
+const videoProject = (cardNodes = []) => ({ cardNodes, media: [{ id: 'v', kind: 'video' }] });
+const fast = { id: 'c', mediaId: 'v', speed: 2 };
+
+test('变速段挂着声画一体卡：照常出声，不标「无原声」', () => {
+  const p = videoProject();
+  const clip = { ...fast, cardId: 'av' };
+  assert.equal(clipHasCardAudio(p, clip, hooks.getCard), true, '声画一体卡算卡片声音');
+  assert.equal(clipGoesSilentBySpeed(p, clip, hooks.getCard), false);
+  // 卡的声音已经生成好了（cardAudio 在手）同样算
+  assert.equal(clipGoesSilentBySpeed(p, { ...fast, cardAudio: { version: 1 } }), false);
+  // 卡自己声明了内嵌声音（节点上或片段上）也算
+  assert.equal(clipGoesSilentBySpeed(videoProject([{ id: 'n', embeddedAudio: true }]), { ...fast, nodeId: 'n' }), false);
+});
+
+test('变速段挂着音频素材效果卡：卡在出声，不标「无原声」', () => {
+  // 节点登记成 adapter:card + kind:audio 的就是音频素材效果卡
+  const p = videoProject([{ id: 'n', adapter: 'card', kind: 'audio' }]);
+  const clip = { ...fast, nodeId: 'n' };
+  assert.equal(clipHasCardAudio(p, clip), true);
+  assert.equal(clipGoesSilentBySpeed(p, clip), false);
+  // 只认得卡片定义（def.audio 是函数）时同样算：纯音频卡不是声画卡，但它出声
+  const audioOnly = { id: 'sfx', audio() {}, kind: 'audio' };
+  assert.equal(isAudiovisualCard(audioOnly), false, '前提：它不是声画一体卡');
+  assert.equal(clipGoesSilentBySpeed(videoProject(), { ...fast, cardId: 'sfx' }, id => id === 'sfx' ? audioOnly : undefined), false);
+});
+
+test('变速段什么卡都没挂：真的一点声音都不出，标', () => {
+  const p = videoProject();
+  assert.equal(clipHasCardAudio(p, fast), false);
+  assert.equal(clipGoesSilentBySpeed(p, fast), true);
+  // 挂了一张不出声的卡（没有 audio()）照样是哑的
+  assert.equal(clipGoesSilentBySpeed(p, { ...fast, cardId: 'plain' }, () => ({ id: 'plain', Component() {} })), true);
+});
+
+test('不变速的段行为不变：从来不标，挂不挂卡都一样', () => {
+  const p = videoProject();
+  for (const speed of [undefined, 1]) {
+    assert.equal(clipGoesSilentBySpeed(p, { id: 'c', mediaId: 'v', speed }), false, `speed=${speed}`);
+    assert.equal(clipGoesSilentBySpeed(p, { id: 'c', mediaId: 'v', speed, cardId: 'av' }, hooks.getCard), false);
+  }
+  // 变速的**声音**素材段本来就不在这条规矩里（speedMutesSource 只管有画面的素材）
+  assert.equal(clipGoesSilentBySpeed({ cardNodes: [], media: [{ id: 'a', kind: 'audio' }] }, { id: 'c', mediaId: 'a', speed: 2 }), false);
+  // 没有素材的段（纯卡片段）也不标
+  assert.equal(clipGoesSilentBySpeed(p, { id: 'c', speed: 2 }), false);
 });

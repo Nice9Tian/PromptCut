@@ -6,6 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stagePolicySnippets, STAGE_HEADERS_SNIPPET_FILE, EDITOR_POLICY_SNIPPET_FILE } from '../hosted/stage-policy-nginx.mjs';
@@ -125,4 +126,20 @@ test('OCS-N-06 舞台入口 stage.html:index.html 加一条 <meta> 策略,别的
   assert.ok(stage.indexOf(meta) < stage.indexOf('<script'));
   assert.equal(STAGE_ENTRY_FILE, 'stage.html');
   assert.throws(() => stageEntryHtml('<html><body></body></html>'), /没有 <head>/);
+});
+
+test('OCS-N-07 账号公开路由:服务端的 ${PUBLIC}/… 集合必须和 nginx 白名单逐个对上(0.7.21 漏了 guest,线上游客登录 403)', async () => {
+  // 2026-10-23：nginx 的账号路由是**白名单**（`location ~ ^/hosted/shared/account/(…)$`，这一条不剥前缀）；
+  // 没进白名单的路由会掉进下面那条 `location /hosted`，被 `rewrite ^/hosted/?(.*)$ /$1` 剥掉前缀，
+  // 服务端就匹配不到、回 403 account-required。0.7.21 新加的 `guest` 正是这么漏的，线上游客登录直接坏掉。
+  const source = await readFile(new URL('../docservice/modules/account-projects.mjs', import.meta.url), 'utf8');
+  const served = [...new Set([...source.matchAll(/\$\{PUBLIC\}\/([a-z-]+)/g)].map((m) => m[1]))].sort();
+  assert.ok(served.length >= 8, `服务端路由至少八条，实际 ${served.join(',')}`);
+
+  const conf = read('nginx-site-promptcut.conf');
+  const listed = conf.match(/\^\/hosted\/shared\/account\/\(([^)]+)\)\$/);
+  assert.ok(listed, 'nginx 模板里要有账号路由的白名单');
+  const allowed = listed[1].split('|').map((s) => s.trim()).sort();
+  const missing = served.filter((r) => !allowed.includes(r));
+  assert.deepEqual(missing, [], `这些服务端路由没进 nginx 白名单，上线会 403：${missing.join(', ')}`);
 });

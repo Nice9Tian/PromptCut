@@ -221,7 +221,7 @@
 
 源文本目标 G 里下面这些句子判断为已过时或被取代，逐条说明：
 
-1. **「G0-a 纯探针（一天，第 4 步准入）」的待办口径**——G0-a 已于 2026-09-19 跑完并全过，正文改写成结论 + 报告路径，不再写成待办。三项探针的脚本已在仓库里（`scripts/probes/videodecoder-probe.mjs` / `backdrop-probe.mjs` / `oac-probe.mjs` / `probe-connect.mjs`）。
+1. **「G0-a 纯探针（一天，第 4 步准入）」的待办口径**——G0-a 已于 2026-09-19 跑完并全过，正文改写成结论 + 报告路径，不再写成待办。三项探针的脚本已在仓库里：`scripts/archive/probes/videodecoder-probe.mjs`、`scripts/archive/probes/backdrop-probe.mjs`（这两支 2026-10-23 的探针总审归档，归档里照旧跑得动，见 `scripts/archive/probes/README.md`），`scripts/probes/oac-probe.mjs` 仍在原处（产品代码 `server/vite-plugin-stage-ports.ts` 引它作 `Origin-Agent-Cluster` 头的实测出处）；它们共用的 `scripts/probes/probe-connect.mjs` 也仍在原处。
 2. **「任一不过，第 4 步不开工」**——已经全过，这句没有再成立的对象；准入条件现在只剩 G0-b。
 3. **G0-b 里「量 `frameMs`（稳态每帧）」的字面歧义**——`frameMs` 作为成本记录字段在 R1 已删，判重只看 `stepMs`。G0-b 量的是**生产侧每帧耗时**，和成本记录无关，正文里保留这个名字但加了口径注（同 `planPlaybackBatch` 的参数）。
 4. **G3 公共命令块里的 `-g 15 -keyint_min 15 -sc_threshold 0 -bf 0`**——从公共块挪进了每个编码器各自一行的参数表（`-sc_threshold` 等不是所有编码器都认，直接拼会失败）。

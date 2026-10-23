@@ -123,3 +123,15 @@
 - 不动宿主机网络（断网只在应用层模拟）。
 - 新增费用、需要人在机器旁的物理操作：先找不花钱、不用人手的路；绕不过就记「待用户项」，继续其它工作。
 - `docs/local.md` 里的值不许打印、不许进提交、日志、报告、消息。
+
+## 部署脚本必须核的事（2026-10-23 验收失败后补）
+
+0.7.21 上线后用户验收发现线上进不了项目。查下来是部署这一环的两个盲点，**以后每次部署都要核**：
+
+1. **五个服务各自跑在哪棵树**。素材服务（`promptcut-asset-v2`）的 systemd unit 把 `WorkingDirectory` / `ExecStart` / `ReadOnlyPaths` 钉在 `releases/41b6d335`（**0.7.18 的树**），而文档服务在 `releases/35f7b2ab`。部署脚本开头的 ABORT 检查只核了文档服务、Agent、Agent-root、渲染四个，**漏了素材服务**，于是它一直跑 0.7.18 的代码、也从没被重启过。
+   → 部署前逐个核 `systemctl show <服务> -p ExecStart`，**五个服务都要指向本次部署的那棵树**；对不上就中止。
+2. **重启清单要包含素材服务，且顺序是「先素材、后文档」**。素材服务与 Agent 之间的运行产物观察者通道（`asset-run-client.mjs`）一旦 socket 断开就**永久 latch 成 `asset-run-observer-lost`**，不会自愈；而它又是主消费者的参与方，一坏就把整个素材服务拖成 not-ready → 发不出素材票据 → **所有人都进不了项目**（表现为「项目会话暂时不可用，请稍后重试。」）。
+   → 部署后核一次 `journalctl -u promptcut-asset-v2 --since "1 min ago" | grep -c not-ready`，不为 0 就是没起来。
+
+另外 **nginx 的账号路由是白名单**（landing 站点 `location ~ ^/hosted/shared/account/(…)$`），新加的公开路由不加进去就会被下面那条剥前缀的规则吃掉、回 403。本版新加的 `guest` 就是这么漏的。
+→ 服务端 `account-projects.mjs` 的 `${PUBLIC}/…` 路由集合必须与 nginx 白名单一致，部署前对一遍。

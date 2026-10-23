@@ -6,6 +6,7 @@
  * "在动"，只是不一样。
  */
 import type { ClipMotion } from "./types";
+import { mediaSpanOf, mediaTimeAt, timelineSpanOf } from "./clipTime.mjs";
 
 export interface BuildMotionInput {
   /** 轨迹：逐帧的**素材原始像素**坐标，覆盖整段素材 */
@@ -17,8 +18,8 @@ export interface BuildMotionInput {
   stage: { width: number; height: number };
   /** 卡片段在时间轴上的区间（秒） */
   card: { start: number; end: number };
-  /** 提供画面的那个素材段：它在时间轴上的起点，以及它从素材第几秒开始播 */
-  clipOfMedia: { start: number; mediaOffset: number };
+  /** 提供画面的那个素材段：它在时间轴上的起点，它从素材第几秒开始播，以及片段速度（缺省 1，见 kernel/clipTime.mjs） */
+  clipOfMedia: { start: number; mediaOffset: number; speed?: number };
   pointIndex: number;
   whenHidden: "hold" | "hide";
 }
@@ -60,10 +61,11 @@ export function buildClipMotion(input: BuildMotionInput): BuildMotionResult {
   }
 
   const frameStep = media.duration / total;
-  // 卡片起点那一刻，画面正在播素材的第几秒
-  const mediaTimeAtStart = clipOfMedia.mediaOffset + (card.start - clipOfMedia.start);
+  // 卡片起点那一刻，画面正在播素材的第几秒（含片段速度，kernel/clipTime.mjs）
+  const mediaTimeAtStart = mediaTimeAt(clipOfMedia, card.start);
   const i0 = Math.max(0, Math.min(total - 1, Math.round(mediaTimeAtStart / frameStep)));
-  const need = Math.ceil((card.end - card.start) / frameStep) + 1;
+  // 卡片这段时长覆盖多少素材：变速段按倍率折算（缺省 1 时 × 1 逐位不变）
+  const need = Math.ceil(mediaSpanOf(clipOfMedia, card.end - card.start) / frameStep) + 1;
   const i1 = Math.min(total, i0 + Math.max(need, 1));
 
   const sliceXy = xy.slice(i0, i1);
@@ -85,7 +87,8 @@ export function buildClipMotion(input: BuildMotionInput): BuildMotionResult {
       pointIndex,
       offsets,
       visible: sliceVis,
-      frameStep,
+      // 存的是时间轴上相邻两点隔几秒（播放时按卡片本地时间 / frameStep 取点）：变速段素材步长除以倍率
+      frameStep: timelineSpanOf(clipOfMedia, frameStep),
       whenHidden,
     },
     summary: {

@@ -1,6 +1,6 @@
 /**
  * 查询渲染调度的端到端探针(`docs/semantics/product/rendering.md`「Agent 优先只是插队」「AI 栏的操作预览可以插队」,
- * `docs/semantics/mechanism/rendering.md`「查询渲染与预渲染进程」;报告 `docs/reports/AGENT-query-render.md`)。
+ * `docs/semantics/mechanism/rendering.md`「查询渲染与预渲染进程」;报告 `docs/archive/agent-reports/AGENT-query-render.md`)。
  * 起编辑器进程 + 预渲染进程(真 Chrome),读预渲染进程 `GET /api/frames/diagnostics` 的 `scheduler`
  * (`FramePipeline.noteSched`:每类活在哪个实例上开工的计数)逐条核对:
  *

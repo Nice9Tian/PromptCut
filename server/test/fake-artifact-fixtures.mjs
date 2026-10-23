@@ -84,7 +84,7 @@ export const metaOf = (t) => ({ taskId: t.id, nodeId: 'node-1', token: 1 });
 export const htmlOf = (n, tag = 'A') => `<div data-pc-scene="" data-f="${n}">${tag} frame ${n} ${'·'.repeat(n % 7)}</div>`;
 export const bigHtml = (n = 0) => `<div data-pc-scene="" data-f="${n}">${'x'.repeat(310 * 1024)}</div>`;
 /**
- * `data:image` 占比约为 `share` 的一帧 HTML（按 `snapshot-size-probe.mjs` 的 `dataImageBytes` 口径：
+ * `data:image` 占比约为 `share` 的一帧 HTML（按 `scripts/archive/probes/snapshot-size-probe.mjs` 的 `dataImageBytes` 口径（该探针 2026-10-23 归档，算法在这里是复制的，不受影响）：
  * 匹配 `data:image/<type>;base64,<base64>` 的字符数，除以整帧 UTF-8 字节数）。
  */
 export function dataImageHtml(n, share, total = 8000) {
@@ -95,7 +95,7 @@ export function dataImageHtml(n, share, total = 8000) {
   const pad = Math.max(0, total - head.length - uri.length - tail.length - 6);
   return `${head}${uri}${tail}${'p'.repeat(pad)}</div>`;
 }
-/** 与 `scripts/probes/snapshot-size-probe.mjs` 的 `dataImageBytes` 相同的算法（复制，不引用探针） */
+/** 与 `scripts/archive/probes/snapshot-size-probe.mjs`（2026-10-23 归档） 的 `dataImageBytes` 相同的算法（复制，不引用探针） */
 const DATA_IMG = /data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+/g;
 export const dataImageBytes = (s) => { let n = 0; for (const m of (s || '').match(DATA_IMG) || []) n += m.length; return n; };
 

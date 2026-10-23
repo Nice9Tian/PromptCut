@@ -414,7 +414,7 @@ async function main() {
       const page = pages[index], account = fixture.accounts[index];
       const pageLabel = pageLabels[index];
       await recordPageStep(page, pageLabel, 'login:navigate');
-      await page.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded' });
+      await page.goto(`${ORIGIN}/editor/?ui=classic`, { waitUntil: 'domcontentloaded' });
       await recordPageStep(page, pageLabel, 'login:form-loaded');
       await fill(page, 'input[name="username"]', account.name); await fill(page, 'input[name="password"]', account.password);
       const submit = '[data-pc="account-projects"] form button.sp-primary-btn';

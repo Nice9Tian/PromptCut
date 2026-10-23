@@ -87,7 +87,7 @@ const FPS = PROJECT.fps;
 const CLIP = { start: 0.4, duration: 8.4 };
 /** 这条流自己的第一帧 */
 const ORIGIN_FRAME = Math.round(CLIP.start * 30);
-/** 块上不放字:流的位图里文字是灰度抗锯齿、精确活渲是子像素抗锯齿(`docs/reports/AGENT-rr-a1-integ.md` 记过),带字时边缘的差贴着 0.2% 的通过线 */
+/** 块上不放字:流的位图里文字是灰度抗锯齿、精确活渲是子像素抗锯齿(`docs/archive/agent-reports/AGENT-rr-a1-integ.md` 记过),带字时边缘的差贴着 0.2% 的通过线 */
 const LABEL = '';
 /** 甲报的浏览器标识:非 Chromium 内核(带 `Firefox/`),页面据此不当渲染节点 */
 const NON_NODE_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130.0) Gecko/20100101 Firefox/130.0';

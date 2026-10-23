@@ -74,8 +74,13 @@ function accountFetchAllowed(path: string, input: RequestInfo | URL, init: Reque
   const editorPage = [root, root.slice(0, -1) || '/', `${root}index.html`].includes(page.pathname) || readProjectAddress(page, root) !== null;
   if (!editorPage || page.searchParams.has('stage')) return false;
   const members = path === '/hosted/shared/account/members';
-  const expected = members ? 'POST' : path === '/api/account/me' || path === '/api/account/projects' ? 'GET' :
-    ['/api/account/login', '/api/account/logout', '/api/account/editor/session', '/api/account/editor/renew'].includes(path) ? 'POST' : null;
+  // `third-party/*` 这三条和上面几条同类：都是**官网账号服务**的接口，不是编辑器进程的。
+  // 漏了它们，在线浏览器里「用 Google 继续」会被这道闸门直接拦掉（2026-10-23 真跑时撞到）。
+  // 接口在 VisuHive 仓库 account/app.mjs，说明见那边的 docs/third-party-login.md。
+  const GET_PATHS = ['/api/account/me', '/api/account/projects', '/api/account/third-party/config'];
+  const POST_PATHS = ['/api/account/login', '/api/account/logout', '/api/account/editor/session', '/api/account/editor/renew',
+    '/api/account/third-party/login', '/api/account/third-party/register'];
+  const expected = members ? 'POST' : GET_PATHS.includes(path) ? 'GET' : POST_PATHS.includes(path) ? 'POST' : null;
   const consent = path === '/api/account/cloud-agent-consent';
   if (!expected && !consent) return false;
   const request = typeof Request !== 'undefined' && input instanceof Request ? input : null;

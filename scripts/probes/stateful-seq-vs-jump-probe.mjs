@@ -27,7 +27,7 @@
  * 要先有在线构建:`npx vite build --mode online`(产出 `dist-online/`)。
  *
  * 2026-10-13 起产品代码已经照 sync-finish、exact-steps、settle 这三样改了(`src/render/pinAnimations.ts`、`src/render/stageClock.ts`、
- * `src/StageView.tsx` 的 `bakeFrame`;`docs/reports/AGENT-rr-push-exact.md`):**不带任何干预跑,应当退出 0**。这三样干预留着,
+ * `src/StageView.tsx` 的 `bakeFrame`;`docs/archive/agent-reports/AGENT-rr-push-exact.md`):**不带任何干预跑,应当退出 0**。这三样干预留着,
  * 只为在改之前的构建上复现当时的拆解;在现在的构建上再加它们没有意义(`exact-steps` 还会把舞台时钟的函数换掉)。
  * 改前改后各条路逐帧差多少,见 `stage-push-before-after-probe.mjs`。
  *

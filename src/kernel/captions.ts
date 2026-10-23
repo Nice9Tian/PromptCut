@@ -12,6 +12,8 @@
  * 纯字符串和数字计算,不碰 store、不碰 DOM。
  */
 
+import { timelineSpanOf, timelineTimeAt } from "./clipTime.mjs";
+
 /** 一条字幕。start / end 是**相对字幕卡起点**的秒数,和 lines 里写的一样 */
 export interface CaptionLine {
   start: number;
@@ -210,6 +212,8 @@ export interface MediaPlacement {
   end: number;
   mediaId?: string;
   mediaOffset?: number;
+  /** 片段速度(缺省 1),见 kernel/clipTime.mjs */
+  speed?: number;
 }
 
 /**
@@ -220,10 +224,16 @@ export interface MediaPlacement {
  * 所以这个坑很久都没被踩出来。落在素材没被用到的部分就返回 null(那句话根本不会播)。
  */
 export function mapMediaTime(clips: MediaPlacement[], mediaId: string, mediaSec: number): number | null {
+  return placeMediaTime(clips, mediaId, mediaSec)?.tl ?? null;
+}
+
+/** 同 mapMediaTime,另回落在哪一段上(要按那一段的速度换算句长) */
+function placeMediaTime(clips: MediaPlacement[], mediaId: string, mediaSec: number): { tl: number; clip: MediaPlacement } | null {
   for (const c of clips) {
     if (c.mediaId !== mediaId) continue;
-    const tl = c.start + (mediaSec - (c.mediaOffset ?? 0));
-    if (tl >= c.start - 1e-6 && tl < c.end) return tl;
+    // 素材秒 → 时间轴秒按 kernel/clipTime.mjs 的统一换算(含片段速度)
+    const tl = timelineTimeAt(c, mediaSec);
+    if (tl >= c.start - 1e-6 && tl < c.end) return { tl, clip: c };
   }
   return null;
 }
@@ -250,10 +260,11 @@ export function captionsFromTranscript(
 ): { from: number; to: number; lines: CaptionLine[] } {
   const mapped: { from: number; to: number; text: string }[] = [];
   for (const s of segments) {
-    const from = mapMediaTime(clips, mediaId, s.start);
-    if (from == null) continue;
-    // 末尾那一刻正好落在 clip 边界上,mapMediaTime 会判成「不在里面」,所以止点自己按时长推
-    const to = from + Math.max(0, s.end - s.start);
+    const hit = placeMediaTime(clips, mediaId, s.start);
+    if (hit == null) continue;
+    const from = hit.tl;
+    // 末尾那一刻正好落在 clip 边界上,mapMediaTime 会判成「不在里面」,所以止点自己按时长推(素材时长按那一段的速度折成时间轴时长)
+    const to = from + timelineSpanOf(hit.clip, Math.max(0, s.end - s.start));
     const text = clean(s.text);
     if (!text || to <= from) continue;
     mapped.push({ from, to, text });

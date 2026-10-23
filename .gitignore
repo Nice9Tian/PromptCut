@@ -58,5 +58,5 @@ reply_to_users_goal.md
 docs/local.md
 docs/auto_long_work/local.md
 
-# promptcut-dev 技能给读不到它的外部工具(codex、agy)准备的简版要求,本机生成、不入库
+# 给读不到 promptcut-dev 技能的工具（codex、agy 等）准备的简版要求，本机生成，不入库
 /my_agent/

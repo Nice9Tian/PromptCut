@@ -19,8 +19,12 @@ export function projectScopeOfRoot(root) { return roots().get(path.resolve(root)
 
 /**
  * createProjectAssetStores({ dir, kind:'fs'|'memory', contentTypeForExt?, chunkSize? })
- * -> { v:2, project(id):{projectId,root,dir,stores:{media,snap,px}}, store(id,ns), removeProject(id) }
+ * -> { v:2, project(id):{projectId,root,dir,stores:{media,snap,px}}, store(id,ns), removeProject(id, { recreatable? }) }
  * 每项目独立完整库/分片/索引/tiers/queue/px usage；同 hash 不跨库复用。removeProject 是内部删除机制，非用户权限决策。
+ * `recreatable: true`（删掉的项目回收字节用，`project-reaper.mjs`，claude/guest-fix）：目录删干净之后撤掉「已删除」标记，
+ * 同一个项目号以后还能再建一个**空的**库。谁能再建由文档服务（中央 owner）定：它只让原创建者重用自己删掉的项目号
+ * （`server/account/authority.mjs` 的 `createProject`），每一次读写都先过它的核权。删的途中、删失败时标记一直在，
+ * 这个项目号的库一律 `project-gone`，不会有新字节写进删了一半的目录。
  */
 export function createProjectAssetStores({ dir, kind = 'fs', contentTypeForExt, chunkSize } = {}) {
   if (typeof dir !== 'string' || !dir) throw new TypeError('project asset dir required');
@@ -63,13 +67,16 @@ export function createProjectAssetStores({ dir, kind = 'fs', contentTypeForExt, 
   return {
     v: 2, dir: base, project,
     store(projectId, ns) { if (!['media', 'snap', 'px'].includes(ns)) throw new TypeError('invalid-namespace'); return project(projectId).stores[ns]; },
-    async removeProject(projectId) {
-      const p = project(projectId);
-      // 从注册表撤去前先移走物理目录；旧引用不能被重用为新库。调用者必须先关闭该项目任务/流。
+    async removeProject(projectId, { recreatable = false } = {}) {
+      // 上一次删到一半失败（已标成删除、目录还在）的再删一次：不经 project()，它对已删除的号只会抛 project-gone
+      const p = removed.has(assertProjectId(projectId)) ? projects.get(projectId) ?? null : project(projectId);
+      const dir = p?.dir ?? path.join(base, 'projects', projectStorageKey(projectId));
+      // 先标成删除、让旧引用失效，再删物理目录；旧引用不能被重用为新库。调用者必须先关闭该项目任务/流。
       removed.add(projectId);
-      p.retire();
-      if (kind === 'fs') await fs.rm(p.dir, { recursive: true, force: true });
+      p?.retire();
       projects.delete(projectId);
+      if (kind === 'fs') await fs.rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      if (recreatable) removed.delete(projectId);
       // 保持 root 身份，避免删除后迟到代码退回全局环境路径。中央 owner 必须授权重新创建。
       return { projectId, removed: true };
     },

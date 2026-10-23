@@ -1,6 +1,6 @@
 /**
  * 剪辑段里的有声动效卡:导出前自动生成声音递归进剪辑段,成片里听得到,并按剪辑段的音量、淡入淡出、静音处理
- * (剪辑段首版局限补齐第 3 项,`docs/reports/AGENT-cut-segment-followups.md`)。
+ * (剪辑段首版局限补齐第 3 项,`docs/archive/agent-reports/AGENT-cut-segment-followups.md`)。
  *
  *   node scripts/probes/cut-segment-card-sound-probe.mjs [--port 5373] [--out <目录>]
  *

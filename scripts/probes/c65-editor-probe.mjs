@@ -39,7 +39,8 @@
  * - 计时都只用本机时钟,不跨机比时间戳:
  *     creator 的 `memberEditSeenMs` = 本页面 store 里出现成员那一处的时刻 − 收到成员「已提交」报告的时刻(先看到就记 0);
  *     另记 `memberEditSinceGoMs` = 看到的时刻 − 自己发出 `u2-go` 的时刻(含协调口往返与成员动手的时间,是上界)。
- *     member 的 `creatorEditSeenMs` 同理。两者都要求 ≤ 5000 ms(上界只记录,不判)。
+ *     member 的 `creatorEditSeenMs` 同理。两者都**只记录、不判**(2026-10-23 探针总审按 verification.md「耗时只记录,不当闸门」改;
+ *     原先要求 ≤ 5000 ms,语义里没有这条时间承诺)。看到的是哪一处、是不是那张卡照旧判。
  * - projectRev 核对:member 进入后,页面的 rev / 项目 sha256 与「探针另开一条凭证连接直接向主机(托管端)project.open」读到的相同,
  *   且与 creator 报的相同;结束时两边再各核一次最终版本。
  * - 截图:`<role>-1-*.png`(creator 创建后 / member 进入后)、`<role>-2-*.png`(看到对方改动后)。
@@ -911,7 +912,7 @@ async function runCreator(res, fails) {
   res.memberEdit = { clipId: report.clipId, value: report.value, memberCommitMs: report.commitMs, seenClipId: seen.clipId, flash: seen.flash };
   res.shots.push(seen.shot);
   say('creator.saw-member-edit', { memberEditSeenMs: res.memberEditSeenMs, memberEditSinceGoMs: res.memberEditSinceGoMs, ...res.memberEdit });
-  if (!(res.memberEditSeenMs <= 5000)) fails.push('memberEditSeenMs>5000');
+  // memberEditSeenMs 量的是改动从一边到另一边要多久（含协调口往返），语义里没有这条时间承诺：耗时只记录,不当闸门(verification.md,2026-10-07 用户改定);2026-10-23 探针总审改
   if (seen.clipId !== report.clipId) fails.push('member-edit-wrong-clip');
 
   // ---------- 本页面改一处,交成员核对
@@ -1038,7 +1039,7 @@ async function runMember(res, fails) {
     res.creatorEdit = { clipId: report.clipId, value: report.value, creatorCommitMs: report.commitMs, seenClipId: seen.clipId, flash: seen.flash };
     res.shots.push(seen.shot);
     say('member.saw-creator-edit', { creatorEditSeenMs: res.creatorEditSeenMs, ...res.creatorEdit });
-    if (!(res.creatorEditSeenMs <= 5000)) fails.push('creatorEditSeenMs>5000');
+    // creatorEditSeenMs 同上，只记录不判（耗时只记录,不当闸门(verification.md,2026-10-07 用户改定);2026-10-23 探针总审改）
     if (seen.clipId !== report.clipId) fails.push('creator-edit-wrong-clip');
 
     await settle(B);

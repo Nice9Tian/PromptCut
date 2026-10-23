@@ -1,6 +1,6 @@
 /**
  * 用 remotion 式框架写的用户卡，经真的预渲染管线和导出管线跑一遍
- * （任务书 `docs/plan/render-refactor-task.md`「乙」框架、「丙」建卡指南；丙的报告 `docs/reports/AGENT-rr-guide.md`
+ * （任务书 `docs/plan/render-refactor-task.md`「乙」框架、「丙」建卡指南；丙的报告 `docs/archive/agent-reports/AGENT-rr-guide.md`
  * 只验到：指南例子过建卡检查、在线页面的卡片运行时、托管渲染的隔离工作进程。本探针补验：这种卡经**桌面的预渲染进程**产轨道流、
  * 经**导出页**导出、再和**编辑器预览**对上）。
  *

@@ -86,12 +86,20 @@ export function stageCspHeader(editorOrigin, { template = false } = {}) {
 }
 
 /**
- * 编辑器页的策略:只加舞台隔离必需的一条 —— 舞台 iframe 只能载入本源与两个舞台源(它自己跳走也归这条管)。
+ * 第三方登录(Google Identity Services)画按钮和弹窗用的 iframe 源。
+ * 2026-10-23 线上实测:不放行它,登录页上「通过 Google 继续操作」会被这条 CSP 挡掉
+ * (控制台报 `Framing 'https://accounts.google.com/' violates ... frame-src`),哪怕控制台那边把来源配好了也没用。
+ */
+export const THIRD_PARTY_SIGNIN_FRAME_ORIGIN = "https://accounts.google.com";
+
+/**
+ * 编辑器页的策略:只加舞台隔离必需的一条 —— 舞台 iframe 只能载入本源、两个舞台源,
+ * 外加第三方登录那一个源(见上)。它自己跳走也归这条管。
  * `blob:` 与 `data:` 不放行:编辑器页自己没有这样的子框架。
  */
 export function editorCspHeader(stageOrigins, { template = false } = {}) {
   const list = (Array.isArray(stageOrigins) ? stageOrigins : []).map((o) => (template ? String(o) : checkOrigin(o, "舞台源")));
-  return ["frame-src 'self'", ...list].join(" ");
+  return ["frame-src 'self'", ...list, THIRD_PARTY_SIGNIN_FRAME_ORIGIN].join(" ");
 }
 
 /**

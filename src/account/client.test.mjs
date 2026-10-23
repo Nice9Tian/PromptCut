@@ -283,3 +283,104 @@ test('STF1 account session keeps render.streamsAllowed (permission group verdict
   await assert.rejects(client.setHostedOption(projectId, 'render', 'streams', true, 1, 'streams-on'),
     { status: 403, code: 'permission-denied', message: '你的账号没有开启这一项的权限，请联系托管方。' });
 });
+
+// —— 第三方登录（VisuHive 仓库 docs/third-party-login.md）——
+// 后半段和密码登录是同一套：建立网站会话之后由 ensureLogin() 换编辑器令牌，所以这里要盯住
+// 「真的走到了 /api/account/editor/session」，不然只是建了网站会话、编辑器其实没登进去。
+
+/** 起一个只认第三方那几条路的假后端；`on` 里可以逐条改回包 */
+function thirdPartyClient(on = {}) {
+  const calls = [];
+  const client = createAccountClient({ online: true, origin: 'https://visuhive.com', device, now: () => 1000,
+    fetch: async (url, init) => {
+      const path = url.pathname;
+      calls.push({ path, method: init?.method ?? 'GET', body: init?.body ? JSON.parse(init.body) : undefined,
+        csrf: init?.headers?.['X-CSRF-Token'], credentials: init?.credentials, auth: init?.headers?.Authorization });
+      if (Object.hasOwn(on, path)) { const r = on[path]; return typeof r === 'function' ? r() : r; }
+      if (path.endsWith('/me')) return reply({ ok: true, account, csrfToken: 'csrf' });
+      if (path.includes('/editor/')) return reply(credential());
+      return reply({ ok: false, code: 'not-found' }, 404);
+    } });
+  return { client, calls };
+}
+
+test('第三方登录：问后端开没开；后端是旧版（没这条接口）就当没开，不是报错', async () => {
+  const open = thirdPartyClient({ '/api/account/third-party/config': reply({ ok: true, providers: [
+    { provider: 'google', clientId: 'cid.apps.googleusercontent.com' },
+    { provider: 'google', clientId: '' },            // 没有 clientId，丢掉
+    { provider: 'facebook', clientId: 'x' },         // 不认识的，丢掉
+    null,
+  ] }) });
+  assert.deepEqual(await open.client.thirdPartyProviders(), [{ provider: 'google', clientId: 'cid.apps.googleusercontent.com' }]);
+  assert.equal(open.calls[0].method, 'GET');
+
+  // 旧后端没有这条路由 → 回空数组，界面据此整块不显示
+  const old = thirdPartyClient();
+  assert.deepEqual(await old.client.thirdPartyProviders(), []);
+  // 后端整个连不上也一样，不该把登录页拖垮
+  const down = thirdPartyClient({ '/api/account/third-party/config': () => { throw Error('offline'); } });
+  assert.deepEqual(await down.client.thirdPartyProviders(), []);
+});
+
+test('第三方登录：第一次用这个 Google 账号 → need-name，并且不去换编辑器令牌', async () => {
+  const { client, calls } = thirdPartyClient({
+    '/api/account/third-party/login': reply({ ok: true, next: 'need-name', ticket: 'tkt-1', email: 'a@example.com' }),
+  });
+  const result = await client.loginWithThirdParty('google', 'id-token-abc', true);
+  assert.deepEqual(result, { kind: 'need-name', ticket: 'tkt-1', email: 'a@example.com' });
+  // 还没有账号，这一步绝不能去要编辑器令牌
+  assert.equal(calls.some((c) => c.path.includes('/editor/')), false);
+  // 令牌原样转走，这一层不解析它
+  const post = calls.find((c) => c.path.endsWith('/third-party/login'));
+  assert.deepEqual(post.body, { provider: 'google', token: 'id-token-abc', remember: true });
+  assert.equal(post.credentials, 'same-origin');   // 要带 cookie
+  assert.equal(post.csrf, 'csrf');                 // 要带 CSRF
+  assert.equal(post.auth, undefined);              // 不是 bearer 那条路
+});
+
+test('第三方登录：已关联过 → 建立网站会话再换编辑器令牌，account 来自编辑器那一步', async () => {
+  const { client, calls } = thirdPartyClient({
+    '/api/account/third-party/login': reply({ ok: true, account, csrfToken: 'csrf-2' }),
+  });
+  const result = await client.loginWithThirdParty('google', 'id-token-abc', false);
+  assert.equal(result.kind, 'signed-in');
+  assert.deepEqual(result.account, account);
+  const order = calls.map((c) => c.path);
+  assert.ok(order.includes('/api/account/third-party/login'));
+  assert.ok(order.includes('/api/account/editor/session'), `没走到换编辑器令牌那一步：${order.join(' → ')}`);
+  assert.ok(order.indexOf('/api/account/editor/session') > order.indexOf('/api/account/third-party/login'));
+});
+
+test('第三方登录：建账号那一步会带上小票；账号名被占时说的是账号名，不是项目名', async () => {
+  const ok = thirdPartyClient({ '/api/account/third-party/register': reply({ ok: true, account, csrfToken: 'csrf-3' }) });
+  assert.deepEqual(await ok.client.registerWithThirdParty('tkt-1', '张三丰', true), account);
+  const post = ok.calls.find((c) => c.path.endsWith('/third-party/register'));
+  assert.deepEqual(post.body, { ticket: 'tkt-1', name: '张三丰', remember: true });
+  assert.ok(ok.calls.some((c) => c.path === '/api/account/editor/session'));
+
+  // name-taken 这个码两处在用：建项目时指项目名，建账号时指账号名。这里必须说账号名
+  const taken = thirdPartyClient({ '/api/account/third-party/register': reply({ ok: false, code: 'name-taken' }, 409) });
+  await assert.rejects(taken.client.registerWithThirdParty('tkt-1', '张三丰', true), (e) => {
+    assert.equal(e.code, 'name-taken');
+    assert.match(e.message, /账号名/);
+    assert.doesNotMatch(e.message, /项目名/, '这里不该说「项目名已被使用」');
+    return true;
+  });
+});
+
+test('第三方登录：邮箱被别的账号绑着时，话里要告诉他怎么办', async () => {
+  const { client } = thirdPartyClient({ '/api/account/third-party/login': reply({ ok: false, code: 'email-taken' }, 409) });
+  await assert.rejects(client.loginWithThirdParty('google', 'tok', true), (e) => {
+    assert.equal(e.code, 'email-taken');
+    assert.match(e.message, /账号页绑定/);
+    return true;
+  });
+});
+
+test('第三方登录：桌面版如实说不支持，不假装能用', async () => {
+  const client = createAccountClient({ online: false, origin: 'https://visuhive.com', device, now: () => 1000,
+    native: async () => ({ ok: true }) });
+  assert.deepEqual(await client.thirdPartyProviders(), []);
+  await assert.rejects(client.loginWithThirdParty('google', 'tok', true), { code: 'third-party-desktop' });
+  await assert.rejects(client.registerWithThirdParty('tkt', 'n', true), { code: 'third-party-desktop' });
+});

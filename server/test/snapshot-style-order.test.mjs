@@ -4,7 +4,9 @@
  *
  * 转译 `src/render/snapshot/inlineStyles.ts` 后直接跑,不起浏览器:`getComputedStyle` / `document`
  * 换成最小的假实现,同一份计算样式按不同的枚举顺序喂两遍,比克隆体上写出的 style 串。
- * 真浏览器、两个预渲染进程的逐张比对在 `scripts/probes/snapshot-hash-probe.mjs`。
+ * 真浏览器、两个预渲染进程的逐张比对原先在 `scripts/probes/snapshot-hash-probe.mjs`；那支探针 2026-10-23 已删
+ * （它要求 `snapshotTier() === 'shared'`，而每张卡的快照 2026-10-16 撤掉后该函数恒回 `'none'`，整支必然失败）。
+ * 删除依据与当时的读数见 `docs/reports/AGENT-claude-probe-audit.md`。本文件的断言不依赖它。
  *
  * 跑法:node --test server/test/snapshot-style-order.test.mjs
  */

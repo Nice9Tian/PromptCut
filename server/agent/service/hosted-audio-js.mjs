@@ -31,6 +31,15 @@ import {
 import { encodePcmChannels, HOSTED_AUDIO_JS_AUTH_HEADER } from '../../hosted-render/audio-js.mjs';
 import { signLookRequest } from '../../hosted-render/look.mjs';
 
+/**
+ * 片段速度(`TrackClip.speed`),不是有限正数时按 1。与 `src/kernel/clipTime.mjs` 的 clipSpeed 同一条规则
+ * (Agent 服务进程这一侧不 import src/,照抄)。
+ */
+function speedOf(clip) {
+  const s = clip?.speed;
+  return typeof s === 'number' && Number.isFinite(s) && s > 0 ? s : 1;
+}
+
 export const AUDIO_JS_TOOL_NAMES = Object.freeze(['measure_audio_js']);
 
 export const AUDIO_JS_DEFAULTS = Object.freeze({
@@ -352,7 +361,8 @@ export function createAudioJsTools({
         scope: 'clip',
         media,
         offset: Number(clip.mediaOffset) || 0,
-        duration: Math.max(0, (Number(clip.end) || 0) - (Number(clip.start) || 0)),
+        // 变速段:量的是这一段用到的那截素材(时间轴时长 × 片段速度;与 src/kernel/clipTime.mjs 的 mediaSpanOf 同一个式子)
+        duration: Math.max(0, (Number(clip.end) || 0) - (Number(clip.start) || 0)) * speedOf(clip),
         meta: { clipId: clip.id, mediaId: media.id },
       };
     }
@@ -370,6 +380,8 @@ export function createAudioJsTools({
           if (!(dur > 0)) continue;
           const media = await project.getMedia(context, clip.mediaId);
           if (!media || media.kind === 'image' || media.pending) continue;
+          // 〔裁〕变速的视频段第一版不出原声(src/kernel/clipTime.mjs 的 speedMutesSource);变速的声音段照常出声、随倍率变调
+          if (speedOf(clip) !== 1 && media.kind !== 'audio') continue;
           if (clip.audioFx || clip.fx) withFx.push(clip.id);
           entries.push({
             clipId: clip.id,
@@ -377,6 +389,7 @@ export function createAudioJsTools({
             start: Number(clip.start) || 0,
             dur,
             offset: Number(clip.mediaOffset) || 0,
+            ...(speedOf(clip) !== 1 ? { speed: speedOf(clip) } : null),
             volume: vol,
             fadeIn: Number(clip.fadeIn) || 0,
             fadeOut: Number(clip.fadeOut) || 0,

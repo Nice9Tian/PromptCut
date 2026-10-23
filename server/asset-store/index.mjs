@@ -24,6 +24,7 @@ export { createAssetRevocationConsumer } from './project-revocations.mjs';
 export { authorizeAsset, openProjectStream, createProjectAssetAccess } from './project-access.mjs';
 export { assetContextOf, setAssetContext, authorizedAssetStore } from './project-access.mjs';
 export { createGuestAssetQuota, guestQuotaApplies, guestIdOfUserId } from './guest-quota.mjs';
+export { SNIFF_BYTES, sniffMediaKind, countsAsVideoFile } from './media-sniff.mjs';
 
 export { BLOB_CHUNK_SIZE, createFsStore, createMemoryStore, createAssetClient, ensureLayoutSync, readLayoutSync, LAYOUT_FILE, LAYOUTS };
 

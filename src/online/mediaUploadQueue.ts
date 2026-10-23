@@ -10,10 +10,14 @@
  *   - **严格按序与退避**：轮到的那一档在退避时，后面的都等着（小尺寸在退避，任何原尺寸都不传）。
  *   - **分片与对账**：每一档向远程素材服务 `media` 命名空间对账（`GET media/<hash>/chunks`），
  *     只补缺的片（`PUT media/<hash>/<n>`，每片 8 MiB，带 `X-Media-Size` 与 `X-Media-Ext`），最后 `POST media/<hash>/complete`。
- *     云端账号项目另带 `X-Media-Tier: small | original`（这一档是小尺寸还是原尺寸）：游客只数视频的原尺寸
- *     （`server/asset-store/guest-quota.mjs`），服务端认不出这个头就当原尺寸。只在云端带，是因为游客只在云端有，
+ *     云端账号项目另带 `X-Media-Tier: small | original`（这一档是小尺寸还是原尺寸）：游客的视频条数按「原尺寸几个、
+ *     小档几个取多的」数（`server/asset-store/guest-quota.mjs`），服务端认不出这个头就当原尺寸。只在云端带，是因为游客只在云端有，
  *     而本地项目经托管中继（`server/hosting/service.mjs`）走的那条路，预检放行的头里没有它，带上浏览器就把整个 PUT 拦了。
  *   - **所有档位 complete 才出队**：两档都向素材服务确认 `complete: true` 后才出队。
+ *   - **被限额拒掉的不再重试**（claude/guest-fix〔裁〕，二级：用户看得见；审查 D）：素材服务回 403 且错误是
+ *     `PERMANENT_REFUSALS` 里的一种（游客视频条数满了、文件太大、只读），这一项整项出队、记成被拒，不进退避，
+ *     后面的照常传；并告诉订阅的人（`subscribeMediaUploadRejected`，编辑台据此显示「游客最多上传 3 条视频」那句话）。
+ *     原先它按暂时性失败无限退避重试，严格按序之下后面所有项（包括图片）都排在它后面传不上去。
  *   - **写入票据**：带写票据 `Authorization: Bearer <rw 票据>`；账号项目带 `credentials: "omit"`。
  */
 import {
@@ -26,6 +30,14 @@ import {
 import { onlinePage } from "./pageFlag";
 
 export const CHUNK_SIZE = 8 * 1024 * 1024;
+/**
+ * 素材服务回 403 时，哪些错误是「再试也不会过」的：这一项出队、记成被拒，不挡后面的。
+ * 只收限额与只读这几种；别的 403（票据过期之类）仍按暂时性失败退避重试。
+ */
+export const PERMANENT_REFUSALS: ReadonlySet<string> = new Set(["guest-video-limit", "guest-file-too-large", "guest-read-only"]);
+
+/** 被拒的那一项 */
+export interface MediaUploadRejection { id: string; name: string; mediaId?: string; projectId?: string; code: string }
 export const UPLOAD_BACKOFF_MS = Object.freeze([5_000, 30_000, 120_000, 600_000]);
 const HASH = /^[0-9a-f]{64}$/;
 const TIER_ORDER: Array<"small" | "original"> = ["small", "original"];
@@ -66,6 +78,8 @@ export interface MediaUploadQueueDeps {
   backoff?: number[];
   now?: () => number;
   log?: (event: string, fields: Record<string, unknown>) => void;
+  /** 有一项被素材服务永久拒掉（`PERMANENT_REFUSALS`）时调 */
+  onRejected?: (rejection: MediaUploadRejection) => void;
 }
 
 export interface MediaUploadQueue {
@@ -80,6 +94,7 @@ export interface MediaUploadQueue {
     merged: number;
     done: number;
     failures: number;
+    rejected: number;
     items: string[];
     working: boolean;
   };
@@ -101,7 +116,7 @@ export function createMediaUploadQueue(deps: MediaUploadQueueDeps): MediaUploadQ
   let timer: any = null;
   let controller: AbortController | null = null;
   const waiters: Array<() => void> = [];
-  const counters = { enqueued: 0, merged: 0, done: 0, failures: 0 };
+  const counters = { enqueued: 0, merged: 0, done: 0, failures: 0, rejected: 0 };
   let holdOriginalsCount = 0;
 
   const clearTimer = () => {
@@ -171,6 +186,12 @@ export function createMediaUploadQueue(deps: MediaUploadQueueDeps): MediaUploadQ
       ...(where.accountProject ? { "X-Media-Tier": t.tier === "small" ? "small" : "original" } : {}),
     };
 
+    /** 没过的回包摆成错误：带状态码和素材服务说的错误代号（`PERMANENT_REFUSALS` 靠它认） */
+    const failure = async (res: Response, what: string) => {
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+      return Object.assign(new Error(`${what} 回 ${res.status}${body?.error ? ` ${body.error}` : ""}`), { status: res.status, code: body?.error });
+    };
+
     const authedFetch = async (url: string, init: RequestInit): Promise<Response> => {
       const getHeaders = (ticket: string | null | undefined) => {
         const h: Record<string, string> = { ...(init.headers as Record<string, string> | undefined) };
@@ -201,7 +222,7 @@ export function createMediaUploadQueue(deps: MediaUploadQueueDeps): MediaUploadQ
 
     // 1. 对账
     const chunksRes = await authedFetch(`${base}/media/${t.hash}/chunks`, { method: "GET", cache: "no-store" });
-    if (!chunksRes.ok) throw Object.assign(new Error(`chunks 回 ${chunksRes.status}`), { status: chunksRes.status });
+    if (!chunksRes.ok) throw await failure(chunksRes, "chunks");
     let chunksData = (await chunksRes.json()) as { size?: number | null; received?: number[]; complete?: boolean };
 
     // 2. 补齐缺片
@@ -218,7 +239,7 @@ export function createMediaUploadQueue(deps: MediaUploadQueueDeps): MediaUploadQ
           headers: chunkHeaders,
           body: chunkSlice,
         });
-        if (!putRes.ok) throw Object.assign(new Error(`PUT 第 ${n} 片回 ${putRes.status}`), { status: putRes.status });
+        if (!putRes.ok) throw await failure(putRes, `PUT 第 ${n} 片`);
       }
 
       // 3. 收尾
@@ -245,7 +266,7 @@ export function createMediaUploadQueue(deps: MediaUploadQueueDeps): MediaUploadQ
             continue;
           }
         }
-        throw Object.assign(new Error(`complete 回 ${completeRes.status}${body?.error ? ` ${body.error}` : ""}`), { status: completeRes.status });
+        throw Object.assign(new Error(`complete 回 ${completeRes.status}${body?.error ? ` ${body.error}` : ""}`), { status: completeRes.status, code: body?.error });
       }
     }
 
@@ -305,6 +326,15 @@ export function createMediaUploadQueue(deps: MediaUploadQueueDeps): MediaUploadQ
     } catch (error: any) {
       if (!running && error?.name === "AbortError") {
         // 队列主动停止，保留在队内
+      } else if (error?.status === 403 && PERMANENT_REFUSALS.has(error?.code)) {
+        // 再试也不会过：整项出队、记成被拒，不挡后面的（文件头说明）
+        counters.failures++;
+        counters.rejected++;
+        items.delete(item.id);
+        const rejection: MediaUploadRejection = { id: item.id, name: item.name, mediaId: item.mediaId, projectId: item.projectId, code: error.code };
+        say("upload.rejected", { id: item.id, name: item.name, tier: job.tier, code: error.code });
+        try { deps.onRejected?.(rejection); } catch {}
+        settle();
       } else {
         counters.failures++;
         item.attempts++;
@@ -406,6 +436,7 @@ export function createMediaUploadQueue(deps: MediaUploadQueueDeps): MediaUploadQ
         merged: counters.merged,
         done: counters.done,
         failures: counters.failures,
+        rejected: counters.rejected,
         items: [...items.keys()],
         working,
       };
@@ -418,6 +449,19 @@ export function createMediaUploadQueue(deps: MediaUploadQueueDeps): MediaUploadQ
  * ------------------------------------------------------------------ */
 
 let globalQueue: MediaUploadQueue | null = null;
+const rejectionListeners = new Set<(rejection: MediaUploadRejection) => void>();
+
+/**
+ * 订阅「在线上传队列里有一项被素材服务永久拒掉」（游客视频条数满了之类）。回退订函数。
+ * 编辑台的素材库据此把那句话显示出来（`src/editor/left/LibrarySection.tsx`）。
+ */
+export function subscribeMediaUploadRejected(listener: (rejection: MediaUploadRejection) => void): () => void {
+  rejectionListeners.add(listener);
+  return () => { rejectionListeners.delete(listener); };
+}
+const announceRejection = (rejection: MediaUploadRejection) => {
+  for (const listener of [...rejectionListeners]) { try { listener(rejection); } catch {} }
+};
 
 export async function defaultOnlineUploadTarget(): Promise<{ base: string; ticket: string | null; accountProject: boolean } | null> {
   const remoteBase = remoteAssetBase();
@@ -447,6 +491,7 @@ export function getOnlineMediaUploadQueue(): MediaUploadQueue {
   if (!globalQueue) {
     globalQueue = createMediaUploadQueue({
       target: defaultOnlineUploadTarget,
+      onRejected: announceRejection,
     });
     globalQueue.start();
   }

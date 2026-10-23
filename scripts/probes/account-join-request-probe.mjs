@@ -1,6 +1,6 @@
 /**
  * 申请加入与「任何知道链接的人都可加入」勾选的端到端探针:桌面、在线、手机三处各走一遍并截图
- * (2026-10-22 用户定,`docs/semantics/workflow/project.md`「多用户协作」第 26、27 条;报告 `docs/reports/AGENT-claude-join-requests.md`)。
+ * (2026-10-22 用户定,`docs/semantics/workflow/project.md`「多用户协作」第 26、27 条;报告 `docs/archive/agent-reports/AGENT-claude-join-requests.md`)。
  *
  * 真的服务组合:账号后端、文档服务、独立的素材服务进程、TLS 入口(`server/test/fixtures/cloud-queue-user-path.mjs`),
  * 探针另在账号后端注册几个账号。三处:
@@ -365,7 +365,7 @@ async function scenarioDesktop(accounts) {
 
   // —— 创建者:登录、在开始页新建云端项目(夹具自带的那个项目内容只有 `{ tracks: [] }`,编辑器打不开,不用它)
   const pageA = await newPage({ native: stateA });
-  await pageA.goto(`${editor.base}/?nosetup=1`, { waitUntil: 'domcontentloaded' });
+  await pageA.goto(`${editor.base}/?nosetup=1&ui=classic`, { waitUntil: 'domcontentloaded' });
   await startLogin(pageA, A);
   const name = `申请加入-桌面-${RUN}`;
   await fill(pageA, '[data-pc="cloud-project-name"]', name);
@@ -411,7 +411,7 @@ async function scenarioDesktop(accounts) {
 
   // —— 申请人丙:被挡住 → 发送申请 → 已发送
   const pageC = await newPage({ native: stateC });
-  await pageC.goto(`${editor.base}/?nosetup=1`, { waitUntil: 'domcontentloaded' });
+  await pageC.goto(`${editor.base}/?nosetup=1&ui=classic`, { waitUntil: 'domcontentloaded' });
   await startLogin(pageC, C);
   await startJoin(pageC, link);
   await waitFor(async () => (await requestState(pageC)) === 'none', 60_000, '丙看到被挡住');
@@ -427,7 +427,7 @@ async function scenarioDesktop(accounts) {
 
   // —— 申请人丁也发一条
   const pageD = await newPage({ native: stateD });
-  await pageD.goto(`${editor.base}/?nosetup=1`, { waitUntil: 'domcontentloaded' });
+  await pageD.goto(`${editor.base}/?nosetup=1&ui=classic`, { waitUntil: 'domcontentloaded' });
   await startLogin(pageD, D);
   await startJoin(pageD, link);
   await waitFor(async () => (await requestState(pageD)) === 'none', 60_000, '丁看到被挡住');
@@ -478,7 +478,7 @@ async function scenarioDesktop(accounts) {
   // 被踢的人:不能申请(要先解除禁入)
   check((await adminAs(await A.editorToken(), projectId, { op: 'kick', accountId: K.id })).status === 200, '桌面-创建者踢了 K');
   const pageK = await newPage({ native: stateK });
-  await pageK.goto(`${editor.base}/?nosetup=1`, { waitUntil: 'domcontentloaded' });
+  await pageK.goto(`${editor.base}/?nosetup=1&ui=classic`, { waitUntil: 'domcontentloaded' });
   await startLogin(pageK, K);
   await startJoin(pageK, link);
   out.bannedText = await waitFor(() => textOf(pageK, '[data-pc="account-error"]'), 60_000, 'K 看到被禁入');
@@ -502,7 +502,7 @@ async function scenarioPasswordChange(accounts) {
   const editor = await startEditor(EDITOR_PORT);
   const stateA = {}, stateB = {};
   const pageA = await newPage({ native: stateA });
-  await pageA.goto(`${editor.base}/?nosetup=1`, { waitUntil: 'domcontentloaded' });
+  await pageA.goto(`${editor.base}/?nosetup=1&ui=classic`, { waitUntil: 'domcontentloaded' });
   await startLogin(pageA, A);
   const name = `二级密码-在线老成员-${RUN}`;
   await fill(pageA, '[data-pc="cloud-project-name"]', name);
@@ -511,7 +511,7 @@ async function scenarioPasswordChange(accounts) {
   const projectId = await waitFor(() => A.ownedProjectId(name), 30_000, '取新项目的项目号');
   // 乙:设二级密码之前凭链接进来,在编辑器里,成员浮层开着(展开时每 3 秒取一次名单)
   const pageB = await newPage({ native: stateB });
-  await pageB.goto(`${editor.base}/?nosetup=1`, { waitUntil: 'domcontentloaded' });
+  await pageB.goto(`${editor.base}/?nosetup=1&ui=classic`, { waitUntil: 'domcontentloaded' });
   await startLogin(pageB, B);
   await startJoin(pageB, `${ORIGIN}/editor?project=${projectId}`);
   await waitFor(() => inEditor(pageB), 180_000, '乙进入项目');
@@ -557,7 +557,7 @@ async function scenarioPasswordChange(accounts) {
 /* ---------------- 在线(网页) ---------------- */
 
 async function onlineLogin(page, account) {
-  await page.goto(`${ORIGIN}/editor/?nosetup=1`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${ORIGIN}/editor/?nosetup=1&ui=classic`, { waitUntil: 'domcontentloaded' });
   await startLogin(page, account);
 }
 async function scenarioOnline(accounts) {
@@ -587,7 +587,7 @@ async function scenarioOnline(accounts) {
   out.projectId = accounts.onlineProjectId = await waitFor(() => A.ownedProjectId(name), 30_000, '取新项目的项目号');
   // 申请人戊:被挡住 → 发送申请 → 已发送
   const pageE = await newPage();
-  await pageE.goto(`${ORIGIN}/editor/?nosetup=1&project=${out.projectId}`, { waitUntil: 'domcontentloaded' });
+  await pageE.goto(`${ORIGIN}/editor/?nosetup=1&ui=classic&project=${out.projectId}`, { waitUntil: 'domcontentloaded' });
   await startLogin(pageE, E);
   check((await P(pageE, () => document.querySelector('[data-pc="cloud-project-link"]').value)).includes(out.projectId), '在线-打开项目链接时链接已经填好');
   await click(pageE, '[data-pc="cloud-join"]', '加入并打开项目');
@@ -599,7 +599,7 @@ async function scenarioOnline(accounts) {
   await shot(pageE, 'online-4-sent');
   // 申请人己
   const pageF = await newPage();
-  await pageF.goto(`${ORIGIN}/editor/?nosetup=1&project=${out.projectId}`, { waitUntil: 'domcontentloaded' });
+  await pageF.goto(`${ORIGIN}/editor/?nosetup=1&ui=classic&project=${out.projectId}`, { waitUntil: 'domcontentloaded' });
   await startLogin(pageF, F);
   await click(pageF, '[data-pc="cloud-join"]', '己加入');
   await waitFor(async () => (await requestState(pageF)) === 'none', 60_000, '己看到被挡住');
@@ -633,7 +633,7 @@ async function scenarioOnline(accounts) {
   check(true, '在线-被通过那一刻这个项目就出现在申请人的「我加入的」里(不用刷新)');
   await shot(pageE, 'online-8a-approved-asks-password');
   // 交叉审查必改 1:换一个干净的开始页(不带项目链接),从「我加入的」点这个项目:链接填好、弹出二级密码框、不报「请求失败」;输对了进项目
-  await pageE.goto(`${ORIGIN}/editor/?nosetup=1`, { waitUntil: 'domcontentloaded' });
+  await pageE.goto(`${ORIGIN}/editor/?nosetup=1&ui=classic`, { waitUntil: 'domcontentloaded' });
   await pageE.waitForSelector(openSel, { timeout: 120_000 });
   out.cleanStart = { secondaryBox: await has(pageE, '[data-pc="cloud-secondary-password"]'), link: await P(pageE, () => document.querySelector('[data-pc="cloud-project-link"]')?.value ?? '') };
   check(!out.cleanStart.secondaryBox && out.cleanStart.link === '', '在线-干净的开始页:没有二级密码框、链接栏是空的', out.cleanStart);

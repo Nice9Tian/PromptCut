@@ -2,6 +2,7 @@ import { useLayoutEffect, useReducer, useRef, useSyncExternalStore } from "react
 import { frameCss } from "../kernel/layout";
 import { isImageMedia, type MediaAsset, type Project, type TrackClip } from "../kernel/project";
 import type { FilterDef } from "../kernel/filters.mjs";
+import { clipSpeed, mediaSpanOf } from "../kernel/clipTime.mjs";
 import { shouldMuteNativeAudio } from "../audio/cardAudio";
 import { driveMedia, filterOf, lastSeekAt, releaseMedia, targetTimeOf } from "./mediaDrive";
 import { frontTimeAtDisplay, planSlots, reloadOnComplete, tierAligned, type SlotClip } from "./mediaSync";
@@ -66,12 +67,13 @@ function slotClipOf(clip: TrackClip, media: MediaAsset, localHashes: readonly st
   // 只用小尺寸(最低一档、超过解码上限)而没有素材小尺寸的素材不给地址(c10a 第 8 节):不进槽位,这一层只挂「等待上传方」
   const url = playbackUrl(media, localHashes);
   if (!url) return null;
-  return { id: clip.id, url, start: clip.start, end: clip.end, offset: clip.mediaOffset ?? 0 };
+  // 片段速度(缺省 1 不写,和原来的对象逐字相同)
+  return { id: clip.id, url, start: clip.start, end: clip.end, offset: clip.mediaOffset ?? 0, ...(clipSpeed(clip) !== 1 ? { speed: clipSpeed(clip) } : null) };
 }
 
 /** 这个素材时刻属于这一段(前后放 0.1s:出画的帧时刻比目标早最多一帧) */
 function inClipRange(c: SlotClip, mediaTime: number) {
-  return mediaTime >= c.offset - 0.1 && mediaTime <= c.offset + (c.end - c.start) + 0.1;
+  return mediaTime >= c.offset - 0.1 && mediaTime <= c.offset + mediaSpanOf(c) + 0.1;
 }
 
 export function VideoTrack({
@@ -209,7 +211,7 @@ export function VideoTrack({
       const frontFrame = now.shown !== null ? displayedFrames.current[now.shown] : null;
       const ref = now.playing
         ? front && !front.paused && frontFrame && frontFrame.token === slots.current[now.shown!].token && expectedDisplayTime !== undefined
-          ? frontTimeAtDisplay(frontFrame, expectedDisplayTime) : NaN
+          ? frontTimeAtDisplay(frontFrame, expectedDisplayTime, clipSpeed(now.cur.clip)) : NaN
         : targetTimeOf(now.cur.clip, now.t);
       const ok = tierAligned(mediaTime, ref, now.fps);
       if (!ok && now.playing && Number.isFinite(ref)) {
@@ -301,12 +303,12 @@ export function VideoTrack({
         const target = targetTimeOf(cur.clip, t);
         // 偏差过了「暂停时该 seek」的门槛就补注册一次 rVFC(见 armFrame)
         if (Math.abs(el.currentTime - target) > 0.03) armFrame(el, i);
-        driveMedia(el, { target, playing, volume: shouldMuteNativeAudio(project, cur.clip, muted) ? 0 : cur.opacity * gain * (cur.clip.audioVolume ?? 1), scrubbing });
+        driveMedia(el, { target, playing, volume: shouldMuteNativeAudio(project, cur.clip, muted) ? 0 : cur.opacity * gain * (cur.clip.audioVolume ?? 1), scrubbing, rate: clipSpeed(cur.clip) });
         slots.current[i].opacity = cur.opacity;
       } else if (i === plan.warm && cur) {
         // 播放中的前台解码帧可能落后舞台时钟；预热档直接跟前台走，避免初装时 seek 到未来。
         const front = plan.shown !== null ? els[plan.shown].current : null;
-        driveMedia(el, { target: playing && front ? front.currentTime : targetTimeOf(cur.clip, t), playing, volume: 0, scrubbing });
+        driveMedia(el, { target: playing && front ? front.currentTime : targetTimeOf(cur.clip, t), playing, volume: 0, scrubbing, rate: clipSpeed(cur.clip) });
         if (playing && front && el.playbackRate !== front.playbackRate) el.playbackRate = front.playbackRate;
       } else {
         releaseMedia(el);

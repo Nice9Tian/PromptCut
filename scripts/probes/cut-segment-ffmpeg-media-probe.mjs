@@ -1,6 +1,6 @@
 /**
  * 显式 `--media=ffmpeg` 导出遇到剪辑段里的视频 / 图片:改走缺省的完整整帧路线,成片里画得出它们
- * (剪辑段首版局限补齐第 4 项,`docs/reports/AGENT-cut-segment-followups.md`;`server/bakery/export.mjs` 的 `cutSegmentsHaveVisualMedia`)。
+ * (剪辑段首版局限补齐第 4 项,`docs/archive/agent-reports/AGENT-cut-segment-followups.md`;`server/bakery/export.mjs` 的 `cutSegmentsHaveVisualMedia`)。
  *
  *   node scripts/probes/cut-segment-ffmpeg-media-probe.mjs [--port 5376] [--out <目录>]
  *

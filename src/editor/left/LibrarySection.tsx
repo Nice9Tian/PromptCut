@@ -12,6 +12,7 @@ import { useCutsGroup } from "./library/cutsGroup";
 import { IMPORT_OFFLINE_TEXT, useImportOffline } from "../sync/useImportOffline";
 import { StorageImportButton } from "./StorageImportButton";
 import { useReadOnly } from "../readOnly";
+import { useUploadRejectedNotice } from "./uploadRejectedNotice";
 
 /**
  * 「素材库」分区:导入媒体 → 搜索 → 分类胶囊 → 分组(视频 / 图片 / 音频)。
@@ -28,6 +29,9 @@ export function LibrarySection() {
   const [openGroup, setOpenGroup] = useOpenGroup("library", LIBRARY_GROUP_IDS);
   const [msg, flash] = useFlash();
   const mediaInputRef = useRef<HTMLInputElement>(null);
+  // 在线上传被限额拒掉的（游客第 4 条视频之类）：在底部提示条说清楚，多停一会儿
+  const showRejected = useCallback((text: string) => flash(text, 8000), [flash]);
+  useUploadRejectedNotice(showRejected);
 
   // 素材三组共用一份右键菜单
   const mediaMenu = useMediaMenu(flash);

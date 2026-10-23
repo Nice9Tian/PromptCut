@@ -527,7 +527,7 @@ export const aiHandlers = {
       },
       stage: { width: p.width, height: p.height },
       card: { start: hit.clip.start, end: hit.clip.end },
-      clipOfMedia: { start: source.start, mediaOffset: source.mediaOffset ?? 0 },
+      clipOfMedia: { start: source.start, mediaOffset: source.mediaOffset ?? 0, ...(source.speed !== undefined ? { speed: source.speed } : {}) },
       pointIndex: idx,
       whenHidden: args.whenHidden === "hide" ? "hide" : "hold",
     });

@@ -22,6 +22,20 @@ export interface ProjectSession {
  * 令牌是持有即身份的，和账号的访问令牌一样只留在内存与本机存档里（`guest.ts`），不进地址、不进日志。
  */
 export interface GuestLogin { id: string; name: string; token: string; expiresAt: number }
+/** 官网开着的第三方登录方式。`clientId` 不是秘密，本来就要出现在页面里 */
+export interface ThirdPartyProvider { provider: 'google'; clientId: string }
+/**
+ * 第三方登录的结果。第一次用某个 Google 账号时拿不到账号——账号名得用户自己起
+ * （Google 不提供，而网站账号名全站唯一），所以回一张十分钟的小票，拿它再调 `registerWithThirdParty`。
+ */
+export type ThirdPartyLogin =
+  | { kind: 'signed-in'; account: Account }
+  | { kind: 'need-name'; ticket: string; email: string | null };
+/**
+ * 云端项目里的主体编号：账号 `acc_` 或游客 `gst_`，后面都是 24 位十六进制（服务端 `server/account/authority.mjs` 的 `accountIdOK`）。
+ * 成员名单、踢人、禁入都按它认；只有「凭账号做的事」（登录、项目列表、云端 Agent 的告知、申请加入）才只认 `acc_`。
+ */
+export const PRINCIPAL_ID_RE = /^(?:acc|gst)_[0-9a-f]{24}$/;
 export interface CloudAgentConsent { accountId: string; accepted: boolean; noticeVersion: 1; acceptedAt?: number }
 /** Keep the standard transport protocol alongside the opaque account credential. */
 export function accountConnectionProtocols(session: ProjectSession): string[] { return ['promptcut.v1', `promptcut.account.${session.connectionTicket}`]; }
@@ -58,7 +72,9 @@ export const JOIN_REQUEST_POLL_MS = 10_000;
 export class AccountFailure extends Error {
   status: number;
   code: string;
-  constructor(status: number, code: string, message?: string) { super(message || accountErrorText(status, code)); this.status = status; this.code = code; }
+  /** 服务端回的整个 JSON(冲突时带着云端当前那一份,如 `start-org` 的 409);没有就是 undefined */
+  body?: Record<string, any>;
+  constructor(status: number, code: string, message?: string, body?: Record<string, any>) { super(message || accountErrorText(status, code)); this.status = status; this.code = code; if (body) this.body = body; }
 }
 export function accountErrorText(status: number, code: string): string {
   const messages: Record<string, string> = { 'login-required': '请先登录账号。', 'credential-revoked': '登录已失效，请重新登录。',
@@ -95,9 +111,30 @@ export function accountErrorText(status: number, code: string): string {
     'guest-rate-limited': '领取游客身份的次数太多了，请过一会儿再试，或者登录网站账号。',
     'guest-project-limit': `游客只能建 ${GUEST_LIMITS.projects} 个项目。要建更多，请注册一个账号。`,
     'guest-read-only': '你在这个项目里只能查看，改不了内容。',
+    // 云端 Agent 的告知记在网站账号上（`/api/account/cloud-agent-consent`），游客没地方记、服务端也核不了 —— 待用户定（claude/guest-enter）
+    'guest-agent-unavailable': '游客暂时用不了云端 Agent。要用的话，请登录网站账号。',
+    // 云端分组(账号级整理信息,公开路由 `start-org`,裁定 V22-05～09)
+    'guest-org-unavailable': '游客没有分组、置顶和归档。注册一个账号后，可以用云端分组整理项目。',
+    'org-unavailable': '这台云端现在不能保存分组。',
+    'org-version-mismatch': '云端的分组刚被另一台设备改过。',
+    'bad-org': '分组信息不完整，没有保存。',
+    'org-rate-limited': '分组改得太频繁了，过一会儿会自动同步。',
+    'org-too-large': '分组、置顶和归档的记录太多了，没有保存。可以删掉一些不用的分组。',
     'guest-video-limit': `游客最多上传 ${GUEST_LIMITS.videos} 条视频。要传更多，请注册一个账号。`,
     'guest-file-too-large': `游客上传的每一条源文件不能超过 ${GUEST_LIMITS.assetMB} MB。`,
-    'invalid-asset': '这条素材的信息不完整，请重新选择。' };
+    'invalid-asset': '这条素材的信息不完整，请重新选择。',
+    // 第三方登录（VisuHive 仓库 docs/third-party-login.md）。这些话要和那边的接口一一对上
+    'third-party-off': '这个云端没有开通 Google 登录，请用账号名和密码。',
+    'third-party-desktop': '桌面版暂时不支持 Google 登录，请用账号名和密码。',
+    'third-party-refused': 'Google 没有通过这次登录，请再试一次。',
+    'identity-unavailable': 'Google 登录服务暂时不可用，请用账号名和密码，或过一会儿再试。',
+    'identity-timeout': 'Google 登录服务没有响应，请过一会儿再试。',
+    'email-taken': '这个邮箱已经绑在一个账号上了。请先用账号名和密码登录，再到官网账号页绑定 Google。',
+    // `name-taken` 不在这里加：上面已经有一条，那条说的是「项目名」。账号服务用同一个码表示
+    // 「账号名被占」，两种意思撞了码，所以建账号那一处单独换话（见 `registerWithThirdParty`）。
+    'bad-ticket': '这一步超时了，请重新点一次「用 Google 继续」。',
+    'already-linked': '这个 Google 账号已经关联在别的账号上了。',
+    'unknown-provider': '不认识这个登录方式。' };
   return messages[code] || (status === 401 ? '登录已失效，请重新登录。' : status === 503 ? '云端服务暂时不可用，请稍后重试。' : status === 403 ? '没有访问这个项目的权限。' : status === 0 ? '连接云端失败，请检查网络后重试。' : `请求失败（${code}）。`);
 }
 /** 在线页面一次账号请求最多等多久(桌面版走外壳的账号桥,那边自己有 20 秒的时限) */
@@ -165,7 +202,13 @@ export function createAccountClient(options: AccountClientOptions) {
     catch { throw new AccountFailure(0, 'network'); }
     let result: Record<string, any>;
     try { result = await response.json(); } catch (error) { throw (error as { name?: string })?.name === 'TimeoutError' ? new AccountFailure(0, 'network') : new AccountFailure(response.status, 'account-protocol'); }
-    if (!response.ok || result.ok !== true) throw new AccountFailure(response.status, String(result.code || result.error || 'account-unavailable'));
+    if (!response.ok || result.ok !== true) {
+      const failure = new AccountFailure(response.status, String(result.code || result.error || 'account-unavailable'), undefined, result);
+      // 限流(429)带 Retry-After:调用方(云端分组同步)照它的时间再试,不自己乱猜
+      const wait = Number(response.headers.get('retry-after'));
+      if (Number.isFinite(wait) && wait > 0) Object.assign(failure, { retryAfterSec: wait });
+      throw failure;
+    }
     return result;
   }
   function accept(value: Record<string, any>): EditorLogin {
@@ -179,8 +222,10 @@ export function createAccountClient(options: AccountClientOptions) {
   }
   async function website() { const value = await request('/api/account/me'); csrf = value.csrfToken || ''; websiteAccount = value.account ?? null; return websiteAccount; }
   /**
-   * 游客（`server/account/guest.mjs`）：向文档服务领一张令牌。带着手里那一张就是续期、编号不变；
-   * 不带、或者它已经过期，服务端就随机一个新身份。编号只由服务端给，这里报什么都不算数。
+   * 游客（`server/account/guest.mjs`）：向文档服务领一张令牌。带着手里那一张就是续期、编号不变（过期不太久的也续，
+   * `authority.mjs` 的 `issueGuest`）；不带、或者续不了，服务端就随机一个新身份。编号只由服务端给，这里报什么都不算数。
+   * **每次领到都写回本机**（claude/guest-fix，审查 B：原先页面续期只在内存里，本机存的始终是第一次领的那张，
+   * 第二天回来交的是一张过期很久的旧令牌）。
    *
    * 只在线页面有这条路：桌面版走外壳的账号桥，桥只放行 create / join / session / admin / members 五条，
    * 加一条要换外壳（`desktop/src-tauri/src/account_vault.rs`），所以桌面版点游客时如实说要用官网。
@@ -192,8 +237,17 @@ export function createAccountClient(options: AccountClientOptions) {
       !Number.isSafeInteger(value.expiresAt) || value.expiresAt <= now()) throw new AccountFailure(503, 'account-protocol');
     const before = authIdentity();
     guest = { id: value.guestId, name: guestName(value.guestId), token: value.token, expiresAt: value.expiresAt };
+    adoptGuestSession({ id: guest.id, token: guest.token, expiresAt: guest.expiresAt });
     if (authIdentity() !== before) authChanged();
     return guest;
+  }
+  /**
+   * 作废手里这个游客身份（登录账号之后游客身份作废，product/document-service.md「游客」；审查 S9）。
+   * 尽力而为：发不出去也不拦着登录，本机那一份照样清掉。
+   */
+  function revokeGuestOnServer(token: string | undefined) {
+    if (!options.online || !token) return;
+    void request('/hosted/shared/account/guest', { token, revoke: true }).catch(() => {});
   }
   /** 游客手里那一张摆成登录的样子：下面 `/hosted/shared/account/*` 那几条不用分辨这是账号还是游客 */
   const asLogin = (g: GuestLogin): EditorLogin =>
@@ -213,8 +267,34 @@ export function createAccountClient(options: AccountClientOptions) {
     })().finally(() => { renewTask = null; });
     return renewTask;
   }
+  /** `start-org` 的一次调用(带编辑器令牌)。`allowConflict`:409 当结果返回,不抛 */
+  async function startOrgCall(body: Record<string, unknown>, allowConflict = false) {
+    if (guest) throw new AccountFailure(403, 'guest-org-unavailable');
+    if (!options.online) throw new AccountFailure(503, 'desktop-bridge-unavailable');
+    const current = await ensureLogin(), identity = authIdentity(), revision = authVersion;
+    let value: Record<string, any>;
+    try { value = await request('/hosted/shared/account/start-org', body, current.accessToken); }
+    catch (error) {
+      const failure = error as AccountFailure;
+      if (allowConflict && failure?.status === 409 && failure.code === 'org-version-mismatch' && Number.isSafeInteger(failure.body?.version)) {
+        if (identity !== authIdentity() || revision !== authVersion) throw new AccountFailure(401, 'credential-revoked');
+        return { conflict: true as const, version: failure.body!.version as number, org: failure.body!.org ?? null, updatedAt: Number(failure.body!.updatedAt) || 0 };
+      }
+      throw error;
+    }
+    if (identity !== authIdentity() || revision !== authVersion) throw new AccountFailure(401, 'credential-revoked');
+    if (!Number.isSafeInteger(value.version) || value.version < 0) throw new AccountFailure(503, 'account-protocol');
+    return { conflict: false as const, version: value.version as number, org: value.org ?? null, updatedAt: Number(value.updatedAt) || 0 };
+  }
   return {
+    /** 网站账号（桌面版是编辑器登录的那个账号）；游客时是 null。只有「凭账号做的事」才看它 */
     get account() { return login?.account ?? websiteAccount; },
+    /**
+     * 这台页面在云端项目里以谁的身份行事：游客模式下是游客（编号 `gst_…`、显示名「游客-XXXX」），否则是账号。
+     * 进项目、成员与在场、合并表、云端 Agent 的绑定都按它认（claude/guest-enter：原先都看 `account`，游客那里必是 null，
+     * 游客进自己的项目报「请先登录账号。」）。和 `ensureLogin` 的游客分支同一个判断：游客模式下不去问网站账号
+     */
+    get principal(): Account | null { return guest ? { id: guest.id, name: guest.name } : login?.account ?? websiteAccount; },
     /** 这台页面此刻的游客身份；不是游客就是 null。界面拿它取名字和头像 */
     get guest() { return guest; },
     get authVersion() { return authVersion; },
@@ -237,6 +317,7 @@ export function createAccountClient(options: AccountClientOptions) {
     /** 不当游客了（去登录账号，或者离开）。本机那一份一并清掉：留着也用不上，还会被下次进入捡回来 */
     leaveGuest() {
       if (!guest) return;
+      revokeGuestOnServer(guest.token);
       guest = null; clearGuest(); authChanged();
     },
     subscribeAuth(listener: () => void) { authListeners.add(listener); return () => { authListeners.delete(listener); }; },
@@ -244,12 +325,65 @@ export function createAccountClient(options: AccountClientOptions) {
       const value = await native('recover', options.device); if (value === null) return null; return accept(check(value)).account; },
     async login(identifier: string, password: string, remember: boolean, requestId: string = crypto.randomUUID()) {
       // 登录了账号就不再是游客:`ensureLogin` 在游客模式下问的是游客令牌,不清掉的话登录完还在拿游客身份行事
-      if (guest) { guest = null; clearGuest(); }
+      if (guest) { revokeGuestOnServer(guest.token); guest = null; clearGuest(); }
       if (!options.online) return accept(check(await native('login', { ...options.device, name: identifier, password, requestId }))).account;
       await website(); const value = await request('/api/account/login', { name: identifier, password, remember });
       csrf = value.csrfToken || ''; websiteAccount = value.account; login = null; authChanged();
       return (await ensureLogin()).account;
     },
+    // —— 第三方登录（VisuHive 仓库的 docs/third-party-login.md；接口在 account/app.mjs）——
+    // 这三条**不碰游客那一段**，只在上面 `login()` 的基础上把「怎么建立网站会话」换一种做法：
+    // 建立起网站会话之后，照样由 `ensureLogin()` 去换编辑器令牌（`/api/account/editor/session`），
+    // 和密码登录走的是同一条后半段，所以后端不用为编辑器另开接口。
+
+    /** 官网开没开第三方登录、客户端 ID 是多少。没开、或者后端是旧版（没这条接口）就回空数组，界面据此不显示按钮 */
+    async thirdPartyProviders(): Promise<ThirdPartyProvider[]> {
+      if (!options.online) return [];
+      try {
+        const value = await request('/api/account/third-party/config');
+        if (!Array.isArray(value.providers)) return [];
+        return value.providers.filter((p: unknown): p is ThirdPartyProvider => {
+          const row = p as Record<string, unknown> | null;
+          return !!row && row.provider === 'google' && typeof row.clientId === 'string' && row.clientId.length > 0;
+        });
+      } catch { return []; }
+    },
+
+    /**
+     * 拿第三方给的令牌登录。令牌原样交给账号服务，这边不解析它（解析在 VisuHive 的身份服务里）。
+     * 这个第三方身份还没关联过账号时回 `need-name`，要用户起一个账号名再调 `registerWithThirdParty`。
+     */
+    async loginWithThirdParty(provider: string, token: string, remember: boolean): Promise<ThirdPartyLogin> {
+      // 桌面版走外壳的账号桥，桥只放行五条操作，加一条要换外壳；这里如实说，不假装能用
+      if (!options.online) throw new AccountFailure(503, 'third-party-desktop');
+      // 和密码登录一致：登录了账号就不再是游客
+      if (guest) { revokeGuestOnServer(guest.token); guest = null; clearGuest(); }
+      await website();
+      const value = await request('/api/account/third-party/login', { provider, token, remember });
+      if (value.next === 'need-name') {
+        if (typeof value.ticket !== 'string' || !value.ticket) throw new AccountFailure(503, 'account-protocol');
+        return { kind: 'need-name', ticket: value.ticket, email: typeof value.email === 'string' ? value.email : null };
+      }
+      csrf = value.csrfToken || csrf;
+      websiteAccount = value.account; login = null; authChanged();
+      return { kind: 'signed-in', account: (await ensureLogin()).account };
+    },
+
+    /** 拿上一步的小票起账号名、建号并登录 */
+    async registerWithThirdParty(ticket: string, name: string, remember: boolean): Promise<Account> {
+      if (!options.online) throw new AccountFailure(503, 'third-party-desktop');
+      // `name-taken` 这个码两处在用：建项目时指「项目名被占」，建账号时指「账号名被占」。
+      // 错误话术表里只能有一条，所以在这里把话换成账号那一种，不去动项目那条路。
+      const value = await request('/api/account/third-party/register', { ticket, name, remember })
+        .catch((e: unknown) => {
+          if (e instanceof AccountFailure && e.code === 'name-taken') throw new AccountFailure(e.status, e.code, '这个账号名已经有人用了，换一个。');
+          throw e;
+        });
+      csrf = value.csrfToken || csrf;
+      websiteAccount = value.account; login = null; authChanged();
+      return (await ensureLogin()).account;
+    },
+
     async logout() {
       if (options.online) { await website(); await request('/api/account/logout', {}); }
       else {
@@ -261,6 +395,7 @@ export function createAccountClient(options: AccountClientOptions) {
       login = null; websiteAccount = null; authChanged();
     },
     async cloudAgentConsent(): Promise<CloudAgentConsent> {
+      if (guest) throw new AccountFailure(403, 'guest-agent-unavailable');
       const current = await ensureLogin();
       const identity = authIdentity(), revision = authVersion;
       if (options.online && (await website())?.id !== current.account.id) throw new AccountFailure(401, 'credential-revoked');
@@ -269,6 +404,7 @@ export function createAccountClient(options: AccountClientOptions) {
       return validateConsent(result, current.account.id);
     },
     async acceptCloudAgentConsent(requestId: string = crypto.randomUUID()): Promise<CloudAgentConsent> {
+      if (guest) throw new AccountFailure(403, 'guest-agent-unavailable');
       const current = await ensureLogin();
       const identity = authIdentity(), revision = authVersion;
       if (options.online && (await website())?.id !== current.account.id) throw new AccountFailure(401, 'credential-revoked');
@@ -277,6 +413,22 @@ export function createAccountClient(options: AccountClientOptions) {
       const consent = validateConsent(result, current.account.id);
       if (!consent.accepted) throw new AccountFailure(503, 'account-protocol');
       return consent;
+    },
+    /**
+     * 云端分组(账号级整理信息):取云端那一份。只有在线页面、只有网站账号;游客没有。
+     * 版本 0、`org` 是 null 是云端没存过。服务端还没有这条路由(老服务端)时 `AccountFailure.status` 是 404 / 405 / 501,
+     * 调用方当「不支持」安静地退回只记在本机(`src/start/useCloudOrg.ts`)。
+     */
+    async getStartOrg(): Promise<{ version: number; org: unknown | null; updatedAt: number }> {
+      return startOrgCall({ op: 'get' });
+    },
+    /**
+     * 写云端那一份。`baseVersion` 是上次拿到的版本;对不上(云端比这新)不抛,回 `conflict: true` 并带回云端当前那份,
+     * 调用方三方合并后用带回的版本重传。
+     */
+    async putStartOrg(baseVersion: number, org: unknown): Promise<{ conflict: false; version: number; org: unknown; updatedAt: number } | { conflict: true; version: number; org: unknown | null; updatedAt: number }> {
+      const out = await startOrgCall({ op: 'put', baseVersion, org }, true);
+      return out as any;
     },
     async lists(): Promise<ProjectLists> { if (!options.online) throw new AccountFailure(503, 'website-project-list', '请在官网登录，查看“我创建的”和“我加入的”项目。');
       await website(); const result = await request('/api/account/projects');
@@ -369,7 +521,8 @@ export function createAccountClient(options: AccountClientOptions) {
       const okRevision = (x: unknown) => Number.isSafeInteger(x) && (x as number) >= 0;
       let body: Record<string, unknown>;
       if (operation.op === 'kick' || operation.op === 'unban') {
-        if (!/^acc_[a-f0-9]{24}$/.test(operation.accountId) || !okRevision(operation.expectedAccessRevision) || !okRequest) throw new AccountFailure(400, 'invalid-member');
+        // 踢的、解禁的可以是游客(游客凭链接进了账号的项目,是只读成员)
+        if (!PRINCIPAL_ID_RE.test(operation.accountId) || !okRevision(operation.expectedAccessRevision) || !okRequest) throw new AccountFailure(400, 'invalid-member');
         body = { projectId, op: operation.op, accountId: operation.accountId, expectedAccessRevision: operation.expectedAccessRevision, requestId: operation.requestId };
       } else if (operation.op === 'set-entry') {
         if (typeof operation.allowLinkJoin !== 'boolean' || !okRevision(operation.expectedAccessRevision) || !okRequest) throw new AccountFailure(400, 'invalid-entry');
@@ -433,7 +586,11 @@ function validateJoinRequest(value: Record<string, any>, projectId: string): Joi
 }
 function validateMembers(value: Record<string, any>, projectId: string, accountId: string): AccountMembersSnapshot {
   const bad = () => { throw new AccountFailure(503, 'account-protocol'); };
-  const id = (x: unknown) => typeof x === 'string' && /^acc_[a-f0-9]{24}$/.test(x);
+  // 成员、设备、禁入、创建者都可以是游客;申请只有账号能发(服务端 `project-members.mjs` 的 `pendingRequestsOf`)
+  const id = (x: unknown) => typeof x === 'string' && PRINCIPAL_ID_RE.test(x);
+  const accountOnly = (x: unknown) => typeof x === 'string' && /^acc_[a-f0-9]{24}$/.test(x);
+  /** 游客没有账号名:服务端没给名字时(早先建的项目记录里没存)按编号拼「游客-XXXX」,和他自己页面上显示的一样 */
+  const shown = (accountId: string, accountName: string | null) => accountName ?? (GUEST_ID_RE.test(accountId) ? guestName(accountId) : null);
   const name = (x: unknown) => x === null || (typeof x === 'string' && x.length > 0 && x.length <= 200 && !/[\u0000-\u001f]/.test(x));
   const access = (x: unknown) => x === 'r' || x === 'rw';
   if (value.v !== 2 || value.projectId !== projectId || typeof value.authorityId !== 'string' || !value.authorityId ||
@@ -448,7 +605,7 @@ function validateMembers(value: Record<string, any>, projectId: string, accountI
     if (!id(row?.accountId) || memberIds.has(row.accountId) || !name(row.accountName) || !access(row.access) ||
         !(row.joinedAt === null || (Number.isSafeInteger(row.joinedAt) && row.joinedAt >= 0))) bad();
     memberIds.add(row.accountId);
-    return { accountId: row.accountId, accountName: row.accountName, access: row.access, joinedAt: row.joinedAt };
+    return { accountId: row.accountId, accountName: shown(row.accountId, row.accountName), access: row.access, joinedAt: row.joinedAt };
   });
   if (!memberIds.has(accountId) || !memberIds.has(value.creatorAccountId)) bad();
   const rows = value.devices.map((row: any) => {
@@ -465,16 +622,16 @@ function validateMembers(value: Record<string, any>, projectId: string, accountI
       return { role: conn.role, ...(conn.service !== undefined ? { service: conn.service } : {}),
         ...(conn.conversation !== undefined ? { conversation: conn.conversation } : {}) };
     });
-    return { accountId: row.accountId, accountName: row.accountName, deviceId: row.deviceId, deviceName: row.deviceName, creator: row.creator, conns };
+    return { accountId: row.accountId, accountName: shown(row.accountId, row.accountName), deviceId: row.deviceId, deviceName: row.deviceName, creator: row.creator, conns };
   });
   const banned = value.bans?.map((row: any) => {
     if (!id(row?.accountId) || bans.has(row.accountId) || memberIds.has(row.accountId) || !name(row.accountName) || row.reason !== 'kick') bad();
-    bans.add(row.accountId); return { accountId: row.accountId, accountName: row.accountName, reason: 'kick' as const };
+    bans.add(row.accountId); return { accountId: row.accountId, accountName: shown(row.accountId, row.accountName), reason: 'kick' as const };
   });
   // 申请:只给创建者;一个账号一条;不能同时是成员或已被禁入;字段只收这四样
   const requested = new Set<string>();
   const requests = value.requests?.map((row: any) => {
-    if (!id(row?.accountId) || requested.has(row.accountId) || memberIds.has(row.accountId) || bans.has(row.accountId) ||
+    if (!accountOnly(row?.accountId) || requested.has(row.accountId) || memberIds.has(row.accountId) || bans.has(row.accountId) ||
         typeof row.joinRequestId !== 'string' || !/^jr_[a-f0-9]{24}$/.test(row.joinRequestId) || !name(row.accountName) ||
         !Number.isSafeInteger(row.createdAt) || row.createdAt < 0) bad();
     requested.add(row.accountId);

@@ -255,8 +255,9 @@ const SHELL_ROUTES = ['/hosted/shared/account/create', '/hosted/shared/account/j
  * 只在线页面走、桌面版一定走不到的路由（2026-10-23 加）：外壳的账号桥上**没有**它们，加一条要发新外壳
  * （`product/platforms.md`「更新补丁换不掉外壳」），而这条路本来就只给在线浏览器。
  * 放行的前提是「页面在桌面版上根本发不出这个请求」，所以下面另有一条守着那个 `options.online` 判断还在。
+ * `start-org` 是云端分组（账号级整理信息，2026-10-23 裁定 V22-05～09）：桌面版的氛围式用本地分组、不碰云端分组，所以同样不进外壳。
  */
-const ONLINE_ONLY_ROUTES = ['/hosted/shared/account/guest'];
+const ONLINE_ONLY_ROUTES = ['/hosted/shared/account/guest', '/hosted/shared/account/start-org'];
 const allowedRoute = route => SHELL_ROUTES.includes(route) || ONLINE_ONLY_ROUTES.includes(route);
 
 test('JRC-7 守门:页面代码里写到的每一条账号项目路由都在外壳的放行清单里(扫字面量,不只看测试走到的那几个函数;安全专审 F2)', () => {

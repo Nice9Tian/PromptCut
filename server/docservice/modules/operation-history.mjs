@@ -118,11 +118,17 @@ export function openOperationHistory(file, { failpoint = () => {}, maxBytes = 25
       const current = get(op.projectId, op.opId); verifyPrepared(current);
       if (['accepted', 'materialized'].includes(current.state)) { if (canonical(current.witness) !== canonical(witness)) throw historyError('accepted-witness-mismatch'); return current; }
       if (current.state === 'cancelled' || witness.state !== 'sealed') throw historyError('not-accepted');
-      const last = q("SELECT witness FROM operations WHERE project_id=? AND state IN ('accepted','materialized') ORDER BY json_extract(prepared,'$.projectRev') DESC LIMIT 1").get(op.projectId);
-      if (last && JSON.parse(last.witness).orderSeq >= witness.orderSeq) throw historyError('order-regression');
+      // 顺序号按见证的签发方（域）各自单调：账号服务的一条序列，游客见证（文档服务自己签，`password-order.mjs` 的 GUEST_ORDER_DOMAIN）另一条
+      const last = lastOrderSeq(op.projectId, witness.domain);
+      if (last >= witness.orderSeq) throw historyError('order-regression');
       q("UPDATE operations SET state='accepted',witness=? WHERE project_id=? AND op_id=?").run(canonical(witness), op.projectId, op.opId);
       append(op.projectId, 'accepted-op', { opId: op.opId, witness }); failpoint('accepted-before-commit'); return get(op.projectId, op.opId);
     });
+  }
+  /** 这个项目里这个域的见证最后一个被接受的顺序号；没有回 0。没写域的老见证（只在测试里）按同一条算 */
+  function lastOrderSeq(projectId, domain = null) {
+    const row = q("SELECT witness FROM operations WHERE project_id=? AND state IN ('accepted','materialized') AND json_extract(witness,'$.domain') IS ? ORDER BY json_extract(prepared,'$.projectRev') DESC LIMIT 1").get(projectId, domain ?? null);
+    return row ? JSON.parse(row.witness).orderSeq : 0;
   }
   function materialize(op) {
     return tx(() => {
@@ -166,15 +172,16 @@ export function openOperationHistory(file, { failpoint = () => {}, maxBytes = 25
     const genesis = q("SELECT payload FROM journal WHERE project_id=? AND kind='project-created' ORDER BY seq LIMIT 1").get(projectId);
     if (!genesis) throw historyError('needs-reconciliation');
     const baseline = JSON.parse(genesis.payload);
-    let value = baseline.snapshot; let rev = baseline.projectRev ?? 0; let orderSeq = 0; const versions = {};
+    let value = baseline.snapshot; let rev = baseline.projectRev ?? 0; const orderSeqs = new Map(); const versions = {};
     const rows = q("SELECT * FROM operations WHERE project_id=? AND state IN ('accepted','materialized') ORDER BY json_extract(prepared,'$.projectRev')").all(projectId);
     for (const row of rows) {
       const op = decode(row); const prepared = verifyPrepared(op);
-      if (op.expectedRev !== rev || op.projectRev !== rev + 1 || digest(op.before) !== digest(value) || !Number.isSafeInteger(op.witness?.orderSeq) || op.witness.orderSeq <= orderSeq) throw historyError('needs-reconciliation');
+      const domain = op.witness?.domain ?? null;
+      if (op.expectedRev !== rev || op.projectRev !== rev + 1 || digest(op.before) !== digest(value) || !Number.isSafeInteger(op.witness?.orderSeq) || op.witness.orderSeq <= (orderSeqs.get(domain) ?? 0)) throw historyError('needs-reconciliation');
       const accepted = q("SELECT payload FROM journal WHERE project_id=? AND kind='accepted-op' AND json_extract(payload,'$.opId')=?").get(projectId, op.opId);
       const preparedLog = q("SELECT payload FROM journal WHERE project_id=? AND kind='prepared-op' AND json_extract(payload,'$.opId')=?").get(projectId, op.opId);
       if (!accepted || canonical(JSON.parse(accepted.payload).witness) !== canonical(op.witness) || !preparedLog || canonical(JSON.parse(preparedLog.payload)) !== canonical({ ...prepared, preparedDigest: op.preparedDigest, payloadDigest: op.payloadDigest })) throw historyError('needs-reconciliation');
-      orderSeq = op.witness.orderSeq;
+      orderSeqs.set(domain, op.witness.orderSeq);
       if (op.state === 'materialized') { rev = op.projectRev; value = op.after; for (const change of op.changes) versions[change.itemKey] = change.afterVersion; }
     }
     const acceptedCount = q("SELECT COUNT(*) AS n FROM journal WHERE project_id=? AND kind='accepted-op'").get(projectId).n;
@@ -184,7 +191,7 @@ export function openOperationHistory(file, { failpoint = () => {}, maxBytes = 25
   }
   const fenceReceipt = (id) => { const row = q("SELECT payload FROM journal WHERE kind='fence-acknowledged' AND json_extract(payload,'$.id')=?").get(id); return row ? JSON.parse(row.payload).receipt : null; };
   return { prepareOperation, recordWitness, recordAcceptedOperation, materialize, cancelOperation, requestFence, commitFence, get, snapshot, verifyPrepared,
-    validate, fenceReceipt,
+    validate, fenceReceipt, lastOrderSeq,
     recordFenceReceipt(fence, receipt) { return tx(() => { if (receipt?.durable !== true || q('SELECT state FROM fences WHERE id=?').get(fence.id)?.state !== 'committed') throw historyError('fence-not-acknowledged'); const prior = fenceReceipt(fence.id); if (prior) return prior; append(fence.projectId, 'fence-acknowledged', { id: fence.id, receipt }); failpoint('fence-ack-before-commit'); return copy(receipt); }); },
     createProject(projectId, initial = {}, { projectRev = 0 } = {}) { tx(() => {
       if (!Number.isSafeInteger(projectRev) || projectRev < 0) throw historyError('bad-project-baseline');

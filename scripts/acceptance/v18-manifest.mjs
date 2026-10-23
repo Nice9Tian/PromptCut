@@ -35,6 +35,7 @@ export const G0_2_SKIPS = [
   { name: 'real chain, a dependency not ready: subjects cannot run (no onnxruntime in this Python) → the flow stops there when not optional, shots stay done, the project gets nothing', file: 'server/test/cloud-tools-p5-real.test.mjs', kind: '缺外部依赖', why: '同上' },
   { name: 'real chain, stopped mid-transcription (host path): the Python process is really gone, the flow never moves on, nothing is committed', file: 'server/test/cloud-tools-p5-real.test.mjs', kind: '缺外部依赖', why: '同上' },
   { name: 'real chain, the service shuts down mid-run, then comes back: "interrupted" at the right stage; a new call finishes the job', file: 'server/test/cloud-tools-p5-real.test.mjs', kind: '缺外部依赖', why: '同上' },
+  { name: 'AR-10 本机隔离托管组合 + 真实渲染服务:关着如实写 off;打开后成员都离线,云端 Agent 改重卡 → 渲染服务产出入库 → 对话里「云端渲染完成」', file: 'server/test/account-render-publish-e2e.test.mjs', kind: '本来该跑却被无声跳过', why: '(它自己写了跳过原因,不是真「无声」;归这一类是因为它本来该跑、只是被一个开关挡着,和 cards-layout 那条同例)要 PROMPTCUT_E2E_REAL_RENDER=1 才跑:它真起托管方渲染服务和无头 Chrome 工作进程,单项上限 15 分钟,所以全量里不默认跑。清单里 V22-ar10-real-render 专门设好这个变量把它跑一遍(照 G0-6 对 cards-layout 的办法)。2026-10-23 补登记:在那之前它一直是全量里一条没人管的跳过' },
   { name: 'WIRE-SET 浏览器数据的记号:有删不动的东西时记号留着,下次接着清', file: 'server/test/cloud-tools-wire.test.mjs', platforms: ['win32'], kind: '平台不符', why: '要靠目录权限演「删不动」,Windows 上演不出;Linux 上两个用户之间的真情形由 scripts/probes/account-tools-perms-linux.mjs 验' },
   { name: 'WIRE-USAGE 以前按 0700 / 0600 建的目录和流水:任务进程起来时补成组内可读', file: 'server/test/cloud-tools-wire.test.mjs', platforms: ['win32'], kind: '平台不符', why: 'Windows 没有这一套权限位;Linux 上两个用户之间的真情形由 scripts/probes/account-tools-perms-linux.mjs 验' },
 ];
@@ -119,7 +120,7 @@ export const V18_ITEMS = [
   T('V18-conv-access', '对话访问、已读回执、运行权威(撤销、崩溃)、任务进程生命周期、退出确认、改密用户路径', ['2.1-3', '2.1-4', '2.1-5'],
     ['server/test/agent-access-conversation.test.mjs', 'server/test/agent-access-http.test.mjs', 'server/test/agent-read-control.test.mjs', 'server/test/run-authority-core.test.mjs',
       'server/test/run-authority-crash.test.mjs', 'server/test/account-worker-lifecycle.test.mjs', 'server/test/account-logout-confirmation.test.mjs', 'server/test/account-password-user-path.test.mjs'], { account: true, timeoutMin: 30, known: 'account-password-user-path 写死 6680 段端口、account-logout-confirmation 写死 66xx;机器忙时偶发撞端口,单独重跑' }),
-  PR('V18-conv-password-probe', '改密选退出:真浏览器看页面「已退出」与四个服务的真实确认一致', ['2.1-5'], 'accept-018-conv-password-probe',
+  PR('V18-conv-password-probe', '改密选退出:真浏览器看页面「已退出」与四个服务的真实确认一致', ['2.1-5'], 'account-password-user-path-probe',
     ['--dist', DIST, '--site-root', `${VISU}/site`, '--out', '{item}', '--base-port', port(0)], {
       account: true, needs: ['online-build'], prereq: ['G0-4'], timeoutMin: 20, must: ['"passed":\\s*47', '"completed":\\s*true'],
     }),
@@ -316,22 +317,20 @@ export const V18_ITEMS = [
 const RENDER_REFACTOR = '渲染 / 轨道流 / 卡片键一带的探针,属渲染重构那一块(现在不碰),不是 0.7.18 38 行的依据;渲染重构合入后另议';
 export const V18_EXCLUDED = {
   'account-dual-user-path-probe.mjs': '账号双用户路径夹具的公开入口(导出 runAccountDualUserPath),被 server/test/account-dual-user-path.test.mjs 直接导入,不单独跑',
-  'account-password-user-path-probe.mjs': '改密选退出的原始探针(端口写死 6680～6689);V18-conv-password-probe 是它按 0.7.18 端口段改的同一套断言(47 项)的副本,以后者为准',
   'account-public-user-pages-probe.test.mjs': '公网网页探针自己的单测,由 npm test 扫(放在探针目录里)',
-  'asset-project-isolation-probe.mjs': '素材按项目隔离的旧模式(口令式)版本;账号模式以 V18-asset-isolation(asset-account-isolation-probe)为准',
   'cloud-tools-c1-site.mjs': '网页采集探针 cloud-tools-c1-probe 的本机站点夹具,不单独跑',
   'below-diff-measure-probe.mjs': RENDER_REFACTOR, 'below-stream-common.mjs': RENDER_REFACTOR, 'browser-stream-e2e-probe.mjs': RENDER_REFACTOR, 'browser-stream-node-probe.mjs': RENDER_REFACTOR,
-  'canvas-encode-paths-probe.mjs': RENDER_REFACTOR, 'card-plan-key-compare.mjs': RENDER_REFACTOR, 'card-policy-particles-probe.mjs': RENDER_REFACTOR, 'card-policy-probe.mjs': RENDER_REFACTOR,
+  'canvas-encode-paths-probe.mjs': RENDER_REFACTOR, 'card-plan-key-compare.mjs': RENDER_REFACTOR, 'card-policy-particles-probe.mjs': RENDER_REFACTOR,
+  // card-policy-probe.mjs 已由清单项 S2-8 点名（2026-10-23 探针总审把 S2-8 从 6 行的转发壳改指它），不再写排除原因
+  'merged-stream-common.mjs': RENDER_REFACTOR, // 合并流探针的公共件;本体已归档,但 stream-budget-probe 仍 import 它(2026-10-23 探针总审)
   'card-source-version-compare.mjs': RENDER_REFACTOR, 'card-table-digest-compare.mjs': RENDER_REFACTOR, 'emphasis-key-probe.mjs': RENDER_REFACTOR, 'export-paths-measure.mjs': RENDER_REFACTOR,
   'framework-card-pipeline-probe.mjs': RENDER_REFACTOR, 'guide-blind-check.mjs': '建卡指南的盲写验收(派不带上下文的子 Agent),渲染重构「丙」的验收,不是 0.7.18 的依据',
-  'hosted-render-remotion-probe.mjs': RENDER_REFACTOR, 'hosted-render-wipe-demo.mjs': RENDER_REFACTOR, 'hosted-stream-entry-probe.mjs': RENDER_REFACTOR,
+  'hosted-render-remotion-probe.mjs': RENDER_REFACTOR, 'hosted-stream-entry-probe.mjs': RENDER_REFACTOR,
   'online-remotion-card-probe.mjs': RENDER_REFACTOR, 'online-runtime-harness.html': RENDER_REFACTOR + '(页面夹具)',
   'preview-3d-stream-probe.mjs': RENDER_REFACTOR,
-  'preview-stop-lib.mjs': 'seek-back-exact-probe 与 scrub-hold-snapshot-probe 共用的搭法,不单独运行', 'remotion-style-harness.html': RENDER_REFACTOR + '(页面夹具)', 'remotion-style-probe.mjs': RENDER_REFACTOR,
-  'scrub-hold-snapshot-probe.mjs': RENDER_REFACTOR, 'seek-back-exact-probe.mjs': RENDER_REFACTOR, 'stage-push-before-after-probe.mjs': RENDER_REFACTOR, 'stateful-seq-vs-jump-probe.mjs': RENDER_REFACTOR,
+  'preview-stop-lib.mjs': 'seek-back-exact-probe、framework-card-pipeline-probe、lottie-* 共用的搭法,不单独运行', 'remotion-style-harness.html': RENDER_REFACTOR + '(页面夹具)', 'remotion-style-probe.mjs': RENDER_REFACTOR,
+  'seek-back-exact-probe.mjs': RENDER_REFACTOR, 'stage-push-before-after-probe.mjs': RENDER_REFACTOR, 'stateful-seq-vs-jump-probe.mjs': RENDER_REFACTOR,
   'lottie-baseline-probe.mjs': RENDER_REFACTOR, 'lottie-pipeline-probe.mjs': RENDER_REFACTOR, 'lottie-seed-extra-probe.mjs': RENDER_REFACTOR, 'lottie-seed-probe.mjs': RENDER_REFACTOR,
-  'merged-stream-bitstream.mjs': RENDER_REFACTOR, 'merged-stream-capacity.mjs': RENDER_REFACTOR, 'merged-stream-common.mjs': RENDER_REFACTOR, 'merged-stream-decode-limits.mjs': RENDER_REFACTOR,
-  'merged-stream-h264.mjs': RENDER_REFACTOR, 'merged-stream-play-page.js': RENDER_REFACTOR, 'merged-stream-play.mjs': RENDER_REFACTOR, 'merged-stream-reencode.mjs': RENDER_REFACTOR,
   'stream-below-probe.mjs': RENDER_REFACTOR, 'stream-canvas-direct-probe.mjs': RENDER_REFACTOR, 'stream-noreplay-probe.mjs': RENDER_REFACTOR,
 };
 

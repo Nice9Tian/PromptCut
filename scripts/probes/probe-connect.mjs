@@ -104,7 +104,7 @@ export async function pickExistingPage(browser, hint = null) {
 /**
  * A source of "clean" pages. Every backdrop/OAC case must start from a fresh
  * document — reusing one document across cases is what made the first version of
- * backdrop-probe.mjs report white for cases 2 and 3.
+ * scripts/archive/probes/backdrop-probe.mjs report white for cases 2 and 3.
  *
  * launch mode: a real new page per case (and it gets closed).
  * connect mode: one page, navigated to about:blank between cases (WebView2 has no

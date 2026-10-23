@@ -5,10 +5,11 @@
  * 两个镜头的缩略图**叠着画**——画面正在交融这件事，用两张叠图比任何文字都直观。
  *
  * 位置换算要经过 mediaOffset：片段可能只截取了素材中间一段，素材里 T 秒发生的
- * 转场，在时间轴上是 clip.start + (T - mediaOffset)。
+ * 转场，在时间轴上是 clip.start + (T - mediaOffset) / speed（片段速度，见 kernel/clipTime.mjs）。
  */
 import { useStore } from "../../store/project";
 import type { ShotTransition, TrackClip } from "../../kernel/project";
+import { mediaSpanOf, timelineSpanOf } from "../../kernel/clipTime.mjs";
 import { useTimelineContext } from "./TimelineContext";
 
 /** 缩略图太小就看不清，太大又盖住片段本身，行高不够时干脆只留竖线 */
@@ -31,7 +32,7 @@ export function ShotMarkers({ clip, rowHeight }: { clip: TrackClip; rowHeight: n
 
   const offset = clip.mediaOffset ?? 0;
   const visibleFrom = offset;
-  const visibleTo = offset + (clip.end - clip.start);
+  const visibleTo = offset + mediaSpanOf(clip);
   // 缩略图在编辑器进程的镜头检测目录里(`/api/shots/thumb/`);在线页面没有编辑器进程,只画竖线,不发请求(C10 契约第 10 节)
   const showThumbs = !ONLINE_BUILD && rowHeight >= THUMB_MIN_ROW_H;
 
@@ -40,8 +41,8 @@ export function ShotMarkers({ clip, rowHeight }: { clip: TrackClip; rowHeight: n
       {transitions.map((t, i) => {
         // 只画落在这个片段可见范围内的转场
         if (t.end < visibleFrom || t.start > visibleTo) return null;
-        const left = (t.start - offset) * pxPerSec;
-        const width = Math.max(1, (t.end - t.start) * pxPerSec);
+        const left = timelineSpanOf(clip, t.start - offset) * pxPerSec;
+        const width = Math.max(1, timelineSpanOf(clip, t.end - t.start) * pxPerSec);
         return t.kind === "dissolve"
           ? <DissolveMark key={i} t={t} left={left} width={width} showThumbs={showThumbs} />
           : <CutMark key={i} t={t} left={left} showThumbs={showThumbs} />;

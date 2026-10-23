@@ -63,12 +63,16 @@ export function GraphCard({ def, clip, graph, fps, t, params, stage }: {
     const node = nodeAt(id);
     if (!node) throw new Error(`素材效果卡输入节点不存在：${id}`);
     const media = node.adapter === "media" ? (node.media as { url?: string } | undefined) : undefined;
+    // 素材节点的取帧时刻 = 片段内时间 × 片段速度(`rate`,只在变速段上有,`kernel/cardGraph.mjs`)+ 裁剪起点。
+    // 没有 rate 时不乘,和原来逐位相同
+    const rate = Number(node.rate);
+    const mediaAt = (Number.isFinite(rate) && rate > 0 && rate !== 1 ? time * rate : time) + (Number(node.offset) || 0);
     const key = media?.url
-      ? `media:${media.url}:${time + (Number(node.offset) || 0)}`
+      ? `media:${media.url}:${mediaAt}`
       : `node:${id}:${time}:${depth}`;
     if (!bitmaps.current.has(key)) {
       const pending = media?.url
-        ? decoder.current.frame(media as any, time + (Number(node.offset) || 0), signal)
+        ? decoder.current.frame(media as any, mediaAt, signal)
         : renderUpstream(node, time, depth, signal);
       bitmaps.current.set(key, pending.catch((error) => { bitmaps.current.delete(key); throw error; }));
     }

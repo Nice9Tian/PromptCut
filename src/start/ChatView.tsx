@@ -1,36 +1,127 @@
 /**
- * 聊天页:侧栏里点一条 Agent 对话就进这里(用户 2026-10-23 定)。
+ * 聊天页:侧栏里点一条项目 Agent(云端 Agent 对话)就进这里(界面形状用户 2026-10-23 定)。
  *
- * 形状照手机 App 里那种对话:上面一条标题栏(回去、对话名、它挂在哪个项目或分组上、共有还是私有),
- * 中间是消息,下面是贴底的输入框。自己说的话靠右、带底色的气泡;Agent 说的话靠左、不套气泡,
- * 只在前面放一个星芒头像 —— 和编辑器右栏那套一致(`src/editor/right/chat/MessageList.tsx` 的做法:
- * 「用户消息靠右、不放头像」),这样两边看着是同一个产品。
+ * 形状照手机 App 里那种对话:中间是消息,下面是贴底的输入框。自己说的话靠右、强调色气泡;Agent 说的话靠左、
+ * 面板色气泡,前面放一个星芒头像 —— 和编辑器右栏那套一致(`src/editor/right/chat/MessageList.tsx`)。
  *
- * Agent 那一轮做过的事单独列一小块(编辑器里那一栏叫「Agent 操作」,这里沿用同一个说法)。
- *
- * **这一版只跑界面**:消息是 `mockChat.ts` 里写死的,发出去只把自己那条贴上去,再回一条说明「不会真的
- * 回复」,不碰云端 Agent 服务、不改任何项目。要接什么写在 `mockChat.ts` 的文件头。
+ * 2026-10-23 接上业务层(`docs/reports/AGENT-claude-vibe-wire.md`):消息、发送、停止都是真的,数据和动作由
+ * 调用方按 `vibeAgent.ts` 的 `VibeAgent` 给 —— 在线浏览器是云端 Agent(`useVibeCloud.ts`),桌面版是本机的
+ * CLI / API Agent(`useVibeLocal.ts`,和编辑界面 AI 栏同一套)。这一页对两种一视同仁,不认具体是哪一种。
+ *   - 一轮回复按 `product/agent.md`「汇报」拆:气泡里只放 Agent 说的「在做什么」,做过的操作列在「Agent 操作」那一块
+ *     (拆法与手机版共用 `src/mobile/agentView.ts` 的 `roundView`);
+ *   - 自己的消息云端还没收下之前写明发送状态,没发出去写原因;共有对话里别人发的标上是谁;
+ *   - 对话是空的时候只有一条示例句(`workflow/production.md`「用户发送指令」),点它填进输入框;
+ *   - 发不了(只读成员、创建者看别人的私有对话、开关关着)时输入框置灰,下面那一行写为什么。
  */
 import { useEffect, useRef, useState } from "react";
 import type { JSX } from "react";
+import { LiveMarkdown } from "../ai/Markdown";
+import type { ChatMessage } from "../ai/types";
+import { OUTBOX_RESEND_EVENT, OUTBOX_TEXT } from "../ai/cloud/outbox";
+import { activityText, outcomeText, runningTool } from "../editor/right/chat/AgentBubble";
+import { START_PRESET } from "../editor/right/chat/StartHero";
+import { CloudAgentConsentDialog } from "../editor/right/CloudAgentConsentDialog";
+import { isUserBubble, ordinals, partsOf, roundView, splitQuotes } from "../mobile/agentView";
+import { selectionPresenceStatus } from "../editor/sync/selectionPresence";
 import { ChatSidePanel } from "./ChatSidePanel";
 import { DetailEdit } from "./DetailEdit";
-import type { MockMessage } from "./mockChat";
-import type { MockAgentChat } from "./mockProjects";
+import type { VibeAgent } from "./vibeAgent";
 
 /** 和 `.ps-chat-input` 的 max-height 对齐 */
 const MAX_H = 200;
+/** 开始页那句话自动发出之前,选区连上之后再等多久(毫秒):给文档服务登记这张页面留的余量 */
+const PENDING_SETTLE_MS = 2000;
+
+const MARK: Record<string, string> = { done: "✓", run: "…", todo: "·", err: "!", ask: "!" };
+
+function AgentAvatar(): JSX.Element {
+  return (
+    <span className="ps-msg-avatar" aria-hidden="true">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 2.8c.5 4.3 2.1 6.1 6.4 6.6-4.3.5-5.9 2.3-6.4 6.6-.5-4.3-2.1-6.1-6.4-6.6 4.3-.5 5.9-2.3 6.4-6.6Z" />
+      </svg>
+    </span>
+  );
+}
+
+function MyMessage(props: { m: ChatMessage; sender: string | null }): JSX.Element {
+  const { m } = props;
+  const { quotes, rest } = splitQuotes(m.text);
+  const failed = m.sendState === "failed";
+  return (
+    <div className="ps-msg is-me" data-pc="start-chat-msg" data-from="me" data-send={m.sendState}>
+      <div className="ps-me-col">
+        {props.sender && <span className="ps-msg-sender" data-pc="start-chat-sender">{props.sender}</span>}
+        <div className="ps-bubble">
+          {quotes.map((q) => `@${q.label} `).join("")}
+          {rest}
+        </div>
+        {m.sendState === "sending" && <span className="ps-msg-state">发送中…</span>}
+        {m.sendState === "accepted" && <span className="ps-msg-state">已发出，等待云端开始处理…</span>}
+        {m.sendState === "queued" && <span className="ps-msg-state">{OUTBOX_TEXT.queued}</span>}
+        {m.error && <span className="ps-msg-state is-err" data-pc="start-chat-send-error">{m.error}</span>}
+        {failed && m.resendable && (
+          <button type="button" className="ps-link" onClick={() => window.dispatchEvent(new CustomEvent(OUTBOX_RESEND_EVENT, { detail: { id: m.id } }))}>
+            {OUTBOX_TEXT.resend}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AgentMessage(props: { m: ChatMessage; ordinal: number }): JSX.Element {
+  const { m } = props;
+  const v = roundView(m, props.ordinal);
+  const live = !!m.pending;
+  const sayings = [...v.before, ...v.after];
+  const lastText = sayings.filter((s) => s.from === "text").pop();
+  const outcome = live ? null : outcomeText(m);
+  return (
+    <div className="ps-msg is-agent" data-pc="start-chat-msg" data-from="agent" data-live={live || undefined}>
+      <AgentAvatar />
+      <div className="ps-msg-body">
+        {v.before.map((s) => (
+          <div key={s.key} className="ps-msg-text ps-md"><LiveMarkdown text={s.text} live={live && s === lastText} /></div>
+        ))}
+        {v.hasCard && (
+          <div className="ps-actions" data-pc="start-chat-actions">
+            <div className="ps-actions-head">Agent 操作 · {v.title}</div>
+            <ul className="ps-actions-list">
+              {v.items.map((it) => (
+                <li key={it.key} data-state={it.state}><span className="ps-op-mark">{MARK[it.state]}</span>{it.kind} · {it.name}</li>
+              ))}
+              {v.reports.flatMap((r, i) => [
+                <li key={`r${i}`} className="ps-op-report">{r.title}</li>,
+                ...r.rows.map((row, j) => <li key={`r${i}-${j}`} data-state={row.state}><span className="ps-op-mark">{MARK[row.state]}</span>{row.text}</li>),
+              ])}
+            </ul>
+          </div>
+        )}
+        {v.after.map((s) => (
+          <div key={s.key} className="ps-msg-text ps-md"><LiveMarkdown text={s.text} live={live && s === lastText} /></div>
+        ))}
+        {live && <p className="ps-msg-text ps-msg-live" data-pc="start-chat-typing">{activityText(m, runningTool(partsOf(m)))}</p>}
+        {!live && !sayings.length && !v.hasCard && !m.error && !outcome && <p className="ps-msg-text ps-msg-live">（这一轮没有留下文字）</p>}
+        {m.error && <p className="ps-msg-text ps-msg-err" role="alert" data-pc="start-chat-error">{m.error}</p>}
+        {outcome && <p className="ps-msg-text ps-msg-live">{outcome}</p>}
+        {m.cloudRender && <p className={`ps-msg-text ps-msg-live${m.cloudRender.state === "failed" || m.cloudRender.state === "unavailable" ? " ps-msg-err" : ""}`}>{m.cloudRender.text}</p>}
+      </div>
+    </div>
+  );
+}
 
 export function ChatView(props: {
-  chat: MockAgentChat;
-  /** 这条对话的消息。存在上层按对话号分开放,所以切走再回来还在 */
-  messages: MockMessage[];
-  onSend: (text: string) => void;
+  vibe: VibeAgent;
+  /** 对话标题(顶栏上那一行);这里输入框的占位文字要用 */
+  title: string;
+  /** 开始页上说的那句话:进了聊天页自动发出去一次(发过就由上层清掉) */
+  pending: string | null;
+  onPendingSent: () => void;
   /** 右边那条拓展栏开着没有。开关在顶栏上(`TopBar.tsx`),所以状态拿在 `OnlineStart` */
   panel: boolean;
   /** 切到传统式(打开编辑界面);按钮在「详细编辑」的头上 */
   onPro: () => void;
-  /** 拓展栏的宽度与它那条拖宽缝的回调。状态也在 `OnlineStart`,这里只过一道 */
   ext: {
     width: number;
     onWidth: (px: number) => void;
@@ -38,24 +129,25 @@ export function ChatView(props: {
     onWidthNudge: (delta: number) => void;
   };
 }): JSX.Element {
-  const messages = props.messages;
+  const { vibe } = props;
+  const messages = vibe.chat.messages;
   const [text, setText] = useState("");
-  /** 拓展栏里点出来的那句说明,显示在输入框下面 */
+  /** 拓展栏、详细编辑里点出来的那句说明,显示在输入框下面 */
   const [note, setNote] = useState("");
-  /** 「详细编辑」展开了没有:展开时占满聊天区,输入框照旧留在下面 */
   const [detail, setDetail] = useState(false);
   const area = useRef<HTMLTextAreaElement>(null);
   const tail = useRef<HTMLDivElement>(null);
+  const convId = vibe.chat.conversationId;
 
-  // 换一条对话:没发出去的草稿不带过去
+  // 换一条对话:没发出去的草稿不带过去。开始页带过来的那句话先放进输入框(看得见),就绪后自动发出;
+  // 没能发出去(拒绝了告知)就一直留在输入框里,不用重打
   useEffect(() => {
-    setText("");
-  }, [props.chat.id]);
-
-  // 新消息进来滚到底
-  useEffect(() => {
-    tail.current?.scrollIntoView({ block: "end" });
-  }, [messages]);
+    setText(props.pending ?? "");
+    setNote("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [convId]);
+  useEffect(() => { if (props.pending) setText(props.pending); }, [props.pending]);
+  useEffect(() => { tail.current?.scrollIntoView({ block: "end" }); }, [messages]);
 
   const fit = () => {
     const el = area.current;
@@ -64,115 +156,156 @@ export function ChatView(props: {
     el.style.height = `${Math.min(el.scrollHeight, MAX_H)}px`;
   };
 
-  const send = () => {
-    const t = text.trim();
+  const send = async (body: string) => {
+    const t = body.trim();
     if (!t) return;
-    props.onSend(t);
     setText("");
     requestAnimationFrame(fit);
+    const ok = await vibe.send(t);
+    // 没发出去(还没确认告知、被拒):原文放回输入框,不让人重打
+    if (!ok) setText((cur) => cur || t);
   };
 
-  const seed = props.chat.on === "project" ? props.chat.projectId : props.chat.groupId;
+  // 开始页上说的那句话:对话就绪(能发了)就发一次
+  // 还要等这张页面的选区在文档服务那边登记上:账号模式发消息带的是这张页面的选区快照,刚进项目那一下文档服务还没有这张页面,
+  // 立刻发会被拒(`selection-page-unavailable`)。手动发不会撞上(人打字比它慢),自动发的这一条等选区连上之后再等一小会儿
+  const pendingSent = useRef<string | null>(null);
+  useEffect(() => {
+    const p = props.pending;
+    if (!p || pendingSent.current === p || !vibe.canSend || !vibe.chat.history.loaded) return;
+    let dead = false;
+    let timer = 0;
+    const t0 = Date.now();
+    const tick = () => {
+      if (dead) return;
+      const presence = selectionPresenceStatus();
+      if (!(presence.linked && presence.pageId) && Date.now() - t0 < 15_000) { timer = window.setTimeout(tick, 300); return; }
+      timer = window.setTimeout(() => {
+        if (dead || pendingSent.current === p) return;
+        pendingSent.current = p;
+        props.onPendingSent();
+        void send(p);
+      }, PENDING_SETTLE_MS);
+    };
+    tick();
+    return () => { dead = true; window.clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.pending, vibe.canSend, vibe.chat.history.loaded]);
+
+  const stopMode = vibe.streaming && text.trim().length === 0;
+  const order = ordinals(messages);
+  const meId = vibe.me;
+  const senders = vibe.chat.view.senders ?? {};
+  const shown = messages.filter((m) => m.role === "assistant" || isUserBubble(m));
+
+  const footNote = note
+    || (vibe.whyNot && vibe.projectId ? vibe.whyNot : "")
+    // 云端的执行服务没在接活:和编辑器右栏同一句(`CloudAiPanel.tsx` 的 cloud-note)。本机 Agent 没有执行服务,恒为假
+    || (vibe.waitingExecutor ? "消息会持久排队，等待执行服务；重新打开可接着看。" : "")
+
+    || (vibe.queued > 0 ? `前面还有 ${vibe.queued} 条在排队，一轮一轮跑。` : "")
+    || vibe.hint;
 
   return (
-    <main className="ps-main ps-chat" data-pc="start-chat" data-chat={props.chat.id}>
-
+    <main className="ps-main ps-chat" data-pc="start-chat" data-chat={convId}>
       <div className="ps-chat-row">
         <div className="ps-chat-col">
-      {/*
-        「详细编辑」占的是消息那一截,输入框在它下面不收 —— 用户就能在编辑视图里右键一张卡、
-        把它引用进输入框。输入框和消息同在这一列里,所以宽度跟着对话列走,不会伸到右边拓展栏底下。
-      */}
-      {detail ? (
-        <DetailEdit
-          seed={seed}
-          onPro={props.onPro}
-          onClose={() => setDetail(false)}
-          onQuote={(q) => {
-            setText((t) => (t.trim() ? `${t.trimEnd()} ${q} ` : `${q} `));
-            area.current?.focus();
-            setNote(`已把「${q}」放进输入框。`);
-          }}
-        />
-      ) : (
-      <div className="ps-chat-scroll">
-        <div className="ps-chat-list">
-          {messages.map((m) =>
-            m.from === "me" ? (
-              <div key={m.id} className="ps-msg is-me" data-pc="start-chat-msg" data-from="me">
-                <div className="ps-bubble">{m.text}</div>
-              </div>
-            ) : (
-              <div key={m.id} className="ps-msg is-agent" data-pc="start-chat-msg" data-from="agent">
-                <span className="ps-msg-avatar" aria-hidden="true">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M12 2.8c.5 4.3 2.1 6.1 6.4 6.6-4.3.5-5.9 2.3-6.4 6.6-.5-4.3-2.1-6.1-6.4-6.6 4.3-.5 5.9-2.3 6.4-6.6Z" />
-                  </svg>
-                </span>
-                <div className="ps-msg-body">
-                  <p className="ps-msg-text">{m.text}</p>
-                  {m.actions && m.actions.length > 0 && (
-                    <div className="ps-actions">
-                      <div className="ps-actions-head">Agent 操作</div>
-                      <ul className="ps-actions-list">
-                        {m.actions.map((a) => <li key={a}>{a}</li>)}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ),
+          {vibe.banner && (
+            <div className="ps-chat-banner" role="alert" data-pc="start-chat-banner" onClick={vibe.clearBanner}>{vibe.banner}</div>
           )}
-          <div ref={tail} />
-        </div>
-      </div>
-      )}
+          {detail ? (
+            <DetailEdit
+              onPro={props.onPro}
+              onClose={() => setDetail(false)}
+              onQuote={(q) => {
+                setText((t) => (t.trim() ? `${t.trimEnd()} ${q} ` : `${q} `));
+                area.current?.focus();
+                setNote(`已把「${q}」放进输入框。`);
+              }}
+            />
+          ) : (
+            <div className="ps-chat-scroll">
+              <div className="ps-chat-list" data-pc="start-chat-list">
+                {shown.length === 0 && (
+                  <div className="ps-chat-empty" data-pc="start-chat-empty">
+                    {vibe.canSend ? (
+                      <button type="button" className="ps-chat-example" data-pc="start-chat-example" onClick={() => { setText(START_PRESET); area.current?.focus(); }}>
+                        {START_PRESET}
+                      </button>
+                    ) : (
+                      <p className="ps-muted">{vibe.whyNot ?? "正在连接云端 Agent…"}</p>
+                    )}
+                  </div>
+                )}
+                {shown.map((m) => {
+                  if (m.role === "user") {
+                    const s = senders[m.id];
+                    return <MyMessage key={m.id} m={m} sender={s && s.accountId !== meId ? s.name : null} />;
+                  }
+                  return <AgentMessage key={m.id} m={m} ordinal={order.get(m.id) ?? 1} />;
+                })}
+                <div ref={tail} />
+              </div>
+            </div>
+          )}
 
-      {/* 输入框:和消息同在对话列里,所以「详细编辑」展开时它照旧在下面,宽度也不越界 */}
-      <div className="ps-chat-foot">
-        <div className="ps-chat-box">
-          <textarea
-            ref={area}
-            className="ps-chat-input"
-            data-pc="start-chat-input"
-            value={text}
-            placeholder={`对「${props.chat.name}」说点什么`}
-            aria-label="写一条消息"
-            onChange={(e) => {
-              setText(e.target.value);
-              fit();
-            }}
-            onKeyDown={(e) => {
-              // 回车发送、Shift+回车换行;输入法组合中的回车不算(中文输入按回车是在选字)
-              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-                e.preventDefault();
-                send();
-              }
-            }}
-          />
-          <button
-            type="button"
-            className="ps-prompt-send"
-            data-pc="start-chat-send"
-            disabled={!text.trim()}
-            aria-label="发送"
-            onClick={send}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 19V5M5 12l7-7 7 7" />
-            </svg>
-          </button>
-        </div>
-        <p className="ps-chat-note" role="status" data-pc="start-chat-note">
-          {note || "界面预览阶段：发出去不会真的跑 Agent，也不会改动项目。"}
-        </p>
-      </div>
+          <div className="ps-chat-foot">
+            <div className="ps-chat-box">
+              <textarea
+                ref={area}
+                className="ps-chat-input"
+                data-pc="start-chat-input"
+                value={text}
+                disabled={!vibe.canSend}
+                placeholder={vibe.canSend ? `对「${props.title}」说点什么` : (vibe.whyNot ?? "")}
+                aria-label="写一条消息"
+                onChange={(e) => {
+                  setText(e.target.value);
+                  fit();
+                }}
+                onKeyDown={(e) => {
+                  // 回车发送、Shift+回车换行;输入法组合中的回车不算(中文输入按回车是在选字)
+                  if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    e.preventDefault();
+                    void send(text);
+                  }
+                }}
+              />
+              {stopMode ? (
+                <button
+                  type="button"
+                  className="ps-prompt-send"
+                  data-pc="start-chat-stop"
+                  disabled={!vibe.canStop}
+                  aria-label="停止这一轮"
+                  title={vibe.canStop ? "停止这一轮" : "只能停止自己发起的任务"}
+                  onClick={() => void vibe.stop()}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="ps-prompt-send"
+                  data-pc="start-chat-send"
+                  disabled={!text.trim() || !vibe.canSend}
+                  aria-label="发送"
+                  onClick={() => void send(text)}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 19V5M5 12l7-7 7 7" />
+                  </svg>
+                </button>
+              )}
+            </div>
+            <p className="ps-chat-note" role="status" data-pc="start-chat-note">{footNote}</p>
+          </div>
         </div>
 
         {props.panel && (
           <ChatSidePanel
-            chatId={props.chat.id}
-            projectSeed={seed}
+            messages={messages}
+            detailOpen={detail}
             onNote={setNote}
             onDetail={() => setDetail(true)}
             width={props.ext.width}
@@ -182,6 +315,8 @@ export function ChatView(props: {
           />
         )}
       </div>
+      <CloudAgentConsentDialog open={vibe.consent.open} pending={vibe.consent.pending} error={vibe.consent.error}
+        onAccept={vibe.consent.accept} onReject={vibe.consent.reject} />
     </main>
   );
 }

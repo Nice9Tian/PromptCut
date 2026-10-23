@@ -1,5 +1,11 @@
 /**
- * 在线浏览器节点认领并生成单卡轨道流的本机端到端(`docs/plan/browser-stream-task.md` 第一到四处;任务书 `render-refactor-task.md`「甲一」的「产」这一半)。
+ * 在线浏览器节点认领并生成单卡轨道流的本机端到端
+ * 2026-10-23 探针总审：每张卡的 HTML 快照已于 2026-10-16（己二）撤掉 —— `server/snapshot-tier.mjs` 的 `snapshotTier()` 对所有卡恒回 `none`、
+ * `server/render-node/split.mjs` 因此一个快照任务都不再发，`src/StageView.tsx` 的 `setSnapshots` 只剩空桩。本探针原先的等待条件把「快照任务也做完」
+ * 算在 `completed` 里，撤快照之后那个数永远凑不满，整支会卡到 15 分钟超时。现在把门槛按「每张卡少一个快照任务」逐处减一，并删掉只对旧快照有意义的断言。
+ * **留一个待实跑确认的点**：产流那几处的帧数与分段数门槛（送进编码器多少帧、几个分段）是撤快照之前的读数；
+ * 2026-10-14 起空项目加第一张卡时本页会先产一遍稀疏版，可能让这些数翻倍。跑通一次看 `diag.streams.frames` 是 48 还是 96 再定，别先改。
+(`docs/plan/browser-stream-task.md` 第一到四处;任务书 `render-refactor-task.md`「甲一」的「产」这一半)。
  *
  *   node scripts/probes/browser-stream-node-probe.mjs [--dist <在线构建目录>] [--base-port 7410] [--out <目录>] [--keep-temp] [--no-yield]
  *        端口(整段 +0～+9):+0 编辑器页的源、+1 / +2 两个舞台的源、+3 文档服务、+4 素材服务、+5～+7 桌面编辑器(及它的舞台端口)。都只绑 127.0.0.1。
@@ -309,7 +315,7 @@ try {
   const streamed = await until('页面节点做完第一条流任务(连同这张卡的快照任务)', async () => {
     const d = await nodeDiag(page);
     for (const h of d?.holding ?? []) seen.add(h.id);
-    return d?.counters?.streamTasks >= 1 && d.counters.completed >= 2 ? d : null;
+    return d?.counters?.streamTasks >= 1 && d.counters.completed >= 1 ? d : null;
   }, 900_000, 250);
   const diag = streamed ?? (await nodeDiag(page));
   out.timings.firstStreamMs = streamed ? Date.now() - t0 : null;
@@ -508,14 +514,10 @@ try {
     try { execFileSync(ffmpegPath, ['-y', '-hide_banner', '-loglevel', 'error', '-i', files[Math.floor((g - ORIGIN_FRAME) / SEG)], '-vf', 'select=eq(n' + '\\' + ',' + ((g - ORIGIN_FRAME) % SEG) + ')', '-frames:v', '1', path.join(OUT, name + '-frame-' + g + '.png')], { windowsHide: true }); } catch { /* 看图用,出不来不影响结论 */ }
   }
 
-  /* ---------------------------------------------------------------- 7. 快照回归:同一张卡的快照任务照旧完成 */
-  const snapId = [...seen].find((id) => id.startsWith('snapshot:'));
-  const sm = snapId ? /^snapshot:([a-f0-9]{64}):(\d+)-(\d+)$/.exec(snapId) : null;
-  const snapItem = sm ? await content.get('snapshot-manifest', `${sm[1]}:${sm[2]}-${sm[3]}`).catch(() => null) : null;
-  check(snapItem?.body && manifestMatches(snapItem.body, { kind: 'snapshot', resultKey: sm[1], range: { from: Number(sm[2]), to: Number(sm[3]) } })
-    && snapItem.body.frames.length === 48 && snapItem.body.small?.length === 48, 'F:同一张卡的快照任务照旧由页面完成(snapshot-manifest 两档齐,48 帧)',
-  { snapId, frames: snapItem?.body?.frames?.length ?? null, small: snapItem?.body?.small?.length ?? null });
-  check((diag?.counters?.bakedFrames ?? 0) === 48, 'F:快照那一段生成了 48 帧', diag?.counters);
+  /* ---------------------------------------------------------------- 7.（原「快照回归」一节已删）
+   * 这一节原先断言「同一张卡的快照任务照旧由页面完成（snapshot-manifest 两档齐、48 帧）」与「快照那一段生成了 48 帧」。
+   * 每张卡的快照 2026-10-16 撤掉之后，切分方一个快照任务都不发，`seen` 里不会再有 `snapshot:` 开头的 id，两条必挂。
+   * 2026-10-23 探针总审删。产流过程里那种「当场生成、送进编码器、用完就丢」的快照仍在，由下面的产流断言覆盖。 */
   await shot(page, 'after-first-stream');
 
   /* ---------------------------------------------------------------- 8. 让路:产流途中开始播放 */
@@ -533,7 +535,7 @@ try {
     await delay(2500);
     const during = await nodeDiag(page);
     await P(page, () => window.__pcStore.actions.pause());
-    const after = await until('停下后恢复认领、做完第二张卡的流任务与快照任务', async () => { const d = await nodeDiag(page); return d?.counters?.streamTasks >= 2 && d.counters.completed >= before0.counters.completed + 3 ? d : null; }, 900_000, 500);
+    const after = await until('停下后恢复认领、做完第二张卡的流任务(快照任务 2026-10-16 起不再发)', async () => { const d = await nodeDiag(page); return d?.counters?.streamTasks >= 2 && d.counters.completed >= before0.counters.completed + 2 ? d : null; }, 900_000, 500);
     out.steps.yield = {
       clip: clip2,
       baking: b && { frames: b.frames, segments: b.segments },
@@ -567,7 +569,7 @@ try {
     const whileHidden = await nodeDiag(page);
     await page.bringToFront();
     await other.close().catch(() => {});
-    const after3 = await until('回到前台后恢复并做完第三张卡的流任务', async () => { const d = await nodeDiag(page); return d?.counters?.streamTasks >= 3 && d.counters.completed >= before1.counters.completed + 2 ? d : null; }, 900_000, 500);
+    const after3 = await until('回到前台后恢复并做完第三张卡的流任务', async () => { const d = await nodeDiag(page); return d?.counters?.streamTasks >= 3 && d.counters.completed >= before1.counters.completed + 1 ? d : null; }, 900_000, 500);
     out.steps.hidden = {
       clip: clip3, hidden: !!hidden,
       baking: baking3 && { frames: baking3.streams.frames, done: streamHold(baking3)?.done ?? null },

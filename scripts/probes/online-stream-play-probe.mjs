@@ -11,7 +11,7 @@
  *
  * 为什么页面用在线模式的**开发服务**、不用在线构建:2026-10-07 起在线构建的首屏只有官网账号入口(`src/account/AccountProjects.tsx`),
  * 本机托管组合没有账号服务,页面进不了项目(`c10-browser-probe`、`m7-browser-probe`、`online-stale-layer-probe` 在这一步都过不去,见
- * `docs/reports/AGENT-rr-a1-play.md`「开工前的对照」)。开发服务认 `?editor` 直接进编辑器(`src/Shell.tsx`),探针在页面里引
+ * `docs/archive/agent-reports/AGENT-rr-a1-play.md`「开工前的对照」)。开发服务认 `?editor` 直接进编辑器(`src/Shell.tsx`),探针在页面里引
  * `syncManager.ts` 的 `enterShared`,凭项目口令进同一个共享项目 —— 连接、同步、素材票据、内容库都是真的,只是没经过首屏那张表单。
  * 开发服务没有舞台入口 `stage.html`(落到 index.html),舞台的隔离自检不过、走「票据经 RPC」的旧办法;流的字节怎么到舞台与这无关
  * (隔离与否都是父页推过去,见 `src/render/streamPlayer.ts`)。

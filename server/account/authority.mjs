@@ -4,7 +4,7 @@ import { validateAccountEvent, validateEventBatch, requireRequestId } from './pr
 import { accountError } from './client.mjs';
 import { canonicalJson, digestOf, appendAccessEvent } from './ledger.mjs';
 import { rollbackEventOf } from './logout-rollback.mjs';
-import { guestExpired, guestPrincipal, guestProjectLimitReached, isGuestId, looksLikeGuestToken, readGuestToken, signGuestToken } from './guest.mjs';
+import { GUEST_LIMITS, guestExpired, guestPrincipal, guestProjectLimitReached, isGuestId, looksLikeGuestToken, readGuestToken, signGuestToken } from './guest.mjs';
 
 /**
  * 主体编号：账号是 `acc_` + 24 位十六进制，游客是 `gst_` + 24 位（`guest.mjs`）。两种在成员名单、禁入表、
@@ -405,7 +405,13 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
       if (Object.values(state.projects).some(p => p.status !== 'deleted' && p.name === name)) reject(409, 'name-taken');
       let projectId;
       if (reqProjectId) {
-        if (state.projects[reqProjectId] && state.projects[reqProjectId].status !== 'deleted') {
+        // 删掉过的项目号只有原创建者能再用(claude/guest-fix〔裁〕,审查 C / S1):原先谁都能重建已删除的号,游客 A 的项目
+        // 三天清理后,游客 B 带同一个号新建就成了它的创建者,素材服务那边同一处项目库里还留着 A 的字节。原创建者自己重用
+        // 仍然放行:搬到云端「放弃这次搬迁」之后再搬,还是原来的项目号(workflow/project.md「搬上去还是同一个项目」);
+        // 素材服务在那之前已经把旧字节删掉了(`server/asset-store/project-reaper.mjs`)。别人带这个号来回 409 `project-id-taken`,
+        // 页面会改由云端发新号再建(`src/editor/sync/accountMove.ts`)
+        const existing = state.projects[reqProjectId];
+        if (existing && (existing.status !== 'deleted' || existing.creatorAccountId !== actor.accountId)) {
           reject(409, 'project-id-taken');
         }
         projectId = reqProjectId;
@@ -624,27 +630,53 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
   /**
    * 发一张游客令牌（公开路由 `/hosted/shared/account/guest`，不要登录 —— 他还没有身份）。
    *
-   * 带着旧令牌来就续期，编号不变（同一台浏览器回来还是同一个人）；不带、过期了或者改过，就随机一个新身份。
+   * 带着旧令牌来就续期，编号不变（同一台浏览器回来还是同一个人，product/document-service.md「游客」）。
+   * **过期了也续**（2026-10-23 claude/guest-fix〔裁〕，审查 B：原先过期就换新编号，游客隔天回来就成了另一个人、
+   * 进不了自己的项目）：签名对得上、过期不超过 `GUEST_LIMITS.renewGraceMs`（3 天，和游客项目的寿命一样长）、
+   * 这个身份没被作废（`revokeGuest`），就续成同一个编号。超过 3 天没来，他建的项目也早清掉了，这时才换新身份。
+   * 不带、改过（签名对不上）、作废过的，随机一个新身份。
    * 编号只由这里生成，不收请求体里写的：收了的话谁都能自称是别人（`guest.mjs` 开头说明）。
    *
    * @param {string | null} previous 页面手里那一张，没有就给 null
+   * @param {{ admitNew?: () => void }} [options] `admitNew`：要发**新**身份之前调（领令牌的 IP 限流只数这一种，
+   *   续期不数，审查 E）；不许发就在里面抛错
    */
-  function issueGuest(previous) {
+  function issueGuest(previous, { admitNew } = {}) {
     if (!guestKey) reject(503, 'guest-unavailable');
     const at = now();
-    // 过期的只当没带:交回一张过期令牌就是换一个新身份(他那三天的东西本来也清掉了)
     const read = typeof previous === 'string' ? readGuestToken(previous, { key: guestKey, at }) : null;
-    const old = read && !read.expired ? read : null;
+    const old = read && at <= read.expiresAt + GUEST_LIMITS.renewGraceMs && !ledger.read().revokedLogins[`login:guest:${read.guestId}`] ? read : null;
+    if (!old) admitNew?.();
     const issued = signGuestToken({ key: guestKey, at, ...(old ? { guestId: old.guestId } : {}) });
     return { token: issued.token, guestId: issued.guestId, expiresAt: issued.expiresAt, renewed: !!old };
+  }
+
+  /**
+   * 作废一个游客身份（同一条公开路由带 `revoke: true`；页面登录账号、或者点「我有账号，去登录」时发，
+   * product「登录账号之后游客身份作废」，审查 S9：原先只在页面那一侧清掉，服务端那张令牌照样能用、能续期）。
+   * 交来的令牌签名对得上就作废它的编号（过期的也收，过期的还能续期）：记进撤销表（`revokedLogins`，
+   * 和账号退出登录同一张），之后这个编号的令牌核不过（`verify` 本来就查这张表）、也续不了期。
+   * 认不出的令牌回 `{ revoked: false }`，不说为什么。作废是幂等的。
+   *
+   * @param {string | null} token
+   */
+  function revokeGuest(token) {
+    if (!guestKey) reject(503, 'guest-unavailable');
+    const at = now();
+    const read = typeof token === 'string' ? readGuestToken(token, { key: guestKey, at }) : null;
+    if (!read) return { revoked: false };
+    const key = `login:guest:${read.guestId}`;
+    ledger.transaction(state => { if (!state.revokedLogins[key]) state.revokedLogins[key] = { guest: true, revokedAt: at }; });
+    return { revoked: true };
   }
 
   /**
    * 游客建的项目三天就清（2026-10-23 用户定，天数在 `guest.mjs` 的 `GUEST_LIMITS.ttlMs`）。
    *
    * 清的办法和创建者自己点「删项目」完全一样（上面 `adminProject` 的 `delete` 分支）：标成已删除、落墓碑、
-   * 记一条访问事件、按 `delete` 围栏停掉在跑的任务。走同一条路，下游（素材服务按项目清字节、连着的页面被断开）
-   * 不用为游客另认一种「项目没了」。账号建的项目一个都不碰。
+   * 记一条访问事件、按 `delete` 围栏停掉在跑的任务。走同一条路，下游不用为游客另认一种「项目没了」：
+   * 素材服务收到这条删除事件就把整个项目的字节删掉（`server/asset-store/project-reaper.mjs`），连着的页面被断开。
+   * 删掉的项目号不再发给别人（`createProject`）。账号建的项目一个都不碰。
    *
    * 由外面定时叫（`server/hosted/main.mjs`）；这里不自己起计时器，测试才好把时间拨过去。
    * @returns {string[]} 这一趟清掉的项目号
@@ -931,8 +963,17 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     const state = ledger.read();
     return agentReadClosureComplete(state, eventId, state.accessAcks[`ack:${eventId}:agent`]);
   }
-  return { authorityId: ledger.authorityId, synchronize, applyRevocation, applyRevocationNotification, authorizePrincipal, checkAccess,
-    issueGuest, sweepExpiredGuestProjects,
+  /**
+   * 令牌是谁(不要求项目):回 `{ accountId, guest }`。账号级的东西(云端分组,`modules/account-org.mjs`)用它认人,
+   * 身份只取令牌解出来的,请求体里写什么都不收。只给出这两项,不把授权引用号交出去,所以验完就把验证时临时记的引用丢掉。
+   */
+  async function identify(input) {
+    const principal = await verify(input);
+    if (!input?.authorizationId && principal.authorizationId) refs.delete(principal.authorizationId);
+    return { accountId: principal.accountId, guest: principal.guest === true };
+  }
+  return { authorityId: ledger.authorityId, synchronize, applyRevocation, applyRevocationNotification, authorizePrincipal, identify, checkAccess,
+    issueGuest, revokeGuest, sweepExpiredGuestProjects,
     createProject, joinProject, joinRequest, decideJoinRequest, entryState, adminProject, listProjects, status, statusForPrincipal, legacyGoneStatus, eventsSince, ackAccessEvent, hasAgentReadClosure, revocationStatus, completeLogoutBarrier, recordLogoutTimeout, flushAccountAcknowledgements,
     subscribeProjectChanges(callback) {
       if (typeof callback !== 'function') reject(400, 'invalid-subscription');

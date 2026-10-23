@@ -25,6 +25,7 @@ import { JoinForm } from "./editor/sync/JoinForm";
 import { STORAGE_EVENT, takeStorageRequest } from "./ui/WindowTitleBar";
 import { AccountProjects } from "./account/AccountProjects";
 import { OnlineStart } from "./start/OnlineStart";
+import { DesktopStart } from "./start/DesktopStart";
 
 /** 字节数写成人看的样子。导出产物、预渲染缓存动辄几十 GB,所以到 G 为止 */
 function humanSize(bytes: number): string {
@@ -82,29 +83,56 @@ function JoinSection(props: { onEnterEditor: () => void }): JSX.Element {
   );
 }
 
-/** 地址里有没有点名要 Vibe 模式那一套新界面。`home` / `login` 是它自己的预览入口,一并认 */
-function wantsVibe(): boolean {
+/** 地址里点名要原来那一块账号表单(`?ui=classic`):只留给排障和还认老页面的探针,界面上没有入口 */
+function wantsClassic(): boolean {
   try {
-    const ui = new URLSearchParams(location.search).get("ui");
-    return ui === "vibe" || ui === "home" || ui === "login";
+    return new URLSearchParams(location.search).get("ui") === "classic";
   } catch {
     return false;
   }
 }
 
 /**
- * 在线浏览器(电脑身份)的首屏。
+ * 桌面版点名要氛围式那一屏(`?ui=vibe`)。桌面版的缺省仍是这一页(传统开始页) —— 改桌面版的缺省界面是一级改动,
+ * 不由会话定;在线那边缺省就是氛围式,不看这个参数。
  *
- * **缺省仍是原来那一页**:一块账号表单(`AccountProjects`)—— 真的账号登录、真的云端项目列表、
- * 凭链接加入。Vibe 模式(`user-workflow.md`「工作方式」)那一套新界面(`src/start/`)**还在跑界面、
- * 用的是假数据**,所以只有地址里点名要(`?ui=vibe`)时才进。这样它能进 main、随时打开看,
- * 线上的真开始页不受影响。
+ * 用地址带着是为了**刷新后还在原地**:氛围式里按 F5、从编辑界面回首页,落回的都该是刚才那一屏。
+ * 编辑界面顶栏的「氛围式」(`src/editor/ModeSwitch.tsx`)也是改这个参数再派 `pc-go-home`。
+ */
+function wantsVibe(): boolean {
+  try {
+    return new URLSearchParams(location.search).get("ui") === "vibe";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 把 `?ui=` 写成某个值(null 是去掉)。地址改不了(少见)不影响这一次切换,只是刷新后回到缺省那一屏。
  *
- * 〔裁:发版会话 V21-12,2026-10-23 —— 0.7.21 要部署到生产,不能把线上的开始页默认换成原型〕
- * 等 `src/start/` 接上业务层(真实项目列表、真实对话)之后,把这道门去掉、缺省换成新界面。
+ * 编辑界面那边(`src/editor/TopBar.tsx` 的 `goVibe`)写的是同一个参数,但它自己写,不从这里引 ——
+ * 这个文件要引 `src/editor/`,反过来引会绕成一圈。
+ */
+function setUiParam(value: string | null): void {
+  try {
+    const url = new URL(location.href);
+    if (value === null) url.searchParams.delete("ui");
+    else url.searchParams.set("ui", value);
+    history.replaceState(history.state, "", url);
+  } catch { /* 改不了地址栏不拦着切 */ }
+}
+
+/**
+ * 在线浏览器(电脑身份)的首屏:**缺省是 Vibe 模式**(`user-workflow.md`「工作方式」:在线浏览器登录后的默认界面),
+ * 整套在 `src/start/`,已接上真账号、真云端项目、真云端 Agent(`src/start/OnlineStart.tsx` 文件头逐块写了接到哪)。
+ *
+ * 原先这里有一道门(〔裁 V21-12〕:新界面只跑界面、用假数据时,只有带 `?ui=vibe` 才进,缺省仍是老的账号表单),
+ * 用户 2026-10-23 验收时指出判错了:要的是把新界面接上业务层并成为缺省。门已去掉(返工分支 `claude/vibe-wire`)。
+ * `?ui=vibe` / `?ui=home` / `?ui=login` 不再有特别的意思(进的都是缺省这一页,`?ui=home` 不再跳过登录)。
+ * 老的那一块账号表单(`AccountProjects`)只在 `?ui=classic` 下还能打开,界面上没有入口。
  */
 function OnlineStartPage(props: { onEnterEditor: () => void }): JSX.Element {
-  if (!wantsVibe()) {
+  if (wantsClassic()) {
     return (
       <div className="sp">
         <header className="sp-bar">
@@ -120,7 +148,27 @@ function OnlineStartPage(props: { onEnterEditor: () => void }): JSX.Element {
 
 export const StartPage: (props: { onEnterEditor: () => void }) => JSX.Element = ONLINE_BUILD ? OnlineStartPage : DesktopStartPage;
 
+/**
+ * 桌面版的首屏:在传统开始页(下面那一大段)和**氛围式**那一屏(`src/start/DesktopStart.tsx`)之间二选一。
+ *
+ * 缺省是传统开始页;点它顶上那颗「氛围式」或编辑界面顶栏工作方式开关的第一格进氛围式,地址上记成 `?ui=vibe`
+ * (所以刷新后还在氛围式)。氛围式顶栏右边的「拓展与存储」回这一页 —— 打开项目文件、加入别人的项目、拓展功能、
+ * 存储这几块只有这一页有。
+ */
 function DesktopStartPage(props: { onEnterEditor: () => void }): JSX.Element {
+  const [vibe, setVibe] = useState(wantsVibe);
+  if (vibe) {
+    return (
+      <DesktopStart
+        onEnterEditor={props.onEnterEditor}
+        onClassic={() => { setUiParam(null); setVibe(false); }}
+      />
+    );
+  }
+  return <DesktopClassicPage onEnterEditor={props.onEnterEditor} onVibe={() => { setUiParam("vibe"); setVibe(true); }} />;
+}
+
+function DesktopClassicPage(props: { onEnterEditor: () => void; onVibe: () => void }): JSX.Element {
   const { onEnterEditor } = props;
   const [drafts, setDrafts] = useState<DraftInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -195,6 +243,10 @@ function DesktopStartPage(props: { onEnterEditor: () => void }): JSX.Element {
         {/* Logo 自带文字标,别再补一遍 */}
         <Logo size={22} />
         <span className="sp-bar-spacer" />
+        {/* 氛围式(`user-workflow.md`「工作方式」第一行):不打开编辑界面,对着 Agent 说话把片子做出来 */}
+        <button className="sp-ghost-btn" data-pc="start-go-vibe" title="不打开编辑界面，对着 Agent 说话把片子做出来" onClick={props.onVibe}>
+          氛围式
+        </button>
         <button className="sp-ghost-btn" onClick={() => fileInput.current?.click()}>
           打开项目文件
         </button>

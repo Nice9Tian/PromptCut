@@ -105,7 +105,7 @@ async function main() {
     const account = fixture.accounts[0], projectName = 'Shared dual account project';
 
     phase = 'login';
-    await page.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`${ORIGIN}/editor/?ui=classic`, { waitUntil: 'domcontentloaded' });
     await fill(page, 'input[name="username"]', account.name); await fill(page, 'input[name="password"]', account.password);
     const submit = '[data-pc="account-projects"] form button.sp-primary-btn';
     await page.waitForFunction(q => { const e = document.querySelector(q); return e && !e.disabled; }, {}, submit); await page.click(submit);
@@ -140,7 +140,7 @@ async function main() {
 
     // ---------- R1：重新进项目(已同意过告知、开关已开)，量面板多久能输入 ----------
     phase = 'enter-measured';
-    await page.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`${ORIGIN}/editor/?ui=classic`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('[data-pc="account-name"]', { visible: true });
     const clickedAt = await openProject();
     await page.waitForSelector('[data-pc="cloud-project-copy"]', { visible: true });
@@ -185,7 +185,7 @@ async function main() {
     const bubble = await page.evaluate(() => window.__pcProbeBubble);
     record('S1-enter-to-bubble-ms(in-page)', Math.round(bubble.ms));
     await shot(page, '02-right-after-enter');
-    check(bubble.ms < 300, 'S1-bubble-within-300ms-of-enter', { ms: Math.round(bubble.ms), before });
+    check(bubble.ms !== null, 'S1-bubble-appears-on-enter(ms 只记录,见上面 record;耗时只记录,不当闸门(verification.md,2026-10-07 用户改定);2026-10-23 探针总审改)', { ms: Math.round(bubble.ms), before });
     check(bubble.input === '', 'S1-input-cleared-immediately', { input: bubble.input });
     check(bubble.state === 'sending' || bubble.state === 'accepted', 'S1-bubble-says-sending-not-sent', { state: bubble.state });
     const post = await postWait;

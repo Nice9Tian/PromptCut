@@ -3,6 +3,7 @@ import { accountError } from './client.mjs';
 import { digestOf } from './ledger.mjs';
 import { scrubConversationInState } from './conversation-scrub.mjs';
 import { normalizeRunOptions } from './run-options.mjs';
+import { guestChatLimitReached } from './guest.mjs';
 
 const fail = (status, code) => { throw accountError(status, code); };
 const idOK = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value);
@@ -278,6 +279,9 @@ export function createConversationAuthority({ ledger, accountAuthority, checkCon
         if (tombstoneOf(state, projectId, conversationId)) fail(404, 'conversation-deleted');
         // 满额只拦新建，不自动删任何历史(2026-10-08 用户定)；删除入口见 remove()
         const owned = Object.values(rows(state)[projectId] ?? {}).filter(row => row.ownerAccountId === principal.accountId);
+        // 游客每个项目只能开一条对话（2026-10-23 用户定）：在这个事务里数，两个并发的新对话号也只有先到的那个成；
+        // 明确拒绝并带码，页面译成人话。只拦新建——游客往自己已有的对话里发消息走下面的 else，不受影响
+        if (guestChatLimitReached({ accountId: principal.accountId, ownedCount: owned.length })) fail(403, 'guest-chat-limit');
         if (owned.length >= MAX_CONVERSATIONS_PER_OWNER) fail(409, 'conversation-limit');
         conversation = { v: 2, projectId, id: conversationId, ownerAccountId: principal.accountId, visibility: 'shared',
           aclRevision: clock(state), queueRevision: 0, currentRunId: null, title: content.trim().split('\n')[0].slice(0, 80),

@@ -60,7 +60,11 @@ test('account website calls pass only in the top editor; stages, unknown account
   const originalWindow = globalThis.window;
   const allowed = [['/api/account/me','GET'], ['/api/account/projects','GET'], ['/api/account/login','POST'],
     ['/api/account/logout','POST'], ['/api/account/editor/session','POST'], ['/api/account/editor/renew','POST'],
-    ['/api/account/cloud-agent-consent','GET'], ['/api/account/cloud-agent-consent','POST']];
+    ['/api/account/cloud-agent-consent','GET'], ['/api/account/cloud-agent-consent','POST'],
+    // 第三方登录（VisuHive 仓库 docs/third-party-login.md）。漏了这三条，在线浏览器里
+    // 「用 Google 继续」会被这道闸门拦掉，按钮点了没反应（2026-10-23 真跑时撞到）
+    ['/api/account/third-party/config','GET'], ['/api/account/third-party/login','POST'],
+    ['/api/account/third-party/register','POST']];
   function context(href, embedded = false) {
     const passed = [], window = { fetch:async (input, init) => { passed.push({ input, init }); return new Response('{}'); } };
     window.self = window; window.top = embedded ? {} : window; globalThis.window = window;
@@ -69,7 +73,8 @@ test('account website calls pass only in the top editor; stages, unknown account
   try {
     const main = context('https://h.example/editor/');
     for (const [url, method] of allowed) await main.window.fetch(url, { method, credentials:'same-origin' });
-    assert.equal(main.passed.length, 8);
+    // 从上面那张清单推，别写死数字：往清单里加一条就得回来改数字，容易改成「把数字调大」了事
+    assert.equal(main.passed.length, allowed.length);
     for (const url of ['/api/account/editor/login','/api/account/editor/recover','/api/account/editor/logout',
       '/api/account/editor/','/api/account/me/extra','/api/account/reset/confirm','/api/account/admin', '/api/docservice/device', '/editor/api/account/me']) {
       await assert.rejects(main.window.fetch(url, { method:'POST', credentials:'same-origin' }));
@@ -80,7 +85,14 @@ test('account website calls pass only in the top editor; stages, unknown account
     await assert.rejects(main.window.fetch('/api/account/cloud-agent-consent', { method:'DELETE', credentials:'same-origin' }));
     await assert.rejects(main.window.fetch('/api/account/cloud-agent-consent', { method:'GET', credentials:'include' }));
     await assert.rejects(main.window.fetch('/api/account/cloud-agent-consent/extra', { method:'GET', credentials:'same-origin' }));
-    assert.equal(main.passed.length, 8);
+    // 第三方那三条也只放行确切的路径、方法和 cookie 口径，多一截、换方法、换口径都不行
+    await assert.rejects(main.window.fetch('/api/account/third-party/config', { method:'POST', credentials:'same-origin' }));
+    await assert.rejects(main.window.fetch('/api/account/third-party/login', { method:'GET', credentials:'same-origin' }));
+    await assert.rejects(main.window.fetch('/api/account/third-party/login', { method:'POST', credentials:'include' }));
+    await assert.rejects(main.window.fetch('/api/account/third-party/login/extra', { method:'POST', credentials:'same-origin' }));
+    await assert.rejects(main.window.fetch('/api/account/third-party/unlink', { method:'POST', credentials:'same-origin' }));
+    // 从上面那张清单推，别写死数字：往清单里加一条就得回来改数字，容易改成「把数字调大」了事
+    assert.equal(main.passed.length, allowed.length);
     for (const [href, embedded] of [['https://h.example/editor/stage.html',false], ['https://h.example/editor/?stage=1',false],
       ['https://h.example/editor/',true], ['https://h.example/other',false]]) {
       const stage = context(href, embedded);

@@ -42,9 +42,12 @@ test("OCS-P-03 舞台不发出口白名单，保留分源与响应类型安全�
   assert.equal(h['x-content-type-options'],'nosniff');
 });
 
-test("OCS-P-04 编辑器页只加 frame-src 一条:本源与两个舞台源,不放 blob: / data:", () => {
-  assert.equal(editorCspHeader(["https://s1.x.io", "https://s2.x.io"]), "frame-src 'self' https://s1.x.io https://s2.x.io");
-  assert.deepEqual(editorSecurityHeaders(["https://s1.x.io", "https://s2.x.io"]), { "content-security-policy": "frame-src 'self' https://s1.x.io https://s2.x.io" });
+test("OCS-P-04 编辑器页只加 frame-src 一条:本源、两个舞台源与第三方登录那一源,不放 blob: / data:", () => {
+  // 2026-10-23 加 `https://accounts.google.com`：登录页「通过 Google 继续操作」要在它的 iframe 里画按钮，
+  // 不放行时线上控制台报 `Framing 'https://accounts.google.com/' violates ... frame-src`，按钮根本出不来
+  const G = "https://accounts.google.com";
+  assert.equal(editorCspHeader(["https://s1.x.io", "https://s2.x.io"]), `frame-src 'self' https://s1.x.io https://s2.x.io ${G}`);
+  assert.deepEqual(editorSecurityHeaders(["https://s1.x.io", "https://s2.x.io"]), { "content-security-policy": `frame-src 'self' https://s1.x.io https://s2.x.io ${G}` });
   assert.throws(() => editorCspHeader(["https://s1.x.io/a"]), /不是合法的源/);
   assert.ok(!/blob:|data:|\*/.test(editorCspHeader(["https://s1.x.io", "https://s2.x.io"])));
 });

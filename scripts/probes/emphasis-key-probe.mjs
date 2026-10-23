@@ -1,6 +1,6 @@
 /**
  * 输出节点带上游的片段(挂了强调的卡片段)经真的预渲染管线跑一遍:两张不同的卡挂同样的强调,各是各的画面吗
- * (报告 `docs/reports/AGENT-rr-emphasis-key.md`;单测 `server/test/card-cache-upstream-key.test.mjs`)。
+ * (报告 `docs/archive/agent-reports/AGENT-rr-emphasis-key.md`;单测 `server/test/card-cache-upstream-key.test.mjs`)。
  *
  *   node scripts/probes/emphasis-key-probe.mjs [--port 27840] [--out <dir>] [--keep] [--json <file>]
  *

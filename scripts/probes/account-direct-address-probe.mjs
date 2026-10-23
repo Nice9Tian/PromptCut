@@ -256,7 +256,7 @@ async function scenario(A, B, C) {
   // 1 创建者新建云端项目:地址栏换成直达地址
   const ctxA = await newContext();
   const pageA = await newPage(ctxA);
-  await pageA.goto(`${ORIGIN}/editor/?nosetup=1`, { waitUntil: 'domcontentloaded' });
+  await pageA.goto(`${ORIGIN}/editor/?nosetup=1&ui=classic`, { waitUntil: 'domcontentloaded' });
   await startLogin(pageA, A);
   const name = `直达地址-${RUN}`;
   await fill(pageA, '[data-pc="cloud-project-name"]', name);
@@ -265,7 +265,7 @@ async function scenario(A, B, C) {
   const projectId = out.projectId = await waitFor(() => A.ownedProjectId(name), 30_000, '取新项目的项目号');
   const direct = `/editor/p/${projectId}`;
   out.afterCreate = await pathOf(pageA);
-  check(out.afterCreate === `${direct}?nosetup=1`, '1-新建后地址栏是直达地址(不带 project、令牌)', out.afterCreate);
+  check(out.afterCreate === `${direct}?nosetup=1&ui=classic`, '1-新建后地址栏是直达地址(不带 project、令牌)', out.afterCreate);
   await shot(pageA, '1-created');
   await pageA.reload({ waitUntil: 'domcontentloaded' });
   await enteredEditor(pageA, '刷新后回到项目');
@@ -277,8 +277,8 @@ async function scenario(A, B, C) {
   await P(pageA, () => window.dispatchEvent(new Event('pc-go-home')));
   await waitFor(() => onStartPage(pageA), 60_000, '回到开始页');
   out.afterHome = await pathOf(pageA);
-  check(out.afterHome === '/editor/?nosetup=1', '2-回首页后地址回到 /editor/', out.afterHome);
-  await pageA.goto(`${ORIGIN}${direct}?nosetup=1`, { waitUntil: 'domcontentloaded' });
+  check(out.afterHome === '/editor/?nosetup=1&ui=classic', '2-回首页后地址回到 /editor/', out.afterHome);
+  await pageA.goto(`${ORIGIN}${direct}?nosetup=1&ui=classic`, { waitUntil: 'domcontentloaded' });
   await enteredEditor(pageA, '再开直达地址进项目');
   check(await inEditor(pageA), '2-已登录时打开直达地址直接进项目');
 
@@ -288,7 +288,7 @@ async function scenario(A, B, C) {
   const share = `/editor/s/${projectId}/${token}`;
   const ctxB = await newContext();
   const pageB = await newPage(ctxB);
-  await pageB.goto(`${ORIGIN}${share}?nosetup=1`, { waitUntil: 'domcontentloaded' });
+  await pageB.goto(`${ORIGIN}${share}?nosetup=1&ui=classic`, { waitUntil: 'domcontentloaded' });
   await pageB.waitForSelector('[data-pc="cloud-project-link"]', { timeout: 300_000 });
   check((await P(pageB, () => document.querySelector('[data-pc="cloud-project-link"]').value)) === `${ORIGIN}${share}`, '3-分享链接打开后「凭链接加入」已填好这条链接');
   await startLogin(pageB, B);
@@ -296,20 +296,20 @@ async function scenario(A, B, C) {
   await click(pageB, '[data-pc="cloud-join"]', '加入并打开项目');
   await enteredEditor(pageB, '乙加入后进项目');
   out.afterJoin = await pathOf(pageB);
-  check(out.afterJoin === `${direct}?nosetup=1`, '3-加入后地址换成直达地址', out.afterJoin.replace(token, '[token]'));
+  check(out.afterJoin === `${direct}?nosetup=1&ui=classic`, '3-加入后地址换成直达地址', out.afterJoin.replace(token, '[token]'));
   check(!out.afterJoin.includes(token), '3-令牌不留在地址栏里');
   await shot(pageB, '3-joined');
 
   // 4 同一个浏览器另开直达地址
   const pageB2 = await newPage(ctxB);
-  await pageB2.goto(`${ORIGIN}${direct}?nosetup=1`, { waitUntil: 'domcontentloaded' });
+  await pageB2.goto(`${ORIGIN}${direct}?nosetup=1&ui=classic`, { waitUntil: 'domcontentloaded' });
   await enteredEditor(pageB2, '乙另开直达地址进项目');
   check(await inEditor(pageB2), '4-已登录的成员另开直达地址直接进项目');
 
   // 5 不是成员的丙
   const ctxC = await newContext();
   const pageC = await newPage(ctxC);
-  await pageC.goto(`${ORIGIN}${direct}?nosetup=1`, { waitUntil: 'domcontentloaded' });
+  await pageC.goto(`${ORIGIN}${direct}?nosetup=1&ui=classic`, { waitUntil: 'domcontentloaded' });
   await startLogin(pageC, C);
   out.nonMemberError = await waitFor(() => textOf(pageC, '[data-pc="account-error"]'), 60_000, '丙看到进不去的原因');
   await sleep(1500);
@@ -320,7 +320,7 @@ async function scenario(A, B, C) {
 
   // 6 旧形式链接照常
   const pageB3 = await newPage(ctxB);
-  await pageB3.goto(`${ORIGIN}/editor/?nosetup=1&project=${projectId}&token=${token}`, { waitUntil: 'domcontentloaded' });
+  await pageB3.goto(`${ORIGIN}/editor/?nosetup=1&ui=classic&project=${projectId}&token=${token}`, { waitUntil: 'domcontentloaded' });
   await pageB3.waitForSelector('[data-pc="cloud-project-link"]', { timeout: 300_000 });
   check(await waitFor(async () => (await P(pageB3, () => document.querySelector('[data-pc="cloud-project-link"]').value)) === `${ORIGIN}${share}`, 30_000, '旧链接预填').catch(() => false),
     '6-旧形式 ?project=&token= 照常:链接框填好(换成新形式)');
@@ -329,7 +329,7 @@ async function scenario(A, B, C) {
   const secondary = `二级-${RUN}`;
   check((await adminAs(await A.editorToken(), projectId, { op: 'set-secondary-password', password: secondary })).status === 200, '7-创建者设了项目二级密码');
   const pageB4 = await newPage(ctxB);
-  await pageB4.goto(`${ORIGIN}${direct}?nosetup=1`, { waitUntil: 'domcontentloaded' });
+  await pageB4.goto(`${ORIGIN}${direct}?nosetup=1&ui=classic`, { waitUntil: 'domcontentloaded' });
   await waitFor(() => has(pageB4, '[data-pc="cloud-secondary-password"]'), 120_000, '弹出二级密码框');
   out.secondaryText = await textOf(pageB4, '[data-pc="account-error"]');
   check(!(await inEditor(pageB4)), '7-要二级密码时先不进项目');
@@ -337,11 +337,11 @@ async function scenario(A, B, C) {
   await fill(pageB4, '[data-pc="cloud-secondary-password"]', secondary);
   await P(pageB4, () => document.querySelector('[data-pc="cloud-join"]').closest('form').requestSubmit());
   await enteredEditor(pageB4, '输对二级密码后进项目');
-  check((await pathOf(pageB4)) === `${direct}?nosetup=1`, '7-输对后进项目,地址是直达地址', await pathOf(pageB4));
+  check((await pathOf(pageB4)) === `${direct}?nosetup=1&ui=classic`, '7-输对后进项目,地址是直达地址', await pathOf(pageB4));
 
   // 8 手机版
   const pageM = await newPage(ctxB, { mobile: true });
-  await pageM.goto(`${ORIGIN}${direct}?nosetup=1&layout=mobile`, { waitUntil: 'domcontentloaded' });
+  await pageM.goto(`${ORIGIN}${direct}?nosetup=1&ui=classic&layout=mobile`, { waitUntil: 'domcontentloaded' });
   await waitFor(() => has(pageM, '[data-pcm="editor"]'), 180_000, '手机版进项目');
   await dismissConsent(pageM, 3000);
   check(await has(pageM, '[data-pcm="editor"]'), '8-手机版打开直达地址直接进编辑器');

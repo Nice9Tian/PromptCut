@@ -1,5 +1,7 @@
 # AGENT 报告：claude/guest-asset-quota
 
+> **更正（2026-10-23，claude/guest-fix）**：下文把「三天清理删掉整个项目」当成已有能力（第 31 行、「4.」那一条），合入时其实没有：三天清理只把账本标成已删除，素材字节留在盘上（审查 REVIEW-guest-identity 的 C）。claude/guest-fix 补上了：素材服务收到删除事件就删整个项目库（`server/asset-store/project-reaper.mjs`）。另外条数的口径也改了：视频按文件头认、小档也数（原件几个、小档几个取多的），见 `docs/semantics/mechanism/document-service.md`「游客」。
+
 任务：把 `server/account/guest.mjs` 的 `checkGuestAsset` 接到素材服务上传路径，游客往 `media` 传素材最多 3 条、每条不超过 100 MB；账号不受影响；`snap` / `px` 不受限。
 
 分支 `claude/guest-asset-quota`（从 `claude/guest-identity` 切出），未推送、未合并。

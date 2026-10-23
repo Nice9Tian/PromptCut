@@ -73,6 +73,7 @@ export function cloudErrorText(code: string, serverMessage?: string): string {
     case "network": return "连不上云端 Agent 服务,请检查网络。";
     // 50 个上限与删除（文字集中在 chatTexts.ts，用户 2026-10-13 确认）；purge-failed 与 creator-required 两句是 2026-10-13 新起草的，列在报告的文字表里
     case "conversation-limit": return CLOUD_CHAT_TEXT.limitReached;
+    case "guest-chat-limit": return CLOUD_CHAT_TEXT.guestLimit;
     case "delete-forbidden": return CLOUD_CHAT_TEXT.deleteForbidden;
     case "conversation-deleting": return CLOUD_CHAT_TEXT.conversationDeleting;
     case "conversation-deleted":

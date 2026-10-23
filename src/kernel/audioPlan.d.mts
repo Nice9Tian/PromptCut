@@ -7,6 +7,8 @@ export interface AudioPlanEntry {
   start: number;
   dur: number;
   offset: number;
+  /** 变速的声音段才有:随倍率变速变调(kernel/clipTime.mjs 的 ffmpegVarispeed / resampleVarispeed) */
+  speed?: number;
   volume: number;
   fadeIn: number;
   fadeOut: number;

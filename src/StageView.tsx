@@ -4,6 +4,7 @@ import { Stage, type StreamPlaneGroup } from "./render/Stage";
 import { FrameScene } from "./render/FrameScene";
 import { flattenOverlay, type Project } from "./kernel/project";
 import { projectCardGraph } from "./kernel/cardGraph.mjs";
+import { withMediaRates } from "./kernel/clipTime.mjs";
 import { cardsStamp, cardsVersion, getCard, onCardsUpdated, onRuntimeCardsChanged, runtimeCardsGen, setSyncedUserCards, syncedUserCardsGen, cardsRegistryGen } from "./kernel/registry";
 import { installStageClock } from "./render/stageClock";
 import { cardMountedAt, mountFrameOf } from "./render/frameWindow.mjs";
@@ -342,7 +343,8 @@ export default function StageView() {
   const graph = useMemo(() => {
     if (!project) return undefined;
     try {
-      return projectCardGraph(project, getCard);
+      // 变速段的素材节点补上倍率(kernel/clipTime.mjs 的 withMediaRates;没有变速段时原样)
+      return withMediaRates(project, projectCardGraph(project, getCard));
     } catch {
       return undefined;
     }

@@ -1,6 +1,6 @@
 /**
  * see_frames 的 cutId 探针(用户 2026-10-21 定:看画面能指定剪辑,不用切换;`docs/semantics/product/agent.md`「工具」、
- * `product/project-model.md`「剪辑」;报告 `docs/reports/AGENT-cut-look-ui.md`)。
+ * `product/project-model.md`「剪辑」;报告 `docs/archive/agent-reports/AGENT-cut-look-ui.md`)。
  *
  *   node scripts/probes/cut-look-probe.mjs [--port 5970] --out <出图目录> [--keep]
  *

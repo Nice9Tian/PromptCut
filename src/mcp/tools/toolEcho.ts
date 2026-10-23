@@ -13,6 +13,7 @@
 
 import type { Project } from "../../kernel/project";
 import { otherCutsHint } from "../../kernel/agentScopes.mjs";
+import { clipSpeed, isSpeedChanged } from "../../kernel/clipTime.mjs";
 
 export interface TimelineDigestClip {
   id: string;
@@ -22,6 +23,8 @@ export interface TimelineDigestClip {
   filterId?: string;
   /** 挂着的音频效果(project.audioFx 里的 id) */
   audioFxId?: string;
+  /** 只在变速时出现:视频段的播放速度(kernel/clipTime.mjs)。变速段不出原声 */
+  speed?: number;
   start: number;
   end: number;
 }
@@ -66,6 +69,7 @@ export function timelineDigest(p: Project): TimelineDigest {
       ...(c.cardId ? { cardId: c.cardId } : { mediaId: c.mediaId }),
       ...(c.filter ? { filterId: c.filter.id } : null),
       ...(c.audioFx ? { audioFxId: c.audioFx.id } : null),
+      ...(isSpeedChanged(c) ? { speed: clipSpeed(c) } : null),
       start: round2(c.start),
       end: round2(c.end),
     })),

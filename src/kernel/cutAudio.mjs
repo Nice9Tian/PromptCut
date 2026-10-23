@@ -9,6 +9,8 @@
  */
 
 /** 和 cuts.ts 新剪辑的默认时长同一个数 */
+import { clipSpeed } from "./clipTime.mjs";
+
 const FALLBACK_CUT_DURATION = 30;
 const MAX_DEPTH = 32;
 
@@ -122,7 +124,8 @@ function expand(p, seg, hostTrack, prefix, outer) {
         id: `${path.join("/")}/${c.id}`,
         start: a,
         end: b,
-        ...(trim > 0 || c.mediaId ? { mediaOffset: sourceOffset + trim } : {}),
+        // 截掉的那一截按片段速度推进素材起点(变速段本身不出原声,这里只为口径一致;缺省 1 逐位不变)
+        ...(trim > 0 || c.mediaId ? { mediaOffset: sourceOffset + trim * clipSpeed(c) } : {}),
         fadeIn: undefined,
         fadeOut: undefined,
         audioVolume: (c.audioVolume ?? 1) * segVolume,

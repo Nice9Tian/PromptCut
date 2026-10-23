@@ -266,7 +266,6 @@
 .ps-ext-scrub:focus-visible,
 .ps-detail-play:focus-visible,
 .ps-detail-scrub:focus-visible,
-.ps-detail-clip:focus-visible,
 .ps-top-home:focus-visible,
 .ps-top-collapse:focus-visible,
 .ps-chat-vis:focus-visible,
@@ -835,95 +834,18 @@
   font-variant-numeric: tabular-nums;
 }
 
-.ps-detail-tl {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding-bottom: 8px;
-  border-top: 1px solid var(--hairline);
-  padding-top: 8px;
-}
-.ps-detail-tlbar { display: flex; align-items: center; gap: 10px; }
-.ps-detail-tltitle {
-  padding: 3px 9px;
-  border-radius: 6px;
-  background: var(--ui-accent-soft, var(--fill-subtle));
-  color: var(--accent);
-  font-size: 12px;
-  font-weight: 600;
-}
-.ps-detail-zoom { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--ink-muted); }
-.ps-detail-zoom input { width: 110px; accent-color: var(--accent); }
-
 /*
- * 左边一列序列名,右边是轨道。栏窄了(右边拓展栏开着)轨道会比框宽,所以这一框横向可滚 ——
- * 否则右边的卡片被切掉就再也够不着了。序列名那一列吸在左边,滚的时候不跟着走。
+ * 真时间轴那一框(`src/editor/timeline/` 的 `TimelineView`)。它自己是 `h-full`,
+ * 所以这里要给一截确定的高度 —— 用 auto 的话它量不到高,整条会塌成 0。
+ * 上面的舞台是 `flex: 1`,拿走剩下的。
  */
-.ps-detail-tracks {
-  display: flex;
-  border: 1px solid var(--hairline);
+.ps-detail-tl {
+  flex: 0 0 clamp(240px, 42%, 420px);
+  min-height: 0;
+  margin-top: 8px;
   border-radius: 8px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  background: var(--bg-panel);
-}
-.ps-detail-names {
-  position: sticky;
-  left: 0;
-  z-index: 2;
-  flex: 0 0 92px;
-  border-right: 1px solid var(--hairline);
-  background: var(--bg-panel);
-}
-.ps-detail-name {
-  display: flex;
-  align-items: center;
-  padding: 0 10px;
-  border-bottom: 1px solid var(--hairline);
-  font-size: 12px;
-  color: var(--ink-muted);
-  box-sizing: border-box;
-}
-.ps-detail-name:last-child { border-bottom: 0; }
-.ps-detail-lanes { position: relative; }
-.ps-detail-lane {
-  position: relative;
-  border-bottom: 1px solid var(--hairline);
-  box-sizing: border-box;
-}
-.ps-detail-lane:last-child { border-bottom: 0; }
-.ps-detail-playhead {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: var(--accent);
-  z-index: 2;
-  pointer-events: none;
-}
-.ps-detail-clip {
-  position: absolute;
-  top: 3px;
-  bottom: 3px;
-  display: flex;
-  align-items: center;
-  padding: 0 7px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: var(--ui-agent, var(--accent));
-  color: #111016;
-  font-family: inherit;
-  font-size: 11px;
-  text-align: left;
-  cursor: pointer;
   overflow: hidden;
 }
-/* 素材和卡片分两个色,一眼看得出哪条是素材 */
-.ps-detail-clip[data-kind="素材"] { background: color-mix(in oklab, var(--accent) 72%, #ffffff); }
-.ps-detail-clip[data-picked] { border-color: var(--ink); }
-.ps-detail-clip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
 /* ── 行的右键菜单 ─────────────────────────────── */
 .ps-menu {
   position: fixed;
@@ -1487,3 +1409,127 @@
   .ps-body { padding: 0 16px 32px; }
   .ps-hero-title { font-size: 24px; }
 }
+
+/*
+ * ── 接业务层补的几样(2026-10-23,`docs/reports/AGENT-claude-vibe-wire.md`)───────────
+ * 界面形状用户已定稿,这里只补真数据才有的几种状态:发送状态、出错、空态、加载中、真画面、已归档、用链接加入。
+ * 一律用已有的主题变量,长相跟着旁边已有的那一档(小字跟 `.ps-chat-note`、卡片跟 `.ps-menu`)。
+ */
+
+/* 登录页外壳:错误与「正在连接」浮在页面顶上 */
+.ps-vibe-login { position: relative; height: 100%; min-height: 0; }
+.ps-vibe-login[data-busy] .ps-login-form { opacity: 0.6; pointer-events: none; }
+.ps-vibe-login-error,
+.ps-vibe-login-busy {
+  position: absolute;
+  z-index: 5;
+  top: 14px;
+  right: 14px;
+  max-width: min(420px, calc(100% - 28px));
+  padding: 9px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--bg-panel);
+  color: var(--ink);
+  font-size: 13px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+.ps-vibe-login-error { border-color: var(--danger); color: var(--danger); }
+.ps-vibe-loading {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  background: var(--bg-canvas);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 13px;
+}
+
+/* 开始页那行小字出错时 */
+.ps-prompt-note.is-err { color: var(--danger); }
+
+/* 侧栏:一行状态 / 提示;新建不可用时 */
+.ps-side-hint {
+  margin: 4px 8px 6px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-faint);
+}
+.ps-side-hint .ps-link { margin-left: 6px; }
+.ps-side-new:disabled { opacity: 0.5; cursor: default; filter: none; }
+/* 两处都要:`.is-blocked` 是游客开第二条对话时置灰那一行(claude/guest-one-chat),
+   `:disabled` 是游客没有分组时置灰的分组行(claude/groups-local-cloud)。样式相同、来路不同 */
+.ps-row.is-blocked,
+.ps-row:disabled { opacity: 0.5; cursor: default; }
+.ps-row.is-archived .ps-row-icon { opacity: 0.55; }
+.ps-tile:disabled { opacity: 0.5; cursor: default; }
+
+/* 缩略图:真画面盖满那一格,画幅框照旧 */
+.ps-shot { position: relative; overflow: hidden; }
+.ps-shot-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+
+/* 真画面(编辑界面的预览,手机版那一种只出画面的样子):铺满容器,播放键与播放条压在上面 */
+.ps-stage { position: relative; overflow: hidden; background: #000; }
+.ps-stage .pc-pv--mobile { position: absolute; inset: 0; padding: 0; gap: 0; height: auto; }
+.ps-stage .pc-pv--mobile .pc-pv-stage { border-radius: 0; }
+.ps-stage .pc-pv--mobile .pc-pv-corner { display: none; }
+.ps-stage-over { position: absolute; inset: 0; z-index: 3; display: grid; place-items: center; }
+.ps-ext-frame-img { background: var(--fill-subtle); }
+.ps-ext-frame-img img { width: 100%; height: 100%; object-fit: contain; }
+
+/* 聊天:自己那一侧的发送状态、发送者;Agent 那一侧的进行中、出错;空对话的示例句;顶上那条提示 */
+.ps-me-col { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-width: 85%; }
+.ps-me-col .ps-bubble { max-width: 100%; }
+.ps-msg-sender { font-size: 11px; color: var(--ink-faint); }
+.ps-msg-state { font-size: 11px; color: var(--ink-faint); }
+.ps-msg-state.is-err { color: var(--danger); }
+.ps-md > :first-child { margin-top: 0; }
+.ps-md > :last-child { margin-bottom: 0; }
+.ps-md p { margin: 0 0 6px; }
+.ps-msg-live { color: var(--ink-muted); font-size: 12px; }
+.ps-msg-err { color: var(--danger); }
+.ps-actions-list { list-style: none; padding-left: 0; }
+.ps-actions-list li[data-state="err"],
+.ps-actions-list li[data-state="ask"] { color: var(--danger); }
+.ps-op-mark { display: inline-block; width: 14px; color: var(--ui-agent, var(--accent)); }
+.ps-op-report { margin-top: 4px; font-weight: 600; color: var(--ink); }
+.ps-chat-empty { display: grid; place-items: center; padding: 48px 0; }
+.ps-chat-example {
+  padding: 9px 14px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 999px;
+  background: var(--bg-panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.ps-chat-example:hover { border-color: var(--accent); color: var(--accent); }
+.ps-chat-banner {
+  flex: 0 0 auto;
+  max-width: 760px;
+  width: calc(100% - 48px);
+  margin: 10px auto 0;
+  padding: 8px 12px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 10px;
+  background: var(--fill-subtle);
+  color: var(--ink);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ps-chat-input:disabled { cursor: not-allowed; }
+
+/* 用链接加入:借右键菜单那一套长相,钉在顶栏右下 */
+.ps-menu.ps-join {
+  position: fixed;
+  top: 52px;
+  right: 16px;
+  left: auto;
+  width: min(340px, calc(100vw - 32px));
+  z-index: 40;
+}
+.ps-join-form { display: flex; flex-direction: column; gap: 10px; padding: 6px 10px 10px; }
+.ps-join-msg { margin: 0; font-size: 12px; line-height: 1.6; color: var(--ink-muted); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ps-join-msg[role="alert"] { color: var(--danger); }
+.ps-join-actions { display: flex; justify-content: flex-end; gap: 8px; }

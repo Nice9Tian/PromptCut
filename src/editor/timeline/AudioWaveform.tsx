@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { MediaAsset, TrackClip } from "../../kernel/project";
+import { mediaSpanOf } from "../../kernel/clipTime.mjs";
 import { previewCacheKey, usePreviewMediaUrl } from "../media/previewUrl";
 
 type Wave = { peaks: number[]; duration: number };
@@ -58,9 +59,11 @@ export function AudioWaveform({ media, clip, width }: { media: MediaAsset; clip:
   if (!wave) return null;
   const count = Math.max(1, Math.min(1500, Math.ceil(width / 3)));
   const paths: string[] = [];
+  // 这一段用到的那截素材有多长(变速段 = 时间轴时长 × 速度,kernel/clipTime.mjs)
+  const span = mediaSpanOf(clip);
   for (let i = 0; i < count; i++) {
-    const from = (clip.mediaOffset ?? 0) + i / count * (clip.end - clip.start);
-    const to = (clip.mediaOffset ?? 0) + (i + 1) / count * (clip.end - clip.start);
+    const from = (clip.mediaOffset ?? 0) + i / count * span;
+    const to = (clip.mediaOffset ?? 0) + (i + 1) / count * span;
     let peak = 0;
     for (let j = Math.max(0, Math.floor(from / wave.duration * wave.peaks.length)); j < Math.min(wave.peaks.length, Math.ceil(to / wave.duration * wave.peaks.length)); j++) peak = Math.max(peak, wave.peaks[j]);
     const h = Math.max(0.3, peak * 9);

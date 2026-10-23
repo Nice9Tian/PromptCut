@@ -748,7 +748,7 @@ export async function sendText(page, text, panelSel = '[data-pc="cloud-ai-panel"
 
 /** 账号模式的在线页面:开编辑器页、用网站账号登录(与 cloud-agent-ui-probe 的登录同一个写法),等开始页出账号名 */
 export async function accountLogin(page, origin, { username, password }, timeout = 30_000) {
-  await page.goto(`${origin}/editor/`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+  await page.goto(`${origin}/editor/?ui=classic`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
   const fill = async (selector, text) => {
     await page.waitForSelector(selector, { visible: true, timeout }); await page.focus(selector);
     await page.keyboard.down('Control'); await page.keyboard.press('KeyA'); await page.keyboard.up('Control'); await page.keyboard.press('Backspace');

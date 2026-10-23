@@ -27,6 +27,10 @@ const CAPTURE_FILES = [...BAKERY_FILES, 'server/bakery/capture-frame.mjs', 'serv
  * 同一个提交在两种机器上不能算出两个代码版本(另一台机器上的独立渲染主机按代码版本分池、按快照键核对任务)。
  */
 const textOf = (file) => fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+/* 哈希的是文件原文,注释也在里头:改下面任何一份清单里的文件,哪怕只动一行注释,也会换一个代码版本,
+ * 让已有的快照键和卡片缓存键全部作废、下次部署整站重渲。先例:2026-10-23 的探针总审要把
+ * `src/render/snapshotRename.ts` 文件头里的探针路径改成归档路径,〔裁〕V21-30 按这条理由驳回,
+ * 把去向记在 `scripts/archive/probes/README.md`。 */
 const hashFiles = (hash, root, files) => {
   for (const file of files) {
     hash.update(file);

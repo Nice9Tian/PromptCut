@@ -2,6 +2,7 @@ import { findClip, findSoundAsset, newId, soundAssetFrom, type MediaAsset, type 
 import { stripAudioFxFromCuts, withoutAudioFx } from "../../kernel/cuts";
 import type { AudioFxDef, ClipAudioFx } from "../../kernel/audioFx.mjs";
 import { getCard } from "../../kernel/registry";
+import { isSpeedChanged } from "../../kernel/clipTime.mjs";
 import { clipHasAudio, clipHasEmbeddedAudio } from "../../kernel/cardAudioRendition.mjs";
 
 import { state, setProject, updateTrack } from "../core";
@@ -82,6 +83,8 @@ export const audio = {
         id: newId("c"), cardId: "", mediaId: asset.id, params: {}, label: asset.name,
         start: hit.clip.start, end: hit.clip.end, mediaOffset: hit.clip.mediaOffset,
         opacity: hit.clip.opacity, fadeIn: hit.clip.fadeIn, fadeOut: hit.clip.fadeOut, audioVolume: hit.clip.audioVolume,
+        // 变速段也能分离(用户 2026-10-23 定「可以分离,失真问题记待办」):分出来的声音段带着同样的速度,随倍率变速变调
+        ...(isSpeedChanged(hit.clip) ? { speed: hit.clip.speed } : null),
         ...(hit.clip.audioFx ? { audioFx: hit.clip.audioFx } : null),
       };
       const track: Track = { id: newId("t"), name: asset.name, muted: hit.track.muted, hidden: hit.track.hidden, clips: [sound] };
@@ -119,6 +122,7 @@ export const audio = {
     if (!hit) return { ok: false, error: `找不到片段 ${clipId}` };
     if (clipHasEmbeddedAudio(state.project, hit.clip, getCard)) return { ok: false, error: "动效卡片的内嵌声音不能分离或转换为声音；可以单独静音该卡片" };
     if (!hit.clip.mediaId) return { ok: false, error: "这段是卡片,不是素材,没有声音可转" };
+    // 变速段转换为声音:片段带着速度变成声音段,随倍率变速变调(同音画分离,用户 2026-10-23 定)
     const r = audio.audioFromVideo(hit.clip.mediaId);
     if (!r.ok) return r;
     if (r.media.id === hit.clip.mediaId) return { ok: true, mediaId: r.media.id, created: false, already: true };

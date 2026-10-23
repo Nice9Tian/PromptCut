@@ -180,7 +180,7 @@ try {
   await sleep(150);
   const layerAfter=layers.length;
   const beatDelta=Number((p90(visible)-p90(baseline)).toFixed(3));
-  check('beat_p90',beatDelta<=.1,{baselineP90:p90(baseline),visibleP90:p90(visible),deltaMs:beatDelta});
+  check('beat_p90_recorded',Number.isFinite(beatDelta),{baselineP90:p90(baseline),visibleP90:p90(visible),deltaMs:beatDelta}); // 每拍耗时差只记录(耗时只记录,不当闸门(verification.md,2026-10-07 用户改定);2026-10-23 探针总审改)
   const thirtyLayers=layerCases.find(c=>c.n===30);
   check('layer_budget_30',thirtyLayers.added<=31,{cases:layerCases,before:layerBefore,after:layerAfter,limit:31});
   const layerPredictions=await page.evaluate(ns=>ns.map(n=>window.placeholderHarness.layersFor(n)),[1,10,30,60]);
@@ -196,7 +196,8 @@ try {
   const steady=events.filter(e=>e.ts>=lo&&e.ts<=hi);
   const counts=Object.fromEntries(['Paint','Layout','RecalculateStyles','UpdateLayoutTree'].map(name=>[name,steady.filter(e=>e.name===name).length]));
   check('steady_trace',counts.Paint===0&&counts.Layout===0&&counts.RecalculateStyles===0,{counts,seconds:(hi-lo)/1e6});
-  check('main_thread_component_script',true,{componentScriptMsPerFrame:0,method:'The component has no scheduled JS; tracing was collected with no harness beat during this interval.'});
+  // 原先这里有一条 check('main_thread_component_script', true, …)：条件写死 true，什么也不证（2026-10-23 探针总审删）。
+  // 它想说的「占位符自己不排 JS」由上面的 steady_trace（这段里 Paint / Layout / RecalculateStyles 都是 0）证明。
   fs.writeFileSync(path.join(out,'metrics.json'),JSON.stringify(results,null,2));
   console.log(JSON.stringify(results,null,2));
   if(results.failed) process.exitCode=1;

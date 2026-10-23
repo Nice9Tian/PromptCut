@@ -330,7 +330,7 @@ async function openDesktop(ed, state) {
   cdp.on('Network.webSocketFrameReceived', note('in'));
   cdp.on('Network.webSocketFrameSent', note('out'));
   await page.exposeFunction('__probeNative', nativeBridge(state));
-  await page.goto(`${ed.origin}/?editor`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${ed.origin}/?editor&ui=classic`, { waitUntil: 'domcontentloaded' });
   await waitFor(() => P(page, () => !!window.__pcSyncTest && window.__pcSyncTest.view().status === 'online'), 180_000, `${ed.tag} 页面接上本机文档服务`);
   await waitFor(() => P(page, () => !document.querySelector('[data-pc="probe-gate"]')), 300_000, `${ed.tag} 测量遮罩退下`).catch(() => null);
   await P(page, () => { for (const b of document.querySelectorAll('.ais-dialog .ais-btn')) if (b.textContent?.trim() === '关闭') b.click(); });
@@ -425,7 +425,7 @@ async function linkScenario({ A, B, pageA, pageB, stateA, stateB, projectId, aLo
   pageC.setDefaultTimeout(90_000); pageC.setDefaultNavigationTimeout(120_000);
   pageC.on('pageerror', (e) => say('pageerror', { tag: 'online', message: String(e?.message ?? e).slice(0, 300) }));
   const typeInto = async (selector, value) => { const input = await pageC.waitForSelector(selector, { visible: true }); await input.click({ clickCount: 3 }); await pageC.keyboard.press('Backspace'); await input.type(value); };
-  await pageC.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded' });
+  await pageC.goto(`${ORIGIN}/editor/?ui=classic`, { waitUntil: 'domcontentloaded' });
   await typeInto('[data-pc="account-projects"] input[name="username"]', fixture.accounts[1].name);
   await typeInto('[data-pc="account-projects"] input[name="password"]', fixture.accounts[1].password);
   await pageC.waitForFunction(() => { const b = document.querySelector('[data-pc="account-projects"] form button.sp-primary-btn'); return Boolean(b && !b.disabled); });
@@ -468,7 +468,7 @@ async function linkScenario({ A, B, pageA, pageB, stateA, stateB, projectId, aLo
       const seen = await waitFor(() => hasFn(id).then((v) => (v ? Date.now() : null)), 90_000, `${label} 收到断线之后甲的改动`).catch(() => null);
       const out = { did, resumeMs: back ? back - t0 : null, sawEditMs: seen ? seen - t0 : null, opens: (await stats())?.opens ?? null };
       L[`cut-${label}`] = out;
-      check(did === true && out.resumeMs !== null && out.resumeMs < 10_000 && out.sawEditMs !== null && out.sawEditMs < 15_000, `断一次传输-${label}:几秒内接回并收到之后的改动`, out);
+      check(did === true && out.resumeMs !== null && out.sawEditMs !== null, `断一次传输-${label}:接回并收到断线之后的改动(用时只记录;耗时只记录,不当闸门(verification.md,2026-10-07 用户改定);2026-10-23 探针总审改)`, out);
     };
     await cutOne('desktop', () => P(pageB, () => window.__pcSyncTest.cut()), () => P(pageB, () => window.__pcSyncTest.link()), (id) => hasDesktop(pageB, id));
   }
@@ -659,7 +659,7 @@ try {
     check(audio.accountProject === projectId, '5-用的是账号项目的素材服务', { base: audio.base, accountProject: audio.accountProject });
   }
   res.aPageWritesDoneMs = Date.now() - aLoginAt;
-  check(res.aPageWritesDoneMs < 100_000, '甲页面写项目的几步在登录后 100 秒内做完(探针自己的前提)', res.aPageWritesDoneMs);
+  check(res.aPageWritesDoneMs !== null, '甲页面写项目的几步做完(用时只记录;原先的 100 秒上限来自旧的定时换会话机制,2026-10-14 已推翻;耗时只记录,不当闸门(verification.md,2026-10-07 用户改定);2026-10-23 探针总审改)', res.aPageWritesDoneMs);
   await dismissDialogs(pageA);
   await waitFor(() => stageHas(pageA, MARK('v1')), 60_000, '甲的舞台画出 v1').catch(() => null);
   await shot(pageA, '1-a-desktop-v1');
@@ -733,7 +733,7 @@ try {
   pageC.on('pageerror', (e) => say('pageerror', { tag: 'online', message: String(e?.message ?? e).slice(0, 300) }));
   const typeInto = async (selector, value) => { const input = await pageC.waitForSelector(selector, { visible: true }); await input.click({ clickCount: 3 }); await pageC.keyboard.press('Backspace'); await input.type(value); };
   const enterOnline = async ({ login }) => {
-    await pageC.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded' });
+    await pageC.goto(`${ORIGIN}/editor/?ui=classic`, { waitUntil: 'domcontentloaded' });
     if (login) {
       await typeInto('[data-pc="account-projects"] input[name="username"]', fixture.accounts[1].name);
       await typeInto('[data-pc="account-projects"] input[name="password"]', fixture.accounts[1].password);

@@ -2,6 +2,7 @@ import { getState, actions } from "../../store/project";
 import { getCard } from "../../kernel/registry";
 import { sttStatus, transcribeMedia } from "../../editor/io/stt";
 import type { TranscriptSegment } from "../../kernel/project";
+import { timelineTimeAt } from "../../kernel/clipTime.mjs";
 
 const autoWorkflowJobs = new Map<string, any>();
 
@@ -46,6 +47,7 @@ async function pipeline(args: { mediaId: string; style?: string; maxCards?: numb
   let clipStart = 0;
   let mediaOffset = 0;
   let clipEnd = Infinity;
+  let speed: number | undefined;
 
   for (const track of getState().project.tracks) {
     const clip = track.clips.find(c => c.mediaId === mediaId);
@@ -53,11 +55,13 @@ async function pipeline(args: { mediaId: string; style?: string; maxCards?: numb
       clipStart = clip.start;
       mediaOffset = clip.mediaOffset ?? 0;
       clipEnd = clip.end;
+      speed = clip.speed;
       break;
     }
   }
 
-  const toTl = (s: number) => clipStart + (s - mediaOffset);
+  // 素材秒 → 时间轴秒:kernel/clipTime.mjs 的统一换算(含片段速度)
+  const toTl = (s: number) => timelineTimeAt({ start: clipStart, mediaOffset, speed }, s);
   
   const mappedSegments: { start: number; end: number; text: string }[] = [];
   for (const seg of transcript.segments) {

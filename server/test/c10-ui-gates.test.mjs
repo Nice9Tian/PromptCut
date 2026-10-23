@@ -8,7 +8,7 @@
  *   C10-UI-03 本页运行不了的用户卡、素材效果卡（内容库同步来的没载入成功的；素材效果卡；2026-10-21 起不按档另挡本页能运行的用户卡）在线时与内置重卡一样：一律按重卡（分派表判轻也一样）、
  *             选帧、报缺口、取字节；暂停态整台「已精确」时它们的快照照挂（停下不追）——2026-09-29 用户改语义，撤销原豁免；
  *   C10-UI-04 桌面（在线开关关着）用户卡、素材效果卡照常选帧，同步表不影响桌面；
- *   C10-RA-01 旧本机 `/api` 清单只减不增；已批准账号入口固定8条字面量，不重复、不接受未知账号路径。
+ *   C10-RA-01 旧本机 `/api` 清单只减不增；已批准账号入口固定11条字面量（含 2026-10-23 的三条第三方登录），不重复、不接受未知账号路径。
  *
  * 置灰入口「点了不发请求、不露报错」要在真页面里点，归探针与验收 C10-A7（主会话），这里只核文案。
  * 假设见 `c10-kit.mjs` 的 K7、K8、K9。门不开时整组 skip。
@@ -187,6 +187,9 @@ const ACCOUNT_PATHS = [
   '/api/account/cloud-agent-consent',
   '/api/account/editor/', '/api/account/editor/renew', '/api/account/editor/session',
   '/api/account/login', '/api/account/logout', '/api/account/me', '/api/account/projects',
+  // 2026-10-23 第三方登录（Google）：取开着哪几种方式（GET config）、登录与第一次注册（POST）。
+  // 和上面八条同类，都是官网账号服务的接口；`src/online/apiGuard.ts` 里逐条精确放行、方法钉死，`third-party/unlink` 不放行
+  '/api/account/third-party/config', '/api/account/third-party/login', '/api/account/third-party/register',
 ];
 test('C10-RA-03 project members has one separate exact hosted path without enlarging the /api scanner set', () => {
   const list = JSON.parse(fs.readFileSync(repoPath(RATCHET_FILE), 'utf8'));
@@ -207,7 +210,7 @@ function assertRatchet(paths, baseline) {
   assert.deepEqual(added, [], `棘轮清单多出了未许可的路径：${added.join(', ')}`);
   assert.deepEqual(paths.filter((p) => p.startsWith('/api/account/')), ACCOUNT_PATHS, '账号产物清单逐条精确登记');
 }
-test('C10-RA-01 旧本机 /api 只减不增、账号入口固定8条、不重复', { skip: ratchet.ok ? false : ratchet.reason }, () => {
+test('C10-RA-01 旧本机 /api 只减不增、账号入口固定11条、不重复', { skip: ratchet.ok ? false : ratchet.reason }, () => {
   const list = JSON.parse(fs.readFileSync(repoPath(RATCHET_FILE), 'utf8'));
   const baseline = JSON.parse(fs.readFileSync(repoPath(RATCHET_BASELINE), 'utf8'));
   assertRatchet(list.paths, baseline);

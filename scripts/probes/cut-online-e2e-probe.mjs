@@ -491,7 +491,7 @@ try {
   out.edit = { ...edit, hadPlane: !!had };
   // 「当场不再贴旧流」看的是旧流平面:父页按就绪索引发平面,在线来源一拿到新项目就撤层(签名对不上),平面当场没了。
   // 不再判重(heavy)要等分派表按新的成本身份重算(新身份先测一次),和顶层卡改参数是同一条路;只记毫秒、要求 5 秒内落下,不当 1 秒闸门
-  check(!!had && edit?.hadBefore === true && edit.planeGoneMs !== null && edit.planeGoneMs <= 1000, 'D:改之前父页在发旧流;改被引用剪辑以后当场(≤ 1 秒)不再发旧流的平面(实测毫秒记在结果里)', out.edit);
+  check(!!had && edit?.hadBefore === true && edit.planeGoneMs !== null, 'D:改之前父页在发旧流;改被引用剪辑以后不再发旧流的平面(毫秒只记录;耗时只记录,不当闸门(verification.md,2026-10-07 用户改定);2026-10-23 探针总审改)', out.edit);
   check(edit?.heavyGoneMs !== null, 'D:随后那张卡不再判重(新身份还没钉重,照旧活渲;毫秒只记录)', out.edit);
   const withdrawn = await until('D:在线来源撤掉旧流', async () => { const d = await onlineDiag(pageA); return d && !(d.streams ?? []).some((x) => x.resultKey === key1) ? d : null; }, 15_000, 50);
   out.edit.withdrawn = withdrawn && { staleStreams: withdrawn.staleStreams, streams: (withdrawn.streams ?? []).map((s) => ({ clipId: s.clipId, resultKey: short(s.resultKey) })) };

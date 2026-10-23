@@ -25,7 +25,12 @@ const SITE_FORM_ONLY = argv.includes('--site-form-only');
 const outRelative = path.relative(os.tmpdir(), OUT);
 if (!outRelative || outRelative.startsWith('..') || path.isAbsolute(outRelative)) throw Error('output-must-be-private-temp-child');
 // 十个端口都向系统要：0～6 给测试底座的七个服务（6 是 HTTPS 入口），7 给 Agent，8、9 给两个舞台。
-const PORTS = await freePorts(10);
+// 给了 `--base-port <起点>` 就用那一段连着的十个（验收运行器要固定端口段才能平移、串行排布）；没给就向系统要空闲的。
+// 2026-10-23 的探针总审：原先另有一支逐字副本 accept-018-conv-password-probe.mjs 专为固定端口段而存在，
+// 两份只差 17 行（端口号归一化后），已把它删掉、验收项改指本脚本（报告 docs/reports/AGENT-claude-probe-audit.md）。
+const BASE_PORT = (() => { const value = arg('--base-port'); if (value === undefined) return undefined;
+  const n = Number(value); if (!Number.isInteger(n) || n < 1024 || n > 65526) throw Error('bad-base-port'); return n; })();
+const PORTS = BASE_PORT === undefined ? await freePorts(10) : Array.from({ length: 10 }, (_, n) => BASE_PORT + n);
 const ORIGIN = `https://127.0.0.1:${PORTS[6]}`;
 const STAGE_PORTS = [PORTS[8], PORTS[9]];
 const STAGES = STAGE_PORTS.map((port, index) => `http://s${index + 1}.pc.localhost:${port}`);

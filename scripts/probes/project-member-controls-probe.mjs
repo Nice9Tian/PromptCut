@@ -47,7 +47,7 @@ const shot = async (page, name) => {
   const file = path.join(OUT, `${name}.png`); await page.screenshot({ path: file, fullPage: true }); result.screenshots.push({ name, file });
 };
 const login = async (page, account) => {
-  await page.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${ORIGIN}/editor/?ui=classic`, { waitUntil: 'domcontentloaded' });
   await fill(page, 'input[name="username"]', account.name); await fill(page, 'input[name="password"]', account.password);
   const submit = '[data-pc="account-projects"] form button.sp-primary-btn'; await enabled(page, submit); await page.click(submit);
   await page.waitForSelector('[data-pc="account-name"]', { visible: true });
@@ -228,7 +228,7 @@ try {
       oldClosed: records.filter(record => record.closed).length, allOldClosed: records.every(record => record.closed) });
     check(records.every(record => record.closed), 'affected-page-actual-websocket-closed');
     // Real reload goes through current session/join. No public principal or old ticket is injected.
-    await page.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`${ORIGIN}/editor/?ui=classic`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('[data-pc="account-name"]', { visible: true });
     await enabled(page, '[data-pc="cloud-join"]'); await fill(page, '[data-pc="cloud-project-link"]', `${ORIGIN}/editor?project=${encodeURIComponent(id)}`);
     await page.click('[data-pc="cloud-join"]');
