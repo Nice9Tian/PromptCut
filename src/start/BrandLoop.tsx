@@ -22,16 +22,16 @@ import { BrandCanvas } from "./BrandCanvas";
 import { useSkin } from "../skins/useSkin";
 import "./brandCanvas.css";
 
-import studio from "./art/login-art-studio.mp4";
-import steel from "./art/login-art-steel.mp4";
-import graphite from "./art/login-art-graphite.mp4";
-import indigo from "./art/login-art-indigo.mp4";
-import terminal from "./art/login-art-terminal.mp4";
-import clay from "./art/login-art-clay.mp4";
-
+/*
+ * 用 glob 收，不逐个 import：少一个文件就整页 500（2026-10-24 撞到 —— 页面先改成
+ * import 六个，而当时只渲出一个，导出页加载应用时 vite 直接 500，把批量渲染也带挂了）。
+ * glob 的另一个好处：以后 palettes.ts 加一套皮肤，渲出文件丢进来就认，不用改这里。
+ */
+const FILES = import.meta.glob<string>("./art/login-art-*.mp4", { eager: true, query: "?url", import: "default" });
 /** 调色盘 id → 那一套的循环视频。键和 `src/skins/palettes.ts` 里的 id 一一对应 */
-const LOOPS: Record<string, string> = { studio, steel, graphite, indigo, terminal, clay };
-const FALLBACK = studio;
+const LOOPS: Record<string, string> = Object.fromEntries(
+  Object.entries(FILES).map(([file, url]) => [/login-art-(.+)\.mp4$/.exec(file)?.[1] ?? file, url]),
+);
 
 /** `data-skin` 是「调色盘-深浅」，取前半截 */
 const paletteOf = (skinId: string) => skinId.replace(/-(dark|light)$/, "");
@@ -40,7 +40,7 @@ export function BrandLoop(): JSX.Element {
   const { skinId } = useSkin();
   const [failed, setFailed] = useState(false);
   const video = useRef<HTMLVideoElement>(null);
-  const src = LOOPS[paletteOf(skinId)] ?? FALLBACK;
+  const src = LOOPS[paletteOf(skinId)] ?? LOOPS.studio ?? Object.values(LOOPS)[0];
 
   useEffect(() => {
     const el = video.current;
@@ -51,7 +51,8 @@ export function BrandLoop(): JSX.Element {
     void el.play().catch(() => setFailed(true));
   }, [src]);
 
-  if (failed) return <BrandCanvas />;
+  // 一个视频都没有（还没渲、或者被裁掉了）就走实时着色器，不留空白
+  if (failed || !src) return <BrandCanvas />;
   return (
     <video
       ref={video}
