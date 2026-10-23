@@ -149,6 +149,8 @@
 .pcm .mblock .no { position: absolute; left: 5px; top: 4px; font-size: var(--fs-xs); background: var(--shade-weak); padding: 0 5px; border-radius: var(--r-s); }
 .pcm .mblock .du { position: absolute; left: 6px; bottom: 4px; display: inline-flex; align-items: center; gap: 3px; font-size: var(--fs-m); font-weight: 600; text-shadow: 0 1px 3px var(--shade-strong); font-variant-numeric: tabular-nums; color: var(--white); }
 .pcm .mblock .du svg { width: 11px; height: 11px; }
+.pcm .mblock .kic { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--white); opacity: .55; pointer-events: none; }
+.pcm .mblock .kic svg { width: 22px; height: 22px; }
 .pcm .mblock.sel { border-color: var(--accent); }
 .pcm .mblock.lift { z-index: 5; border-color: var(--accent); box-shadow: 0 6px 18px var(--shade); opacity: .92; }
 .pcm .mark { flex: none; width: 24px; height: 24px; margin: 0 3px; border-radius: var(--r-pill); background: var(--panel2); display: grid; place-items: center; font-size: var(--fs-s); color: var(--dim); }
