@@ -1,6 +1,6 @@
 /**
  * 改舞台推帧的公共代码(`src/render/pinAnimations.ts`、`src/render/stageClock.ts`)前后,舞台各条路逐帧生成的快照变没变。
- * 出处:渲染重构「推帧一致性」(`docs/reports/AGENT-rr-push-exact.md`):这两处是可见舞台、测量、后台生成快照共用的,
+ * 出处:渲染重构「推帧一致性」(`docs/archive/agent-reports/AGENT-rr-push-exact.md`):这两处是可见舞台、测量、后台生成快照共用的,
  * 改了以后各条路受多大影响要量出来,不靠读代码推断。
  *
  *   node scripts/probes/stage-push-before-after-probe.mjs --before <改之前的在线构建> --after <改之后的在线构建>

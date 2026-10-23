@@ -1,6 +1,6 @@
 /**
  * 单张卡片画面(`bake_card`、3D 视图的贴图)是当场渲出的位图、不存这张卡的 HTML —— 的端到端探针
- * (报告 `docs/reports/AGENT-rr-card-bitmap.md`;语义 `docs/semantics/mechanism/asset-service.md`
+ * (报告 `docs/archive/agent-reports/AGENT-rr-card-bitmap.md`;语义 `docs/semantics/mechanism/asset-service.md`
  * 「不经任务队列的单张卡片画面」、`docs/semantics/glossary.md`「快照」)。
  *
  *   node scripts/probes/card-bitmap-probe.mjs --port 26900 --save <目录>      改之前跑:只把各用例的图存下来

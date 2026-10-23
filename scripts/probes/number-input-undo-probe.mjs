@@ -1,5 +1,5 @@
 /**
- * 编辑面板数字框与滑块的提交时机探针(`docs/reports/AGENT-number-input-undo.md`;语义 workflow/editing.md「撤销、重做」2026-10-20 用户定)。
+ * 编辑面板数字框与滑块的提交时机探针(`docs/archive/agent-reports/AGENT-number-input-undo.md`;语义 workflow/editing.md「撤销、重做」2026-10-20 用户定)。
  * 真的打开编辑台,在剪辑段属性面板的「不透明度」滑块和数字框上敲字、按键、拖动,核对 store 与撤销栈,逐步截图。
  * 页面连着 dev server 自带的文档服务,所以走的是文档服务的提交与撤销(不是快照栈)。
  *

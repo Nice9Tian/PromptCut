@@ -6,6 +6,6 @@
  * 在线构建入口脚本(4 MB 多)会偶发永远加载不完:网络层几十毫秒就收完了全部字节,渲染进程却一直没把它收下,页面停在
  * `readyState: 'interactive'`,等不到 DOMContentLoaded;舞台 iframe 里的同一个脚本卡住时,页面退回单舞台。
  * 压测(`online-nav-stress-probe.mjs`)里新开页面约 1%～3% 中招;关掉实验配置、换 chrome-headless-shell、换本机正式版 Chrome
- * 都是 0 次。取证与数据见 `docs/reports/AGENT-nav-hang.md`。
+ * 都是 0 次。取证与数据见 `docs/archive/agent-reports/AGENT-nav-hang.md`。
  */
 export const PROBE_CHROME_ARGS = Object.freeze(['--disable-field-trial-config']);

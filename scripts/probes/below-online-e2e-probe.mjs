@@ -26,7 +26,7 @@
  *   E 像素    参照是**精确活渲**:这张卡还没钉重(轻卡,一直活渲)时,同一个场景停在每一帧截的图(旧的一版在甲那里截,改过下层的一版在乙钉重之前截)。
  *             拖动时贴流的那一张只看毛玻璃卡那一块:与同一帧的参照的平均差在编码误差的量级(≤ 4,满分 255),比它与前一帧、后一帧的参照都像,
  *             比它与隔 8 帧的参照明显更像。另外记一个数(不判):同一帧钉重以后停下追到的活渲与贴流那一张的差 —— 重卡停下追帧走的是另一条路,
- *             入场动画没放完的帧上它比轻卡时的活渲多走一帧(`main` 上就有,`docs/reports/AGENT-rr-below-paste.md` 第 7 节第 3 条)
+ *             入场动画没放完的帧上它比轻卡时的活渲多走一帧(`main` 上就有,`docs/archive/agent-reports/AGENT-rr-below-paste.md` 第 7 节第 3 条)
  *   F 暂停    播放中暂停:停下的那一刻卡还贴着流(抑制、舞台平面),随后追到精确活渲、不再抑制
  *   G 改下层  甲把下面那张卡的参数改一处:父页当场不再发旧流的流平面(记毫秒),在线来源把旧流撤了,舞台上没有旧键的轨道;
  *             切分方按新的一版重产,层表换成新的一行(内容键、签名都换了),甲认出新流并贴它;像素同 E 那样比(新流对新一版的活渲)
@@ -695,7 +695,7 @@ try {
     const gone = await until('G:舞台上没有旧键的轨道', async () => { const s = await stageState(pageA, glassId); return s && !s.tracks.some((t) => t.key === key1) ? s : null; }, 10_000, 30);
     // 舞台那一侧:从页面里改完(上面那一段返回)到探针读到「旧键的轨道没了」,含探针自己一来一回的耗时,只记录
     out.edit = { ...edit, sourceStale: withdrawn?.staleStreams ?? null, stageGone: !!gone, stageGoneWithinMs: gone ? Date.now() - tEdited : null, clipAfter: gone && { suppressed: gone.clip.suppressed, placeholder: gone.clip.placeholder, snapshot: gone.clip.snapshot } };
-    check(edit?.hadBefore === true && edit.goneMs !== null && edit.goneMs <= 1000 && edit.staleSeen === true, 'G:改之前父页在发这条流;改下层以后当场不再发、认它过期(1 秒以内;实测毫秒记在结果里)', edit);
+    check(edit?.hadBefore === true && edit.goneMs !== null && edit.staleSeen === true, 'G:改之前父页在发这条流;改下层以后不再发、认它过期(毫秒只记录;耗时只记录,不当闸门(verification.md,2026-10-07 用户改定);2026-10-23 探针总审改)', edit);
     check(!!withdrawn && withdrawn.staleStreams.includes(glassId), 'G:在线来源认出旧流过期、不再列它', withdrawn && { stale: withdrawn.staleStreams, streams: withdrawn.streams.map((x) => short(x.resultKey)) });
     check(!!gone, 'G:舞台上旧流的轨道关掉了', (await stageState(pageA, glassId))?.tracks.map(trackBrief));
     out.edit.oldShot = !!oldShot;

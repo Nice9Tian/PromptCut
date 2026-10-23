@@ -1,7 +1,7 @@
 /**
  * 探针:Lottie 卡在**在线页面**里的播放、暂停、拖动,逐帧和导出页同一帧相同;带随机表达式的五份测试素材在在线页面里同样逐帧稳定。
  * 出处:`docs/plan/render-refactor-task.md`「癸」的验收(「播放、暂停、拖动各验一遍,桌面和在线都验。带随机表达式和随机顺序文字的测试素材同样要过」)。
- * 桌面那一半在 `lottie-pipeline-probe.mjs`(`docs/reports/AGENT-rr-lottie.md`);这里补在线的。
+ * 桌面那一半在 `lottie-pipeline-probe.mjs`(`docs/archive/agent-reports/AGENT-rr-lottie.md`);这里补在线的。
  *
  *   node scripts/probes/lottie-online-probe.mjs [--dist <在线构建目录>] [--base-port 27280] [--out <目录>] [--keep-temp] [--no-pixels]
  *        端口(整段 +0～+9):+0 编辑器页的源、+1 / +2 两个舞台的源、+3 文档服务、+4 素材服务、+5～+7 导出页用的开发服务器(及它的舞台端口)。都只绑 127.0.0.1。
@@ -409,7 +409,7 @@ try {
     };
     out.pixels = { seqVsJump: [], vsExport: [] };
     // 顺着挪到 对 从别处直接点到。两张的 SVG 文本散列要相同;像素允许差一点点边缘取整(浏览器只重画变了的那一块和整张重画时的取整,
-    // 卡片管不到,见 docs/reports/AGENT-rr-lottie.md「还剩的一点差别」):差的像素不超过画面的 0.02%、差超过 48 的像素为 0
+    // 卡片管不到,见 docs/archive/agent-reports/AGENT-rr-lottie.md「还剩的一点差别」):差的像素不超过画面的 0.02%、差超过 48 的像素为 0
     for (const f of [62, 75, 96, 199, 322, 353, 395, 440, 500]) {
       await arrive(Math.max(0, f - 3)); await arrive(f - 2); await arrive(f - 1);
       const seqShot = await shot(f, null);

@@ -1,5 +1,5 @@
 /**
- * 剪辑段属性面板与素材库剪辑格子的界面探针(剪辑段首版局限补齐,`docs/reports/AGENT-cut-segment-followups.md` 第 1、5 项)。
+ * 剪辑段属性面板与素材库剪辑格子的界面探针(剪辑段首版局限补齐,`docs/archive/agent-reports/AGENT-cut-segment-followups.md` 第 1、5 项)。
  * 真的打开编辑台,在面板上点、填、拖,读 store 核对,逐步截图。
  *
  *   node scripts/probes/cut-segment-panel-probe.mjs --origin http://127.0.0.1:5370 --out <截图目录>

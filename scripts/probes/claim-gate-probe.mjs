@@ -1,7 +1,7 @@
 /**
  * 队列模式认领闸的端到端探针(`docs/semantics/mechanism/rendering.md`「Agent 优先只是插队」;
  * 认领闸见 `server/queue-agent-spare.mjs`,报告 `docs/archive/agent-reports/AGENT-query-render-2.md` 第 4 节、第 7 节「没跑的」;
- * 本探针出自 `docs/reports/AGENT-maint-3.md` 第 4 项)。
+ * 本探针出自 `docs/archive/agent-reports/AGENT-maint-3.md` 第 4 项)。
  *
  * 前后两趟,各起一个独立的文档服务(临时数据目录,只绑回环)和一台队列模式的编辑器(`PROMPTCUT_QUEUE_NODE=1`,
  * 它拉起自己的预渲染进程、本机节点),各用一个空帧库、同一个探针项目(6 秒、三张卡,切出十来个快照细任务):
@@ -228,7 +228,10 @@ async function runOnce(label, { withAgent, port, docPort }) {
       if (order) {
         check(!order.error && order.status === 200 && order.ok !== false, `[${label}] 专用实例忙着时模型再看一帧,照常返回`, { status: order.status, error: order.error });
         check(order.ok !== false && order.jumped?.length === 0 && order.agentAt !== null, `[${label}] Agent 任务不排在排队中的预渲染后面`, { reason: order.reason, jumped: order.jumped });
-        for (const f of judgeAgentWait(order, AGENT_WAIT_LIMIT_MS)) fails.push(`[${label}] ${f}`);
+        // judgeAgentWait 的 15 秒上限量的是机器与网络有多快，语义里没有这条时间承诺：只记录，不进 fails
+        // （判据函数 claim-gate-judge.mjs 一字不动，它有自己的单测；耗时只记录,不当闸门(verification.md,2026-10-07 用户改定);2026-10-23 探针总审第二遍扫描补改）
+        const agentWaitNotes = judgeAgentWait(order, AGENT_WAIT_LIMIT_MS);
+        if (agentWaitNotes.length) (out.agentWaitNotes ??= []).push(`[${label}] 等 Agent 落定的用时超过 ${AGENT_WAIT_LIMIT_MS} ms（只记录）：${agentWaitNotes.join('；')}`);
         check((run.yields?.count ?? 0) >= 1, `[${label}] 专用实例上的队列任务在批边界让过路(scheduler.yields.count >= 1)`, run.yields);
       }
     }

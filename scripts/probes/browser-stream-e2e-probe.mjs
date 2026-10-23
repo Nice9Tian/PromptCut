@@ -1,5 +1,11 @@
 /**
- * 在线浏览器产流、另一个在线页面播流的整条链(`docs/plan/browser-stream-task.md` 的七处接在一起;任务书 `render-refactor-task.md`「甲一」的集成)。
+ * 在线浏览器产流、另一个在线页面播流的整条链
+ * 2026-10-23 探针总审：每张卡的 HTML 快照已于 2026-10-16（己二）撤掉 —— `server/snapshot-tier.mjs` 的 `snapshotTier()` 对所有卡恒回 `none`、
+ * `server/render-node/split.mjs` 因此一个快照任务都不再发，`src/StageView.tsx` 的 `setSnapshots` 只剩空桩。本探针原先的等待条件把「快照任务也做完」
+ * 算在 `completed` 里，撤快照之后那个数永远凑不满，整支会卡到 15 分钟超时。现在把门槛按「每张卡少一个快照任务」逐处减一，并删掉只对旧快照有意义的断言。
+ * **留一个待实跑确认的点**：产流那几处的帧数与分段数门槛（送进编码器多少帧、几个分段）是撤快照之前的读数；
+ * 2026-10-14 起空项目加第一张卡时本页会先产一遍稀疏版，可能让这些数翻倍。跑通一次看 `diag.streams.frames` 是 48 还是 96 再定，别先改。
+(`docs/plan/browser-stream-task.md` 的七处接在一起;任务书 `render-refactor-task.md`「甲一」的集成)。
  *
  *   node scripts/probes/browser-stream-e2e-probe.mjs [--dist <在线构建目录>] [--base-port 7410] [--out <目录>] [--keep-temp] [--only off|on]
  *        端口(整段 +0～+9):+0 编辑器页的源、+1 / +2 两个舞台的源、+3 文档服务、+4 素材服务、+5～+7 桌面编辑器(及它的舞台端口)。都只绑 127.0.0.1。
@@ -30,7 +36,7 @@
  *   G 改参数  甲把这张卡的文字改成空的:乙那边旧流马上不再贴(在线来源把它撤了、舞台上没有旧键的轨道);新一版的流产出来之后层表换成新的一行
  *             (内容键、输入签名都换了),乙认出新流并播它;像素同 E 那样比,且旧流那张截图里有白字、新流这张里没有(与新一版的活渲一样)
  *   H 没有页面错误
- * 已知(不判不过,只记数,见 `docs/reports/AGENT-rr-a1-integ.md`):乙是甲产完之后才进来的,它没收到过这张卡快照任务的 `task.done`,层表里快照层的候选
+ * 已知(不判不过,只记数,见 `docs/archive/agent-reports/AGENT-rr-a1-integ.md`):乙是甲产完之后才进来的,它没收到过这张卡快照任务的 `task.done`,层表里快照层的候选
  *   它取第一个(切分方自己的那一份,切分方只切分、没产),所以它这里这张卡没有快照;每次起播(先放播放头再播)的头 500 毫秒,舞台给这一层盖
  *   「等快照」的沙漏,流在下面照画,兜底一过沙漏撤掉。D 里判的是「起播 0.7 秒之后没有占位符」,头 0.7 秒里出现过几次记在结果的 `placeholderEarly`。
  * 耗时只记录(`guide_files/verification.md`「耗时只记录,不当闸门」)。不打印令牌、口令。
@@ -369,9 +375,9 @@ function checkStreamPlaying(who, r, { key }) {
   const withSlot = r.drawn.filter((s) => s.clip.placeholder);
   brief.placeholderEarly = withSlot.filter((s) => s.t <= r.from + 0.7).length;
   check(withSlot.every((s) => s.t <= r.from + 0.7), `${who}:起播 0.7 秒之后没有占位符`, withSlot.filter((s) => s.t > r.from + 0.7).map((s) => s.t));
-  check(r.drawn.filter((s) => s.clip.snapshot && !s.clip.snapshotHidden).length <= 1, `${who}:流在画的时候快照平面藏着`, r.drawn.filter((s) => s.clip.snapshot && !s.clip.snapshotHidden).length);
-  // 垫着的是海报:播 `frames` 帧只换约 frames / 15 次(每次换是一摘一挂,按两次变动算);每拍换的话是 frames × 2 次上下
-  check(typeof r.swaps === 'number' && r.swaps <= (Math.ceil(r.frames / SEG) + 2) * 2, `${who}:不是快照在换(播 ${r.frames} 帧,快照平面只变动了 ${r.swaps} 次)`, { swaps: r.swaps, frames: r.frames });
+  // 原先这里有两条断言：「流在画的时候快照平面藏着」「不是快照在换」。每张卡的快照 2026-10-16 撤掉后，
+  // 产品里已经没有代码创建 `[data-pc-snapshot-plane]`，两条都恒真、什么也不证（2026-10-23 探针总审删）。
+  // `r.swaps`、`r.drawn` 照旧采样并记进结果，供看数用。
   return brief;
 }
 
@@ -474,11 +480,11 @@ async function runRound(streams, M) {
     const seen = new Set();
     // 流任务四个:两段(0～7、8～8)各一个稀疏流任务、一个满密度任务。计划发出去 5 秒没人认领时本页会自己先产(`pageStreams.ts`),
     // 那样队列来的四个都走去重、`streamTasks` 一直是 0 —— 认出这种情况就不白等(下面的断言照样判不过,并说明原因)
-    const produced = await until('甲做完这张卡的流任务(稀疏、满密度各两个)与快照任务', async () => {
+    const produced = await until('甲做完这张卡的流任务(稀疏、满密度各两个;快照任务 2026-10-16 起不再发)', async () => {
       const d = await nodeDiag(pageA);
       for (const h of d?.holding ?? []) seen.add(h.id);
       if (d?.state === 'baking') return null;
-      if (d?.counters?.streamTasks >= 2 && d.counters.dedup >= 2 && d.counters.completed >= 5) return d;
+      if (d?.counters?.streamTasks >= 2 && d.counters.dedup >= 2 && d.counters.completed >= 4) return d;
       return d?.counters?.streamTasks === 0 && d.counters.dedup >= 4 ? d : null;
     }, 900_000, 250);
     const diagA = produced ?? (await nodeDiag(pageA));

@@ -468,7 +468,7 @@ async function linkScenario({ A, B, pageA, pageB, stateA, stateB, projectId, aLo
       const seen = await waitFor(() => hasFn(id).then((v) => (v ? Date.now() : null)), 90_000, `${label} 收到断线之后甲的改动`).catch(() => null);
       const out = { did, resumeMs: back ? back - t0 : null, sawEditMs: seen ? seen - t0 : null, opens: (await stats())?.opens ?? null };
       L[`cut-${label}`] = out;
-      check(did === true && out.resumeMs !== null && out.resumeMs < 10_000 && out.sawEditMs !== null && out.sawEditMs < 15_000, `断一次传输-${label}:几秒内接回并收到之后的改动`, out);
+      check(did === true && out.resumeMs !== null && out.sawEditMs !== null, `断一次传输-${label}:接回并收到断线之后的改动(用时只记录;耗时只记录,不当闸门(verification.md,2026-10-07 用户改定);2026-10-23 探针总审改)`, out);
     };
     await cutOne('desktop', () => P(pageB, () => window.__pcSyncTest.cut()), () => P(pageB, () => window.__pcSyncTest.link()), (id) => hasDesktop(pageB, id));
   }
@@ -659,7 +659,7 @@ try {
     check(audio.accountProject === projectId, '5-用的是账号项目的素材服务', { base: audio.base, accountProject: audio.accountProject });
   }
   res.aPageWritesDoneMs = Date.now() - aLoginAt;
-  check(res.aPageWritesDoneMs < 100_000, '甲页面写项目的几步在登录后 100 秒内做完(探针自己的前提)', res.aPageWritesDoneMs);
+  check(res.aPageWritesDoneMs !== null, '甲页面写项目的几步做完(用时只记录;原先的 100 秒上限来自旧的定时换会话机制,2026-10-14 已推翻;耗时只记录,不当闸门(verification.md,2026-10-07 用户改定);2026-10-23 探针总审改)', res.aPageWritesDoneMs);
   await dismissDialogs(pageA);
   await waitFor(() => stageHas(pageA, MARK('v1')), 60_000, '甲的舞台画出 v1').catch(() => null);
   await shot(pageA, '1-a-desktop-v1');

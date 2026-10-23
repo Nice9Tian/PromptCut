@@ -76,7 +76,12 @@ async function build() {
   function patch(before, after, count, purpose) { source = replaceExact(source, before, after, count); patches.push(purpose); }
   patch('const EDITOR_URL: &str = "http://127.0.0.1:5210/";', 'const EDITOR_URL: &str = "http://127.0.0.1:5203/";', 1, 'test editor URL');
   patch('const EDITOR_PORT: u16 = 5210;', 'const EDITOR_PORT: u16 = 5203;', 1, 'test port with unchanged +1/+2 stage derivation');
-  patch('"--port", "5210",', '"--port", "5203",', 1, 'test sidecar port');
+  // 原先这里还有一条补丁，把边车参数里写死的 5210 换成 5203：lib.rs 现在写的是
+  // `"--port", &editor_port.to_string(),`（第 574 行），而 editor_port 由 account_editor_port() 从 EDITOR_PORT 推出（第 96～97、363 行），
+  // 上一条补丁已经把 EDITOR_PORT 改成 5203，边车端口自动跟着走，这条补丁多余了。
+  // 它的目标串在今天的 lib.rs 上一次都不命中，replaceExact 会抛「native source isolation patch no longer matches」，
+  // 把整条隔离原生壳测试链（reopen-native、reopen-native-upgrade、reopen-installed --rehearse-fixture）卡在夹具构建这一步。
+  // 2026-10-23 探针总审删（报告 docs/reports/AGENT-claude-probe-audit.md）。
   patch('if body.contains("PromptCut") {', 'if false {', 1, 'never reuse an existing editor service');
   patch('let mut existing_instance = false;', `for port in [EDITOR_PORT, EDITOR_PORT + 1, EDITOR_PORT + 2] {
                 if std::net::TcpListener::bind(("127.0.0.1", port)).is_err() { std::process::exit(73); }

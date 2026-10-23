@@ -1399,10 +1399,10 @@ async function runObserver(out) {
     out.shots = ['1-small', '2-original', '3-v2'].map((s) => path.join(OUT, `${run}-observer-${s}.png`)).filter((f) => fs.existsSync(f));
     out.pageErrors = pageErrors.slice(0, 5);
 
-    check(out.installMs !== null && out.installMs <= 5000, `[observer] 5 s 内装上 v2(installMs=${out.installMs})`);
+    check(out.installMs !== null, `[observer] 装上 v2(installMs=${out.installMs},只记录;耗时只记录,不当闸门(verification.md,2026-10-07 用户改定);2026-10-23 探针总审改)`);
     check(out.hmrMs !== null, '[observer] B 页面热更新到 v2');
     if (out.remeasureMs === null) fails.push('[observer] b-no-remeasure');
-    else check(out.remeasureMs <= 5000, `[observer] remeasure-over-5s(${out.remeasureMs})`);
+    else say('observer.remeasureMs', { ms: out.remeasureMs }); // 重测用时只记录(耗时只记录,不当闸门(verification.md,2026-10-07 用户改定);2026-10-23 探针总审改)
     check(keyAfter && keyAfter !== out.keyBefore, '[observer] 用户卡片段的身份键变了');
     check(out.stageMs !== null, '[observer] B 的舞台画出 v2');
     check(out.bOverrideV2, '[observer] v2 装进 B 的改动层');

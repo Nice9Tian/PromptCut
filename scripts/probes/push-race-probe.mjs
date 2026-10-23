@@ -1,6 +1,6 @@
 /**
  * 尺子:两路同时推同一批内容时,素材服务 `complete` 会不会回 400 incomplete(claude/push-incomplete,
- * 报告 `docs/reports/AGENT-push-incomplete.md`)。
+ * 报告 `docs/archive/agent-reports/AGENT-push-incomplete.md`)。
  *
  * 现场(M7 浏览器节点探针):节点渲完一段,队列节点的产物库(`artifact-transfer.mjs` 的 `createAssetSink().put`)
  * 与本机的无条件推送队列(`artifact-push.mjs`)几乎同时推同一段的 180 块,两边都是 `pushResult`(每路 4 并发)

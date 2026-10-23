@@ -636,7 +636,9 @@ export function releaseTimingsSection(run, { version, machineName = null } = {})
 
 /**
  * 登记覆盖检查:probesDir 里的文件名(去目录)对照清单里每项 `covers`(文件名数组)与排除表。
- * 返回 { unlisted: [...], staleExcluded: [...], staleCovers: [...] }。
+ * 返回 { unlisted: [...], staleExcluded: [...], staleCovers: [...], bothListedAndExcluded: [...] }。
+ * `bothListedAndExcluded` 是既被某项 `covers` 点名、又写在排除表里的(台账自相矛盾:排除表的定义是「不进清单的」,
+ * 两边都写时读台账的人会得出相反结论;2026-10-23 探针总审加,报告 docs/reports/AGENT-claude-probe-audit.md)。
  */
 export function coverageReport(fileNames, items, excluded) {
   const files = new Set(fileNames);
@@ -645,7 +647,8 @@ export function coverageReport(fileNames, items, excluded) {
   const unlisted = fileNames.filter((f) => !covered.has(f) && !(f in excluded)).sort();
   const staleExcluded = Object.keys(excluded).filter((f) => !files.has(f));
   const staleCovers = [...covered].filter((f) => !files.has(f));
-  return { unlisted, staleExcluded, staleCovers };
+  const bothListedAndExcluded = [...covered].filter((f) => f in excluded).sort();
+  return { unlisted, staleExcluded, staleCovers, bothListedAndExcluded };
 }
 
 /**

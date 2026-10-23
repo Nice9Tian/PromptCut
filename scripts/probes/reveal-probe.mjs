@@ -328,8 +328,11 @@ try {
     const genAfter = (await frontDiag(page)).stage?.remountGen ?? null;
     const beat = 1000 / 30;
     out.cases['拖动'] = { trips: stats(trips), overBeat: trips.filter((x) => x > beat).length, awaitingSeen, awaitingStuck, genBefore, genAfter };
-    check(trips.filter((x) => x > beat * 3).length === 0,
-      '暂停拖动:每一次 setTime 都在一拍上下回来(不等 HTTP)', out.cases['拖动']);
+    // 原先这里要求「每一次 setTime 往返都不超过三拍（100 ms）」。那个数量的是机器有多快，语义里没有这条时间承诺，
+    // 按 verification.md「耗时只记录，不当闸门」（2026-10-07 用户改定）改为只记录（往返次数与超过一拍的次数都在 out.cases['拖动'] 里）。
+    // 它想证的「不等 HTTP」更该用「这段里没有发出网络请求」来断言，记进报告的待办，这次没有现编新断言。
+    // 2026-10-23 探针总审第三遍扫描（阈值是表达式那一类，前两遍的正则都漏了）。
+    check(trips.length > 0, '暂停拖动:每一次 setTime 都回来了(往返用时只记录,不当闸门)', out.cases['拖动']);
     check(awaitingStuck === 0, '.pc-awaiting 500 ms 内必被摘掉', { awaitingSeen, awaitingStuck });
   }
 

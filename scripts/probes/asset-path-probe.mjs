@@ -1,7 +1,7 @@
 /**
- * Agent 读素材的路径的端到端探针(`docs/reports/AGENT-asset-path.md`;语义 `docs/semantics/product/agent.md`「素材与产物」):
+ * Agent 读素材的路径的端到端探针(`docs/archive/agent-reports/AGENT-asset-path.md`;语义 `docs/semantics/product/agent.md`「素材与产物」):
  * 证明 `measure_audio` 与 `measure_audio_js`,以及三个感知工具 `detect_shots` / `track_points` / `detect_subjects`
- * (`docs/reports/AGENT-asset-path-2.md`)在编辑器进程里是**经素材服务的接口**取的字节,不是按素材目录找文件。
+ * (`docs/archive/agent-reports/AGENT-asset-path-2.md`)在编辑器进程里是**经素材服务的接口**取的字节,不是按素材目录找文件。
  *
  *   node scripts/probes/asset-path-probe.mjs [--port 5920] [--keep]
  *

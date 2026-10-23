@@ -54,7 +54,7 @@
 
 ## 已做步骤的遗留
 
-- **〔已修，2026-10-13 `claude/rr-preview-fixes`，`3c660f2a`：两处都查清根因并修好，各有探针 `scripts/probes/seek-back-exact-probe.mjs`、`scrub-hold-snapshot-probe.mjs`；报告 `docs/reports/AGENT-rr-preview-fixes.md`〕预览里的两处老问题**（2026-10-12 做「拖动时贴轨道流」的原型时在 `main` 上查出来；复现办法和数字在分支 `claude/scrub-streams` 的 `docs/reports/AGENT-scrub-streams.md`「发现」一节）。两处都排在渲染重构的「己」之前修，见 `render-refactor-task.md`「己」的「先要修的两处」。
+- **〔已修，2026-10-13 `claude/rr-preview-fixes`，`3c660f2a`：两处都查清根因并修好，各有探针 `scripts/probes/seek-back-exact-probe.mjs`、`scrub-hold-snapshot-probe.mjs`（这支 2026-10-23 随每张卡的快照撤除一并删掉，见 `docs/reports/AGENT-claude-probe-audit.md`）；报告 `docs/reports/AGENT-rr-preview-fixes.md`〕预览里的两处老问题**（2026-10-12 做「拖动时贴轨道流」的原型时在 `main` 上查出来；复现办法和数字在分支 `claude/scrub-streams` 的 `docs/reports/AGENT-scrub-streams.md`「发现」一节）。两处都排在渲染重构的「己」之前修，见 `render-refactor-task.md`「己」的「先要修的两处」。
   - **粒子卡往回跳以后停下，画布上的画面不是这一刻的。** 同一帧，往回跳到达和往前到达的两张画面，差得和两个不相干的帧一样大；再往前挪一步就对了。违反 `product/rendering.md`「停下就精确」。
   - **手按着标尺不动时，快照有时一直贴不上。** 快照的字节在设时间之后 33 毫秒内到货时，补投被换帧的节流挡掉，之后没有人再投；那一层藏 500 毫秒后露出活组件，直到下一次拖动。按住 12 处有 4 处没贴上。
 - **导出里的四处老问题**（前三处是 2026-10-12 渲染重构「辛」量两条导出路时在 `main` 上遇到的，现象和次数在 `docs/reports/AGENT-rr-export-measure.md`；第四处是 2026-10-13 核对导出像素基线时查到的。没标「已修」的都还没修、没查根因）。

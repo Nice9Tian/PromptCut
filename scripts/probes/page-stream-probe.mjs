@@ -1522,7 +1522,9 @@ async function sceneLowest(M) {
     check(R.measured.stack.perSecond !== null && R.measured.stack.perSecond <= 4 * (FPS / SEG) * 1.6, '量:四条流同屏每秒解的帧数约等于 4 × 2', R.measured.stack);
     // 这几张卡一帧要算 40 毫秒:哪一拍到了 35 毫秒,就是有重卡的活组件在这一拍里跑了。最低一档播放时重卡不活渲 —— 例外只有跳过来起播的头一拍、
     // 卡入场的那一两拍(父页的抑制比舞台的节拍晚到一步;这一条和贴不贴流无关),所以这样的拍只许零星几拍,不许连着出现
-    check(traceStack.length >= 20 && R.measured.beatMs.stack.p95 < 16.7 && R.measured.beatMs.single.p95 < 16.7 && R.measured.beatMs.stack.over35 <= 2 && R.measured.beatMs.single.over35 <= 4,
+    // p95 的毫秒阈值（16.7 = 60 fps 一帧的预算）量的是机器有多快，按「耗时只记录,不当闸门(verification.md,2026-10-07 用户改定);2026-10-23 探针总审第四遍扫描（小数阈值那一类）」只记录；
+    // 超过 35 毫秒的**拍数**是计数，verification.md 明写不看时间的断言照旧是通过条件，保留
+    check(traceStack.length >= 20 && R.measured.beatMs.stack.over35 <= 2 && R.measured.beatMs.single.over35 <= 4,
       '量:播放中舞台每拍的耗时第 95 百分位在一帧以内,活渲到重卡的只有起播、卡入场的零星几拍(不等流的第一帧)', R.measured.beatMs);
 
     /* ---------------- 六:没有流的卡 —— 甲下线,乙自己加一张卡:没有谁产它的流,播放时占位符;乙不产流、不当节点 */
@@ -1850,7 +1852,7 @@ async function sceneMobile(M) {
     const stats = beatStats(traceStack);
     R.beatStats = stats;
     say('mobile.beats', stats);
-    check(traceStack.length >= 10 && stats.p95 < 33, 'b: 播放节拍 p95 < 33 ms', stats);
+    check(traceStack.length >= 10, 'b: 播放节拍量到了足够的拍（p95 只记录，原先要求 < 33 ms —— 耗时只记录,不当闸门(verification.md,2026-10-07 用户改定);2026-10-23 探针总审第四遍扫描（小数阈值那一类））', stats);
 
     // 暂停后追上精确画面
     await pauseAt(pageB, STACK[0].start + 0.8);
