@@ -666,3 +666,51 @@ G0-2 全量那一项报了 5 条失败，**五条全是超时类重测试**（�
 
 **这一版的教训**：和透明度、合成、GPU 有关的毛病，**浏览器自己的截图（CDP／回读）不作数**——
 直通 alpha 在回读里是对的、在屏幕合成那条路上被当成不透明。要用系统截图看。
+
+### 0.7.25（Google 登录那条的发版，2026-10-24）
+
+用户 2026-10-24 授权「把所有分支都检查好，能合的都合并好」。合了三条、留了一条：
+
+| 分支 | 怎么处理 |
+|---|---|
+| `claude/google-login-wire` | 合 —— 编辑器登录页用 Google 授权完没有反应 |
+| `claude/drive-connector` | 合 —— `/api/media/storage/*` 三条不再进在线产物（治本，撤掉 0.7.24 的登记） |
+| `claude/mobile-ui-ref` | 合 —— 只有 `prototypes/` 下的参考图 |
+| `dryrun` | **没合**，记待用户项：它删 421 行开发规则 |
+
+发版提交 `6d15988d`（部署用的就是这一个），之后又加了打包那条修复，main 到 `87e3c0c4`。
+应用 0.7.24 → **0.7.25**，外壳保持 **0.2.8**。
+
+**出包连挂两次，查出一个真漏。** NSIS 两次都报 `Internal compiler error #12345: error mmapping datablock`。
+不是偶发：比对两版的 `PREPARE_RESULT_JSON` 发现 app 那部分 **378.2 MB → 10147.2 MB**，总体积 1607.7 → **11376.7 MB**。
+原因是 `prepare-runtime.mjs` 的 `shouldCopyApp` 是纯黑名单，没挡 `.worktrees`：
+`runtime/app/.worktrees` 占 9.8 GB，其中 `_export-baseline`（像素基线的导出产物）一个就 7.9 GB。
+**这不只是体积：少这一条等于把每一条分支的整份源码随安装包发给所有用户。** 补上黑名单并配了守门测试
+（`desktop/test/prepare-runtime-filter.test.mjs`）。补完重出：app **392.9 MB**、总 **1622.4 MB**，一次过。
+
+出包 **598 秒**：完整安装包 **479,535,315** 字节 SHA-256 `4a64c423f12b6eced7034b81920ba1ddf16f26c158b77bbaada5e572c947ed81`；
+兼容补丁 **67,244,956** 字节 SHA-256 `816d3c45bca77520e536e2203bf3c12bcdafe61c422c1aa5224e83561b3820e4`。
+两个包都已传官网并换上链接，节点上重算的 SHA-256 与本机产物逐字相同，实测 200、`Content-Length` 对得上。
+
+节点部署：前端入口 `index-DWAa5Pw7.js`，`src` 改 6 个文件；五服务 active；
+8791 健康检查 `version` 与 `codeVersion` 都是 **0.7.25**；`render.code-version match: true`；
+素材服务静置后 not-ready **0** 次；`nginx-whitelist-already` → `nginx-whitelist-ok`；
+备份 `/root/v0725-backup-20261023T180534Z`。
+
+**快照指纹没动**：从 `server/frame-code.mjs` 抽出被哈希的 24 个文件路径，对线上 0.7.24（`a5302553`）逐一 diff 是空的；
+`server/cardGraph.mjs` 与 `src/cards/` 也是空的。不会整站重渲，已生成的卡片声音也不会被判过期。
+
+验证：
+
+| 项 | 结果 |
+|---|---|
+| 全量测试（发版前） | **零失败**，8053 条、15 跳过，206 秒 |
+| 全量测试（加了打包修复之后再跑一遍） | **零失败**，215 秒 |
+| 线上编辑器入口 | `index-DWAa5Pw7.js`，与本地包逐字一致 |
+| 线上产物里的网盘三条路径 | `connect` / `disconnect` / `import` **各 0 处**（部署前各 1 处） |
+| **用户本人实测 Google 登录** | **「Google 登录试了，进去了。」** |
+| 官网两个链接 | 200，字节数与本地产物相同 |
+| main / release | 都推到 `6d15988d`（打包修复在其后，main 到 `87e3c0c4`） |
+
+**这一版的教训**：出包失败先比 `PREPARE_RESULT_JSON` 的体积，别当成 NSIS 抽风重试 —— 两次重试白花了 20 分钟。
+打包那份黑名单文件头自己就写着「少列一条不是打包大了点，是把开发机上的东西发出去」，这次正是漏了一条。
