@@ -22,6 +22,15 @@ export interface ProjectSession {
  * 令牌是持有即身份的，和账号的访问令牌一样只留在内存与本机存档里（`guest.ts`），不进地址、不进日志。
  */
 export interface GuestLogin { id: string; name: string; token: string; expiresAt: number }
+/** 官网开着的第三方登录方式。`clientId` 不是秘密，本来就要出现在页面里 */
+export interface ThirdPartyProvider { provider: 'google'; clientId: string }
+/**
+ * 第三方登录的结果。第一次用某个 Google 账号时拿不到账号——账号名得用户自己起
+ * （Google 不提供，而网站账号名全站唯一），所以回一张十分钟的小票，拿它再调 `registerWithThirdParty`。
+ */
+export type ThirdPartyLogin =
+  | { kind: 'signed-in'; account: Account }
+  | { kind: 'need-name'; ticket: string; email: string | null };
 export interface CloudAgentConsent { accountId: string; accepted: boolean; noticeVersion: 1; acceptedAt?: number }
 /** Keep the standard transport protocol alongside the opaque account credential. */
 export function accountConnectionProtocols(session: ProjectSession): string[] { return ['promptcut.v1', `promptcut.account.${session.connectionTicket}`]; }
@@ -97,7 +106,19 @@ export function accountErrorText(status: number, code: string): string {
     'guest-read-only': '你在这个项目里只能查看，改不了内容。',
     'guest-video-limit': `游客最多上传 ${GUEST_LIMITS.videos} 条视频。要传更多，请注册一个账号。`,
     'guest-file-too-large': `游客上传的每一条源文件不能超过 ${GUEST_LIMITS.assetMB} MB。`,
-    'invalid-asset': '这条素材的信息不完整，请重新选择。' };
+    'invalid-asset': '这条素材的信息不完整，请重新选择。',
+    // 第三方登录（VisuHive 仓库 docs/third-party-login.md）。这些话要和那边的接口一一对上
+    'third-party-off': '这个云端没有开通 Google 登录，请用账号名和密码。',
+    'third-party-desktop': '桌面版暂时不支持 Google 登录，请用账号名和密码。',
+    'third-party-refused': 'Google 没有通过这次登录，请再试一次。',
+    'identity-unavailable': 'Google 登录服务暂时不可用，请用账号名和密码，或过一会儿再试。',
+    'identity-timeout': 'Google 登录服务没有响应，请过一会儿再试。',
+    'email-taken': '这个邮箱已经绑在一个账号上了。请先用账号名和密码登录，再到官网账号页绑定 Google。',
+    // `name-taken` 不在这里加：上面已经有一条，那条说的是「项目名」。账号服务用同一个码表示
+    // 「账号名被占」，两种意思撞了码，所以建账号那一处单独换话（见 `registerWithThirdParty`）。
+    'bad-ticket': '这一步超时了，请重新点一次「用 Google 继续」。',
+    'already-linked': '这个 Google 账号已经关联在别的账号上了。',
+    'unknown-provider': '不认识这个登录方式。' };
   return messages[code] || (status === 401 ? '登录已失效，请重新登录。' : status === 503 ? '云端服务暂时不可用，请稍后重试。' : status === 403 ? '没有访问这个项目的权限。' : status === 0 ? '连接云端失败，请检查网络后重试。' : `请求失败（${code}）。`);
 }
 /** 在线页面一次账号请求最多等多久(桌面版走外壳的账号桥,那边自己有 20 秒的时限) */
@@ -262,6 +283,59 @@ export function createAccountClient(options: AccountClientOptions) {
       csrf = value.csrfToken || ''; websiteAccount = value.account; login = null; authChanged();
       return (await ensureLogin()).account;
     },
+    // —— 第三方登录（VisuHive 仓库的 docs/third-party-login.md；接口在 account/app.mjs）——
+    // 这三条**不碰游客那一段**，只在上面 `login()` 的基础上把「怎么建立网站会话」换一种做法：
+    // 建立起网站会话之后，照样由 `ensureLogin()` 去换编辑器令牌（`/api/account/editor/session`），
+    // 和密码登录走的是同一条后半段，所以后端不用为编辑器另开接口。
+
+    /** 官网开没开第三方登录、客户端 ID 是多少。没开、或者后端是旧版（没这条接口）就回空数组，界面据此不显示按钮 */
+    async thirdPartyProviders(): Promise<ThirdPartyProvider[]> {
+      if (!options.online) return [];
+      try {
+        const value = await request('/api/account/third-party/config');
+        if (!Array.isArray(value.providers)) return [];
+        return value.providers.filter((p: unknown): p is ThirdPartyProvider => {
+          const row = p as Record<string, unknown> | null;
+          return !!row && row.provider === 'google' && typeof row.clientId === 'string' && row.clientId.length > 0;
+        });
+      } catch { return []; }
+    },
+
+    /**
+     * 拿第三方给的令牌登录。令牌原样交给账号服务，这边不解析它（解析在 VisuHive 的身份服务里）。
+     * 这个第三方身份还没关联过账号时回 `need-name`，要用户起一个账号名再调 `registerWithThirdParty`。
+     */
+    async loginWithThirdParty(provider: string, token: string, remember: boolean): Promise<ThirdPartyLogin> {
+      // 桌面版走外壳的账号桥，桥只放行五条操作，加一条要换外壳；这里如实说，不假装能用
+      if (!options.online) throw new AccountFailure(503, 'third-party-desktop');
+      // 和密码登录一致：登录了账号就不再是游客
+      if (guest) { revokeGuestOnServer(guest.token); guest = null; clearGuest(); }
+      await website();
+      const value = await request('/api/account/third-party/login', { provider, token, remember });
+      if (value.next === 'need-name') {
+        if (typeof value.ticket !== 'string' || !value.ticket) throw new AccountFailure(503, 'account-protocol');
+        return { kind: 'need-name', ticket: value.ticket, email: typeof value.email === 'string' ? value.email : null };
+      }
+      csrf = value.csrfToken || csrf;
+      websiteAccount = value.account; login = null; authChanged();
+      return { kind: 'signed-in', account: (await ensureLogin()).account };
+    },
+
+    /** 拿上一步的小票起账号名、建号并登录 */
+    async registerWithThirdParty(ticket: string, name: string, remember: boolean): Promise<Account> {
+      if (!options.online) throw new AccountFailure(503, 'third-party-desktop');
+      // `name-taken` 这个码两处在用：建项目时指「项目名被占」，建账号时指「账号名被占」。
+      // 错误话术表里只能有一条，所以在这里把话换成账号那一种，不去动项目那条路。
+      const value = await request('/api/account/third-party/register', { ticket, name, remember })
+        .catch((e: unknown) => {
+          if (e instanceof AccountFailure && e.code === 'name-taken') throw new AccountFailure(e.status, e.code, '这个账号名已经有人用了，换一个。');
+          throw e;
+        });
+      csrf = value.csrfToken || csrf;
+      websiteAccount = value.account; login = null; authChanged();
+      return (await ensureLogin()).account;
+    },
+
     async logout() {
       if (options.online) { await website(); await request('/api/account/logout', {}); }
       else {
