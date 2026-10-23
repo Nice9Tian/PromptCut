@@ -4,6 +4,7 @@ import { IconImport } from "../../ui/icons";
 import { SearchBox } from "./SearchBox";
 import { SectionHead } from "./SectionHead";
 import { CaptionsTab } from "./CaptionsTab";
+import { useReadOnly } from "../readOnly";
 
 /**
  * 「字幕」分区:导入 .srt / .vtt → 搜索 → 字幕树(CaptionsTab)。
@@ -25,6 +26,8 @@ export function CaptionsSection({
 }) {
   const [search, setSearch] = useState("");
   const srtInputRef = useRef<HTMLInputElement>(null);
+  // 这个项目只给了只读权限(游客):导入字幕是写
+  const ro = useReadOnly();
 
   const handleSrtFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -46,7 +49,8 @@ export function CaptionsSection({
           type="button"
           className="pc-btn-primary is-block pc-left-primary"
           data-pc-add="captions"
-          title="导入字幕 (.srt / .vtt)"
+          title={ro.title("导入字幕 (.srt / .vtt)")}
+          disabled={ro.locked}
           onClick={() => srtInputRef.current?.click()}
         >
           <IconImport size={16} />

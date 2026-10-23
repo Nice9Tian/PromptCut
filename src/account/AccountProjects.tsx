@@ -2,11 +2,13 @@ import { useEffect, useState } from 'react';
 import { useAccountProjects } from './useAccountProjects';
 import { OLD_SHELL_ACCOUNT_TEXT } from './desktopVault';
 import { JOIN_REQUEST_TEXT, autoJoinKey, joinRequestNotice } from './joinRequestText';
+import { GUEST_LIMITS_TEXT } from './guest.ts';
+import { GuestChip } from './GuestAvatar';
 import './account.css';
 
 export function AccountProjects({ online, onEnterEditor }: { online: boolean; onEnterEditor: () => void }) {
   const ap = useAccountProjects({ online, onEnterEditor });
-  const { origin, account, busy, error, setError, shellOld, link, setLink, lists, listError, perform, request } = ap;
+  const { origin, account, busy, error, setError, shellOld, link, setLink, lists, listError, perform, request, guest, guestProject } = ap;
   const [name, setName] = useState(''), [password, setPassword] = useState(''), [remember, setRemember] = useState(false);
   const [projectName, setProjectName] = useState('未命名');
   const [secondaryPassword, setSecondaryPassword] = useState('');
@@ -42,20 +44,44 @@ export function AccountProjects({ online, onEnterEditor }: { online: boolean; on
       <a className="sp-ghost-btn" href={`${origin}/account`} target="_blank" rel="noopener noreferrer">官网账号与项目列表</a></div>
     {shellOld ? <p className="sp-muted" role="status" data-pc="account-shell-old">{OLD_SHELL_ACCOUNT_TEXT}</p> : <>
     {error && <div className="sp-error" role="alert" data-pc="account-error">{error}</div>}
-    {!account ? <form className="sp-account-form" onSubmit={e => { e.preventDefault(); void perform(async () => {
-      await ap.login(name, password, remember);
-      setPassword('');
-    }); }}>
-      <label>账号名<input name="username" autoComplete="username" required value={name} onChange={e => setName(e.target.value)} /></label>
-      <label>密码<input name="password" type="password" autoComplete="current-password" required value={password} onChange={e => setPassword(e.target.value)} /></label>
-      {online && <label className="sp-account-check"><input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} />记住登录状态</label>}
-      <button className="sp-primary-btn" disabled={busy}>{busy ? '正在连接…' : '登录账号'}</button>
-      <a href={`${origin}/account`} target="_blank" rel="noopener noreferrer">注册账号 / 忘记密码</a>
-    </form> : <>
-      <div className="sp-account-row"><span data-pc="account-name">已登录：{account.name}</span><button className="sp-ghost-btn" disabled={busy} onClick={() => void perform(ap.logout)}>退出登录</button></div>
+    {!account && !guest ? <>
+      <form className="sp-account-form" onSubmit={e => { e.preventDefault(); void perform(async () => {
+        await ap.login(name, password, remember);
+        setPassword('');
+      }); }}>
+        <label>账号名<input name="username" autoComplete="username" required value={name} onChange={e => setName(e.target.value)} /></label>
+        <label>密码<input name="password" type="password" autoComplete="current-password" required value={password} onChange={e => setPassword(e.target.value)} /></label>
+        {online && <label className="sp-account-check"><input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} />记住登录状态</label>}
+        <button className="sp-primary-btn" disabled={busy}>{busy ? '正在连接…' : '登录账号'}</button>
+        <a href={`${origin}/account`} target="_blank" rel="noopener noreferrer">注册账号 / 忘记密码</a>
+      </form>
+      {/* 游客（2026-10-23 用户定）：没有账号也能进来试，进来时随机分一个编号和头像。桌面版走外壳的账号桥，
+          桥上没有这一条，所以只在线页面给这个入口（`client.ts` 的 `enterAsGuest` 在桌面版会明说要用官网） */}
+      {online && <div className="sp-guest-entry" data-pc="guest-entry">
+        <span className="sp-muted">没有账号也可以先进来看看，系统给你一个临时身份。</span>
+        <button type="button" className="sp-ghost-btn" data-pc="guest-enter" disabled={busy}
+          onClick={() => void perform(ap.enterAsGuest)}>{busy ? '正在进入…' : '以游客身份进入'}</button>
+        <span className="sp-muted sp-guest-limits" data-pc="guest-limits">{GUEST_LIMITS_TEXT}</span>
+      </div>}
+    </> : <>
+      {guest
+        ? <div className="sp-account-row" data-pc="guest-row">
+            <GuestChip id={guest.id} />
+            <button className="sp-ghost-btn" data-pc="guest-new" disabled={busy} onClick={() => void perform(ap.newGuest)}>换一个</button>
+            <button className="sp-ghost-btn" data-pc="guest-leave" disabled={busy} onClick={() => ap.leaveGuest()}>我有账号，去登录</button>
+          </div>
+        : <div className="sp-account-row"><span data-pc="account-name">已登录：{account!.name}</span><button className="sp-ghost-btn" disabled={busy} onClick={() => void perform(ap.logout)}>退出登录</button></div>}
+      {guest && <p className="sp-muted sp-guest-limits" data-pc="guest-limits">{GUEST_LIMITS_TEXT}</p>}
+      {/* 游客没有「我创建的」那张表（它是向官网账号要的），自己建的那一个项目靠本机记着的那一条列出来 */}
+      {guest && guestProject && <div className="sp-account-row" data-pc="guest-project">
+        <button className="sp-ghost-btn" data-pc="guest-project-open" disabled={busy}
+          onClick={() => void perform(ap.openGuestProject)}>{guestProject.name}</button>
+        <button className="sp-ghost-btn" onClick={() => { setLink(ap.projectLink(guestProject.id)); }}>显示项目链接</button>
+      </div>}
       <form className="sp-account-form" onSubmit={e => { e.preventDefault(); void perform(() => ap.create(projectName)); }}>
         <label>项目名<input data-pc="cloud-project-name" required maxLength={200} value={projectName} onChange={e => setProjectName(e.target.value)} /></label>
-        <button className="sp-primary-btn" data-pc="cloud-create" disabled={busy}>{busy ? '正在处理…' : '新建云端项目'}</button>
+        <button className="sp-primary-btn" data-pc="cloud-create" disabled={busy || !!(guest && guestProject)}
+          title={guest && guestProject ? '游客只能建一个项目' : undefined}>{busy ? '正在处理…' : '新建云端项目'}</button>
       </form>
     </>}
     <form className="sp-account-form" onSubmit={e => { e.preventDefault(); void submitJoin(askSecondaryPassword ? secondaryPassword : (secondaryPassword || undefined)); }}>
@@ -63,7 +89,7 @@ export function AccountProjects({ online, onEnterEditor }: { online: boolean; on
       {askSecondaryPassword && (
         <label>项目二级密码<input data-pc="cloud-secondary-password" type="password" required placeholder="请输入项目二级密码" value={secondaryPassword} onChange={e => setSecondaryPassword(e.target.value)} /></label>
       )}
-      <button className="sp-primary-btn" data-pc="cloud-join" disabled={busy || !account}>{askSecondaryPassword ? '验证二级密码并加入' : '加入并打开项目'}</button>
+      <button className="sp-primary-btn" data-pc="cloud-join" disabled={busy || (!account && !guest)}>{askSecondaryPassword ? '验证二级密码并加入' : '加入并打开项目'}</button>
       {/* 被账号名单挡住(2026-10-22 用户定):「你不在这个项目的成员名单中」+「发送申请」;发出后「已发送，等创建者通过」;被拒「创建者没有通过你的申请」 */}
       {notice && request && <div className="sp-join-request" role="status" data-pc="join-request" data-state={request.state}>
         <span data-pc="join-request-text">{notice.text}</span>

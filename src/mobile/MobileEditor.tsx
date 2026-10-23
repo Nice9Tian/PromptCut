@@ -21,6 +21,8 @@ import { SyncOverlays } from "../editor/sync/SyncOverlays";
 import { DependencyPrompt } from "../editor/DependencyPrompt";
 import { resumeShared, startSync, useSync } from "../editor/sync/syncManager";
 import { useCloudRunning } from "../editor/sync/presence";
+import { useReadOnly } from "../editor/readOnly";
+import { ReadOnlyMarker } from "../editor/ReadOnlyFence";
 import { AgentPage } from "./AgentPage";
 import { clipKind, clipName, mainClipsOf, mainTrackOf, planReorder } from "./mainContent";
 import { ThumbStrip } from "./ThumbStrip";
@@ -63,6 +65,9 @@ export function MobileEditor() {
   const playing = useStore((s) => s.playing);
   const selection = useStore((s) => s.selection);
   const toast = useToast();
+  // 这个项目只给了只读权限(游客):改项目的操作(换顺序、分割、复制、删除、静音、拖动、对齐、撤销重做、加素材 / 卡片、参数)
+  // 一律不给,子导航栏整排置灰、悬停是 viewOnlyText();播放、预览、点选看缩略时间轴、读 Agent 对话、导出照常
+  const ro = useReadOnly();
   const confirm = useConfirm();
   const [page, setPage] = useState<Page>("preview");
   const [sheet, setSheet] = useState<SheetState>(null);
@@ -172,6 +177,7 @@ export function MobileEditor() {
   /* ---------- 操作 ---------- */
   const seek = (x: number) => { if (getState().playing) actions.pause(); actions.seek(Math.max(0, x)); };
   const reorder = (order: string[]) => {
+    if (ro.locked) { toast(ro.why); return; }
     const p = getState().project;
     const plan = planReorder(p, order);
     if ("error" in plan) { toast(plan.error); return; }
@@ -194,14 +200,16 @@ export function MobileEditor() {
     toast(done ? "已调整顺序" : "换顺序没有完全成功，可以撤销");
   };
   const split = (c: TrackClip) => {
+    if (ro.locked) { toast(ro.why); return; }
     if (t <= c.start + 0.05 || t >= c.end - 0.05) { toast("先把播放头移到片段中间"); return; }
     const r = actions.splitClip(c.id, t);
     toast(r ? "已在播放头处切分" : "切不开：这一段挂着转场，或所在序列锁着");
   };
-  const dup = (c: TrackClip) => { const r = actions.duplicateClip(c.id); if (r) { selectClip(r.id); toast("已复制"); } };
-  const del = (c: TrackClip) => confirm({ text: `删除“${clipName(project, c, cardName)}”？`, ok: "删除", danger: true, run: () => { actions.removeClip(c.id); toast("已删除，可撤销"); } });
-  const mute = (c: TrackClip) => { actions.setClipMuted(c.id, !c.audioMuted); toast(c.audioMuted ? "已恢复声音" : "已静音"); };
+  const dup = (c: TrackClip) => { if (ro.locked) { toast(ro.why); return; } const r = actions.duplicateClip(c.id); if (r) { selectClip(r.id); toast("已复制"); } };
+  const del = (c: TrackClip) => ro.locked ? toast(ro.why) : confirm({ text: `删除“${clipName(project, c, cardName)}”？`, ok: "删除", danger: true, run: () => { actions.removeClip(c.id); toast("已删除，可撤销"); } });
+  const mute = (c: TrackClip) => { if (ro.locked) { toast(ro.why); return; } actions.setClipMuted(c.id, !c.audioMuted); toast(c.audioMuted ? "已恢复声音" : "已静音"); };
   const align = (which: "start" | "end") => {
+    if (ro.locked) { toast(ro.why); return; }
     const c = selClip ? findClip(project, selClip)?.clip : undefined;
     if (!c) { toast("先选中一个片段"); return; }
     if (main.some((m) => m.id === c.id)) { toast("主要内容的位置由顺序决定，在缩略时间轴上长按换顺序"); return; }
@@ -212,11 +220,12 @@ export function MobileEditor() {
     if (getState().project === before) toast("放不下：那里已经有别的片段");
   };
   const commitMove = (id: string, patch: { start: number; end: number }) => {
+    if (ro.locked) { toast(ro.why); return; }
     const before = getState().project;
     actions.moveClip(id, patch);
     toast(getState().project === before ? "放不下：和别的片段重叠，或这一段挂着转场" : "已调整（一次拖动 = 一步撤销）");
   };
-  const delTransition = (x: Transition) => confirm({ text: `删除转场「${TRANSITION_NAME[x.kind]}」？`, ok: "删除", danger: true, run: () => {
+  const delTransition = (x: Transition) => ro.locked ? toast(ro.why) : confirm({ text: `删除转场「${TRANSITION_NAME[x.kind]}」？`, ok: "删除", danger: true, run: () => {
     const r = actions.removeTransition(x.id);
     setSelTr(null);
     toast(r.ok ? (r.note ?? "已删除转场，相关片段解锁了") : r.error);
@@ -260,8 +269,10 @@ export function MobileEditor() {
     items.push({ icon: "trash", label: "删除", pcm: "sub-del", run: () => del(c) });
     return items;
   };
-  const previewItems: SubItem[] = tr ? transitionItems(tr) : selClipObj ? [refItem(() => refClip(selClipObj)), ...STD] : STD;
-  const timelineItems: SubItem[] = selClipObj ? clipTools(selClipObj) : STD;
+  // 只读时整排子导航栏置灰(都是加素材 / 改片段 / 要给 Agent 发话的入口),悬停写明原因
+  const lockItems = (items: SubItem[]): SubItem[] => (ro.locked ? items.map((it) => ({ ...it, disabled: true, title: ro.why })) : items);
+  const previewItems: SubItem[] = lockItems(tr ? transitionItems(tr) : selClipObj ? [refItem(() => refClip(selClipObj)), ...STD] : STD);
+  const timelineItems: SubItem[] = lockItems(selClipObj ? clipTools(selClipObj) : STD);
 
   const timelineTitle = selClipObj
     ? `${({ card: "卡片", audio: "音频", image: "图片段", cut: "剪辑段", video: "视频段" } as const)[clipKind(project, selClipObj)]} · ${clipName(project, selClipObj, cardName)}`
@@ -270,7 +281,8 @@ export function MobileEditor() {
   const memberLabel = members.unavailable ? "成员" : `${members.people} 人 · ${members.agents} Agent`;
 
   return (
-    <div className={`editor${page === "timeline" ? " is-timeline" : ""}`} data-pcm="editor" data-page={page}>
+    <div className={`editor${page === "timeline" ? " is-timeline" : ""}`} data-pcm="editor" data-page={page} data-readonly={ro.locked ? "1" : undefined}>
+      <ReadOnlyMarker />
       <MediaMigrationDialog />
       <MissingMaterialsDialog />
       <CloudGoneDialog />
@@ -292,6 +304,9 @@ export function MobileEditor() {
           <button type="button" className="btn primary" style={{ height: 30, padding: "0 12px" }} data-pcm="top-export" onClick={() => setSheet({ kind: "export" })}>导出</button>
         </div>
       )}
+
+      {/* 只读项目(游客):手机上看不到悬停说明,置灰的按钮得有一句话讲清为什么(播放、预览、导出、读 Agent 对话照常) */}
+      {ro.locked && <div className="robar" data-pcm="ro-bar">{ro.why}</div>}
 
       {conflicts.pending && (
         <div className="cfbar" data-pcm="cfbar">
@@ -328,8 +343,8 @@ export function MobileEditor() {
           <button type="button" className="play" data-pcm="play" aria-label={playing ? "暂停" : "播放"} onClick={() => actions.togglePlay()}><Icon name={playing ? "pause" : "play"} /></button>
           <div className="tc"><b data-pcm="tc-now">{fmtTc(t)}</b> / <span data-pcm="tc-total">{fmtTc(project.duration)}</span></div>
           <span className="spacer" />
-          <button type="button" className="icon-btn" data-pcm="undo" title="撤销" aria-label="撤销" disabled={!actions.canUndo()} onClick={() => { actions.undo(); if (editCount.current > 0) editCount.current--; }}><Icon name="undo" /></button>
-          <button type="button" className="icon-btn" data-pcm="redo" title="重做" aria-label="重做" disabled={!actions.canRedo()} onClick={() => actions.redo()}><Icon name="redo" /></button>
+          <button type="button" className="icon-btn" data-pcm="undo" aria-label="撤销" disabled={!actions.canUndo() || ro.locked} title={ro.title("撤销")} onClick={() => { actions.undo(); if (editCount.current > 0) editCount.current--; }}><Icon name="undo" /></button>
+          <button type="button" className="icon-btn" data-pcm="redo" aria-label="重做" disabled={!actions.canRedo() || ro.locked} title={ro.title("重做")} onClick={() => actions.redo()}><Icon name="redo" /></button>
         </div>
       )}
 
@@ -348,8 +363,9 @@ export function MobileEditor() {
             }}
             onReorder={reorder}
             onScrub={seek}
-            onAddMedia={() => setSheet({ kind: "assets", tab: "video" })}
-            onAddTransition={(a, b) => setSheet({ kind: "cards", tab: "transition", transition: { a, b } })}
+            onAddMedia={() => { if (!ro.locked) setSheet({ kind: "assets", tab: "video" }); }}
+            onAddTransition={(a, b) => { if (!ro.locked) setSheet({ kind: "cards", tab: "transition", transition: { a, b } }); }}
+            locked={ro.locked}
           />
           <SubNav items={previewItems} pcm="subnav-preview" />
         </div>
@@ -369,6 +385,8 @@ export function MobileEditor() {
             onScrub={seek}
             onCommitMove={commitMove}
             onAlign={align}
+            locked={ro.locked}
+            lockedWhy={ro.why}
           />
           <SubNav items={timelineItems} pcm="subnav-timeline" />
         </>

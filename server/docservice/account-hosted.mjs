@@ -23,7 +23,7 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
   now = Date.now, pollMs = 1000, onDiagnostic = () => {}, assetReadyProbe = null,
   assetInstanceId = null, allowFixtureAssetReady = false, runHooks = null,
   getRunProvider = () => null, onRunControl = null, onPageFence = null,
-  getDocBarrier = undefined, verifyDocBarrier = undefined }) {
+  getDocBarrier = undefined, verifyDocBarrier = undefined, guestKey = null }) {
   if (!ledger || !accountClient) fail(503, 'account-configuration');
   if (typeof getRunProvider !== 'function' || (onRunControl !== null && typeof onRunControl !== 'function')) fail(503, 'run-authority-unavailable');
   if (assetReadyProbe !== null && typeof assetReadyProbe !== 'function') fail(503, 'asset-configuration');
@@ -66,7 +66,7 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
   const storeOf = projectId => dataDir ? createFileStore({ dir: path.join(dataDir, 'tenants', projectId), log: () => {} }) :
     (memoryStores.get(projectId) ?? memoryStores.set(projectId, createMemoryStore()).get(projectId));
   const authority = createAccountAuthority({ ledger, accountClient, authorityUrl, signingKey, keyId, now, pollMs, onDiagnostic, runHooks,
-    getDocBarrier, verifyDocBarrier,
+    getDocBarrier, verifyDocBarrier, guestKey,
     async initializeProject({ projectId, initialProject, initialRev = 1, initialHistory = [] }) {
       const store = storeOf(projectId);
       const body = initialProject ?? null;

@@ -24,6 +24,8 @@ import { AgentActivityPanel, useRoundSelection } from "./chat/ActivityPanel";
 import { RemoteAgentsStrip } from "./RemoteAgentsStrip";
 import { DesktopSessionsStrip } from "./DesktopSessionsStrip";
 import { Composer } from "./chat/Composer";
+import { memberReadOnlyNow } from "../readOnlyCore";
+import { useReadOnly } from "../readOnly";
 import { StartHero, useStartPage } from "./chat/StartHero";
 import { CloudAiPanel } from "./CloudAiPanel";
 import { useCloudAgent, useCloudDigest, useCloudNotices } from "../../ai/cloud/useCloud";
@@ -165,6 +167,8 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // 开始页(本项目一个会话都没有):消息区换成 StartHero;点预设往输入框放那句话,点发送才把占位页变成第一个会话
   const start = useStartPage(tabId, inputText, setInputText, () => { requestAnimationFrame(() => textareaRef.current?.focus()); }, messages.length > 0);
+  // 这个项目只给了只读权限(游客):输入区整个置灰(Composer 的 readOnly),发送路径也在 handleSend 里兜底
+  const ro = useReadOnly();
 
   // 预览窗口右键卡片时会在 window 上派发 pc-quote-clip,把引用插进输入框
   useEffect(() => {
@@ -431,6 +435,8 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
    * 这一轮落定后由 useAiChat 按顺序自动发;空闲时照旧直接发。
    */
   const handleSend = (text: string) => {
+    // 这个项目只给了只读权限(游客):不能给 Agent 发消息(输入区已置灰,这是别的发送路径的兜底)
+    if (memberReadOnlyNow()) return;
     if (!passLoginGate()) return;
     if (!text.trim() && attachments.length === 0) return;
     // 开始页上点发送:这时才建第一个会话,这条消息在里面发出去
@@ -636,6 +642,8 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
         config={config}
         tabId={tabId}
         guide={start.guide}
+        readOnly={ro.locked}
+        readOnlyReason={ro.why}
         menu={{
           workflowRoles,
           onRunWorkflow: () => void runWorkflow(),

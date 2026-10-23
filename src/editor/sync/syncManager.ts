@@ -17,7 +17,7 @@ import { bindStore, DocSync, type CommitSummary, type LocalBackup, type PausedIn
 import { actions, getState, subscribe, setProjectLoader } from "../../store/project";
 import { entitiesOf, entityOfPath, type PathOp } from "../../kernel/diffProject";
 import type { Project } from "../../kernel/project";
-import { isViewOnly } from "../io/viewOnly";
+import { isViewOnly, setProjectAccess } from "../io/viewOnly";
 import { SyncLink, type AnyMsg, type CloseInfo } from "./link";
 import { classifyEnterFailure, classifyProtocolError } from "./enterFailure";
 import { client, errorStatus, route, hosted, type Candidate, type SharedMode, type Where } from "./sharedApi";
@@ -102,6 +102,11 @@ export interface SharedInfo {
   creator: boolean;
   hostDeviceName?: string;
   accountId?: string;
+  /**
+   * 服务端发的权限（`'r'` 只读 / `'rw'` 读写）。游客进别人的项目一律是 `'r'`（2026-10-23 用户定）。
+   * 界面据此走只读（`src/editor/io/viewOnly.ts`）；真正拦住写的是服务端，不是这一项。
+   */
+  access?: 'r' | 'rw';
 }
 
 export interface UndoNoticeView {
@@ -232,6 +237,9 @@ const viewListeners = new Set<() => void>();
 
 function patch(p: Partial<SyncView>) {
   view = { ...view, ...p };
+  // 界面的只读开关跟着当前项目的权限走(`src/editor/io/viewOnly.ts`)。只在这里拨一次:
+  // 退出项目的地方有七八处,各记一遍迟早漏一处,漏了就会把只读状态带进下一个项目
+  if ('shared' in p) setProjectAccess(view.shared ? (view.shared.access ?? 'rw') : null);
   for (const l of viewListeners) l();
 }
 
@@ -1527,7 +1535,8 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
         savedAt: new Date().toISOString(),
       });
       patch({ shared: { projectId: options.projectId, name: options.name, mode: 'free', where: 'hosted', base,
-        username: account.name, accountId: account.id, creator: current.creator }, members: [], hosted: current.hosted, blocked: null, association: null, reopenState: null });
+        username: account.name, accountId: account.id, creator: current.creator, access: current.access ?? 'rw' },
+        members: [], hosted: current.hosted, blocked: null, association: null, reopenState: null });
       bind(link, 'shared', options.projectId, url, options.client, `account:${account.id}`);
       projectSession(current);
       setCloudIdentity(accountCloudIdentity({ projectId: options.projectId, isCurrent, session: async () => {
@@ -1806,7 +1815,8 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials, 
         bind(link, "shared", candidate.projectId, wsUrl, null, `user:${cred.username}`);
         if (cur?.link === link) cur.updateAuthentication = k => { key = k; };
         patch({
-          shared: { projectId: candidate.projectId, name: candidate.name, mode: candidate.mode, where: candidate.where, base: candidate.base, username: cred.username, creator: cred.as === "creator", hostDeviceName: candidate.hostDeviceName },
+          // 口令那条路(本机 / 局域网)还没有只读成员这种身份,进去就是读写(`server/auth/delegation.mjs` 的 memberAccess)
+          shared: { projectId: candidate.projectId, name: candidate.name, mode: candidate.mode, where: candidate.where, base: candidate.base, username: cred.username, creator: cred.as === "creator", hostDeviceName: candidate.hostDeviceName, access: 'rw' },
           members: [],
           hosted: null,
           blocked: null,

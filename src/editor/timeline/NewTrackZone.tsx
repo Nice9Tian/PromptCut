@@ -4,6 +4,7 @@ import { useTimelineContext } from "./TimelineContext";
 import { DropGhost } from "./DropGhost";
 import { xOfTime } from "./utils";
 import { useDropTarget } from "./useDropTarget";
+import { useReadOnly } from "../readOnly";
 
 /**
  * 最下面那条常驻的「新建序列落区」(配色诊断与修正 v2 整屏):26 高,虚线控件描边,
@@ -16,6 +17,9 @@ export function NewTrackZone() {
   const { onDragOver, onDragLeave, onDrop, plan } = useDropTarget({ newTrackIndex: trackCount });
 
   const tone = plan ? " is-target" : payload ? " is-armed" : "";
+  // 只读项目(游客)里拖东西进来落不下去,这一条「把卡片 / 素材拖到这里」的邀请就不画
+  const ro = useReadOnly();
+  if (ro.locked) return null;
 
   return (
     <div style={{ padding: "9px 2px 11px" }}>

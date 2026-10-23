@@ -163,7 +163,7 @@ export function StageButton(props: { className?: string; pcm?: string; title?: s
 
 /* ---------------- 子导航栏 ---------------- */
 
-export interface SubItem { icon: IconName; label: string; run: () => void; ref?: boolean; disabled?: boolean; pcm?: string }
+export interface SubItem { icon: IconName; label: string; run: () => void; ref?: boolean; disabled?: boolean; pcm?: string; /** 置灰时的悬停说明 */ title?: string }
 
 /** 子导航栏:缩略预览和时间轴共用同一个组件;内容随选中对象变,换内容时滚回最左 */
 export function SubNav({ items, pcm }: { items: SubItem[]; pcm: string }) {
@@ -173,7 +173,7 @@ export function SubNav({ items, pcm }: { items: SubItem[]; pcm: string }) {
   return (
     <div ref={ref} className="subnav" data-pcm={pcm}>
       {items.map((it) => (
-        <button key={it.label} type="button" className={it.ref ? "refbtn" : undefined} data-pcm={it.pcm} disabled={it.disabled} onClick={it.run}>
+        <button key={it.label} type="button" className={it.ref ? "refbtn" : undefined} data-pcm={it.pcm} disabled={it.disabled} title={it.title} onClick={it.run}>
           <Icon name={it.icon} />{it.label}
         </button>
       ))}

@@ -20,6 +20,7 @@ import { actions, getState, subscribe } from "../../store/project";
 import { contentEndOf, effectiveDuration } from "../../kernel/duration";
 import type { Track } from "../../kernel/project";
 import { isRecoveringAssociation } from "../sync/recoveryAssociation";
+import { memberReadOnlyNow } from "../readOnlyCore";
 
 let mounted = 0;
 let queued = false;
@@ -29,7 +30,8 @@ let seen: { tracks: Track[]; duration: number; manual: number | null } | null = 
 /** 这一刻内容末尾对应的总时长和项目里记的不一样,就改过来(不进撤销栈,和以前一样) */
 export function syncDurationNow(): void {
   queued = false;
-  if (mounted === 0 || isRecoveringAssociation()) return;
+  // 只读项目(游客):总时长是项目里的字段,这一下是个写,服务端要拒;看别人的项目时也别自己去改它
+  if (mounted === 0 || isRecoveringAssociation() || memberReadOnlyNow()) return;
   const s = getState();
   const tracks = s.project.tracks;
   const duration = s.project.duration;

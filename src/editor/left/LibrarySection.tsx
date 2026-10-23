@@ -10,6 +10,7 @@ import { GroupBrowser } from "./library/GroupBrowser";
 import { useMediaGroup, useMediaMenu } from "./library/mediaGroups";
 import { useCutsGroup } from "./library/cutsGroup";
 import { IMPORT_OFFLINE_TEXT, useImportOffline } from "../sync/useImportOffline";
+import { useReadOnly } from "../readOnly";
 
 /**
  * 「素材库」分区:导入媒体 → 搜索 → 分类胶囊 → 分组(视频 / 图片 / 音频)。
@@ -39,7 +40,9 @@ export function LibrarySection() {
 
   // 在线浏览器断网时导入媒体置灰、提示「当前离线」(桌面版照常导入,连上后再上传;2026-10-22 用户定)
   const importOffline = useImportOffline();
-  const importMedia = useCallback(() => { if (!importOffline) mediaInputRef.current?.click(); }, [importOffline]);
+  // 这个项目只给了只读权限(游客):导入是写,按钮置灰、空组里的「导入…」占位也不出
+  const ro = useReadOnly();
+  const importMedia = useCallback(() => { if (!importOffline && !ro.locked) mediaInputRef.current?.click(); }, [importOffline, ro.locked]);
 
   const handleMediaFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -72,8 +75,8 @@ export function LibrarySection() {
           type="button"
           className="pc-btn-primary is-block pc-left-primary"
           data-pc-add="media"
-          title={importOffline ? IMPORT_OFFLINE_TEXT : "导入素材(视频 / 音频 / 图片,按类型自动归位)"}
-          disabled={importOffline}
+          title={ro.locked ? ro.why : importOffline ? IMPORT_OFFLINE_TEXT : "导入素材(视频 / 音频 / 图片,按类型自动归位)"}
+          disabled={importOffline || ro.locked}
           data-offline={importOffline ? "" : undefined}
           onClick={importMedia}
         >
@@ -89,7 +92,7 @@ export function LibrarySection() {
         searching={searching}
         openId={openGroup}
         onOpen={setOpenGroup}
-        onImport={importMedia}
+        onImport={ro.locked ? undefined : importMedia}
         noMatch="没有匹配的素材"
       />
 

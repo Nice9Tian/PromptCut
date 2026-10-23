@@ -19,6 +19,8 @@ import { CutTabBar } from "./CutTabs";
 import { Scrollbar } from "./Scrollbar";
 import { ResizeHandle } from "../ResizeHandle";
 import { IconPlus } from "../../ui/icons";
+import { memberReadOnlyNow } from "../readOnlyCore";
+import { useReadOnly } from "../readOnly";
 import "./timeline.css";
 
 // 仅供调试和自动化测试使用，不是正式接口
@@ -32,6 +34,7 @@ function TimelineInner() {
   const durationManual = useStore((s) => s.durationManual);
   const { scrollRef, trackAreaRef, pxPerSec, setDropPlan, headerW, setHeaderW, commitHeaderW, resetHeaderW, trackH } = useTimelineContext();
   const t = useStore(s => s.t);
+  const ro = useReadOnly();
   
   // 播放范围跟着可见内容走。
   //
@@ -44,6 +47,8 @@ function TimelineInner() {
   // 一次编辑只渲一遍;下面这个 effect 留着兜底,渲完还不对就照旧补一次。
   useDurationFollowsContent();
   useEffect(() => {
+    // 只读项目(游客)不改总时长:这是个写,服务端要拒(同 durationSync.ts)
+    if (memberReadOnlyNow()) return;
     const target = effectiveDuration(contentEndOf(tracks), duration, durationManual);
     if (Math.abs(target - duration) > 1e-6) {
       actions.syncDuration(target);
@@ -77,7 +82,7 @@ function TimelineInner() {
               <TrackHeader key={track.id} track={track} index={i} />
             ))}
             <div className="pc-tl-addtrack-wrap">
-              <button type="button" className="pc-tl-addtrack" onClick={() => actions.addTrack()}>
+              <button type="button" className="pc-tl-addtrack" data-pc="add-track" disabled={ro.locked} title={ro.title()} onClick={() => actions.addTrack()}>
                 <IconPlus size={12} />
                 序列
               </button>

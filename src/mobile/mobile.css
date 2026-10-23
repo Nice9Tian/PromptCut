@@ -122,6 +122,8 @@
 .pcm .cfbar .txt { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pcm .cfbar button { flex: none; height: 24px; padding: 0 14px; border-radius: var(--r-pill); background: var(--warn-bg-2); color: var(--warn); font-size: var(--fs-m); font-weight: 600; }
 .pcm .cfbar button:active { background: var(--warn-bg-3); }
+/* 只读项目(游客)的说明条:手机上没有悬停说明,置灰的按钮得有一句话讲清为什么 */
+.pcm .robar { flex: none; margin: 2px 12px 4px; padding: 6px 10px; border-radius: var(--r-m); border-left: 3px solid var(--accent); background: var(--accent-deeper); color: var(--dim); font-size: var(--fs-m); }
 
 .pcm .transport { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 12px 4px; }
 .pcm .transport .tc { font-variant-numeric: tabular-nums; font-size: var(--fs-m); color: var(--dim); min-width: 92px; }

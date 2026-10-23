@@ -127,6 +127,7 @@ export function PartCell({ def, fill, aspect }: { def: PartDef<any>; fill?: bool
       preview={view}
       hoverDelayMs={180}
       onHover={setHot}
+      edits
       onClick={onClick}
       error={msg}
       titleAttr={`${def.description}\n点击 = 加进选中的组合卡;没选中组合卡就在播放头新建一张`}

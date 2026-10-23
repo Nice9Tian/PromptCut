@@ -4,6 +4,7 @@ import { timeOfX } from "./utils";
 import { useTimelineContext } from "./TimelineContext";
 import { clipAt, planDrop, planTransition, type DropPlan, type DropTarget } from "./dropPlan";
 import { clearDragPayload, getDragPayload, MIME_CARD, MIME_CUT, MIME_MEDIA, type DragPayload } from "../dnd";
+import { memberReadOnlyNow } from "../readOnlyCore";
 
 /** 拖动没经过本窗口的 dragstart(跨窗口拖进来)时的兜底:只认得种类,时长用默认值 */
 function fallbackPayload(types: readonly string[]): DragPayload | null {
@@ -43,6 +44,11 @@ export function useDropTarget(target: DropTarget) {
   const onDragOver = (e: React.DragEvent) => {
     const payload = getDragPayload() ?? fallbackPayload(e.dataTransfer.types);
     if (!payload) return; // 不是左栏拖来的东西(比如轨道换序),让别人去处理
+    // 只读项目(游客):不接。不 preventDefault = 浏览器按「不能放」处理,光标显示禁止
+    if (memberReadOnlyNow()) {
+      e.dataTransfer.dropEffect = "none";
+      return;
+    }
     e.preventDefault();
     e.stopPropagation();
     const plan = compute(e, payload);
@@ -62,6 +68,11 @@ export function useDropTarget(target: DropTarget) {
     if (!payload) return;
     e.preventDefault();
     e.stopPropagation();
+    if (memberReadOnlyNow()) {
+      setDropPlan(null);
+      clearDragPayload();
+      return;
+    }
     const plan = compute(e, payload);
     setDropPlan(null);
     clearDragPayload();

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type HTMLAttributes, type ReactNode } from "react";
 import { loadWave } from "../../timeline/AudioWaveform";
+import { useReadOnly } from "../../readOnly";
 
 type Wave = { peaks: number[]; duration: number };
 
@@ -17,14 +18,18 @@ export interface AudioStripProps extends Omit<HTMLAttributes<HTMLDivElement>, "c
   actions?: ReactNode;
   /** data-* 之类的自动化钩子 */
   attrs?: Record<string, string>;
+  /** 拖它或点它会改项目:这个项目只给了只读权限(游客)时不接拖动、悬停写明原因(同 PreviewCard 的 edits) */
+  edits?: boolean;
 }
 
 /**
  * 56px 高的圆角音频条:左边图标,中间名字和一行说明,背景是整段波形。
  * 素材库的音频素材、特效里的音频效果 / 预设都用它。
  */
-export function AudioStrip({ name, sub, url, icon = "play", actions, attrs, className, ...rest }: AudioStripProps) {
+export function AudioStrip({ name, sub, url, icon = "play", actions, attrs, className, edits, ...rest }: AudioStripProps) {
   const [wave, setWave] = useState<Wave | null>(null);
+  const ro = useReadOnly();
+  const frozen = !!edits && ro.locked;
 
   useEffect(() => {
     if (!url) {
@@ -56,7 +61,12 @@ export function AudioStrip({ name, sub, url, icon = "play", actions, attrs, clas
   }, [wave]);
 
   return (
-    <div {...rest} {...attrs} className={`pc-lib-strip${className ? ` ${className}` : ""}`}>
+    <div
+      {...rest}
+      {...attrs}
+      {...(frozen ? { draggable: false, onClick: undefined, onDragStart: undefined, title: ro.why, "aria-disabled": true } : {})}
+      className={`pc-lib-strip${className && !frozen ? ` ${className}` : ""}${frozen ? " is-readonly" : ""}`}
+    >
       {path && (
         <svg className="pc-lib-strip-wave" viewBox={`0 0 ${BARS} 56`} preserveAspectRatio="none" aria-hidden="true">
           <path d={path} stroke="currentColor" strokeWidth="2" vectorEffect="non-scaling-stroke" />

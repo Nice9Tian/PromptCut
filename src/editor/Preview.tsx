@@ -15,6 +15,7 @@ import { bindStageCards, noteStageCards, noteStageFresh } from "./stageCards";
 import { INITIAL_ROLE_OF, STAGE_IDS, dualStage, interimStage, liveStage, singleLiveStage, stageOrigins, stageSrc, stageTargetOrigin, type StageId } from "./previewMode";
 import { ControlBar } from "./preview/ControlBar";
 import { ToolBar, ToolType } from "./preview/ToolBar";
+import { useMemberReadOnly } from "./readOnly";
 import { PreviewContextMenu } from "./preview/PreviewContextMenu";
 import { cardRunState, getCard, onCardRunStatesChanged, onSyncedUserCardsChanged, setCardRunStates, syncedUserCards, type CardRunState } from "../kernel/registry";
 import { fitView, frameOrigin, panBy, wheelZoomFactor, zoomAt, type View2D } from "./preview/viewport2d";
@@ -343,7 +344,10 @@ export function Preview(props: { variant?: "mobile" } = {}) {
    * 两页各自回答一个问题,不要互相迁就 —— 2D 里出现代理色块就是把它的契约破了。
    */
   const [view, setView] = useState<"2d" | "3d">("2d");
-  const [tool, setTool] = useState<ToolType>("select");
+  const [pickedTool, setTool] = useState<ToolType>("select");
+  // 这个项目只给了只读权限(游客):移动、改文字都是写,工具一律退回「选择」(只能点选看参数);工具栏上那两个也置灰
+  const readOnlyProject = useMemberReadOnly();
+  const tool: ToolType = readOnlyProject ? "select" : pickedTool;
   const [rects, setRects] = useState<{ clipId: string; left: number; top: number; width: number; height: number }[]>([]);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; clipId: string; cardId: string } | null>(null);
   const [editingText, setEditingText] = useState<{ clipId: string; key: string; value: string; x: number; y: number } | null>(null);

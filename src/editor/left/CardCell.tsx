@@ -112,6 +112,7 @@ export function CardCell({ def, fill, aspect }: { def: CardDef<any>; fill?: bool
       hoverDelayMs={180}
       onHover={setHot}
       draggable
+      edits
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       onClick={onClick}

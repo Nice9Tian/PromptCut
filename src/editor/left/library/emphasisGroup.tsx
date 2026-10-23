@@ -4,6 +4,7 @@ import type { Project, TrackClip } from "../../../kernel/project";
 import { describeEmphasis, EMPHASIS_DEFAULTS, EMPHASIS_LABEL, type ClipEmphasis, type EmphasisKind } from "../../../kernel/emphasis";
 import { clearDragPayload, MIME_EMPHASIS, setDragPayload } from "../../dnd";
 import { PreviewCard } from "../PreviewCard";
+import { useReadOnly } from "../../readOnly";
 import { ThumbTile } from "./ThumbTile";
 import type { GroupData, GroupItem } from "./groups";
 
@@ -69,6 +70,8 @@ function withEmphasis(p: Project): Array<{ clip: TrackClip; trackName: string }>
 }
 
 export function useEmphasisGroup(q: string, flash: (text: string, ms?: number) => void): GroupData {
+  // 这个项目只给了只读权限(游客):加强调 / 去掉强调都是写
+  const ro = useReadOnly();
   const project = useStore((s) => s.project);
   const selection = useStore((s) => s.selection);
   const [sizeKey, setSizeKey] = useState("m");
@@ -119,6 +122,7 @@ export function useEmphasisGroup(q: string, flash: (text: string, ms?: number) =
         subtitle={`${px(kind)}px · ${color.label}`}
         preview={<EmphasisGlyph kind={kind} color={color.css} size={px(kind)} />}
         draggable
+        edits
         onDragStart={drag(kind)}
         onDragEnd={clearDragPayload}
         onClick={() => clickKind(kind)}
@@ -187,6 +191,8 @@ export function useEmphasisGroup(q: string, flash: (text: string, ms?: number) =
               <button
                 type="button"
                 className="pc-left-btn"
+                disabled={ro.locked}
+                title={ro.title()}
                 onClick={() => {
                   actions.setClipEmphasis(clip.id, null);
                   flash("已去掉强调");
