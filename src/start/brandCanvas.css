@@ -1,0 +1,53 @@
+/*
+ * 登录页左边那块 WebGL 画布的样式。
+ *
+ * 单独一个文件、由 `BrandCanvas.tsx` 自己 import:`start.css` 这会儿由另一个会话在改(顶栏、侧栏收起),
+ * 两边同时动同一个文件一定打架,所以这一支的样式一行都不进那边。
+ */
+
+/* 登录键的「流光」样式（和手机版共用一份，见文件头的说明） */
+@import "./brandButton.css";
+
+.ps-brand-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/*
+ * `start.css` 里有一条 `.ps-login-art > *:not(.ps-aurora) { position: relative; z-index: 1; }` ——
+ * 它是为了把文字抬到底纹上面,但画布也会被它抬上去,反过来盖住标题。
+ * 这里多带一个元素选择符(`canvas`),特异性比它高一档,把画布按回底层。
+ */
+.ps-login-art > canvas.ps-brand-canvas {
+  position: absolute;
+  z-index: 0;
+}
+
+/*
+ * 画布透出来的应该是**整页**的底色。
+ *
+ * `start.css` 给 `.ps-login-art` 铺的是 `--bg-panel`(#23222A,比整页底色 `--bg-canvas` #111016
+ * 浅一档、偏紫),所以 alpha 透出来的地方和右半边对不上,看着像「混了提亮的浅紫」
+ * (用户 2026-10-23 指出,实测左块 rgb(35,34,42)、整页 rgb(17,16,22))。这里按回整页的底色。
+ *
+ * 选择器多带一个元素名,特异性压过 `start.css` 里那条 —— 那个文件归另一个会话,不去动它。
+ */
+.ps-login > section.ps-login-art {
+  background: var(--bg-canvas);
+  /* 去掉左右两块之间那条竖线(用户 2026-10-23 定):画面本来就是渐隐过去的,再画一条线把它切断 */
+  border-right: 0;
+}
+
+/*
+ * 桌面登录页的勾选框:`start.css` 没给它定 `accent-color`,浏览器就按自己的默认色画
+ * (Chrome 上是一格亮蓝),和整页的强调色对不上;手机版那边是定了的,两边看着就不是一套。
+ * 这一行按皮肤的强调色画,两边归一。
+ *
+ * **这条本该写在 `start.css` 的 `.ps-check input` 上** —— 那个文件这会儿归另一个会话,
+ * 不去动它,所以先放在这里(这个文件在桌面登录页也会加载:`OnlineLogin.tsx` 渲染 `BrandCanvas`)。
+ * 合并时把它搬进 `start.css` 即可。
+ */
+.ps-login .ps-check input { accent-color: var(--accent); }
