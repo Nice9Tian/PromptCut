@@ -181,6 +181,24 @@ try {
   step('P6', { speedField: undone && 'speed' in undone, end: undone?.end });
   check(!!undone && !('speed' in undone) && undone.end === placed.end, 'P6 撤销一步回到 1×、不留 speed 字段', undone);
 
+  /* ---------- P7 挂着转场改速度:装不下时转场跟着缩短,弹气泡说清楚(用户 2026-10-23 定) ---------- */
+  const added = await store(A, 'return S.actions.addTransition({ kind: "fadeOut", clipId: args[0], dur: 2.5 }).ok;', placed.id);
+  await store(A, 'S.actions.select([args[0]]); return true;', placed.id);
+  await until('子导航栏有速度', async () => (await A.$('[data-pcm="sub-speed"]')) ? true : null, 10_000);
+  await tap(A, '[data-pcm="sub-speed"]');
+  await A.waitForSelector('[data-pcm="speed-presets"]', { visible: true, timeout: 10_000 });
+  await tap(A, '[data-pcm="speed-preset"][data-speed="4"]');
+  const bubble = await until('转场缩短的气泡', () => A.evaluate(() => { const t = document.body.innerText; const i = t.indexOf('淡出跟着缩短'); return i >= 0 ? t.slice(Math.max(0, i - 30), i + 60) : null; }), 5000);
+  await shot(A, 'P7-transition-bubble');
+  const fast4 = await clipOf(A, placed.id);
+  const fadeTr = await store(A, 'return (S.getState().project.transitions || []).find((t) => t.aId === args[0] && t.kind === "fadeOut") ?? null;', placed.id);
+  step('P7', { added, bubble, clip: fast4 && { start: fast4.start, end: fast4.end, fadeOut: fast4.fadeOut, speed: fast4.speed }, transitionDur: fadeTr?.dur });
+  check(added && fast4?.speed === 4, 'P7 挂着淡出也能改速度', { added, s: fast4?.speed });
+  check(/2\.50 秒 → 1\.49 秒/.test(bubble ?? ''), 'P7 气泡写明淡出从 2.50 秒缩到 1.49 秒', bubble);
+  check(fadeTr?.dur === 1.49 && fast4?.fadeOut === 1.49, 'P7 转场记录与片段淡出都改成 1.49', { tr: fadeTr?.dur, f: fast4?.fadeOut });
+  await closeSheet(A);
+  await store(A, 'S.actions.undo(); S.actions.undo(); return true;');
+
   /* ---------- D1 / D2 桌面布局 ---------- */
   B = await env.newPage(browser, 'desktop');
   await env.enter(B, { username: 'er' });
