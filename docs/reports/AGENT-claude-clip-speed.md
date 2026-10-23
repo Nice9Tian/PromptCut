@@ -54,7 +54,7 @@
 
 ### 开工提交上的「新元素第一帧取到第 0 帧」
 
-开工提交 `5a8f375a` 上同一份变速项目又跑了 3 遍（`out/speed/export-base`、`r2/export-base-1`、`r2/export-base-2`），按 1 倍算的取帧 360/360 全对，**一次都没复现**；当前代码共跑 5 遍，复现 1 次。**确认不了**它在开工提交上同样出现，维持原来的判断（同一个 seek 目标、同一种新挂元素时机，怀疑是原有竞态），没有更多证据。
+开工提交 `5a8f375a` 上同一份变速项目共跑了 4 遍（`out/speed/export-base`、`r2/export-base-1`、`r2/export-base-2`、`r3/export-base`），按 1 倍算的取帧每遍 360/360 全对，**一次都没复现**；当前代码完整跑了 7 遍，复现 1 次（第 1 遍）。**确认不了**它在开工提交上同样出现，维持原来的判断（同一个 seek 目标、同一种新挂元素时机，怀疑是原有竞态），没有更多证据。
 
 ## 那个纯函数
 
@@ -258,27 +258,78 @@ export function normalizeSpeed(v)          // 夹到 [0.25, 4]、取到 0.01;不
 
 探针调通前的三次失败都是探针自己的问题，记下来：素材库面板没关上挡住了分页按钮（改成点到没有面板为止）；桌面左栏默认在「素材库」分区，要先点「编辑」；有一遍 P5 在 8 秒内没等到舞台里有视频在放（起播慢），另一遍 1.8 秒就放上了，这一条的等待只为防卡死。
 
+### 返工后复跑（提交 `e48b94d1` 及之后只动了探针与报告）
+
+**改前红、改后绿**（返工的四条新测试）：把新测试放到上一版 `22e3e713` 的树上（只换进新的 `clipTime.mjs`，`out/head-22e3`）跑，`ℹ tests 21` `ℹ pass 17` `ℹ fail 4`（`out/speed/red-round3.log`）：
+
+```
+✖ store.setClipSpeed 手动输入:0.25～4 之外拒绝并提示(不夹)…        → 0.2 被夹到 0.25 照改了(true !== false)
+✖ store.setClipSpeed 挂着转场:…                                   → + error: '这一段挂着转场，改速度会改时长；先删掉转场'
+✖ store.setClipSpeed:…切分…                                       → 分离被拒(false !== true)
+✖ 声音段变速(音画分离出来的):…                                   → 声音段不在清单里
+```
+
+当前：`ℹ tests 21` `ℹ pass 21` `ℹ fail 0`（`out/speed/green-7.log`）。推开规则那两条的改前红见「用户定的推开规则」第 5 条。
+
+**键比对**（`out/speed/r4/key-compare.log`）：`✔ 57/57 项逐字相同`、`✔ 全部相符`。返工中途改过 `server/bakery/audio-mix.mjs` 时这里是 `✖ 45/57`（12 处都是 contentKey / snapshotKey，因为那个文件进共享快照键的代码指纹），还原后回到 57/57。
+
+**变速项目逐帧比对 + 声音**（`out/speed/r4/export-current.json`，退出码 0，`"ok": true, "fails": []`）：
+
+画面 480/480。声音（B、C 两段视频静音，各有一段同速度的分离声音段；素材声音 440 Hz）：
+
+| 段 | 内容 | Chrome 离线混音 | ffmpeg 混音 | 两路差（差信号 / 信号） |
+|---|---|---|---|---|
+| A | 1×，视频原声 | −21.1 dBFS / 439.6 Hz | −21.1 dBFS / 440.0 Hz | −36.3 dB |
+| B | 2×，分离出来的声音段 | −21.1 dBFS / 879.6 Hz | −21.1 dBFS / 880.0 Hz | −48.7 dB |
+| C | 0.5×，分离出来的声音段 | −21.1 dBFS / 220.0 Hz | −21.1 dBFS / 219.6 Hz | −53.7 dB |
+| D～G | 变速视频段（剪辑段里的 2×、4×、0.25×、套素材效果卡的 2×），没分离 | −200 dBFS | −200 dBFS | — |
+| H | 1×，视频原声 | −21.1 dBFS / 439.6 Hz | −21.1 dBFS / 439.6 Hz | −54.7 dB |
+
+- 两路确实各走各的：日志核对 Chrome 那一次是「Mixing … in Chrome」、没有「退回 ffmpeg」（`mixedIn: chrome` / `ffmpeg`）。
+- 尺子：两条路本来就不逐采样相同（Chrome 混音 + AAC 编码 vs ffmpeg 混音 + AAC 编码），1 倍的 A、H 两段差 −36.3 dB 与 −54.7 dB；变速的 B、C 是 −48.7 dB、−53.7 dB，在 1 倍段的范围之内，判「对得上」。A 段那 −36.3 dB 是 1 倍原声本来的差（改前的树上 A 也是 −36.3 dB），和速度无关，没查。
+- 改前对照（开工提交，`out/speed/r3/export-base.json`）：B、C 主频都是 440 Hz（速度被忽略，按 1 倍出声），D～G 都是 −21.1 dBFS（变速段照常出 1 倍原声），画面 125/480。
+
+**界面探针**（`out/speed/r4/ui`，最后一遍退出码 0，`"fails":[]`）：在上一节各条之外，新加的几步原文：
+
+```
+"P2b":{"rejectedToast":true,"speedAfterBad":2,"speedAfterOk":1.5,"end":4}
+"P6":{"afterOneUndo":[1.5,4],"speedField":false,"end":6}
+"P7":{"added":true,"bubble":"…已改成 4×，这一段不出原声；淡出跟着缩短：2.50 秒 → 1.49 秒（这一段变短，原来的转场装不下）","clip":{"start":0,"end":1.5,"fadeOut":1.49,"speed":4},"transitionDur":1.49}
+"D1-input":{"msg":"速度要在 0.25～4 倍之间","speed":1}
+"D1-push":{"nextAfter":[12,18],"pushMsg":"后面 1 段整体往后推了 6.00 秒"}   "D1-undo":{"v":[0,6,null],"next":[6,12]}
+"P5":{"rates":[{"…s1.pc.localhost:5931/editor/stage.html…","r":[{"rate":2.0230722666666665,"t":0.63}]}]}
+```
+
+看过的图：`out/speed/r4/ui/P7-transition-bubble.png`（手机 toast 气泡）、`P2-sheet-after.png`、`D2-timeline.png`、`P5-playing.png`。
+
+P5（播放中舞台视频按 2 倍放）**不稳**：最后几遍里 2 遍在等待时限内一直没看到舞台里有视频在放（两个视频元素都是暂停的，播放头照走），另几遍都看到 2.02 倍左右。没查到原因，不确定和速度有没有关系，记在「没做成的」里。调稳的另外几处（先关面板、等面板滑入动画、直接点元素）都是探针自己的问题。
+
 ## 门槛
 
 | 项 | 命令 | 结果 |
 |---|---|---|
-| 类型检查 | `npx tsc -b --force` | 退出码 0，输出 0 字节（`out/speed/tsc-final.log`，在最后一个代码提交上） |
-| 全量测试 | `npm test`（两个账号变量用反斜杠） | 汇总行原文 `ℹ tests 7704` `ℹ pass 7689` `ℹ fail 0` `ℹ cancelled 0` `ℹ skipped 15` `ℹ duration_ms 242722.9162`；退出码 0；日志 927,111 字节（`out/speed/npm-test-full-2.log`） |
-| 网页构建 | `npm run build` | 退出码 0（`✓ built`） |
-| 在线构建 | `npx vite build --mode online` | 退出码 0（`✓ built`） |
+| 类型检查 | `npx tsc -b --force` | 退出码 0，没有任何输出（`out/speed/r4/tsc.log` 只有脚本自己写的 `exit 0`） |
+| 全量测试 | `npm test`（两个账号变量用反斜杠） | 汇总行原文 `ℹ tests 7709` `ℹ pass 7694` `ℹ fail 0` `ℹ cancelled 0` `ℹ skipped 15` `ℹ duration_ms 244787.7703`；退出码 0；日志 927,433 字节（`out/speed/r4/npm-test.log`） |
+| 网页构建 | `npm run build` | 退出码 0 |
+| 在线构建 | `npx vite build --mode online` | 退出码 0 |
 | 与 `5f4523d0` 的全长导出比对 | 两棵树各起自己的开发服务器跑 `scripts/export-frames.mjs --url <origin>/?export=1 --fps 30 --workers 1 --no-video`（基准 5926、候选 5929，驱动 `out/speed/render-gate.mjs`），再 `export-baseline-compare.mjs` | 原文 `逐字节:相同 1800/1800` `✅ 全长导出逐字节相同`，退出码 0 |
 | 导出确定性 | `scripts/verify-determinism.mjs --url <origin>/?export=1 --fps 30`（5932） | `Total Frames: 1800` `Identical: 1800` `Different: 0`，退出码 0 |
-| 快照重放 | `scripts/verify-unified-frames.mjs --origin <origin>`（5926） | `PASS: no video during B; all HTML frames; exact video seek; random replay; cache hits; cumulative C equals A; …`，退出码 0 |
+| 快照重放 | `scripts/verify-unified-frames.mjs --origin <origin>`（5926） | `PASS: no video during B; …`，退出码 0 |
 
-第一遍全量（`out/speed/npm-test-full-1.log`，7704 条、**6 条失败**）就是上面说的有声卡源码闭包守门：`av-pulse` / `sound-notification` / `sound-keyboard` 三张卡各两条（闭包多了 `/src/kernel/clipTime.mjs`；`cardGraph.mjs` 内容变了，源码版本从钉住的 `535ba03a…` / `1a663d9c…` 变了）。按测试文件头「红了先停、问过用户再改钉住值」，我没有改钉住值，而是把 `cardGraph.mjs` 还原、改用 `withMediaRates`；第二遍全量 0 失败。
+以上是返工后在 `e48b94d1` 上跑的（`out/speed/r4/`）；之前每一轮的同一套也都跑过，结果相同（`out/speed/r2/`、`r3/`、根目录的 `npm-test-full-2.log`）。返工第三轮中途的全量捞到 3 条真红：两条 SEAM 守门（Agent 服务进程会载的 `server/audio-measure.mjs` 不许 import `src/`）和「要拷到节点的那几样就够」，已把那一个滤镜函数照抄进 `audio-measure.mjs`，复跑通过。
+
+最早第一遍全量（`out/speed/npm-test-full-1.log`，7704 条、**6 条失败**）就是上面说的有声卡源码闭包守门：`av-pulse` / `sound-notification` / `sound-keyboard` 三张卡各两条（闭包多了 `/src/kernel/clipTime.mjs`；`cardGraph.mjs` 内容变了，源码版本从钉住的 `535ba03a…` / `1a663d9c…` 变了）。按测试文件头「红了先停、问过用户再改钉住值」，我没有改钉住值，而是把 `cardGraph.mjs` 还原、改用 `withMediaRates`；第二遍全量 0 失败。
 
 像素基线的演示项目里没有视频，所以它只证明「缺省路径没动」；变速的画面由上面自造项目的逐帧比对证明。
 
 ## 没做成的及原因
 
+0. **界面探针的 P5 不稳**：见上「返工后复跑」。**在线浏览器导出的变速声音没有实测**（没有对应探针），只有单测核了插值函数。分出来的声音变调是用户定的待办（请记进 `TODO.md`）。
+
 1. **Agent 改速度**：没有加工具，只让 Agent 在时间轴一览里看得到 `speed`。加工具要改 `product/agent.md` 的工具清单，属二级，待用户定。
 2. **导出时新视频元素第一帧偶发取到素材第 0 帧**：变速项目第 1 遍 480 帧里有 1 帧（E 段第一帧），第 2 遍 0 帧。和改前同一个 seek 目标、同一种「新建元素第一次出画」的时机，判断是 `frameMedia.ts` 原有的那类竞态，不是这次引入的；没有深挖，建议另开一条用 `video-seek-race-probe` 的办法量一下「新挂元素」这种情形。
 3. ~~手机版主要内容变速后留空档~~：用户已答（见「用户定的推开规则」），按它改了。
+6. **main 前进了**：分支从 `5a8f375a` 切，没有合 main（按主会话说的，由主会话合进来解冲突）。
 4. **保调变速**：按〔裁〕不做。
 5. 没跑的：`video-seek-race-probe`、`video-source-cadence-probe` 等其余 G0-R 探针（任务门槛没要求；取帧只改了时刻的算法，取帧本身的机制没动）；桌面版（Tauri）里没有实测，只测了开发服务器与在线构建两种页面。
 
