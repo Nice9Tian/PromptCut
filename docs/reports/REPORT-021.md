@@ -104,6 +104,26 @@
 
 **完成条件复核（2026-10-23 返工后）**：线上 `visuhive.com/editor/` 的入口脚本 = 本次部署的 `index-DhSX7jnM.js`；节点 8791 的 `version`、`codeVersion` 都是 `0.7.21`，两棵部署树的 `package.json` 也都是 `0.7.21`；官网 `PromptCut-setup.exe`、`PromptCut-patch.exe` 都 200 且字节数与本地产物逐字相同；`main` = `release` = `origin/main` = `origin/release`；生产只读验收 `ok: true`、`fails: []`（手机与桌面两边页面错误 0、本站 4xx 0、无横向溢出）。
 
+## 第三次出包与部署（2026-10-23，推翻 V21-25 之后）
+
+返工上线之后又进来三件，所以又出了一次包、又部署了一次：
+
+1. **〔裁〕V21-25 被用户推翻**（「放开。」）：变速的素材段现在可以当音频素材效果卡的声音输入，倍率在页面取样层生效（按倍率多取、按绝对采样坐标线性插值，变速变调）。实测 1× 439.6 / 2× 880.0 / 0.5× 220.0 Hz，键比对 57/57。
+2. **左侧列表栏开关的亮灭反了**（用户当场指出）：改成点亮（强调色）＝列表栏开着，灰＝关着。
+3. **三处守门棘轮跟上有意的改动**：第三方登录的三条 `/api` 路径进账号入口棘轮（`unlink` 不在内）、编辑器页 `frame-src` 的断言加上 `accounts.google.com`、本版最后两支探针（`speed-audio-input`、`vibe-start`）进验收台账。
+
+发版提交 `c47ada78`。安装包 476,624,618 字节 SHA-256 `7bc0bc00…a8336`，补丁 63,215,846 字节 SHA-256 `544dc96d…28a2a`（全文在 `release-timings.md`），两个都已换到官网并实测 200、字节数与本地产物相同。节点：前端入口 `index-DmrXTuDm.js`，服务端 5 个文件、`src/` 3 个文件，五服务 active，`version`/`codeVersion` 都是 0.7.21，`render.code-version match: true`，素材服务重启沉降后最近 30 秒 not-ready **0 次**。
+
+验证：干净一轮全量测试 **零失败**；本版验收 18 项 16 过（`V21-direct-address` 不稳定、重跑与隔离重跑都过，`G0-2` 那次失败是守门修好之前的旧快照）；生产只读检查 `ok: true`、`fails: []`；按钮在线上实测亮灭正确（开着 `aria-pressed=true`、`rgb(0,219,219)`，收起 `false`、`rgb(242,241,246)`）。
+
+## 发版之后的仓库收尾
+
+- `0f1f764d`：把 `account_bridge` 命令的自动生成权限清单登记进库（同目录另外 9 份一直在库里）。`release` 按 `--ff-only` 前进到它，`main`、`release` 都已推 origin。
+- `28c7133e`：合入探针总审分支 `claude/probe-audit`（`scripts/probes/` 368 → 330 支：删 12、归档 26、改 49），守门 `node scripts/acceptance/four-stage-acceptance.mjs --check-coverage` 由不过转**通过**。
+- `58e76745`：**〔裁〕V21-30**。那支分支顺手把 `src/render/snapshotRename.ts` 文件头里的探针路径改成归档路径，可这个文件在 `server/frame-code.mjs` 的 `SNAPSHOT_FILES` 里、代码版本按文件原文哈希，一行注释就会换一个 `snapshotCode`，已有的快照键与卡片缓存键全部作废、下次部署整站重渲。合并时把那一行还原成 main 的写法（合并后逐字核过：指纹清单里 21 个文件与线上那一版零差异），探针去向记在 `scripts/archive/probes/README.md`，并在哈希函数旁写明「注释也算」。同一个提交按探针总审自己的约定删掉 0.7.19 清单里那三行临时排除。
+- `c7be9470`：本版四份 AGENT 报告归档到 `docs/archive/agent-reports/`，指向它们的散文指针跟上。
+- 合并之后重跑：全量测试 7926 条、**0 失败**（15 跳过）；`--check-coverage` 通过。
+
 ## 没做的与待用户的
 
 ### 没做的（都写明了原因）
@@ -121,4 +141,4 @@
 2. **游客没有总字节上限**（审查 A3）、**游客项目默认开着云端 Agent 会产生模型费用**（审查 S8）：都已记进 `docs/plan/TODO.md`，没有自行定数字、也没关功能。
 3. **0.7.19、0.7.20 的补丁要不要补传官网**：这两版的补丁只构建、从没上传。
 4. **网盘连接器的四条待用户项**：真机端到端还差用户本人在 Google 弹窗里授权；切「正式」要先填品牌页；测试模式 100 人是终身额度；A2 的客户端密钥在部署配置里怎么放。
-5. **探针总审那条分支（`claude/probe-audit`）合不合 main**：不在本版范围内，合并时按 `v21-manifest.mjs` 文件头的须知走。
+5. ~~探针总审那条分支合不合 main~~：**已合**（`28c7133e`，按 `v21-manifest.mjs` 文件头的须知走，另有〔裁〕V21-30）。
