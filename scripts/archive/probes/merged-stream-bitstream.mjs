@@ -19,7 +19,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { arg, runFfmpeg, serveLocal, closeServer, launchHeadless, cpuBusy, writeJson, workDir, levelFor, PRODUCT_X264, COLOR_TAGS } from './merged-stream-common.mjs';
+import { arg, runFfmpeg, serveLocal, closeServer, launchHeadless, cpuBusy, writeJson, workDir, levelFor, PRODUCT_X264, COLOR_TAGS } from '../../probes/merged-stream-common.mjs';
 import { readStream, stitch, compatible } from './merged-stream-h264.mjs';
 
 const PORT = Number(arg('port', '27900'));

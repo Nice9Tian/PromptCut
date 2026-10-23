@@ -320,6 +320,7 @@ export const V18_EXCLUDED = {
   'cloud-tools-c1-site.mjs': '网页采集探针 cloud-tools-c1-probe 的本机站点夹具,不单独跑',
   'below-diff-measure-probe.mjs': RENDER_REFACTOR, 'below-stream-common.mjs': RENDER_REFACTOR, 'browser-stream-e2e-probe.mjs': RENDER_REFACTOR, 'browser-stream-node-probe.mjs': RENDER_REFACTOR,
   'canvas-encode-paths-probe.mjs': RENDER_REFACTOR, 'card-plan-key-compare.mjs': RENDER_REFACTOR, 'card-policy-particles-probe.mjs': RENDER_REFACTOR, 'card-policy-probe.mjs': RENDER_REFACTOR,
+  'merged-stream-common.mjs': RENDER_REFACTOR, // 合并流探针的公共件;本体已归档,但 stream-budget-probe 仍 import 它(2026-10-23 探针总审)
   'card-source-version-compare.mjs': RENDER_REFACTOR, 'card-table-digest-compare.mjs': RENDER_REFACTOR, 'emphasis-key-probe.mjs': RENDER_REFACTOR, 'export-paths-measure.mjs': RENDER_REFACTOR,
   'framework-card-pipeline-probe.mjs': RENDER_REFACTOR, 'guide-blind-check.mjs': '建卡指南的盲写验收(派不带上下文的子 Agent),渲染重构「丙」的验收,不是 0.7.18 的依据',
   'hosted-render-remotion-probe.mjs': RENDER_REFACTOR, 'hosted-render-wipe-demo.mjs': RENDER_REFACTOR, 'hosted-stream-entry-probe.mjs': RENDER_REFACTOR,
@@ -328,8 +329,6 @@ export const V18_EXCLUDED = {
   'preview-stop-lib.mjs': 'seek-back-exact-probe 与 scrub-hold-snapshot-probe 共用的搭法,不单独运行', 'remotion-style-harness.html': RENDER_REFACTOR + '(页面夹具)', 'remotion-style-probe.mjs': RENDER_REFACTOR,
   'scrub-hold-snapshot-probe.mjs': RENDER_REFACTOR, 'seek-back-exact-probe.mjs': RENDER_REFACTOR, 'stage-push-before-after-probe.mjs': RENDER_REFACTOR, 'stateful-seq-vs-jump-probe.mjs': RENDER_REFACTOR,
   'lottie-baseline-probe.mjs': RENDER_REFACTOR, 'lottie-pipeline-probe.mjs': RENDER_REFACTOR, 'lottie-seed-extra-probe.mjs': RENDER_REFACTOR, 'lottie-seed-probe.mjs': RENDER_REFACTOR,
-  'merged-stream-bitstream.mjs': RENDER_REFACTOR, 'merged-stream-capacity.mjs': RENDER_REFACTOR, 'merged-stream-common.mjs': RENDER_REFACTOR, 'merged-stream-decode-limits.mjs': RENDER_REFACTOR,
-  'merged-stream-h264.mjs': RENDER_REFACTOR, 'merged-stream-play-page.js': RENDER_REFACTOR, 'merged-stream-play.mjs': RENDER_REFACTOR, 'merged-stream-reencode.mjs': RENDER_REFACTOR,
   'stream-below-probe.mjs': RENDER_REFACTOR, 'stream-canvas-direct-probe.mjs': RENDER_REFACTOR, 'stream-noreplay-probe.mjs': RENDER_REFACTOR,
 };
 

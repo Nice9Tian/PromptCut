@@ -10,9 +10,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { arg, runFfmpeg, splitFmp4, serveLocal, closeServer, launchHeadless, gpuInfo, cpuBusy, writeJson, workDir, PRODUCT_X264, COLOR_TAGS, FMP4_FLAGS } from './merged-stream-common.mjs';
-import { syntheticFrame } from './stream-common.mjs';
-import { streamSegmentArgs } from '../../server/bakery/ffmpeg.mjs';
+import { arg, runFfmpeg, splitFmp4, serveLocal, closeServer, launchHeadless, gpuInfo, cpuBusy, writeJson, workDir, PRODUCT_X264, COLOR_TAGS, FMP4_FLAGS } from '../../probes/merged-stream-common.mjs';
+import { syntheticFrame } from '../../probes/stream-common.mjs';
+import { streamSegmentArgs } from '../../../server/bakery/ffmpeg.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(arg('port', '27900'));

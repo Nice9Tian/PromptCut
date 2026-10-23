@@ -9,9 +9,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { openBakery } from '../../server/bakery/chrome.mjs';
-import { bakeFrames } from '../../server/bakery/bake.mjs';
-import { arg, writeJson } from './stream-common.mjs';
+import { openBakery } from '../../../server/bakery/chrome.mjs';
+import { bakeFrames } from '../../../server/bakery/bake.mjs';
+import { arg, writeJson } from '../../probes/stream-common.mjs';
 
 const ORIGIN = String(arg('origin', 'http://127.0.0.1:5201')).replace(/\/+$/, '');
 const CARDS = String(arg('cards', 'particles-snow,growth-curve,scene-3d')).split(',').map((s) => s.trim()).filter(Boolean);

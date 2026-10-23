@@ -15,8 +15,8 @@ import { fileURLToPath } from 'node:url';
 import {
   findFfmpeg, ffmpegVersion, encodeSegment, splitFmp4, syntheticFrame, encodePng,
   even, stats, median, writeJson, arg,
-} from './stream-common.mjs';
-import { openBrowser, pageFactory, serve, closeAll } from './probe-connect.mjs';
+} from '../../probes/stream-common.mjs';
+import { openBrowser, pageFactory, serve, closeAll } from '../../probes/probe-connect.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const HALF = String(arg('half', 'both'));
@@ -124,8 +124,8 @@ if (HALF === 'seek' || HALF === 'both') {
 // ── 生产侧：resetMs / frameMs / 回放曲线 / 两编码器并存 ──────────────────────
 if (HALF === 'produce' || HALF === 'both') {
   console.log('\n=== produce：生产侧出帧节奏 ===');
-  const { openBakery } = await import('../../server/bakery/chrome.mjs');
-  const { bakeFrames } = await import('../../server/bakery/bake.mjs');
+  const { openBakery } = await import('../../../server/bakery/chrome.mjs');
+  const { bakeFrames } = await import('../../../server/bakery/bake.mjs');
 
   const mkProject = (cardId, lenSec) => ({
     version: 1, id: 'g0b', name: 'g0b', width: W, height: H, fps: FPS, duration: lenSec,

@@ -16,7 +16,7 @@ import path from 'node:path';
 import {
   findFfmpeg, ffmpegVersion, encodeSegment, splitFmp4, pngToRgba, pngSize,
   even, stats, writeJson, arg,
-} from './stream-common.mjs';
+} from '../../probes/stream-common.mjs';
 
 const MATERIAL = String(arg('material', path.join(os.tmpdir(), 'pc-stream-material')));
 const CARDS = String(arg('cards', 'particles-snow,growth-curve,scene-3d,odometer')).split(',').map((s) => s.trim()).filter(Boolean);

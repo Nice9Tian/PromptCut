@@ -20,9 +20,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { stripTypeScriptTypes } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { connectArg, flagArg, openBrowser, pageFactory, serve, closeAll } from './probe-connect.mjs';
+import { connectArg, flagArg, openBrowser, pageFactory, serve, closeAll } from '../../probes/probe-connect.mjs';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..'); // 2026-10-23 归档到 scripts/archive/probes/，多了一层
 const PORT = Number(flagArg('port', '5231'));
 const SECONDS = Number(flagArg('seconds', '60'));
 const ONLY = flagArg('only', null);

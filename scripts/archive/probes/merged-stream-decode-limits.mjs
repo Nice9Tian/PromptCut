@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { arg, makeStream, levelFor, serveLocal, closeServer, launchHeadless, gpuInfo, cpuBusy, writeJson, workDir, round } from './merged-stream-common.mjs';
+import { arg, makeStream, levelFor, serveLocal, closeServer, launchHeadless, gpuInfo, cpuBusy, writeJson, workDir, round } from '../../probes/merged-stream-common.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(arg('port', '27900'));

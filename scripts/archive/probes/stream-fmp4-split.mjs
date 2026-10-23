@@ -13,8 +13,8 @@ import { fileURLToPath } from 'node:url';
 import {
   findFfmpeg, ffmpegVersion, encodeSegment, splitFmp4, segmentInfo, initInfo,
   syntheticFrame, encodePng, even, writeJson, arg,
-} from './stream-common.mjs';
-import { openBrowser, pageFactory, serve, closeAll } from './probe-connect.mjs';
+} from '../../probes/stream-common.mjs';
+import { openBrowser, pageFactory, serve, closeAll } from '../../probes/probe-connect.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const W = even(Number(arg('w', '1920')));

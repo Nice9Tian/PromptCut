@@ -14,7 +14,7 @@
 //
 //   node scripts/probes/merged-stream-capacity.mjs [--json <文件>]
 import path from 'node:path';
-import { arg, writeJson, workDir } from './merged-stream-common.mjs';
+import { arg, writeJson, workDir } from '../../probes/merged-stream-common.mjs';
 
 const CARDS = { 'small-a': { w: 704, h: 424 }, 'small-b': { w: 612, h: 450 }, medium: { w: 1320, h: 772 }, full: { w: 1920, h: 1080 } };
 const LIMITS = [

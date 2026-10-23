@@ -15,9 +15,9 @@
 //   node scripts/probes/merged-stream-reencode.mjs [--repeats 3] [--json <文件>]
 import fs from 'node:fs';
 import path from 'node:path';
-import { arg, runFfmpeg, splitFmp4, cpuBusy, writeJson, workDir, median, round, PRODUCT_X264, COLOR_TAGS, FMP4_FLAGS } from './merged-stream-common.mjs';
-import { syntheticFrame } from './stream-common.mjs';
-import { streamSegmentArgs, streamFilter } from '../../server/bakery/ffmpeg.mjs';
+import { arg, runFfmpeg, splitFmp4, cpuBusy, writeJson, workDir, median, round, PRODUCT_X264, COLOR_TAGS, FMP4_FLAGS } from '../../probes/merged-stream-common.mjs';
+import { syntheticFrame } from '../../probes/stream-common.mjs';
+import { streamSegmentArgs, streamFilter } from '../../../server/bakery/ffmpeg.mjs';
 
 const REPEATS = Number(arg('repeats', '3'));
 const FPS = 30, SEG = 15, CARDS = 8, HW_MAX = 4096;

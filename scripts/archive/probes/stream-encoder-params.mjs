@@ -17,7 +17,7 @@ import { promisify } from 'node:util';
 import {
   findFfmpeg, ffprobeOf, ffmpegVersion, probeEncoders, encodeSegment, ENCODER_ARGS, QUALITY_DEFAULT,
   splitFmp4, segmentInfo, initInfo, syntheticFrame, encodePng, even, stats, writeJson, arg,
-} from './stream-common.mjs';
+} from '../../probes/stream-common.mjs';
 
 const execFileAsync = promisify(execFile);
 
