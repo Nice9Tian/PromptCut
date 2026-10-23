@@ -99,8 +99,8 @@
 
 | 步 | 做什么 | 完成的标志 |
 |---|---|---|
-| D0 | 前置：Google Cloud OAuth 客户端（**用户办**，见第 8 节） | 拿到 client ID |
-| D1 | 探针：Picker + `drive.file` + Range | `files.get?alt=media` 带 `Range: bytes=0-1023` 回 206；且 Picker 选中的文件在 `drive.file` 下读得到 |
+| ~~D0~~ | 前置：Google Cloud 登记（见第 8 节） | **已完成 2026-10-23** |
+| ~~D1~~ | 探针：Picker + `drive.file` + Range | **已通过 2026-10-23**，结果见下文 6.1 |
 | D2 | `StorageProvider` 接口 + Google Drive 实现 + 本机拉取（A3） | 本机项目里从 Drive 导入一个 mp4，素材库出现、时间轴能用、两档都 `complete: true` |
 | D3 | 断点续传 | 拉到一半杀进程，重启自动接着拉完，不重头来 |
 | D4 | A2 凭据托管与撤销 | 关掉页面后继续拉完；在 Google 账号页撤销后，下次换票报错、凭据被清掉、用户收到提示 |
@@ -108,6 +108,30 @@
 | D6 | 隔离验收 | A 成员的凭据 B 成员拉不动；A 项目的凭据 B 项目用不了 |
 
 每一步之后基线要全绿：类型检查零错误、全量测试通过（`verification.md`）。
+
+### 6.1 D1 的结果（2026-10-23，`scripts/probes/drive-range-probe.html`）
+
+在 `http://localhost:5321` 上用真实 Google 账号跑的，素材是用户自己 Drive 里一段 18.7 MB 的 mp4。
+
+**两个问题都是「成立」**：
+
+| 验什么 | 结果 |
+|---|---|
+| `drive.file` 够不够用 | 够。Picker 选中的文件直接读到元信息（`video/mp4`，18.7 MB），不需要受限范围 `drive.readonly`。「选中即授权」成立 |
+| `files.get?alt=media` 支不支持 Range | 支持。`Range: bytes=0-1023` 回 **206 Partial Content**、恰好 1024 字节；中段 `bytes=9359604-9360627` 同样回 206、1024 字节，且两段内容的哈希不同——确认是按偏移给字节，不是从头给 |
+
+**由此定下来的两件事**：
+
+- 云端直拉可以**分段取**，断点续传落到片级：断了只补缺的那几段，不用整件重来。第 9 节里「不支持 Range 就只能整件拉」那条退路作废。
+- 配合 `media-tiers.mjs` 已有的 faststart 重封装（`moov` 搬到文件头），拉取方可以**先取第 0 片读出帧索引**，再精确算出某一帧落在哪几个字节上。按 12 字节/样本估，8 MiB 的第 0 片装得下 30 fps 下约 6.5 小时素材的索引。
+
+**另外两条实测到的事实**：
+
+- **access token 寿命 3599 秒**，和设计里按 3600 秒算的一致。
+- **Google 会自动多给几个范围**。只申请了 `drive.file`，实际回来的是
+  `email profile openid .../auth/drive.file .../auth/userinfo.profile .../auth/userinfo.email`。
+  多出来的全是非敏感的 OpenID Connect 基本范围，不用在「数据访问」页里登记，也不影响 CASA 的判定。这从另一个角度印证了第 8.4 节里登录那条线的结论：那几个范围本来就跟着来，不必加。
+- `Content-Range` 响应头跨源读不到（Google 没在 `Access-Control-Expose-Headers` 里放出来）。不影响判断——状态码和实收字节数就够，但将来写拉取代码时**不要依赖这个头**，要自己记偏移。
 
 ## 7. 排期
 
@@ -169,7 +193,8 @@ VisuHive 的账号登录（Google 登录）和网盘连接器**共用这一个 O
 
 - Dropbox：接口留着，实现以后做。满 50 个链接用户要过生产审批。
 - Google Drive 有个没写进文档的下载配额（社区报 10 TB/天，官方 [Usage limits](https://developers.google.com/workspace/drive/api/guides/limits) 只写了每分钟请求配额）。撞上是 403 `downloadQuotaExceeded`。拉取失败要能退回「让用户自己的电脑下载再上传」这条路。
-- Drive 的 `files.get?alt=media` 支不支持 Range，官方文档没写明，D1 探针验。不支持就只能整件拉，断点续传退化成整件重来。
+- ~~Drive 的 `files.get?alt=media` 支不支持 Range，官方文档没写明，D1 探针验。~~ **2026-10-23 实测支持**，见 6.1。
+- 写拉取代码时不要依赖 `Content-Range` 响应头：跨源读不到，要自己记偏移（6.1）。
 - 云端节点的 ffmpeg 部署配置。
 
 ## 10. 不做的
