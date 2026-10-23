@@ -32,6 +32,7 @@ import { V18_ROWS } from './v18-rows.mjs';
 import { V19_ITEMS, V19_REQS, V19_TAGS, V19_EXCLUDED } from './v19-manifest.mjs';
 import { V21_ITEMS, V21_EXCLUDED } from './v21-manifest.mjs';
 import { V22_ITEMS, V22_EXCLUDED } from './v22-manifest.mjs';
+import { V23_ITEMS, V23_EXCLUDED } from './v23-manifest.mjs';
 import { whereOf } from './acceptance-lib.mjs';
 export { V18_ROWS as ROWS, G0_2_SKIPS, V19_REQS };
 
@@ -49,6 +50,7 @@ export const EXCLUDED_PROBE_FILES = {
   ...V19_EXCLUDED,
   ...V21_EXCLUDED,
   ...V22_EXCLUDED,
+  ...V23_EXCLUDED,
   // 公共件与工具,不单独跑
   'asset-lan-discover.mjs': '公共件(局域网发现),单测在 server/test',
   'codex-auth-fixture-loader.mjs': '测试进程加载器,被 codex-auth-state-probe 用',
@@ -889,7 +891,7 @@ const OLD_ITEMS = [
  * 走老入口(在线页面的房间号加口令)的、在 main 上必然跑不通的老项,按 STALE_OLD_ENTRY 记成「不适用」(留着原命令作记录);
  * 支撑 0.7.19 要求的老项按 V19_TAGS 补上 v19。
  */
-export const ITEMS = [...OLD_ITEMS, ...V18_ITEMS, ...V19_ITEMS, ...V21_ITEMS, ...V22_ITEMS].map((it) => {
+export const ITEMS = [...OLD_ITEMS, ...V18_ITEMS, ...V19_ITEMS, ...V21_ITEMS, ...V22_ITEMS, ...V23_ITEMS].map((it) => {
   let out = it;
   if (OLD_ITEM_ROWS[it.id]) out = { ...out, rows: [...new Set([...(out.rows || []), ...OLD_ITEM_ROWS[it.id]])] };
   if (V19_TAGS[it.id]) out = { ...out, v19: [...new Set([...(out.v19 || []), ...V19_TAGS[it.id]])] };

@@ -6,7 +6,7 @@
  */
 
 /** 清单里允许的类别(显示顺序) */
-export const CATEGORIES = ['G0', 'G0-R', '探针', '第一段', '第二段', '第三段', '第四段', 'V18', 'V19', 'V21', 'V22'];
+export const CATEGORIES = ['G0', 'G0-R', '探针', '第一段', '第二段', '第三段', '第四段', 'V18', 'V19', 'V21', 'V22', 'V23'];
 
 /** 一项的最终判定。时间数字不参与判定(只记录),所以没有「参考」一档;remote = 真实网络验证的项,脚本不跑 */
 export const VERDICTS = ['pass', 'fail', 'flaky', 'manual', 'remote', 'missing', 'blocked', 'skipped', 'na', 'waiting'];
