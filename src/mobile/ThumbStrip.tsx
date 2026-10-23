@@ -162,7 +162,6 @@ export function ThumbStrip(props: {
           onPointerDown={onPointerDown}
           onClickCapture={(e) => { if (suppressClick.current) { e.stopPropagation(); e.preventDefault(); } }}
         >
-          <div className="sp-l" />
           <button type="button" className="madd" aria-label="添加素材" title="添加素材" data-pcm="main-add" onClick={props.onAddMedia}><Icon name="plus" /></button>
           {clips.map((c, i) => {
             const tr = i < clips.length - 1 ? boundaryTransition(project, c, clips[i + 1]) : null;
@@ -190,7 +189,6 @@ export function ThumbStrip(props: {
               ),
             ];
           })}
-          <div className="sp-r" />
         </div>
       </div>
     </>
