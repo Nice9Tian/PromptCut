@@ -6,7 +6,8 @@
 
 「探针」指 `scripts/probes/` 下的手工验收脚本（开审时 368 个文件、约 8.6 MB）。它们**不在** `npm test` 里
 （`scripts/test-suite.mjs` 只收 `server/test/*.test.mjs`、`src/**/*.test.mjs`、`tools/report-worker/*.test.mjs`），
-但有 68 支被某个单测 import 或 spawn，还有 5 支被 `server/test/probe-timings.test.mjs` 的 PT-05 读源码检查 —— 这些删或改名会让基线变红。
+但有 68 支被某个 `*.test.mjs` import 或 spawn，还有 5 支被 `server/test/probe-timings.test.mjs` 的 PT-05 读源码检查。
+**其中只有落在 `server/test/`、`src/`、`tools/report-worker/` 下的引用才真会让基线变红**：`scripts/probes/` 自己也有几个 `.test.mjs`（例如 `account-public-user-pages-probe.test.mjs`），而 `npm test` 不收那个目录，删它依赖的件只会弄坏一个手工测试文件、不影响基线（B13 块的 manager 指出这个区分，我核过 `scripts/test-suite.mjs` 的 files 列表，成立）。
 
 ## 一、怎么审的
 
@@ -175,7 +176,8 @@ B06 块第一版把手机版语义安在不存在的小节上；B09 块第一版
 3. **`queue-mode-probe.mjs`、`render-host-probe.mjs` 里残留的 `<帧>.html` 快照比对段**（B08b 给了行号）：前者是正式验收项 `X-queue-mode`，剥离还是整段改要定；后者的 `check` 角色那一段同理。
 4. **守门的两处盲区**（B08b 实测）：`four-stage-acceptance.mjs` 的 `readdirSync` **不递归**，所以 `scripts/probes/m8/` 下 8 支守门从来看不见。改成递归会一次性把 `lib/`、`fixtures/`、`m8/` 下几十个文件判成未登记、守门立刻变红，所以这是个台账口径决定，我没自己改。
 5. **一处产品代码缺陷（B12a 顺带查出，与探针无关）**：`src/export/frameCompositor.ts` 第 507 行先 `this.stats.rasterMs += res.stats.rasterMs ?? 0`，第 511 行又 `this.stats.rasterMs += performance.now() - t0`，跨源隔离导出下 `rasterMs` 被双重计入，任何读 `comp.stats` 的诊断都会看到虚高的值。manager 已核对原文为真。
-6. **`custom-measure-probe.mjs` 有隐藏的单测引用**：`server/test/probe-timings.test.mjs` 第 69 行按不带后缀的名字 `'custom-measure-probe'` 读它的源码。我的块清单把它标成「无测试引用」，是漏标 —— 这支**不能改名或删**。
+6. **`fixtures/online-card-boundary/probe-boundary-attempts.ts` 的注释已过时**（B13 指出）：它写着「加固之后本文档里 `RTCPeerConnection` 是 undefined」，但 `src/online/isolation/harden.ts` 里现在**没有** `RTCPeerConnection`（2026-10-08 用户定不再设出口护栏）。改注释是小事，但这支夹具归 B07a 那一块、那块的最终结论还没回，所以留给它一起办，免得两边对同一件事下不同的结论。
+7. **`custom-measure-probe.mjs` 有隐藏的单测引用**：`server/test/probe-timings.test.mjs` 第 69 行按不带后缀的名字 `'custom-measure-probe'` 读它的源码。我的块清单把它标成「无测试引用」，是漏标 —— 这支**不能改名或删**。
 
 ### 第三遍扫描（B12b 回来后）
 

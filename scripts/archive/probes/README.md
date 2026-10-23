@@ -68,3 +68,17 @@
 它量的入口（整场景 HTML 采样）还在，所以跑得完、退出码 0，但**判据已经没有对应的产品行为**，不再是通过与不通过的凭据。
 同批被删掉的是另外 5 支（`scrub-hold-snapshot-probe`、`snapshot-hash-probe`、`snapshot-diff-apply-probe`、`swap-cost-probe`、`png-adopt-probe`）：
 它们跑起来必然失败或在测空桩，见 `docs/reports/AGENT-claude-probe-audit.md`。
+
+## fixtures/asset-root-publisher-v2-worker.mjs
+
+Linux root 下那套「素材根发布者 v2」隔离实验的被测 worker（2026-10 codex 那一轮写的，当时由 root 写进
+`/run/systemd/system/pc-asset-cgroup-proof-<id>.service` 的 `ExecStart` 启动，见归档报告
+`docs/archive/agent-reports/AGENT-codex-018-asset-root-publisher.md`）。
+
+**今天在仓库里一处引用都没有**：`scripts/probes/asset-root-cgroup-os-probe.mjs` 的 `--publisher-v2` 模式还在，
+但它整个文件没有出现过这支 worker 的名字，连 `fixtures/` 都没引过（`systemd-run` 起的是探针自己内联的东西）；
+命令行也没有传 worker 路径的参数。子 Agent（B13 块）判它「由 systemd ExecStart 启动、属于静态引用查不到的活件」，
+主 Agent 查过原文后推翻了这条理由 —— 它是真孤儿，所以归档而不是留在 `scripts/probes/` 里。
+
+要恢复它的用法，连带看那份归档报告第 352、360 行，以及 `server/hosted/run-assets-current-registry-v2.mjs` 的
+`readRootAssetReservationV2`（这个函数现在还在）。
