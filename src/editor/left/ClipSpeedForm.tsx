@@ -1,15 +1,12 @@
 import { useEffect, useState } from "react";
 import { actions, useStore } from "../../store/project";
 import type { TrackClip } from "../../kernel/project";
-import { CLIP_SPEED_MAX, CLIP_SPEED_MIN, CLIP_SPEED_PRESETS, SPEED_AUDIO_NOTE, SPEED_MUTE_NOTE, clipSpeed, speedLabel } from "../../kernel/clipTime.mjs";
+import { CLIP_SPEED_MAX, CLIP_SPEED_MIN, CLIP_SPEED_PRESETS, SPEED_AUDIO_NOTE, SPEED_MUTE_NOTE, clipSpeed, speedChangeNotes, speedLabel } from "../../kernel/clipTime.mjs";
 
-/** 改速度的结果说给人听:推开了几段、交叉溶解的另一段跟着挪了 */
-export function speedResultText(r: ReturnType<typeof actions.setClipSpeed>): string | null {
+/** 改速度的结果说给人听:转场跟着缩了多少、谁跟着挪了、推开了几段(kernel/clipTime.mjs 的 speedChangeNotes) */
+export function speedResultText(r: ReturnType<typeof actions.setClipSpeed>, clipId: string): string | null {
   if (!r.ok) return r.error;
-  const parts: string[] = [];
-  if (r.moved?.length) parts.push("交叉溶解的另一段跟着挪了");
-  if (r.pushed) parts.push(`后面 ${r.pushed.clips} 段整体往后推了 ${r.pushed.by.toFixed(2)} 秒`);
-  return parts.length ? parts.join("；") : null;
+  return speedChangeNotes(r, clipId);
 }
 
 /**
@@ -24,7 +21,7 @@ export function ClipSpeedForm({ clip }: { clip: TrackClip }) {
   const [text, setText] = useState(String(cur));
   useEffect(() => setText(String(cur)), [cur]);
   const presets = CLIP_SPEED_PRESETS.includes(cur) ? CLIP_SPEED_PRESETS : [...CLIP_SPEED_PRESETS, cur].sort((a, b) => a - b);
-  const apply = (v: number) => setMsg(speedResultText(actions.setClipSpeed(clip.id, v)));
+  const apply = (v: number) => setMsg(speedResultText(actions.setClipSpeed(clip.id, v), clip.id));
   const commitText = () => {
     const v = Number(text.trim().replace(/[×x]$/i, ""));
     if (!Number.isFinite(v) || Math.abs(v - cur) < 1e-9) { setText(String(cur)); return; }

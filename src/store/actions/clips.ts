@@ -3,7 +3,7 @@ import { getCard } from "../../kernel/registry";
 import { isAudiovisualCard, clipHasEmbeddedAudio, assertAudiovisualCardKind } from "../../kernel/cardAudioRendition.mjs";
 import { cloneCardClipInstance } from "../../kernel/cardAuthoring.mjs";
 import type { PartInstance } from "../../kernel/types";
-import { fadeOwner, groupOf, timingLock, transitionsOf, transitionsOfClip } from "../../kernel/transitions";
+import { fadeOwner, groupOf, MIN_TRANSITION_DUR, timingLock, transitionsOf, transitionsOfClip, type Transition } from "../../kernel/transitions";
 import { cutDuration } from "../../kernel/cutSegments";
 import { CLIP_SPEED_MAX, CLIP_SPEED_MIN, clipSpeed, mediaOffsetAfter, mediaSpanOf, normalizeSpeed, speedInRange, speedLabel, withSpeed } from "../../kernel/clipTime.mjs";
 
@@ -230,11 +230,12 @@ export const clips = {
    *   - 这一段是交叉溶解的**前一段**:后一段(在另一条序列上)跟着终点平移同样多,溶解的重叠长度不变——变长往后挪、变短往前挪;
    *     后一段所在序列上它后面的段照上面的推开规则让位;往前挪撞上那条序列上前面的段就拒绝;
    *   - 这一段是交叉溶解的**后一段**:起点不动,前一段不动,重叠不变;
-   *   - 新长度要比它身上每一个转场都长(和加转场时同一条规矩),装不下就**拒绝并说明**,不悄悄缩短转场。
+   *   - 新长度装不下它身上的转场时,转场跟着缩到比新长度短一点(用户 2026-10-23 定「气泡提示即可」),结果里带上缩了哪几条、
+   *     从几秒到几秒,界面弹气泡说清楚;是交叉溶解的后一段时,溶解缩短靠这一段整体往后挪那么多(入点内容不变)。
    * - 改回 1 删掉 `speed` 字段,不留 `speed: 1`(身份键才逐字回到原样)。只给视频段与声音段;序列锁着的拒绝。
    * 〔裁〕第一版变速的视频段不出原声,界面写明;声音段(含音画分离出来的)随倍率变速变调。
    */
-  setClipSpeed(clipId: string, speed: number): { ok: true; pushed?: { clips: number; by: number }; moved?: string[] } | { ok: false; error: string } {
+  setClipSpeed(clipId: string, speed: number): { ok: true; pushed?: { clips: number; by: number }; moved?: string[]; transitions?: { kind: Transition["kind"]; from: number; to: number }[] } | { ok: false; error: string } {
     const p = state.project;
     const hit = findClip(p, clipId);
     if (!hit) return { ok: false, error: "找不到这个片段" };
@@ -248,20 +249,34 @@ export const clips = {
     if (next === clipSpeed(hit.clip)) return { ok: true };
     const start = hit.clip.start;
     const end = start + mediaSpanOf(hit.clip) / next;
+    let fadePatches = new Map<string, Partial<TrackClip>>();
     const len = end - start;
     if (len < 0.1) return { ok: false, error: "这一段太短，改成这个速度后不到 0.1 秒" };
     const own = transitionsOfClip(p, clipId);
-    const longest = own.reduce((m, tr) => Math.max(m, tr.dur), 0);
-    if (own.length && len <= longest + 1e-9) {
-      return { ok: false, error: `改成 ${speedLabel(next)} 后这一段只有 ${len.toFixed(2)} 秒，装不下它身上 ${longest.toFixed(2)} 秒的转场；先缩短或删掉转场` };
+    /*
+     * 转场装不下时跟着缩(用户 2026-10-23 定:挂着转场「可以改」,装不下「气泡提示即可」):这一段身上比新长度还长(或一样长)的转场
+     * 缩到「比新长度短一点」(和加转场时「转场要比片段短」同一条规矩,取到百分之一秒,不短于 MIN_TRANSITION_DUR),
+     * 结果里带上每一条缩了多少(`transitions`),界面弹气泡说清楚。连最短的转场都装不下才拒绝。
+     */
+    const shrunk = new Map<string, { kind: Transition["kind"]; from: number; to: number }>();
+    for (const tr of own) {
+      if (tr.dur < len - 1e-9) continue;
+      const to = Math.max(MIN_TRANSITION_DUR, Math.floor((len - 0.01) * 100) / 100);
+      if (!(to < len)) return { ok: false, error: `改成 ${speedLabel(next)} 后这一段只有 ${len.toFixed(2)} 秒，连最短的转场（${MIN_TRANSITION_DUR} 秒）都装不下；先删掉转场` };
+      shrunk.set(tr.id, { kind: tr.kind, from: tr.dur, to });
     }
+    const durOf = (tr: Transition) => shrunk.get(tr.id)?.to ?? tr.dur;
+    /** 这一段是交叉溶解的后一段、溶解缩短了:这一段整段往后挪「缩掉的那么多」,重叠才跟着变短(入点内容不变) */
+    const asB = own.find((tr) => tr.kind === "crossfade" && tr.bId === clipId);
+    const lateBy = asB && shrunk.has(asB.id) ? asB.dur - durOf(asB) : 0;
     const delta = end - hit.clip.end;
-    const placed: TrackClip = { ...withSpeed(hit.clip, next), end };
+    let placed: TrackClip = { ...withSpeed(hit.clip, next), start: start + lateBy, end: end + lateBy };
 
-    /** 要平移的段 → 平移量。交叉溶解的后一段跟着终点走 */
+    /** 要平移的段 → 平移量。交叉溶解的后一段跟着终点走(溶解缩短时再多挪缩掉的那么多) */
     const moves = new Map<string, number>();
-    const partner = own.find((tr) => tr.kind === "crossfade" && tr.aId === clipId && tr.bId)?.bId;
-    if (partner) moves.set(partner, delta);
+    const asA = own.find((tr) => tr.kind === "crossfade" && tr.aId === clipId && tr.bId);
+    const partner = asA?.bId;
+    if (partner) moves.set(partner, delta + lateBy + (asA!.dur - durOf(asA!)));
     /** 一条序列上「这一段(新终点 end2,原终点 end1)」后面的段:碰上了就整体推开 */
     const pushAfter = (trackId: string, selfId: string, end1: number, end2: number) => {
       const track = p.tracks.find((t) => t.id === trackId)!;
@@ -272,17 +287,35 @@ export const clips = {
       for (const c of followers) for (const m of groupOf(p, c.id).members) if (!moves.has(m)) moves.set(m, dt);
       return dt;
     };
-    let pushedBy = pushAfter(hit.track.id, clipId, hit.clip.end, end);
+    let pushedBy = pushAfter(hit.track.id, clipId, hit.clip.end, end + lateBy);
     if (partner) {
       const b = findClip(p, partner)!;
-      pushedBy = Math.max(pushedBy, pushAfter(b.track.id, partner, b.clip.end, b.clip.end + delta));
+      pushedBy = Math.max(pushedBy, pushAfter(b.track.id, partner, b.clip.end, b.clip.end + moves.get(partner)!));
     }
     if (moves.has(clipId)) return { ok: false, error: "后面的段和这一段绑在同一组转场里，推不开；先删掉转场" };
     const lockedTrack = p.tracks.find((t) => t.locked && t.clips.some((c) => moves.has(c.id)));
     if (lockedTrack) return { ok: false, error: `要挪的段在锁着的序列「${lockedTrack.name}」上；先解锁那条序列` };
 
+    // 缩了的转场:片段两端的淡化跟着改(交叉溶解两头都改),转场记录换新对象
+    if (shrunk.size) {
+      const fades = new Map<string, Partial<TrackClip>>();
+      const set = (id: string, patch: Partial<TrackClip>) => fades.set(id, { ...fades.get(id), ...patch });
+      for (const tr of own) {
+        if (!shrunk.has(tr.id)) continue;
+        const d = durOf(tr);
+        if (tr.kind === "fadeIn") set(tr.aId, { fadeIn: d });
+        else if (tr.kind === "fadeOut") set(tr.aId, { fadeOut: d });
+        else { set(tr.aId, { fadeOut: d }); if (tr.bId) set(tr.bId, { fadeIn: d }); }
+      }
+      placed = { ...placed, ...fades.get(clipId) };
+      fadePatches = fades;
+    }
     // 平移:被挪的段的声音伴随段先拿出来,挪完再按各自的源片段平移回去(同 moveClip 整组平移的做法)
     let base: import("../../kernel/project").Project = updateTrack(p, hit.track.id, (t) => ({ ...t, clips: t.clips.map((c) => (c.id === clipId ? placed : c)) }));
+    if (fadePatches.size) {
+      base = { ...base, tracks: base.tracks.map((t) => ({ ...t, clips: t.clips.map((c) => (c.id !== clipId && fadePatches.has(c.id) ? { ...c, ...fadePatches.get(c.id) } : c)) })),
+        transitions: transitionsOf(base).map((tr) => (shrunk.has(tr.id) ? { ...tr, dur: durOf(tr) } : tr)) };
+    }
     if (moves.size) {
       const companions = new Map(base.tracks.map((t) => [t.id, t.clips.filter((c) => c.soundEffect?.sourceClipId && moves.has(c.soundEffect.sourceClipId))]));
       const lockedCompanion = base.tracks.find((t) => t.locked && companions.get(t.id)!.length);
@@ -299,13 +332,16 @@ export const clips = {
       base = moved!;
     }
     base = updateTrack(base, hit.track.id, (t) => ({ ...t, clips: sortClips(t.clips) }));
+    // 自己的声音伴随段:溶解缩短把这一段往后挪了时先整体平移,再按新长度裁到片段里
     const linked = moveSoundCompanions(base, hit.clip, placed, false);
     if (!linked) return { ok: false, error: "这一段的声音伴随段放不下，没有改速度" };
     // 挪完整体核一遍:任何序列上重叠或跑到 0 之前都整个拒绝(不截断)
     const clash = linked.tracks.find((t) => { const s2 = sortClips(t.clips); return s2.some((c, i) => c.start < -1e-9 || (i > 0 && c.start < s2[i - 1].end - 1e-9)); });
     if (clash) return { ok: false, error: `挪动后序列「${clash.name}」上的段会重叠，没有改速度` };
     setProject(linked);
-    return { ok: true, ...(pushedBy > 0 ? { pushed: { clips: [...moves.keys()].filter((id) => id !== partner).length, by: pushedBy } } : {}), ...(partner ? { moved: [partner] } : {}) };
+    return { ok: true, ...(pushedBy > 0 ? { pushed: { clips: [...moves.keys()].filter((id) => id !== partner).length, by: pushedBy } } : {}),
+      ...(partner || lateBy > 0 ? { moved: [...(partner ? [partner] : []), ...(lateBy > 0 ? [clipId] : [])] } : {}),
+      ...(shrunk.size ? { transitions: [...shrunk.values()] } : {}) };
   },
   removeClip(clipId: string) {
     const p = state.project;

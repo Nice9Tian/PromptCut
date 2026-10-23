@@ -328,12 +328,28 @@ test('store.setClipSpeed 挂着转场:淡化跟着两端走;交叉溶解前一�
   assert.deepEqual(r, { ok: true });
   assert.deepEqual([span('a'), span('b')], [[0, 4], [3, 5]]);
 
-  // 装不下转场:a 改 4 倍只剩 1 秒,不比 1 秒的交叉溶解长 → 拒绝,不缩短转场
+  // 装不下转场(用户 2026-10-23 定「气泡提示即可」):a 改 4 倍只剩 1 秒,1 秒的交叉溶解缩到 0.99 秒,结果里说清楚;b 跟着挪,重叠 = 0.99
   load();
   r = actions.setClipSpeed('a', 4);
-  assert.equal(r.ok, false);
-  assert.match(r.error, /装不下/);
-  assert.deepEqual(span('a'), [0, 4]);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.transitions, [{ kind: 'crossfade', from: 1, to: 0.99 }]);
+  assert.deepEqual(span('a'), [0, 1]);
+  const near = (x, y) => Math.abs(x - y) < 1e-9;
+  assert.ok(near(clip('b').start, 0.01) && near(clip('b').end, 4.01), `b 挪到 0.01～4.01,实得 ${span('b')}`);
+  assert.deepEqual([clip('a').fadeOut, clip('b').fadeIn, clip('a').fadeIn], [0.99, 0.99, 0.5], '两头淡化跟着改,0.5 秒的淡入装得下不动');
+  assert.equal(getState().project.transitions.find((t) => t.id === 'x').dur, 0.99);
+  const { speedChangeNotes } = await import('../../src/kernel/clipTime.mjs');
+  assert.match(speedChangeNotes(r, 'a'), /交叉溶解跟着缩短：1\.00 秒 → 0\.99 秒/);
+  actions.undo();
+  assert.deepEqual([span('a'), span('b'), clip('a').fadeOut, getState().project.transitions.find((t) => t.id === 'x').dur], [[0, 4], [3, 7], 1, 1], '一步撤销,转场也回来');
+
+  // 后一段 b 改 4 倍只剩 1 秒:溶解缩到 0.99,靠 b 整段往后挪 0.01 秒(入点内容不变)
+  load();
+  r = actions.setClipSpeed('b', 4);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.moved, ['b']);
+  assert.ok(near(clip('b').start, 3.01) && near(clip('b').end, 4.01), `b 到 3.01～4.01,实得 ${span('b')}`);
+  assert.equal(clip('a').end - clip('b').start < 0.99 + 1e-9 && clip('a').end - clip('b').start > 0.99 - 1e-9, true, '重叠 0.99');
 });
 
 test('声音段变速(音画分离出来的):照常出声,两条混音路和测响度都用同一份 ffmpegVarispeed', () => {

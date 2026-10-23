@@ -162,6 +162,22 @@ export function withMediaRates(project, graph) {
   return { ...graph, nodes: graph.nodes.map((node) => (node?.adapter === "media" && rates.has(node.id) ? { ...node, rate: rates.get(node.id) } : node)) };
 }
 
+const TRANSITION_NAME = { crossfade: "交叉溶解", fadeIn: "淡入", fadeOut: "淡出" };
+
+/**
+ * 改速度之后的那句说明(桌面编辑分区的提示与手机版的气泡共用):转场跟着缩了几秒、谁跟着挪了、后面推开了几段。
+ * 没有要说的回 null。`r` 是 store 的 setClipSpeed 成功时的结果。
+ */
+export function speedChangeNotes(r, clipId) {
+  const parts = [];
+  for (const t of r?.transitions ?? []) parts.push(`${TRANSITION_NAME[t.kind] ?? "转场"}跟着缩短：${t.from.toFixed(2)} 秒 → ${t.to.toFixed(2)} 秒（这一段变短，原来的转场装不下）`);
+  const moved = r?.moved ?? [];
+  if (moved.includes(clipId)) parts.push("为了缩短交叉溶解，这一段整体往后挪了（内容不变）");
+  if (moved.some((id) => id !== clipId)) parts.push("交叉溶解的另一段跟着挪了");
+  if (r?.pushed) parts.push(`后面 ${r.pushed.clips} 段整体往后推了 ${r.pushed.by.toFixed(2)} 秒`);
+  return parts.length ? parts.join("；") : null;
+}
+
 /** 给人看的倍数:`2×`、`0.5×` */
 export function speedLabel(speed) {
   return `${Math.round(speed * 100) / 100}×`;

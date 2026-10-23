@@ -7,7 +7,7 @@ import { actions, getState, useStore, withMerge } from "../store/project";
 import { findClip, type MediaAsset, type Project, type TrackClip } from "../kernel/project";
 import { MAX_TRANSITION_DUR, MIN_TRANSITION_DUR, transitionsOf, type Transition, type TransitionKind } from "../kernel/transitions";
 import { getCard } from "../kernel/registry";
-import { CLIP_SPEED_MAX, CLIP_SPEED_MIN, CLIP_SPEED_PRESETS, SPEED_MUTE_NOTE, clipSpeed, speedLabel } from "../kernel/clipTime.mjs";
+import { CLIP_SPEED_MAX, CLIP_SPEED_MIN, CLIP_SPEED_PRESETS, SPEED_MUTE_NOTE, clipSpeed, speedChangeNotes, speedLabel } from "../kernel/clipTime.mjs";
 import { listCuts } from "../kernel/cuts";
 import type { CardDef } from "../kernel/types";
 import { importMediaFiles, MEDIA_ACCEPT } from "../editor/left/importAssets";
@@ -338,8 +338,8 @@ export function SpeedSheet(props: { clipId: string; onClose: () => void }) {
     if (!r.ok) { toast(r.error); return; }
     setText(String(getState().project.tracks.flatMap((t) => t.clips).find((x) => x.id === c.id)?.speed ?? 1));
     const head = v === 1 ? "已恢复 1×，原声恢复" : `已改成 ${speedLabel(clipSpeed({ speed: v }))}，这一段不出原声`;
-    // 变长推开了后面的段(用户 2026-10-23 定)、交叉溶解的另一段跟着挪:说清楚
-    const tail = [r.moved?.length ? "交叉溶解的另一段跟着挪了" : "", r.pushed ? `后面 ${r.pushed.clips} 段往后推了 ${r.pushed.by.toFixed(1)} 秒` : ""].filter(Boolean).join("，");
+    // 转场跟着缩了、谁跟着挪了、推开了几段(用户 2026-10-23 定「气泡提示即可」):和桌面同一句(kernel/clipTime.mjs 的 speedChangeNotes)
+    const tail = speedChangeNotes(r, c.id);
     toast(tail ? `${head}；${tail}` : head);
   };
   const commitText = () => {
@@ -361,7 +361,7 @@ export function SpeedSheet(props: { clipId: string; onClose: () => void }) {
         <button type="button" className="btn" data-pcm="speed-apply" onClick={commitText}>应用</button>
       </div>
       <div className="wrapnote" data-pcm="speed-note"><b>声音：</b>{SPEED_MUTE_NOTE}</div>
-      <div className="hint">起点不动，时长按新速度重算：{fmtDur(c.end - c.start)}（素材 {fmtDur((c.end - c.start) * cur)}）。变长碰到后面的段会把它们一起往后推，变短尾部留空；挂着转场时转场跟着片段两端走，装不下转场会提示。</div>
+      <div className="hint">起点不动，时长按新速度重算：{fmtDur(c.end - c.start)}（素材 {fmtDur((c.end - c.start) * cur)}）。变长碰到后面的段会把它们一起往后推，变短尾部留空；挂着转场时转场跟着片段两端走，装不下时转场跟着缩短并提示。</div>
       <div className="undo-row">
         <button type="button" className="btn" data-pcm="speed-undo" onClick={() => actions.undo()}><Icon name="undo" />撤销</button>
       </div>
