@@ -224,7 +224,11 @@
 | `POST /api/media/storage/disconnect` | 向网盘撤销并删掉存着的那份 |
 | `GET /oauth2callback` | 授权弹窗的落地页，把授权码 `postMessage` 回开它的页面然后自己关掉 |
 
-落地页只发给**同源**的开启方（`postMessage(msg, location.origin)`），授权码不会漏给别的源，页面上也不显示它。单测把这两条钉住了。
+落地页只发给**同源**的开启方（`postMessage(msg, location.origin)`），授权码不会漏给别的源，页面上也不显示它。
+
+**这里踩过一个坑（2026-10-24）**：素材中间件的总入口有一行前缀过滤 —— `if (!pathname.startsWith("/@media/") && !pathname.startsWith("/api/media/")) return next();`。`/oauth2callback` 两个前缀都不沾，于是被放给了 vite 的 SPA 兜底：**授权弹窗里渲染出整个编辑器**，授权码永远回不到开它的页面，A2 连不上。这个地址不能改前缀（要和 Google 控制台登记的重定向 URI 逐字一致），所以在总入口那一行放它过来，路径抽成常量 `OAUTH_CALLBACK_PATH`。
+
+**为什么第一次没发现**：当时只用 curl 核了状态码与 `content-type`，两样都是 `200 / text/html` —— vite 的 `index.html` 也是这两样。教训是**核正文**。已补 `server/test/storage-oauth-callback.test.mjs`：把中间件架在裸 http server 上、`next()` 回 404 冒充 SPA 兜底，核正文里有没有来源标记、是不是编辑器那张 `index.html`、有没有落到兜底。撤掉修复后这条测试 4 条里红 3 条，装回去全绿（验过）。
 
 **页面侧**：`googlePicker.ts` 加 `requestDriveAuthCode`——自己生成 PKCE verifier 与 S256 challenge、带 `access_type=offline` 与 `prompt=consent` 开弹窗、按 `state` 对上回来的消息。**页面不兑换授权码**，兑换要客户端密钥，那东西只在编辑器进程这一侧。
 
