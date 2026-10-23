@@ -1502,3 +1502,10 @@
   opacity: 0.45;
   cursor: default;
 }
+/* 网盘名字前面的徽标 */
+.pc-storage-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}

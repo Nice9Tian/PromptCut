@@ -176,7 +176,7 @@ export function StorageImportButton({
                 title={p.configured ? undefined : p.reason}
                 onClick={() => { if (p.kind === "google-drive") void runImport(p); }}
               >
-                <span>{p.label}</span>
+                <span className="pc-storage-name"><ProviderIcon kind={p.kind} />{p.label}</span>
                 {!p.configured
                   ? <span className="pc-storage-tag">{p.kind === "dropbox" ? "待开放" : "未配置"}</span>
                   : conn ? <span className="pc-storage-tag">已托管</span> : null}
@@ -204,7 +204,7 @@ export function StorageImportButton({
                 return (
                   <div key={p.kind} className="pc-storage-row">
                     <div className="pc-storage-rowmain">
-                      <span>{p.label}</span>
+                      <span className="pc-storage-name"><ProviderIcon kind={p.kind} />{p.label}</span>
                       <span className="pc-storage-tag">
                         {conn ? `连接于 ${new Date(conn.createdAt).toLocaleDateString()}` : p.canManage ? "未连接" : "不支持托管"}
                       </span>
@@ -241,6 +241,36 @@ function guessKind(mimeType: string | undefined, name: string): "video" | "audio
   if (["mp4", "mov", "m4v", "webm", "mkv", "avi"].includes(ext)) return "video";
   if (["mp3", "wav", "m4a", "aac", "flac", "ogg"].includes(ext)) return "audio";
   return "image";
+}
+
+/**
+ * 各家网盘的徽标。放在菜单和管理面板里,一眼能认出是哪家。
+ *
+ * 画成内联 SVG,不引外链图片:编辑器要能离线用,而且素材页不该为了一个图标去发网络请求。
+ * 颜色写死品牌色,不跟主题变 —— 徽标变了色就不是那个徽标了。
+ */
+function ProviderIcon({ kind, size = 16 }: { kind: string; size?: number }) {
+  if (kind === "google-drive") {
+    // Drive 的三角由三块拼成:左下绿、右下蓝、上方黄,中间一条深色折线把三块分开
+    return (
+      <svg width={size} height={size} viewBox="0 0 87.3 78" aria-hidden="true" style={{ flex: "none" }}>
+        <path d="M6.6 66.85l3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8H0c0 1.55.4 3.1 1.2 4.5z" fill="#0066da" />
+        <path d="M43.65 25L29.9 1.2c-1.35.8-2.5 1.9-3.3 3.3l-25.4 44A9.06 9.06 0 000 53h27.5z" fill="#00ac47" />
+        <path d="M73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5H59.798l5.852 11.5z" fill="#ea4335" />
+        <path d="M43.65 25L57.4 1.2C56.05.4 54.5 0 52.9 0H34.4c-1.6 0-3.15.45-4.5 1.2z" fill="#00832d" />
+        <path d="M59.8 53H27.5L13.75 76.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z" fill="#2684fc" />
+        <path d="M73.4 26.5l-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3L43.65 25l16.15 28h27.45c0-1.55-.4-3.1-1.2-4.5z" fill="#ffba00" />
+      </svg>
+    );
+  }
+  if (kind === "dropbox") {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" style={{ flex: "none" }}>
+        <path d="M6 2 0 6l6 4 6-4zM18 2l-6 4 6 4 6-4zM0 14l6 4 6-4-6-4zM18 10l-6 4 6 4 6-4zM6 19.5l6 4 6-4-6-4z" fill="#0061FF" />
+      </svg>
+    );
+  }
+  return <IconCloud size={size} />;
 }
 
 function IconCloud({ size = 16 }: { size?: number }) {
