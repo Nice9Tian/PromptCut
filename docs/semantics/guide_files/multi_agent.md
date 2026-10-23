@@ -29,6 +29,7 @@
 
 ## 清理 worktree 与子 Agent
 
+- **删之前确认没有会话正在用它**（2026-10-23 加：0.7.21 发版收尾时，主会话按「分支已合入」一刀切地拆 worktree，把一个**还在开发中的会话**的工作区一起删了 —— 那条分支只合了一截进发版，会话还在上面接着做）。判断办法：看这个 worktree 对应的分支最近有没有新提交、`mcp__ccd_session_mgmt__list_sessions` 里有没有会话在跑它、或者直接问那个会话。**分支已经合入 main 不等于没人在用它。**
 - 删之前确认改动已合并或已提交在分支上。
 - 删之前确认 worktree 里没有 junction，有就按 `verification.md`「会造成真实损失的操作」一节先拆掉。直接删会顺着 junction 把主仓库的 `node_modules` 清空。
 - 分支合入 `main`、AGENT 报告归档并拆掉 worktree 后，调用 `manage_subagents(Action="kill")` 清理已结束（`idle`）的子 Agent，避免活动列表无限膨胀污染后续上下文。
