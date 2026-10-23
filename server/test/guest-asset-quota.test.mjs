@@ -3,7 +3,10 @@
  *
  * 口径（2026-10-23 用户定）：「每一条源文件不能大于100M。总视频素材不能大于三条。」
  * - 每个传上来的文件都查 100 MB；
- * - 只数视频的原尺寸档（`X-Media-Tier` 缺失、拼错一律当原尺寸），小档、图片、音频不计数。
+ * - 数的是视频源：原尺寸档几个、小档几个，取多的那个（`X-Media-Tier` 缺失、拼错一律当原尺寸）；图片、音频不计数。
+ *   小档也数是 2026-10-23 claude/guest-fix〔裁〕：原先只数原尺寸，游客把每一片都标成小档就不计数（审查 A1）。
+ *   是不是视频按文件头认（审查 A2），这一份里的夹具是文本字节，报视频扩展名的按扩展名算；按文件头认的那几条在
+ *   `guest-fix-regression.test.mjs`。
  *
  * 起真的素材服务中间件（`asset-service.ts` + 媒体中间件，按 `fixtures/asset-project-service.mjs` 的办法转译），
  * 托管那条路用真的项目数据层（fs，临时目录）和合成的文档服务权威；票据那条路用 memory 数据层和合成的票据核对。
@@ -134,15 +137,15 @@ async function uploadVideo(base, token, v) {
   return { small: small.status, original: original.status };
 }
 
-test('游客：3 个视频（每个两档共 6 个文件）全部收下；第 4 个的原件在分片时就回 403 guest-video-limit，小档照收', async () => {
+test('游客：3 个视频（每个两档共 6 个文件）全部收下；第 4 个在小档的第一片就回 403 guest-video-limit，原件也拦', async () => {
   const tok = 'p-videos:guest';
   const videos = [video(1), video(2), video(3)];
   for (const [i, v] of videos.entries()) assert.deepEqual(await uploadVideo(hosted.base, tok, v), { small: 200, original: 200 }, `第 ${i + 1} 个视频`);
   assert.equal((await mediaOf('p-videos').usage()).blobs, 6, '6 个文件都入库了');
   assert.equal(await countedVideos(mediaOf('p-videos')), GUEST_LIMITS.videos, '算数的只有 3 条原尺寸');
   const fourth = video(4);
-  // 小档不占额：照收
-  assert.equal((await upload(hosted.base, tok, 'media', fourth.small)).status, 200, '第 4 个视频的小档照收');
+  // 小档也数（原件 3 个、小档再加一个就是 4 条视频源）：第一片就拦
+  assert.deepEqual(await errorOf(await upload(hosted.base, tok, 'media', fourth.small)), { status: 403, error: 'guest-video-limit' }, '第 4 个视频的小档');
   // 原尺寸：第一片就拦，连暂存都没开
   const o = fourth.original;
   assert.deepEqual(await errorOf(await put(hosted.base, tok, 'media', o.hash, 0, o.bytes.length, o.bytes)), { status: 403, error: 'guest-video-limit' });
@@ -151,7 +154,7 @@ test('游客：3 个视频（每个两档共 6 个文件）全部收下；第 4 
   const again = await upload(hosted.base, tok, 'media', videos[0].original);
   assert.equal(again.status, 200);
   assert.equal((await again.json()).complete, true);
-  assert.equal((await mediaOf('p-videos').usage()).blobs, 7);
+  assert.equal((await mediaOf('p-videos').usage()).blobs, 6);
   assert.equal(await countedVideos(mediaOf('p-videos')), 3);
 });
 
@@ -226,10 +229,12 @@ test('游客：先报小档开暂存、后面的片改报原件（或不带头�
     const staged = (await mediaOf('p-downgrade').inventory()).staging.find(e => e.hash === hash);
     assert.equal(staged?.tier, 'original', `第二片 X-Media-Tier=${JSON.stringify(second)} 之后改记原件`);
     assert.deepEqual(await errorOf(await complete(hosted.base, tok, 'media', hash)), { status: 403, error: 'guest-video-limit' });
+    // 被拒的暂存留着；它已经记成原件，不删掉的话下一轮开小档也会把它算进去（4 个原件）
+    assert.equal(await mediaOf('p-downgrade').remove(hash), true);
   }
-  // 反过来：先报原件、后面的片改报小档，不会退回小档（只往计数那边退）。先把上面两条被拒的暂存和一条已入库的删掉腾出名额
+  // 反过来：先报原件、后面的片改报小档，不会退回小档（只往计数那边退）。先把一条已入库的删掉腾出名额
   const store = mediaOf('p-downgrade');
-  for (const e of (await store.inventory()).staging) assert.equal(await store.remove(e.hash), true);
+  assert.deepEqual((await store.inventory()).staging, []);
   assert.equal(await store.remove((await store.inventory()).stored[0].hash), true);
   const bytes = crypto.randomBytes(CHUNK + MiB);
   const hash = sha(bytes);
@@ -271,7 +276,7 @@ test('游客：收尾时再数一次，满了回 403、暂存留着；删掉一�
   assert.equal(await countedVideos(store), 3);
 });
 
-test('游客：整个项目目录被清掉（三天清理删的就是整个项目目录）之后，数当场归零', async () => {
+test('游客：整个项目目录被清掉之后，数当场归零（三天清理由素材服务的 removeProject 删整个项目，见 guest-fix-regression.test.mjs）', async () => {
   const tok = 'p-sweep:guest';
   for (const i of [1, 2, 3]) assert.deepEqual(await uploadVideo(hosted.base, tok, video(`sw${i}`)), { small: 200, original: 200 });
   const v = file('sw4');
@@ -282,14 +287,14 @@ test('游客：整个项目目录被清掉（三天清理删的就是整个项�
   for (const i of [5, 6, 7]) assert.deepEqual(await uploadVideo(hosted.base, tok, video(`sw${i}`)), { small: 200, original: 200 });
 });
 
-test('游客：并发开两个新的原件暂存，只放进一个；并发的小档都放', async () => {
+test('游客：并发开两个新的原件暂存，只放进一个；并发的小档也排队数，4 个只放进 3 个', async () => {
   const tok = 'p-race:guest';
   for (const it of [file('r1'), file('r2')]) assert.equal((await upload(hosted.base, tok, 'media', it)).status, 200);
   const [p, q] = [file('p'), file('q')];
   const results = await Promise.all([p, q].map(it => put(hosted.base, tok, 'media', it.hash, 0, it.bytes.length, it.bytes).then(r => r.status)));
   assert.deepEqual(results.sort(), [200, 403]);
   const smalls = [1, 2, 3, 4].map(i => file(`ps${i}`, { tier: 'small' }));
-  assert.deepEqual(await Promise.all(smalls.map(it => put(hosted.base, tok, 'media', it.hash, 0, it.bytes.length, it.bytes, { tier: 'small' }).then(r => r.status))), [200, 200, 200, 200]);
+  assert.deepEqual((await Promise.all(smalls.map(it => put(hosted.base, tok, 'media', it.hash, 0, it.bytes.length, it.bytes, { tier: 'small' }).then(r => r.status)))).sort(), [200, 200, 200, 403]);
 });
 
 test('游客：snap / px 不受限（条数、尺寸都不管）', async () => {
@@ -396,7 +401,7 @@ test('票据路径：票据的 userId 是游客就按游客限额拦；账号票
 
   for (let i = 0; i < GUEST_LIMITS.videos; i++) assert.deepEqual(await uploadVideo(base, 'g-rw', video(`t${i}`)), { small: 200, original: 200 });
   const fourth = video('t-4');
-  assert.equal((await upload(base, 'g-rw', 'media', fourth.small)).status, 200, '小档照收');
+  assert.deepEqual(await errorOf(await upload(base, 'g-rw', 'media', fourth.small)), { status: 403, error: 'guest-video-limit' }, '小档也数');
   assert.equal((await upload(base, 'g-rw', 'media', file('t-img', { ext: 'png' }))).status, 200, '图片照收');
   assert.deepEqual(await errorOf(await put(base, 'g-rw', 'media', fourth.original.hash, 0, fourth.original.bytes.length, fourth.original.bytes)), { status: 403, error: 'guest-video-limit' });
   assert.deepEqual(await errorOf(await put(base, 'g-bare', 'media', fourth.original.hash, 0, fourth.original.bytes.length, fourth.original.bytes)), { status: 403, error: 'guest-video-limit' }, '裸编号的票据也认');
@@ -406,5 +411,5 @@ test('票据路径：票据的 userId 是游客就按游客限额拦；账号票
   // 本机回环（不看票据，也就不知道是谁）：照收
   trusted = true;
   for (let i = 0; i < 3; i++) assert.equal((await upload(base, 'whatever', 'media', file(`local${i}`))).status, 200);
-  assert.equal((await mediaStore.usage()).blobs, 6 + 2 + 1 + 3);
+  assert.equal((await mediaStore.usage()).blobs, 6 + 1 + 1 + 3);
 });

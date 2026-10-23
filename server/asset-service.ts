@@ -45,9 +45,9 @@
  *   - `X-Media-Ext: <扩展名>` 与 / 或 `X-Media-Type: <MIME>` —— 选填,决定取回时的 Content-Type。
  *     扩展名优先;只给 MIME 时按表反查扩展名;都没给就是无扩展名、`application/octet-stream`。
  *     **哪一片先带上就以哪一片为准**,之后的不再改它。
- *   - `X-Media-Tier: small | original` —— 选填,这个文件是素材小尺寸还是原尺寸(2026-10-23,游客只数视频原尺寸,
- *     `asset-store/guest-quota.mjs`)。只认 `small`,缺失、拼错、不认识的一律当 `original`;同一个哈希只要有一片
- *     没说 `small` 就记成 `original`。只影响游客的视频条数,取回、对账的回包不变。
+ *   - `X-Media-Tier: small | original` —— 选填,这个文件是素材小尺寸还是原尺寸(2026-10-23,游客的视频条数按
+ *     「原件几个、小档几个取多的」数,`asset-store/guest-quota.mjs`)。只认 `small`,缺失、拼错、不认识的一律当 `original`;
+ *     同一个哈希只要有一片没说 `small` 就记成 `original`。只影响游客的视频条数,取回、对账的回包不变。
  *   - 请求体的 `Content-Type` 不看(一般是 `application/octet-stream`)。
  * - 长度:除最后一片外每片必须恰好 `chunkSize` 字节,最后一片是 `size - chunkSize × (count - 1)`。
  *   `Content-Length` 对不上直接回 400;实收字节多了或少了也回 400,这一片不算收到。
@@ -120,7 +120,7 @@ import { Readable } from "stream";
 import path from "path";
 import { createHash } from "crypto";
 import { apiPath, isAssetServicePath, clientAddressOf, isLocalOrigin } from "./http-guard.mjs";
-import { createBlobStore, candidateFileResolver, projectScopeOfRoot, assetContextOf, setAssetContext, authorizedAssetStore, createGuestAssetQuota, guestIdOfUserId } from "./asset-store/index.mjs";
+import { createBlobStore, candidateFileResolver, projectScopeOfRoot, assetContextOf, setAssetContext, authorizedAssetStore, createGuestAssetQuota, guestIdOfUserId, SNIFF_BYTES } from "./asset-store/index.mjs";
 import {
   mediaDir, isMediaHash, extOfName, contentTypeForExt, resolveHashFile, writeMediaIndex, parseRange,
 } from "./vite-plugin-media";
@@ -177,7 +177,7 @@ export const ARTIFACT_EXTS: readonly string[] = [
 
 /**
  * 请求头里的档位 `X-Media-Tier`。原样交给数据层,由它归一(`blob-store.mjs` 的 `normalizeTier`:只认 `small`,
- * 别的一律 `original`)。这是页面说的:游客可以把原件标成 `small` 绕过视频条数,为什么可以接受见 `guest-quota.mjs` 文件头
+ * 别的一律 `original`)。这是页面说的,所以游客的视频条数不只看它(小档也数,原件几个、小档几个取多的),见 `guest-quota.mjs` 文件头
  */
 function tierFromHeaders(req: IncomingMessage): string {
   return String(req.headers["x-media-tier"] || "");
@@ -376,17 +376,17 @@ async function writeChunk(req: IncomingMessage, res: ServerResponse, store: Asse
 }
 
 async function handleComplete(res: ServerResponse, store: AssetBlobStore, hash: string, ns: AssetNamespace = "media", writer: WriteTrace = NO_TRACE) {
-  // 游客往 media 收尾:在队里数已入库的条数,够了回 403、暂存留着
+  // 游客往 media 收尾:在队里数已入库的条数,够了回 403、暂存留着;入库后再按文件头认一遍(见 completeBlob)
   const guest = writer.guest;
   if (guest) {
     return guest.quota.complete({ accountId: writer.accountId, ns, hash, store, key: guest.key },
-      () => completeBlob(res, store, hash, ns, writer),
+      (gate) => completeBlob(res, store, hash, ns, writer, gate),
       (denied) => sendJson(res, denied.status, { ok: false, error: denied.error }));
   }
   return completeBlob(res, store, hash, ns, writer);
 }
 
-async function completeBlob(res: ServerResponse, store: AssetBlobStore, hash: string, ns: AssetNamespace, writer: WriteTrace) {
+async function completeBlob(res: ServerResponse, store: AssetBlobStore, hash: string, ns: AssetNamespace, writer: WriteTrace, gate: CompleteGate | null = null) {
   const usage = writer.usage;
   const accounted = !!(usage && writer.service && usage.accounts(writer.service) && writer.projectId);
   // 收尾之前这个块已经入库:不是这次新写的(成员写的不记;渲染服务自己写过的只补项目归属)
@@ -396,6 +396,14 @@ async function completeBlob(res: ServerResponse, store: AssetBlobStore, hash: st
   if (usage && out.status === "ok") {
     if (!writer.service) usage.disown(ns, hash, writer.projectId);
     else if (accounted && (!existed || usage.has(ns, hash, writer.projectId))) usage.record({ ns, hash, size: out.size, projectId: writer.projectId as string });
+  }
+  // 游客:入库之后按这一条自己的文件头再认一遍(页面报的扩展名不算数),超了视频条数就把它删掉、回 403
+  if (gate && out.status === "ok") {
+    const verdict = await gate();
+    if (!verdict.ok) {
+      await store.remove(hash).catch(() => false);
+      return sendJson(res, verdict.status, { ok: false, error: verdict.error });
+    }
   }
   switch (out.status) {
     case "ok": return sendJson(res, 200, { ok: true, hash, size: out.size, complete: true, url: ns === "media" ? `/@media/${hash}` : `/api/asset/${ns}/${hash}` });
@@ -463,11 +471,44 @@ export function isLoopbackRequest(req: IncomingMessage): boolean {
   return address !== null && isLocalOrigin(req, address);
 }
 
+/** 数据层收尾成功之后、回包之前再判一次(游客按刚入库那一条的文件头认是不是视频);不过就删掉这一条、回它给的错误 */
+type CompleteGate = () => Promise<{ ok: true } | { ok: false; status: number; error: string }>;
+
+/**
+ * 从请求体里先读出开头最多 `n` 个字节,再原样塞回去(`unshift`),后面的处理照常从头读整个请求体。
+ * 游客整件上传按文件头认是不是视频用(`asset-store/guest-quota.mjs`)。请求体比 `n` 短就给全部。
+ * 读到结尾(`ended`)时在同一拍里塞回,赶在 `end` 事件之前:`end` 发出去之后就塞不回去了。
+ */
+function peekBody(req: IncomingMessage, n: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const parts: Buffer[] = [];
+    let got = 0, settled = false;
+    const state = (req as any)._readableState;
+    const finish = (err?: unknown) => {
+      if (settled) return;
+      settled = true;
+      req.off("readable", onReadable);
+      req.off("error", finish);
+      if (err) return reject(err);
+      const buf = Buffer.concat(parts);
+      if (buf.length) req.unshift(buf);
+      resolve(buf.subarray(0, n));
+    };
+    const onReadable = () => {
+      let chunk: Buffer | null;
+      while (got < n && (chunk = req.read()) !== null) { parts.push(chunk); got += chunk.length; }
+      if (got >= n || state?.ended || req.readableEnded) finish();
+    };
+    req.on("readable", onReadable);
+    req.once("error", finish);
+  });
+}
+
 /** 游客限额(`asset-store/guest-quota.mjs`):中间件一份,`key` 标识同一个数据层(托管下是项目,本机是那个数据层) */
 interface GuestQuotaHook {
   putChunk(who: { accountId?: string; ns: string; size: number; hash: string; ext?: string; tier?: string; store: AssetBlobStore; key: unknown }, put: () => Promise<unknown>, deny: (d: { status: number; error: string }) => unknown): Promise<unknown>;
-  complete(who: { accountId?: string; ns: string; hash: string; store: AssetBlobStore; key: unknown }, complete: () => Promise<unknown>, deny: (d: { status: number; error: string }) => unknown): Promise<unknown>;
-  whole(who: { accountId?: string; bytes: number | null; ext?: string; store: AssetBlobStore; key: unknown; needsLength: boolean }): Promise<{ ok: true; release: () => void } | { ok: false; status: number; error: string }>;
+  complete(who: { accountId?: string; ns: string; hash: string; store: AssetBlobStore; key: unknown }, complete: (gate: CompleteGate | null) => Promise<unknown>, deny: (d: { status: number; error: string }) => unknown): Promise<unknown>;
+  whole(who: { accountId?: string; bytes: number | null; ext?: string; peek?: () => Promise<Buffer>; store: AssetBlobStore; key: unknown; needsLength: boolean }): Promise<{ ok: true; release: () => void } | { ok: false; status: number; error: string }>;
 }
 
 /** 这次写入的来历:容量记账用(`usage`、`service`、`projectId`),游客限额用(`accountId`、`guest`) */
@@ -720,18 +761,25 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
   /**
    * 托管下媒体中间件的整件上传(`POST /api/media/upload/<名>`)与补算内容键(`POST /api/media/adopt`)也往项目的 media 写,
    * 不经下面的分片路由。它们由 `vite-plugin-media.ts` 自己核权,这里只先看一眼是不是游客:是就按游客限额拦,
-   * 放行后占着这个项目的游客队直到回完包;不是游客、或者核权没过(交给媒体中间件照原样回),原样 next。
+   * 放行后占着这个项目的游客队直到回完包;不是游客原样 next。
+   * - 核权出错(包括暂时性的 503)照错误回,不往下放(claude/guest-fix〔裁〕,审查 S2):原先 `catch` 了就 next,
+   *   媒体中间件再核一次、碰巧成功,这次游客的整件上传就没经过限额;
+   * - 游客不能补算内容键(审查 S3):那条路给素材收集用,游客用不到;它会把媒体目录里任何文件(包括还没收尾、
+   *   没核哈希的分片暂存 `.chunks/<哈希>/data`)挂进库,绕过收尾时的视频条数;
+   * - 整件上传报的扩展名不是视频时,先从请求体里读出开头几十个字节按文件头认(`peekBody`,审查 A2)。
    */
   const isWholeMediaWrite = (req: IncomingMessage) => req.method === "POST" && (String(req.url || "").startsWith("/api/media/upload/") || String(req.url || "").startsWith("/api/media/adopt"));
   const gateWholeMediaWrite = async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
     let lease: any;
     try {
       lease = await opts.projectAccess.resolve(req, { action: "write", resource: { ns: "media", route: apiPath(req.url) }, close: () => { req.destroy(); res.destroy(); } });
-    } catch { return next(); }
+    } catch (err: any) { return reject(req, res, err?.status ?? 503, { ok: false, error: err?.code ?? "authority-unavailable" }); }
     let verdict: Awaited<ReturnType<GuestQuotaHook["whole"]>>;
     try {
       const accountId = typeof lease.principal?.accountId === "string" ? lease.principal.accountId : undefined;
       const upload = String(req.url || "").startsWith("/api/media/upload/");
+      if (!upload && guestIdOfUserId(accountId ?? null)) verdict = { ok: false, status: 403, error: "guest-adopt-forbidden" };
+      else {
       const declared = Number(req.headers["content-length"]);
       const bytes = upload && req.headers["content-length"] !== undefined && Number.isSafeInteger(declared) && declared >= 0 ? declared : null;
       // 扩展名:整件上传从 URL 里的文件名拿(和 vite-plugin-media 的 handleMediaUpload 同一取法),补算内容键从 `path` 参数的文件名拿
@@ -740,7 +788,8 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
         const u = new URL(String(req.url || "/"), "http://promptcut.local");
         ext = extOfName(upload ? decodeURIComponent(u.pathname.split("/").pop() || "") : (u.searchParams.get("path") || ""));
       } catch { ext = ""; }
-      verdict = await guestQuota.whole({ accountId, bytes, ext, store: opts.projectStores.project(lease.projectId).stores.media, key: `project:${lease.projectId}`, needsLength: upload });
+      verdict = await guestQuota.whole({ accountId, bytes, ext, peek: () => peekBody(req, SNIFF_BYTES), store: opts.projectStores.project(lease.projectId).stores.media, key: `project:${lease.projectId}`, needsLength: upload });
+      }
     } finally { void lease.release(); }
     if (!verdict.ok) return reject(req, res, verdict.status as 403, { ok: false, error: verdict.error });
     const release = verdict.release;
