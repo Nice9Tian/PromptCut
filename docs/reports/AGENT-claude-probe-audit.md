@@ -488,7 +488,14 @@ B08a 建议改的 3 支：`claim-gate-probe` 的 15 秒硬失败**已改**（第
 
 ### 这一节之后的处置总数与验证
 
-- **删 13 / 归档 34 / 改 58 处**（归档由 32 增至 34）；`scripts/probes/` 顶层从 368 支降到 276 支 `.mjs`。
+- **删 13（11 支 `.mjs` + 2 支 `.ps1`）/ 归档 34 / 改 65 个文件**（归档由 32 增至 34）。
+  改的 65 个里：探针本体 51 支、探针夹具 1 个、台账文件 5 个、计划文档 4 份、代码里的注释指针 3 处
+  （`server/test` 两处、`src/render` 一处）、`scripts/README.md` 1 份。第十四节表里写的「改（51 处）」
+  指的是探针本体那一类，口径不同、两个数都对。
+- `scripts/probes/` 顶层 `.mjs`：基点 `2249179a` 上 317 支 → 本分支 276 支（317 − 11 删 − 30 归档 = 276）。
+  **不要拿 main 的 322 支去减**：那 322 里有 5 支是我基点之后 main 上新加的探针（`clip-speed-export-probe`、
+  `clip-speed-key-compare`、`clip-speed-ui-probe`、`guest-readonly-ui-probe`、`media-cache-probe`），
+  本分支从来没有过它们，合并后它们照常留下（见第十六节）。
 - 守门 `node scripts/acceptance/four-stage-acceptance.mjs --check-coverage`：**通过**（①284 个文件都登记或写明排除原因；
   ②0.7.18 的 38 行每行有项；③清单引用的文件都在；④跳过名单 14 条齐全；⑤0.7.19 的 50 条每条有项）。
 - 台账相关测试：`four-stage-acceptance.test.mjs` 29/29、`four-stage-acceptance-v18.test.mjs` 9/9、
@@ -500,3 +507,46 @@ B08a 建议改的 3 支：`claim-gate-probe` 的 15 秒硬失败**已改**（第
 `account-dual-user-path-probe` 就是现成的例子：只看摘要它像个没人用的壳子，一查引用有 3 支在用的探针靠它起夹具。
 所以最终取舍不是「读完就定」，而是**读出可疑 → 逐支核引用、核台账、核语义 → 才下判定**。第十四节表格最后一行
 那约 190 支，现在都过了这一遍阅读；其中 10 支被读出可疑，核完 8 留 2 归档，没有一支是只凭子 Agent 的阅读定下的。
+
+## 十六、合并进 main 会怎样：我把合并结果造出来跑过了
+
+第七节把「合不合 main」列为要用户定的事。为了让这个决定有凭据，我**没有**去合 main（写 main 要授权），
+而是用 `git merge-tree --write-tree HEAD main` 造出合并后的树，`git archive` 到临时目录里，在那上面跑守门。
+
+### 先说一件我这条分支之前不知道的事
+
+main 上有一份我基点（`2249179a`）之后新建的 `scripts/acceptance/v21-manifest.mjs`，它的文件头**专门写了给本分支的合并须知**
+（2026-10-23）。两条要点：
+
+1. 本分支把 `cut-online-browser-probe`、`account-direct-address-probe`、`update-notice-probe` 三支写进了
+   `v19-manifest.mjs` 的 `V19_EXCLUDED`（排除、不跑）；v21 清单把同样三支登记成**会跑的验收项**
+   （`V21-cut-online-br`、`V21-direct-address`、`V21-update-notice`），更严。**合并时以 v21 为准，
+   把那三行从 `V19_EXCLUDED` 里去掉。** 须知里还点明了原因：本分支给 `coverageReport()` 加的那条新检查
+   （同一支探针既被 `covers` 点名又写在排除表里就判红，原先静默通过）会让这三行在合并后当场发作。
+2. 本分支基点之后 main 上新进来的探针（`media-cache-probe`、`guest-readonly-ui-probe`、`clip-speed-*` 等）
+   「合完按它报出来的未登记项补即可」。
+
+### 实际跑出来的结果
+
+| 步骤 | 守门 `--check-coverage` |
+|---|---|
+| 合并结果原样 | **不过**，退出码 1。① 类报「既被清单项点名、又写在排除表里（台账自相矛盾）」，点名的正是那三支 |
+| 照须知把 `V19_EXCLUDED` 里那三行去掉 | **通过**，退出码 0。①290 个文件都登记或写明排除原因；③ 清单引用的文件都在；②④⑤ 照常过 |
+
+所以那份须知**既必要也充分**：不照它办守门必红，照它办就绿，没有别的要补。第 2 条也核过了——那 5 支新探针
+v21 清单里已经登记（按不带 `.mjs` 的名字写的），**不需要补**。合并后 `scripts/probes/` 顶层是 281 支 `.mjs`
+（本分支 276 + main 新加的 5）。
+
+两处说明：造树时我先只抽了 `scripts`/`server`/`src`/`tools`，③ 类因此误报两份 `docs/` 下的文件不在，
+补抽 `docs` 后消失，不是真问题；这整件事只在临时目录里做，本分支一个字没动，也没有碰 main。
+
+### 合并时的一步清单
+
+```
+git merge --no-ff claude/probe-audit        # merge-tree 试过：无冲突，自动合并的只有 TODO.md、acceptance-lib.mjs、four-stage-manifest.mjs
+# 然后删掉 scripts/acceptance/v19-manifest.mjs 里 V19_EXCLUDED 的这三行：
+#   'cut-online-browser-probe.mjs': …   'account-direct-address-probe.mjs': …   'update-notice-probe.mjs': …
+node scripts/acceptance/four-stage-acceptance.mjs --check-coverage   # 应为「守门:通过」
+```
+
+本分支落后 main 159 个提交，但没有冲突；写 main 仍须用户授权（`suggested_agent_behavior.md` 原则 4）。
