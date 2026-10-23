@@ -318,7 +318,6 @@ export const V18_EXCLUDED = {
   'account-dual-user-path-probe.mjs': '账号双用户路径夹具的公开入口(导出 runAccountDualUserPath),被 server/test/account-dual-user-path.test.mjs 直接导入,不单独跑',
   'account-password-user-path-probe.mjs': '改密选退出的原始探针(端口写死 6680～6689);V18-conv-password-probe 是它按 0.7.18 端口段改的同一套断言(47 项)的副本,以后者为准',
   'account-public-user-pages-probe.test.mjs': '公网网页探针自己的单测,由 npm test 扫(放在探针目录里)',
-  'asset-project-isolation-probe.mjs': '素材按项目隔离的旧模式(口令式)版本;账号模式以 V18-asset-isolation(asset-account-isolation-probe)为准',
   'cloud-tools-c1-site.mjs': '网页采集探针 cloud-tools-c1-probe 的本机站点夹具,不单独跑',
   'below-diff-measure-probe.mjs': RENDER_REFACTOR, 'below-stream-common.mjs': RENDER_REFACTOR, 'browser-stream-e2e-probe.mjs': RENDER_REFACTOR, 'browser-stream-node-probe.mjs': RENDER_REFACTOR,
   'canvas-encode-paths-probe.mjs': RENDER_REFACTOR, 'card-plan-key-compare.mjs': RENDER_REFACTOR, 'card-policy-particles-probe.mjs': RENDER_REFACTOR, 'card-policy-probe.mjs': RENDER_REFACTOR,
