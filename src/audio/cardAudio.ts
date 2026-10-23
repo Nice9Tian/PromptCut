@@ -10,6 +10,7 @@ import { ONLINE_CARD_AUDIO_BLOCKED, onlineCardAudioRunnable } from "../online/so
 import { projectCardGraph, cardJson } from "../kernel/cardGraph.mjs";
 import { clipHasEmbeddedAudio, cardAudioIdentity, resolveCardAudioRendition, assertAudiovisualCardKind } from "../kernel/cardAudioRendition.mjs";
 import { audioProjectOf } from "../kernel/cutAudio.mjs";
+import { speedMutesSource } from "../kernel/clipTime.mjs";
 
 export const CARD_AUDIO_SAMPLE_RATE = 48000 as const;
 export const CARD_AUDIO_MAX_BLOCK_FRAMES = 1_048_576;
@@ -264,7 +265,8 @@ export function onlineCardAudioBlocker(project: unknown, nodeId: string): string
 
 /** A generated node owns a video-backed clip's audio too; callers must mute that native media element. */
 export function shouldMuteNativeAudio(project: Project, clip: TrackClip, globallyMuted = false) {
-  return globallyMuted || !!clip.audioMuted || !!cardAudioNodeOf(project, clip);
+  // 变速的素材段不出原声(〔裁〕第一版,kernel/clipTime.mjs)
+  return globallyMuted || !!clip.audioMuted || speedMutesSource(clip, project) || !!cardAudioNodeOf(project, clip);
 }
 
 /** Active generated audio is independent of whether its source happened to be an audio asset, video, or no media asset. */
@@ -273,7 +275,7 @@ export function generatedCardAudioClipsAt(project: Project, t: number): { clip: 
   // 在线浏览器模式:素材效果卡(含音频素材效果卡)在这台设备上渲染不了(C10 契约第 9 节,由渲染节点出),
   // 不求值、不发 `/@media/<hash>/pcm` 请求;这一段的原生声音照旧被 `shouldMuteNativeAudio` 静掉,不拿素材声音顶上
   for (const track of project.tracks) for (const clip of track.clips) {
-    if (track.hidden || track.muted || clip.audioMuted || !cardAudioNodeOf(project, clip) || t < clip.start || t >= clip.end) continue;
+    if (track.hidden || track.muted || clip.audioMuted || speedMutesSource(clip, project) || !cardAudioNodeOf(project, clip) || t < clip.start || t >= clip.end) continue;
     out.push({ clip, media: clip.mediaId ? project.media.find(m => m.id === clip.mediaId) : undefined, volume: opacityAt(clip, t) * (clip.audioVolume ?? 1) });
   }
   return out;
@@ -398,7 +400,7 @@ export function persistentCardAudio(project: Project, clip: TrackClip) {
 /** 导出前核一遍:剪辑段按混音同一份展开(`audioProjectOf`)走进被引用的剪辑,里面出声的有声卡缺了、过期了同样当场报出原片段 */
 export function assertProjectCardAudio(project: Project) {
   for (const track of audioProjectOf(project).tracks) for (const clip of track.clips) {
-    if (track.hidden || track.muted || clip.audioMuted || !(clipHasEmbeddedAudio(project, clip, hooks?.getCard) || syncedUserCards().get(clip.cardId)?.embeddedAudio)) continue;
+    if (track.hidden || track.muted || clip.audioMuted || speedMutesSource(clip, project) || !(clipHasEmbeddedAudio(project, clip, hooks?.getCard) || syncedUserCards().get(clip.cardId)?.embeddedAudio)) continue;
     persistentCardAudio(project, clip);
   }
 }

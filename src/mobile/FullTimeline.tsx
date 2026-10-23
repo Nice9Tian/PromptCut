@@ -6,6 +6,7 @@
  */
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 import type { Project, Track, TrackClip } from "../kernel/project";
+import { clipSpeed, speedLabel, speedMutesSource } from "../kernel/clipTime.mjs";
 import { clipKind, clipName } from "./mainContent";
 import { PX_MAX, PX_MIN, TL_PAD, ZOOM_STEP, clampPx, fitPx, playheadX, rulerStep, timeToX, zoomAround } from "./zoom";
 import { Icon } from "./icons";
@@ -251,6 +252,8 @@ export const FullTimeline = forwardRef<FullTimelineHandle, {
                       <span className="h l" />
                       {clipName(project, c, props.cardName)}
                       {c.audioMuted && <span className="mute"><Icon name="mute" />已静音</span>}
+                      {/* 变速段:写明倍数和「无原声」(〔裁〕第一版变速段不出原声,kernel/clipTime.mjs) */}
+                      {!c.audioMuted && speedMutesSource(c, project) && <span className="mute" data-pcm="clip-speed" title="变速段不出原声"><Icon name="mute" />{speedLabel(clipSpeed(c))} 无原声</span>}
                       <span className="h r" />
                     </div>
                   );

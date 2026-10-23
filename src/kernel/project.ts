@@ -251,6 +251,12 @@ export interface TrackClip extends Clip {
   mediaId?: string;
   /** 视频段从素材的第几秒开始播(默认 0) */
   mediaOffset?: number;
+  /**
+   * 视频段的播放速度(缺省 1;0.5 慢放、2 快放,范围见 kernel/clipTime.mjs)。素材时刻 = mediaOffset + (t − start) × speed,
+   * 各处一律调 `clipTime.mjs` 换算。等于 1 时**不写这个字段**(改回 1 就删掉),身份键才逐字不变。
+   * 〔裁〕第一版变速的视频段不出原声(`speedMutesSource`),界面写明;声音段(含音画分离出来的)变速时随倍率变调照常出声。
+   */
+  speed?: number;
   audioMuted?: boolean;
   /** 独立声音音量，0~1；缺省为原声 1。 */
   audioVolume?: number;
@@ -575,6 +581,7 @@ export function audioClipsAt(
     for (const c of tr.clips) {
       if (!c.mediaId || t < c.start || t >= c.end) continue;
       const media = p.media.find((m) => m.id === c.mediaId);
+      // 声音段变速照常出声(随倍率变调,预览里 playbackRate = speed、不保调;kernel/clipTime.mjs)
       if (!media || media.kind !== "audio" || tr.muted || c.audioMuted) continue;
       out.push({ clip: c, media, volume: opacityAt(c, t) * (c.audioVolume ?? 1) });
     }

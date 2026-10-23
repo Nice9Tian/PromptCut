@@ -5,6 +5,7 @@
  */
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { Project, TrackClip } from "../kernel/project";
+import { clipSpeed, isSpeedChanged, speedLabel, speedMutesSource } from "../kernel/clipTime.mjs";
 import { ThumbImg, useThumb } from "./Thumb";
 import type { Transition } from "../kernel/transitions";
 import { boundaryTransition, cardPosAtTime, clipKind, mainTotal, timeAtCardPos } from "./mainContent";
@@ -145,7 +146,8 @@ export function ThumbStrip(props: {
           <button type="button" className="madd" aria-label="添加素材" title="添加素材" data-pcm="main-add" onClick={props.onAddMedia}><Icon name="plus" /></button>
           {clips.map((c, i) => {
             const tr = i < clips.length - 1 ? boundaryTransition(project, c, clips[i + 1]) : null;
-            const muted = !!c.audioMuted;
+            // 变速段原声不出(〔裁〕,kernel/clipTime.mjs):和静音一样挂静音图标,时长后面带倍数
+            const muted = !!c.audioMuted || speedMutesSource(c, project);
             // 补空档补进来的长段可能在几处各出现一截(同一个 id),键带上起点
             const key = `${c.id}@${c.start}`;
             return [
@@ -159,7 +161,7 @@ export function ThumbStrip(props: {
               >
                 <BlockThumb project={project} clip={c} />
                 <span className="no">{i + 1}</span>
-                <span className="du">{fmtDur(c.end - c.start)}{muted && <Icon name="mute" />}</span>
+                <span className="du">{fmtDur(c.end - c.start)}{isSpeedChanged(c) && c.mediaId ? ` ${speedLabel(clipSpeed(c))}` : ""}{muted && <Icon name="mute" />}</span>
               </div>,
               i < clips.length - 1 && (
                 tr

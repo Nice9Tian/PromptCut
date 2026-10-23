@@ -11,6 +11,7 @@
  * @param {number} [opts.duration] - 截取时长(秒)
  * @returns {string[]}
  */
+
 export function measureArgs({ file, offset, duration }) {
   // -nostats:进度行(size= time= …)是 \r 分隔、和 ebur128 的逐帧行挤在一起,解析时会吞掉整秒的点
   const args = ["-hide_banner", "-nostats"];
@@ -18,6 +19,15 @@ export function measureArgs({ file, offset, duration }) {
   if (duration !== undefined) args.push("-t", String(duration));
   args.push("-i", file, "-map", "0:a", "-af", "ebur128=peak=true", "-f", "null", "-");
   return args;
+}
+
+/**
+ * 声音段变速(变调)的 ffmpeg 滤镜,和 `src/kernel/clipTime.mjs` 的 ffmpegVarispeed 逐字同一份(Agent 服务进程会载这个文件,
+ * 这一侧不许 import src/,守门测试 SEAM-2 / SEAM-3,所以照抄)。速度为 1 时回空数组。
+ */
+function ffmpegVarispeed(speed, rate = 48000) {
+  if (!(speed > 0) || speed === 1) return [];
+  return [`aresample=${rate}`, `asetrate=${Math.round(rate * speed)}`, `aresample=${rate}`];
 }
 
 /**
@@ -31,11 +41,13 @@ export function timelineMixParts(entries, duration) {
   const inputs = [];
   const filters = [];
   entries.forEach((p, i) => {
-    inputs.push("-ss", String(p.offset), "-t", String(p.dur), "-i", p.file);
+    // 变速的声音段:读 dur × speed 秒素材、变速变调成 dur 秒(和导出两条混音路同一份 ffmpegVarispeed,kernel/clipTime.mjs)
+    const speed = Number(p.speed) > 0 ? Number(p.speed) : 1;
+    inputs.push("-ss", String(p.offset), "-t", String(speed !== 1 ? p.dur * speed : p.dur), "-i", p.file);
     // 因为这里只测音频没有视频文件参与，输入文件全都是音频，所以输入索引从 0 开始。
     // 而 mux-audio.mjs 里有视频作为输入 0，所以那里的音频是从 1 开始的。
     const k = i;
-    const chain = [`adelay=${Math.round(p.start * 1000)}:all=1`];
+    const chain = [...ffmpegVarispeed(speed), `adelay=${Math.round(p.start * 1000)}:all=1`];
     if (p.fadeIn > 0) chain.push(`afade=t=in:st=${p.start.toFixed(3)}:d=${p.fadeIn}`);
     if (p.fadeOut > 0) {
       chain.push(`afade=t=out:st=${(p.start + p.dur - p.fadeOut).toFixed(3)}:d=${p.fadeOut}`);

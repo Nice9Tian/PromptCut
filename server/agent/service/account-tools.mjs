@@ -292,7 +292,8 @@ export async function createAccountToolset({ root, dataDir, context, resources, 
       same(ctx);
       const snap = await snapshot();
       return { projectRev: snap.rev, tracks: (snap.project?.tracks ?? []).map((t) => ({ id: t.id,
-        clips: (t.clips ?? []).map((c) => ({ id: c.id, mediaId: c.mediaId, start: c.start, end: c.end, mediaOffset: c.mediaOffset })) })) };
+        // speed:片段速度,只在有时才带(hosted-workflow 按它把文字稿换到时间轴)
+        clips: (t.clips ?? []).map((c) => ({ id: c.id, mediaId: c.mediaId, start: c.start, end: c.end, mediaOffset: c.mediaOffset, ...(c.speed !== undefined ? { speed: c.speed } : null) })) })) };
     },
     async setMediaShots(ctx, { mediaId, expectedMediaRev, shots }) { same(ctx); return writeMedia('detect_shots', mediaId, expectedMediaRev, (h) => h.media.setShots(mediaId, shots)); },
     async setMediaSubjects(ctx, { mediaId, expectedMediaRev, subjects }) { same(ctx); return writeMedia('detect_subjects', mediaId, expectedMediaRev, (h) => h.media.setSubjects(mediaId, subjects)); },

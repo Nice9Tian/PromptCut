@@ -12,6 +12,7 @@
  */
 import { PNG } from "pngjs";
 import { clipFilterOpsAt, ffmpegStaticChain } from "../src/kernel/filters.mjs";
+import { mediaTimeAt } from "../src/kernel/clipTime.mjs";
 
 /** 把素材段全部拿掉,只剩卡片:页面里没有 <video>,每一帧都能判静止 */
 export function cardsOnly(project) {
@@ -52,7 +53,8 @@ export function mediaLayersAt(project, t) {
       // 这里的素材层铺满全画面、不认 clip.frame(老问题),所以模糊按画布像素算、不乘框的缩放
       const ops = clipFilterOpsAt(project, c, t);
       const filter = ops ? ffmpegStaticChain(ops) : "";
-      layers.push({ clip: c, media, opacity, mediaTime: (c.mediaOffset ?? 0) + (t - c.start), ...(filter ? { filter } : null) });
+      // 素材时刻按 kernel/clipTime.mjs 的统一换算(含片段速度;缺省 1 与原来 off + (t − start) 逐位相同)
+      layers.push({ clip: c, media, opacity, mediaTime: mediaTimeAt(c, t), ...(filter ? { filter } : null) });
     }
   }
   return layers;

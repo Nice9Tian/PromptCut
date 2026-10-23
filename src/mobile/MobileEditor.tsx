@@ -30,7 +30,7 @@ import { FullTimeline, type FullTimelineHandle } from "./FullTimeline";
 import { Icon } from "./icons";
 import { StageButton, SubNav, fmtTc, useConfirm, useToast, type SubItem } from "./ui";
 import {
-  AssetsSheet, CardsSheet, ClipsSheet, ConflictSheet, ExportSheet, MembersSheet, ParamsSheet,
+  AssetsSheet, CardsSheet, ClipsSheet, ConflictSheet, ExportSheet, MembersSheet, ParamsSheet, SpeedSheet,
   conflictBarText, useConflicts, type AssetTab, type CardTab, type ParamsTarget, type TransitionTarget,
 } from "./sheets";
 import { useMembers } from "./useMembers";
@@ -45,6 +45,7 @@ type SheetState =
   | { kind: "cards"; tab: CardTab; transition: TransitionTarget | null }
   | { kind: "clips" }
   | { kind: "params"; target: ParamsTarget }
+  | { kind: "speed"; clipId: string }
   | { kind: "conflict" }
   | { kind: "members" }
   | { kind: "export" }
@@ -268,7 +269,8 @@ export function MobileEditor() {
     const muteItem: SubItem = { icon: "mute", label: c.audioMuted ? "恢复声音" : "静音", pcm: "sub-mute", run: () => mute(c) };
     if (kind === "card") items.push({ icon: "style", label: "样式", pcm: "sub-style", run: params }, { icon: "opacity", label: "不透明度", pcm: "sub-opacity", run: params });
     else if (kind === "audio") items.push(muteItem, { icon: "volume", label: "音量", pcm: "sub-volume", run: params });
-    else items.push(...(kind === "video" ? [muteItem] : []), { icon: "adjust", label: "调整", pcm: "sub-adjust", run: params });
+    // 视频段:静音、速度、调整(演示稿 toolsFor 的顺序);「速度」打开速度面板(store 的 setClipSpeed,〔裁〕变速段不出原声)
+    else items.push(...(kind === "video" ? [muteItem, { icon: "speed", label: "速度", pcm: "sub-speed", run: () => setSheet({ kind: "speed", clipId: c.id }) } as SubItem] : []), { icon: "adjust", label: "调整", pcm: "sub-adjust", run: params });
     items.push({ icon: "trash", label: "删除", pcm: "sub-del", run: () => del(c) });
     return items;
   };
@@ -412,6 +414,7 @@ export function MobileEditor() {
         onAdded={(clip) => { setSheet(null); selectClip(clip.id); if (page !== "timeline") goPage("timeline"); }} />}
       {sheet?.kind === "clips" && <ClipsSheet onClose={() => setSheet(null)} onSwitched={(name) => { selectClip(null); toast(`缩略时间轴已换成“${name}”`); if (page === "timeline") requestAnimationFrame(() => timeline.current?.fit()); }} />}
       {sheet?.kind === "params" && <ParamsSheet target={sheet.target} onClose={() => setSheet(null)} onAskAgent={(id) => { const c = findClip(getState().project, id)?.clip; if (c) refClip(c); }} />}
+      {sheet?.kind === "speed" && <SpeedSheet clipId={sheet.clipId} onClose={() => setSheet(null)} />}
       {sheet?.kind === "conflict" && <ConflictSheet onClose={() => setSheet(null)} />}
       {sheet?.kind === "members" && <MembersSheet info={members} onClose={() => setSheet(null)} />}
       {sheet?.kind === "export" && <ExportSheet onClose={() => setSheet(null)} />}

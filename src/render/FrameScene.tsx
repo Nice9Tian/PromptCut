@@ -5,6 +5,7 @@ import type { Timeline } from "../kernel/types";
 import { frameCss } from "../kernel/layout";
 import { emphasisFilter } from "../kernel/emphasis";
 import { clipFilterOpsAt, cssFilter } from "../kernel/filters.mjs";
+import { clipSpeed, mediaTimeAt } from "../kernel/clipTime.mjs";
 import { type PixelMapDef } from "../kernel/pixelMap.mjs";
 import { drawPixelMap } from "./pixelMapGl";
 import { graphVisualNode } from "./cards/GraphCard";
@@ -19,6 +20,15 @@ import { MissingMaterial } from "./MissingMaterial";
 import { SceneHostContext } from "./CutSegmentScene";
 
 const NO_HASHES: readonly string[] = [];
+
+/**
+ * 导出 / 预渲染取帧的素材时刻(`data-pc-media-time`,截图那一步 `frameMedia.ts` 按它 seek)。
+ * 变速段按 `kernel/clipTime.mjs` 的统一换算;缺省 1 时保留这里原来的运算顺序 `(mediaOffset + t) − start` ——
+ * 浮点加减不满足结合律,换成 `mediaOffset + (t − start)` 可能差最后一位,导出取帧要逐位不变。
+ */
+function exportMediaTime(clip: TrackClip, t: number): number {
+  return Math.max(0, clipSpeed(clip) === 1 ? (clip.mediaOffset ?? 0) + t - clip.start : mediaTimeAt(clip, t));
+}
 
 /**
  * 素材层上的像素映射。画面由 WebGL2 片元着色器算(render/pixelMapGl.ts):表达式在
@@ -76,7 +86,7 @@ function PixelMappedMedia({ media, clip, t, project, style, def, live = false, p
     if (!live) return;
     const v = source.current;
     if (v instanceof HTMLVideoElement) {
-      driveMedia(v, { target: targetTimeOf(clip, t), playing, volume: 0, scrubbing });
+      driveMedia(v, { target: targetTimeOf(clip, t), playing, volume: 0, scrubbing, rate: clipSpeed(clip) });
       v.requestVideoFrameCallback(() => draw());
     }
     const tv = targetSource.current;
@@ -111,7 +121,7 @@ function PixelMappedMedia({ media, clip, t, project, style, def, live = false, p
   return <>
     {isImageMedia(media) ? <img ref={source as any} src={srcOf(media)} onLoad={live ? () => draw() : undefined} data-pc-media-src={media.url} data-pc-media-hidden="true" alt="" style={hidden} /> :
       <video ref={source as any} muted playsInline preload={load} src={srcOf(media)} data-pc-media-src={media.url} data-pc-media-hidden="true"
-        data-pc-media-time={Math.max(0, (clip.mediaOffset ?? 0) + t - clip.start)} style={hidden} />}
+        data-pc-media-time={exportMediaTime(clip, t)} style={hidden} />}
     {targetMedia ? (isImageMedia(targetMedia) ? <img ref={targetSource as any} src={srcOf(targetMedia)} onLoad={live ? () => draw() : undefined} data-pc-media-src={targetMedia.url} data-pc-media-hidden="true" alt="" style={targetHidden} /> :
       <video ref={targetSource as any} muted playsInline preload={load} src={srcOf(targetMedia)} data-pc-media-src={targetMedia.url} data-pc-media-hidden="true"
         data-pc-media-time={Math.max(0, t)} style={targetHidden} />) : null}
@@ -293,7 +303,7 @@ export function FrameScene({
             return <PixelMappedMedia media={media} clip={clip} t={t} project={project} style={style} def={def} />;
           })() : isImageMedia(media) ? <img data-pc-media-src={media.url} alt="" style={{ ...style, visibility: "hidden" }} /> :
             <video muted playsInline preload="none" data-pc-media-src={media.url}
-              data-pc-media-time={Math.max(0, (clip.mediaOffset ?? 0) + t - clip.start)}
+              data-pc-media-time={exportMediaTime(clip, t)}
               style={{ ...style, visibility: "hidden" }} />}
         </div>;
       })}

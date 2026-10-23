@@ -22,6 +22,7 @@ import { requestCaptions } from "../left/captionsBus";
 import { CaptionLines } from "./CaptionLines";
 import { captionsOf, isCaptionClip } from "../../kernel/captions";
 import { cutDuration } from "../../kernel/cutSegments";
+import { clipSpeed, isSpeedChanged, speedLabel } from "../../kernel/clipTime.mjs";
 import { openCutInTimeline } from "./CutTabs";
 import { useReadOnly } from "../readOnly";
 
@@ -45,6 +46,8 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   const cutName = useStore((s) => (clip.cutId ? s.project.cuts?.find((c) => c.id === clip.cutId)?.name ?? null : null));
   const cutTotal = useStore((s) => (clip.cutId ? cutDuration(s.project, clip.cutId) : 0));
   const label = clip.cutId ? (cutName ? `剪辑 · ${cutName}` : "剪辑 · (已不存在)") : clip.cardId ? clipCardLabel(knownCardName(clip.cardId)) : clip.label;
+  // 变速的视频段:名字后面带上倍数(kernel/clipTime.mjs),一眼看得出这段改过速度
+  const shownLabel = isSpeedChanged(clip) && clip.mediaId ? `${label ?? ""} · ${speedLabel(clipSpeed(clip))}` : label;
   // 这台设备跑不了的卡不挂任何「本地 PC 辅助渲染」的徽标(2026-10-21 用户定:没有这种情况;画面由渲染节点出)
   // 按素材类型上色:文字 / 视频 / 转场… 各一档,一眼读得出片段是什么
   const trackKind = clipTrackKind(clip, (id) => getState().project.media.find((m) => m.id === id));
@@ -52,7 +55,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   const canBecomeAudio = !!clip.mediaId && getState().project.media.find((m) => m.id === clip.mediaId)?.kind === "video";
   const embeddedAudio = clipHasEmbeddedAudio(getState().project, clip, getCard);
   const hasAudio = clipHasAudio(getState().project, clip, getCard);
-  const muteReason = clipMuteReason(clip, track);
+  const muteReason = clipMuteReason(clip, track, getState().project);
   const selectedAudioIds = selection.includes(clip.id) ? selection : [clip.id];
   const reportAudio = (result: { ok: boolean; error?: string }) => reportClipAudioResult(result, message => window.alert(message));
 
@@ -290,10 +293,10 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
           // 字幕卡:色块里画出一条条字幕,点它跳过去、拖它挪时间、双击改字
           <CaptionLines clip={clip} height={ROW_SIZE_H[rowSize]} />
         ) : rowSize === "small" ? (
-          <span className="truncate pointer-events-none font-medium drop-shadow-md w-full">{label}</span>
+          <span className="truncate pointer-events-none font-medium drop-shadow-md w-full" data-pc-clip-speed={isSpeedChanged(clip) ? clipSpeed(clip) : undefined}>{shownLabel}</span>
         ) : (
           <div className="flex flex-col items-start justify-center overflow-hidden pointer-events-none min-w-0 w-full leading-tight">
-            <span className="truncate font-medium drop-shadow-md w-full">{label}</span>
+            <span className="truncate font-medium drop-shadow-md w-full" data-pc-clip-speed={isSpeedChanged(clip) ? clipSpeed(clip) : undefined}>{shownLabel}</span>
             {subtitle && (
               <span className={`truncate text-[10px] opacity-70 w-full ${rowSize === 'large' ? 'mt-0.5' : ''}`}>
                 {subtitle}

@@ -15,6 +15,7 @@
 import { emphasisFilter } from "../kernel/emphasis";
 import { clipFilterOpsAt, cssFilter, type FilterDef } from "../kernel/filters.mjs";
 import type { TrackClip } from "../kernel/project";
+import { mediaTimeAt } from "../kernel/clipTime.mjs";
 import { planSync } from "./mediaSync";
 
 /** 上一次由我们发起的纠偏 seek 的时刻,按元素记 */
@@ -26,6 +27,8 @@ export interface Want {
   playing: boolean;
   volume: number;
   scrubbing: boolean;
+  /** 基准播放速率 = 片段速度(`TrackClip.speed`,缺省 1);纠偏的 ±10% 在它上面浮动 */
+  rate?: number;
 }
 /**
  * 每个元素**最新的**「想去哪」。seek 落定、拖动节流到点时拿它再判一次;
@@ -55,6 +58,7 @@ export function syncMediaEl(el: HTMLMediaElement, want: Want) {
     paused: el.paused,
     ended: el.ended,
     target: want.target,
+    baseRate: want.rate,
     playing: want.playing,
     scrubbing: want.scrubbing,
     now: realNow(),
@@ -116,8 +120,9 @@ export function releaseMedia(el: HTMLMediaElement | null) {
   if (!el.paused) el.pause();
 }
 
+/** 播放头换算到这段素材上的时刻(`kernel/clipTime.mjs`,含片段速度) */
 export function targetTimeOf(clip: TrackClip, t: number) {
-  return (clip.mediaOffset ?? 0) + (t - clip.start);
+  return mediaTimeAt(clip, t);
 }
 
 /**
