@@ -1,6 +1,6 @@
 /**
  * 账号级整理信息(云端分组)的服务端:`server/docservice/modules/account-org.mjs` 与公开路由 `/hosted/shared/account/start-org`。
- * 裁定 V22-05～09(`docs/plan/release-021-rulings.md`),设计见 `docs/reports/AGENT-claude-groups-local-cloud.md`。
+ * 裁定 V22-05～09(`docs/plan/release-021-rulings.md`),设计见 `docs/archive/agent-reports/AGENT-claude-groups-local-cloud.md`。
  *
  *   ORG-1  get / put 往返:没存过是 version 0、org null;写入后版本 1,读回一致;再写 baseVersion 对得上才加一
  *   ORG-2  版本冲突回 409 并带回云端那一份(含 version),不写;用带回的版本重传就成

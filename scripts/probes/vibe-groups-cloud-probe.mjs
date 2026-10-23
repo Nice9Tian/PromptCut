@@ -1,7 +1,7 @@
 // First import protects user directories and the shared port file before any fixture import.
 import '../lib/no-user-dirs.mjs';
 /**
- * 云端分组真跑一遍(分支 `claude/groups-local-cloud`,报告 `docs/reports/AGENT-claude-groups-local-cloud.md`):
+ * 云端分组真跑一遍(分支 `claude/groups-local-cloud`,报告 `docs/archive/agent-reports/AGENT-claude-groups-local-cloud.md`):
  * 在线浏览器(`VITE_PC_ONLINE=1` 的 vite dev)里两个互相隔离的浏览器上下文当「两台设备」登录同一个账号,
  * 云端分组走**真的**服务端:真的 `mountAccountProjects` + 真的权威(`createAccountHostedRuntime`)+ 真的整理信息存储
  * (`server/docservice/modules/account-org.mjs`,落在临时目录的文件里),只有账号服务那一层(`/api/account/me`、
@@ -40,7 +40,7 @@ const argv = process.argv.slice(2);
 const arg = (key, dflt) => { const i = argv.indexOf(key); return i < 0 ? dflt : argv[i + 1]; };
 const URL_BASE = arg('--url', 'http://127.0.0.1:5964');
 const API_PORT = Number(arg('--api-port', '5969'));
-const OUT = path.resolve(arg('--out', path.join(ROOT, 'docs/reports/AGENT-claude-groups-local-cloud-shots')));
+const OUT = path.resolve(arg('--out', path.join(ROOT, 'docs/archive/agent-reports/AGENT-claude-groups-local-cloud-shots')));
 await fs.mkdir(OUT, { recursive: true });
 
 const fails = [];

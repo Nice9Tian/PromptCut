@@ -1,6 +1,6 @@
 /**
  * 账号级整理信息(云端分组):语义 `docs/semantics/product/document-service.md`「账号级整理信息」(拟稿,待用户过目)、
- * 设计与裁定见 `docs/reports/AGENT-claude-groups-local-cloud.md`、`docs/plan/release-021-rulings.md` 的 V22-05～09。
+ * 设计与裁定见 `docs/archive/agent-reports/AGENT-claude-groups-local-cloud.md`、`docs/plan/release-021-rulings.md` 的 V22-05～09。
  *
  * 云端文档服务替每个**网站账号**存一份整理信息:云端分组、云端项目放在哪个分组、置顶、归档、手排顺序、云端对话的置顶归档。
  * 只有这个账号自己读写;**游客没有**(游客令牌一律拒);别的账号看不到。它只是对项目列表的整理,不改变项目存在状态、创建者、成员。
