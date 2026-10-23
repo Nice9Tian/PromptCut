@@ -532,6 +532,25 @@ export function TopBar() {
     window.dispatchEvent(new Event("pc-go-home"));
   };
 
+  /**
+   * 去氛围式那一屏（顶栏工作方式开关的第一格）。
+   *
+   * 走的就是「回开始页」那条路：在线浏览器的开始页缺省就是氛围式（`StartPage.tsx` 的 `OnlineStartPage`），
+   * 所以离开编辑界面就到了。只多做一件事——把 `?ui=classic` 这个排障后门从地址里清掉，
+   * 否则带着它回去会落到老的账号表单那一页，而不是氛围式。
+   */
+  const goVibe = () => {
+    if (dirty && !confirm("当前项目还有未保存的改动，切到氛围式会丢掉它们。继续？")) return;
+    try {
+      const url = new URL(location.href);
+      url.searchParams.delete("ui");
+      history.replaceState(null, "", url);
+    } catch {
+      // 地址改不了(少见)也不拦着走,顶多是落到老那一页
+    }
+    window.dispatchEvent(new Event("pc-go-home"));
+  };
+
   // 标题栏菜单和顶栏里的按钮共用同一套动作，避免维护两份文件/导出逻辑。
   // WindowTitleBar 只负责呈现菜单，通过这个事件把选择交回编辑器。
   useEffect(() => {
@@ -622,7 +641,7 @@ export function TopBar() {
       */}
       {tier !== "narrow" && (
         <div className="pc-bar-group">
-          <ModeSwitch onOpenSkill={() => setSkillOpen(true)} />
+          <ModeSwitch onOpenSkill={() => setSkillOpen(true)} onEnterVibe={goVibe} />
         </div>
       )}
       {/* 「⋯」任何宽度都在:皮肤只住在这里面,收起来就没入口了 */}
@@ -698,7 +717,7 @@ export function TopBar() {
           {/* 模式开关只在窄档收进来,宽档它还在条上;项目设置已经住进「项目」菜单 */}
           {tier === "narrow" && (
             <div className="pc-more-menu-row">
-              <ModeSwitch onOpenSkill={() => { setMenuOpen(false); setSkillOpen(true); }} />
+              <ModeSwitch onOpenSkill={() => { setMenuOpen(false); setSkillOpen(true); }} onEnterVibe={() => { setMenuOpen(false); goVibe(); }} />
             </div>
           )}
         </div>,

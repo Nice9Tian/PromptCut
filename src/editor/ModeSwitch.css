@@ -1,19 +1,19 @@
 /*
- * 二选一的分段控件(传统式 / SKILL)。一个整体:外面一圈边框、里面两格等宽,一块滑块在底下移动。
+ * 三选一的分段控件(氛围式 / 传统式 / SKILL)。一个整体:外面一圈边框、里面三格等宽,一块滑块在底下移动。
  * 高度 28px,和顶栏其它控件(.pc-btn / .pc-select)对齐。
  */
 .pc-modeswitch {
   position: relative;
   display: grid;
-  /* 两格等宽 —— 滑块靠 translateX(index * 100%) 定位,等宽才对得上 */
-  grid-template-columns: repeat(2, 1fr);
+  /* 三格等宽 —— 滑块靠 translateX(index * 100%) 定位,等宽才对得上 */
+  grid-template-columns: repeat(3, 1fr);
   height: 28px;
   padding: 2px;
   border: 1px solid var(--ui-border-strong);
   border-radius: var(--ui-radius, 6px);
   background: var(--ui-panel-2);
   /* 顶栏放不下时整体收缩,但别被压扁到看不清 */
-  min-width: 124px;
+  min-width: 186px;
   flex: 0 0 auto;
 }
 
@@ -22,7 +22,7 @@
   position: absolute;
   top: 2px;
   left: 2px;
-  width: calc((100% - 4px) / 2);
+  width: calc((100% - 4px) / 3);
   height: calc(100% - 4px);
   border-radius: calc(var(--ui-radius, 6px) - 1px);
   background: var(--ui-accent-soft);
