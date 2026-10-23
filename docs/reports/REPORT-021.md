@@ -317,6 +317,8 @@ Google 验签过了、账号认出来了、网站会话建起来了，**四次�
 4. **`docs/plan/guest-identity-semantics-dryrun.md` 删不删**：那份文件自己写着「用户点头之后删掉它」，用户还没点过这个头，所以留着。
 5. **0.7.19、0.7.20 的补丁**：已补传官网（本来是待用户项，2026-10-23 做掉了）。
 6. **网盘导入在生产上还没开**（0.7.24 新增）：代码已上线，但节点上没配那三个环境变量，所以素材页点「从网盘导入」会显示「未配置」并列出要配什么。要开它得先做两件只有用户能做的事：① 在 Google 控制台把 `https://<主站域名>/oauth2callback` 登记成已授权的重定向 URI（A2 那条路要用）；② 决定 `PROMPTCUT_GOOGLE_CLIENT_SECRET_FILE` 这个密钥文件放在节点的哪个路径下、由谁拥有（现在的规矩是 0600、属主为服务用户，和 `PROMPTCUT_AGENT_CLIENT_KEY_FILE` 同待遇）。只配 A3（一次性令牌）那条路的话不需要密钥文件。
+   **2026-10-24 补（`claude/drive-connector` 那个会话查出来并自测过，我复核了端口与清单）**：要开的不止那两样。OAuth 客户端的 JavaScript 来源、重定向 URI，以及 API 密钥 `PromptCut Picker (localhost 5321)` 的网站限制，**三处登记的全是 `localhost:5321`** —— 那是当初给可行性探针随手挑的端口。而开发服务器是 **5190**（`.claude/launch.json`）、桌面版是 **5210**（`desktop/src-tauri/src/lib.rs` 的 `EDITOR_PORT`，我都核过）。在这两个端口上点「从网盘导入」会三样各撞一堵墙：Picker 被 API 密钥的网站限制挡、A3 的令牌弹窗被 JavaScript 来源挡、A2 换令牌被重定向 URI 挡。补登记要用户本人在 Google 控制台点保存。
+8. **在线产物里那三条网盘路径本来就不该在**（0.7.24 的 `storagePaths` 是治标）：0.7.24 合进来时 `C10A-API-03` 报「在线产物里多了 `/api/media/storage/connect|disconnect|import`」，我当时的做法是在棘轮里**单开一桶登记**这三条（照样只许精确三条）。`claude/drive-connector` 后来给了治本的改法：`src/editor/io/storageImport.ts` 三个函数开头内联一句 `if (!storageImportSupported) throw …`，`storageImportSupported` 在在线构建里是编译期常量 `false`，打包器据此把后面的代码连同字面量一并剪掉（**必须内联写**，抽成辅助函数就静态判不出不可达，字面量照旧留着）；剪掉之后 `c10a-online-api-paths.json` 里那三条也要删（这道门两个方向都判）。我在本分支的在线产物里复核过：**这三条字面量现在各出现 1 处，确实在包里**。那条分支还没合，三个文件的净差是 `storageImport.ts`、`c10a-online-api-paths.json` 与任务书。
 7. **发版前全量「红的那条单独复跑算不算绿」**（0.7.24 新增）：0.7.24 发版前有两轮全量各随机红一条、两条不是同一条、单独跑都绿（已记 `TODO.md`）。把通过条件放宽成「复跑绿了也算」是改基线门槛，按原则 3「基线始终全绿」要你定，所以**没有自行改 `verification.md`**，那里仍写「零失败」。（0.7.24 最后那一轮全量本身是干净的，8053 条零失败，没有用到这条放宽。）
 
 ### 之前那一版的待用户项（已了结的）
