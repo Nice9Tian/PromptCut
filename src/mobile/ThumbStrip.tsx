@@ -1,6 +1,6 @@
 /**
  * 缩略时间轴(语义 `workflow/editing.md`「手机版界面」;演示稿第四、九轮):只放主要内容,各卡等宽、标时长,
- * 正中固定一条当前帧标记,卡在下面滚动。按住左右拖 = 滚动 = 调整当前时间;点卡选中(再点取消);先选中再长按拖动 = 换顺序;
+ * 正中固定一条当前帧标记,卡在下面滚动。按住左右拖 = 滚动 = 调整当前时间(手指上由浏览器原生横滑做,带惯性;鼠标走手动那条路);点卡选中(再点取消);先选中再长按拖动 = 换顺序;
  * 点转场 ◇ 和点卡同一个动作(原地选中);没有转场的「＋」打开卡片库转场分类。
  */
 import { useEffect, useLayoutEffect, useRef } from "react";
@@ -88,6 +88,13 @@ export function ThumbStrip(props: {
     const isBlock = !!target?.classList.contains("mblock");
     const id = target?.dataset.id ?? null;
     const x0 = e.clientX, sl0 = el.scrollLeft;
+    /*
+     * 手指划在**没选中**的地方时,横向滑动交给浏览器自己做(`.strip-scroll` 的 `touch-action: pan-x`),
+     * 这边就不要再推一次 scrollLeft —— 两边一起推会滑成两倍快。
+     * 选中的那张卡上关掉了原生滑动(CSS 里 `.mblock.sel { touch-action: none }`),因为它要能长按拖动换顺序,
+     * 所以那一张仍然走下面手动这条路;鼠标也一直走手动这条路。
+     */
+    const nativePan = e.pointerType === "touch" && !(isBlock && id && selected === id);
     let mode: "pending" | "scroll" | "reorder" = "pending";
     let timer = 0;
     dragging.current = true;
@@ -97,7 +104,7 @@ export function ThumbStrip(props: {
     const mv = (ev: PointerEvent) => {
       const dx = ev.clientX - x0;
       if (mode === "pending" && Math.abs(dx) > 6) { window.clearTimeout(timer); mode = "scroll"; }
-      if (mode === "scroll") el.scrollLeft = sl0 - dx;
+      if (mode === "scroll" && !nativePan) el.scrollLeft = sl0 - dx;
       else if (mode === "reorder") target!.style.transform = `translateX(${dx}px)`;
     };
     const end = (ev: PointerEvent) => {

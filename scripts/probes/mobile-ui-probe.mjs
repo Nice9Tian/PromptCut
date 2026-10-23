@@ -210,7 +210,26 @@ try {
     await tap(A, '.mainhead');
     const ids1b = await mainIds();
     const ra = await rect(A, `[data-pcm="mblock"][data-id="${ids1b[1]}"]`);
+    /*
+     * 这一下要同时判两件事,原来只判了后一件:
+     *   ① 手指划过去,缩略时间轴**真的滚动了**;
+     *   ② 没先选中时按住拖只是滚动,不换序。
+     * 只判 ② 的话,一条「手指划了什么都不动」的时间轴照样能过 —— 用户 2026-10-24 报的
+     * 「手机版传统式缩略时间轴用触屏没法滑动查看」就是从这个缝里漏过去的。
+     * `.strip-scroll` 上写着 `touch-action: none`,浏览器原生滑动是关掉的,全靠
+     * `ThumbStrip` 的 onPointerDown 手动改 scrollLeft,所以这条路必须有人盯。
+     */
+    const slBefore = await A.$eval('.strip-scroll', (el) => el.scrollLeft);
     await touch(A, lerp({ x: ra.x + ra.w / 2, y: ra.y + ra.h / 2 }, { x: ra.x - 60, y: ra.y + ra.h / 2 }, 8), { holdMs: 450 });
+    const slAfter = await A.$eval('.strip-scroll', (el) => el.scrollLeft);
+    /*
+     * 本来还想判「松手之后还带惯性继续滑」—— 那正是这次改动的要害(原生横滑有惯性,
+     * 手动推 scrollLeft 那条老路没有)。实测判不了:CDP 的 `Input.dispatchTouchEvent` 是合成触点,
+     * 不触发合成器的抛掷动画,改之后量出来 rest 仍然等于 after。所以这里只判「真的滚动了」,
+     * 惯性那一条**在这套无头环境里证不了**,要真机才算数。
+     */
+    out.T.touchScroll = { before: Math.round(slBefore), after: Math.round(slAfter) };
+    check(slAfter - slBefore > 20, 'T 手指往左划,缩略时间轴跟着滚动', out.T.touchScroll);
     check(JSON.stringify(await mainIds()) === JSON.stringify(ids1b), 'T 没选中时按住拖动只是滚动,不换序');
     // 加转场:点两段之间的 ＋ → 卡片库转场分类 → 交叉溶解
     await A.evaluate(() => { const sc = document.querySelector('.strip-scroll'); sc.scrollLeft = 0; });
