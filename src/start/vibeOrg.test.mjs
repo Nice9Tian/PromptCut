@@ -3,16 +3,21 @@
  *
  * 盯三件事:项目一律以云端列表为准(本机整理不凭空造项目、取不到列表时不丢整理信息);
  * 本机存的东西坏了不白屏;**别人的私有对话不列出来**(`product/agent.md`,创建者只读例外)。
+ *
+ * 2026-10-23 分本地、云端两套之后:整理信息带 `realm`、项目清单的每一项带 `realm`。这里的用例都在云端那一套上跑(`emptyOrg('cloud')`、
+ * 项目标 `realm: 'cloud'`),只改了这几处样子,断言没动;两套之间的规矩(只收同一套、跨套放不进、键互不覆盖)在 `orgRealm.test.mjs`。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { EMPTY_ORG, addGroup, mergeChats, mergeProjects, moveProject, parseOrg, viewableChats, withChats, withGroups, withProjects } from './vibeOrg.ts';
+import { addGroup, emptyOrg, mergeChats, mergeProjects, moveProject, parseOrg, viewableChats, withChats, withGroups, withProjects } from './vibeOrg.ts';
 
+const EMPTY_ORG = emptyOrg('cloud');
 const cloud = [
-  { id: 'p1', name: '一', role: 'owned' },
-  { id: 'p2', name: '二', role: 'owned' },
-  { id: 'p3', name: '三', role: 'joined' },
+  { id: 'p1', name: '一', role: 'owned', realm: 'cloud' },
+  { id: 'p2', name: '二', role: 'owned', realm: 'cloud' },
+  { id: 'p3', name: '三', role: 'joined', realm: 'cloud' },
 ];
+const C = 'cloud';
 
 test('VORG-01 没有整理信息时:清单就是云端列表,都没放进分组,不知道的画幅时长缩略图是 null', () => {
   const list = mergeProjects(EMPTY_ORG, cloud);
@@ -24,9 +29,9 @@ test('VORG-01 没有整理信息时:清单就是云端列表,都没放进分组,
 test('VORG-02 本机记过的顺序、分组、置顶照用;列表里没有的项目不会凭空出现', () => {
   let org = addGroup(EMPTY_ORG, '品牌', () => 'aaa').org;
   org = withProjects(org, [
-    { id: 'p3', groupId: 'g-aaa', pinned: true },
-    { id: 'gone', groupId: null },
-    { id: 'p1', groupId: null, archived: true },
+    { id: 'p3', realm: C, groupId: 'g-aaa', pinned: true },
+    { id: 'gone', realm: C, groupId: null },
+    { id: 'p1', realm: C, groupId: null, archived: true },
   ]);
   const list = mergeProjects(org, cloud);
   // p2 是新出现的,排最前;gone 不在云端列表里,不出现
@@ -37,8 +42,8 @@ test('VORG-02 本机记过的顺序、分组、置顶照用;列表里没有的�
 });
 
 test('VORG-03 写回整理信息:这次清单里没有的条目原样留着(列表暂时取不到时不丢)', () => {
-  const org = withProjects(EMPTY_ORG, [{ id: 'a', groupId: null }, { id: 'b', groupId: null }]);
-  const next = withProjects(org, [{ id: 'b', groupId: null, pinned: true }]);
+  const org = withProjects(EMPTY_ORG, [{ id: 'a', realm: C, groupId: null }, { id: 'b', realm: C, groupId: null }]);
+  const next = withProjects(org, [{ id: 'b', realm: C, groupId: null, pinned: true }]);
   assert.deepEqual(next.projects.map((p) => p.id), ['b', 'a']);
   assert.equal(next.projects[0].pinned, true);
   assert.notEqual(next, org, '换新对象,不原地改');
@@ -48,18 +53,19 @@ test('VORG-03 写回整理信息:这次清单里没有的条目原样留着(列�
 test('VORG-04 删掉分组:里面的项目回到没放进分组;移到不存在的分组也算移出', () => {
   let { org, id } = addGroup(EMPTY_ORG, '  ');
   assert.equal(org.groups[0].name, '新分组');
-  org = moveProject(org, 'p1', id);
+  const p1 = { id: 'p1', realm: C };
+  org = moveProject(org, p1, id).org;
   assert.equal(org.projects[0].groupId, id);
   org = withGroups(org, []);
   assert.equal(org.projects[0].groupId, null);
-  org = moveProject(org, 'p1', 'nope');
+  org = moveProject(org, p1, 'nope').org;
   assert.equal(org.projects[0].groupId, null);
 });
 
 test('VORG-05 本机存的东西坏了:当没记过,不抛', () => {
-  assert.deepEqual(parseOrg('{not json'), EMPTY_ORG);
-  assert.deepEqual(parseOrg(null), EMPTY_ORG);
-  const odd = parseOrg(JSON.stringify({ groups: [{ id: 'g', name: 'x' }, { id: 3 }], projects: [{ id: 'p', groupId: 'missing', pinned: 'yes' }], chats: [{ id: 'c' }] }));
+  assert.deepEqual(parseOrg('{not json', C), EMPTY_ORG);
+  assert.deepEqual(parseOrg(null, C), EMPTY_ORG);
+  const odd = parseOrg(JSON.stringify({ groups: [{ id: 'g', name: 'x' }, { id: 3 }], projects: [{ id: 'p', groupId: 'missing', pinned: 'yes' }], chats: [{ id: 'c' }] }), C);
   assert.deepEqual(odd.groups, [{ id: 'g', name: 'x' }]);
   assert.deepEqual(odd.projects, [{ id: 'p', groupId: null }]);
   assert.deepEqual(odd.chats, []);

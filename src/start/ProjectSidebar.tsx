@@ -19,8 +19,9 @@
  * 只有此刻连着的那个项目列得出对话(对话要凭这个项目的身份向云端 Agent 服务要),别的项目点进去才列。
  * 搜索只筛这一栏(右边那排跟着当前分组走,不跟搜索走),免得一边打字一边整页都在跳。
  *
- * 2026-10-23 接业务层:项目来自云端项目列表,对话来自云端 Agent 服务;分组、置顶、归档、顺序只记在这台浏览器里
- * (`vibeOrg.ts`,分组语义里还没有,见那个文件头)。「分组 Agent」语义里没有,这一版不做。
+ * 2026-10-23 接业务层:项目来自云端项目列表(桌面版是本机草稿),对话来自云端 Agent 服务(桌面版是本机 Agent)。
+ * 分组分两套、互相放不进:本地分组装本机草稿项目、存本机;云端分组装云端项目、存云端(`vibeOrg.ts` 文件头)。
+ * 每个分组、每个项目都带 `realm`,右键「移到分组」里另一套的分组置灰并说明。「分组 Agent」语义里没有,这一版不做。
  * 归档的东西收在最下面「已归档」那张卡里,右键能取消归档。
  */
 import { useRef, useState } from "react";
@@ -32,6 +33,7 @@ import { WidthGrip } from "./WidthGrip";
 import type { TreeKind } from "./treeKind";
 import { ordered, visible, type Place } from "./treeState";
 import type { VibeChat, VibeGroup, VibeProject } from "./types";
+import { moveTargetsFor } from "./vibeOrg";
 
 /**
  * 整块筛选用的那两行(「全部项目」和「没放进分组」)先归档,默认不显示 —— **用户 2026-10-23 要求的**:
@@ -148,6 +150,12 @@ export function ProjectSidebar(props: {
   onOpenChat: (chat: VibeChat) => void;
   onNewChat: (projectId: string) => void;
   onNewGroup: () => void;
+  /**
+   * 「新建分组」那一行悬停时说的话:这一套分组存在哪、装什么(本地分组 / 云端分组,见 `vibeOrg.ts` 文件头)
+   */
+  groupNote?: string;
+  /** 新建分组做不了(游客没有分组)时的说明;给了就置灰并挂在悬停上 */
+  newGroupBlocked?: string | null;
   /** 「项目」那张卡顶上的一行状态(正在取列表、取不到、重试);没有就不显示 */
   notice?: ReactNode;
   /** 聊天页正开着的那条对话:它那一行标成当前项 */
@@ -192,7 +200,7 @@ export function ProjectSidebar(props: {
 
   /** 同级的键:分组一级,同一分组里的项目一级,挂在同一个项目(或分组)上的对话各一级 */
   const chatSib = (c: VibeChat) => `chat:p:${c.projectId}`;
-  const projectSib = (p: VibeProject) => `project:${p.groupId ?? "loose"}`;
+  const projectSib = (p: VibeProject) => `project:${p.realm}:${p.groupId ?? "loose"}`;
   const archivedGroups = props.groups.filter((g) => g.archived);
   const archivedProjects = props.projects.filter((p) => p.archived);
   const archivedChats = props.chats.filter((c) => c.archived);
@@ -445,7 +453,7 @@ export function ProjectSidebar(props: {
                   id: g.id,
                   name: g.name,
                   pinned: !!g.pinned,
-                  sib: "group",
+                  sib: `group:${g.realm}`,
                   icon: <GroupIcon />,
                   expanded,
                   count: rows.length,
@@ -466,7 +474,8 @@ export function ProjectSidebar(props: {
               </div>
             );
           })}
-          <button type="button" className="ps-row" data-pc="start-new-group" aria-label="新建分组" title="分组只记在这台浏览器里，不会同步到别的设备" onClick={props.onNewGroup}>
+          <button type="button" className="ps-row" data-pc="start-new-group" aria-label="新建分组" disabled={!!props.newGroupBlocked}
+            title={props.newGroupBlocked ?? props.groupNote} onClick={props.onNewGroup}>
             <span className="ps-row-caret" data-empty aria-hidden="true">›</span>
             <span className="ps-row-icon" aria-hidden="true">＋</span>
             <span className="ps-row-name ps-muted">新建分组</span>
@@ -540,10 +549,8 @@ export function ProjectSidebar(props: {
         const project = menu.kind === "project" ? props.projects.find((p) => p.id === menu.id) : undefined;
         const archived = menu.kind === "group" ? !!props.groups.find((g) => g.id === menu.id)?.archived
           : menu.kind === "project" ? !!project?.archived : !!props.chats.find((c) => c.id === menu.id)?.archived;
-        const moveTargets = project && !archived
-          ? [...visible(props.groups).filter((g) => g.id !== project.groupId).map((g) => ({ id: g.id as string | null, name: g.name })),
-             ...(project.groupId ? [{ id: null, name: "" }] : [])]
-          : undefined;
+        // 别的套的分组也列,置灰并说明(本地项目放不进云端分组,云端项目放不进本地分组)
+        const moveTargets = project && !archived ? moveTargetsFor(project, props.groups) : undefined;
         return (
           <RowMenu
             at={menu}

@@ -17,6 +17,7 @@
 import { useEffect, useRef } from "react";
 import type { JSX } from "react";
 import type { TreeKind } from "./treeKind";
+import type { MoveTarget } from "./vibeOrg";
 
 export interface MenuAt {
   id: string;
@@ -49,8 +50,8 @@ export function RowMenu(props: {
   archived?: boolean;
   renameBlocked?: MenuBlock;
   deleteBlocked?: MenuBlock;
-  /** 项目才有:移到哪个分组(`null` 是移出分组) */
-  moveTargets?: { id: string | null; name: string }[];
+  /** 项目才有:移到哪个分组(`null` 是移出分组)。`blocked` 有值是放不进去(本地项目对云端分组等):置顶灰并说明 */
+  moveTargets?: MoveTarget[];
   onMove?: (groupId: string | null) => void;
 }): JSX.Element {
   const box = useRef<HTMLDivElement>(null);
@@ -130,7 +131,7 @@ export function RowMenu(props: {
       {item(props.archived ? "取消归档" : "归档", props.onArchive, { pc: "start-menu-archive" })}
       {props.moveTargets && props.onMove && props.moveTargets.length > 0 && <div className="ps-menu-sep" />}
       {props.moveTargets && props.onMove && props.moveTargets.map((g) =>
-        item(g.id === null ? "移出分组" : `移到「${g.name}」`, () => props.onMove!(g.id), { pc: "start-menu-move" }))}
+        item(g.id === null ? "移出分组" : `移到「${g.name}」`, () => props.onMove!(g.id), { pc: "start-menu-move", blocked: g.blocked }))}
       <div className="ps-menu-sep" />
       {item("删除", props.onDelete, { danger: true, pc: "start-menu-delete", blocked: props.deleteBlocked })}
     </div>

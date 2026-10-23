@@ -1457,6 +1457,7 @@
 }
 .ps-side-hint .ps-link { margin-left: 6px; }
 .ps-side-new:disabled { opacity: 0.5; cursor: default; filter: none; }
+.ps-row:disabled { opacity: 0.5; cursor: default; }
 .ps-row.is-archived .ps-row-icon { opacity: 0.55; }
 .ps-tile:disabled { opacity: 0.5; cursor: default; }
 
