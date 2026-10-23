@@ -103,7 +103,7 @@ async function main() {
 
   // ---------- 页面上的小工具 ----------
   const login = async (page, account) => {
-    await page.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`${ORIGIN}/editor/?ui=classic`, { waitUntil: 'domcontentloaded' });
     await fill(page, 'input[name="username"]', account.name); await fill(page, 'input[name="password"]', account.password);
     const submit = '[data-pc="account-projects"] form button.sp-primary-btn'; await enabled(page, submit); await page.click(submit);
     await page.waitForSelector('[data-pc="account-name"]', { visible: true, timeout: TIMEOUT });

@@ -297,7 +297,7 @@ async function websiteList(account, kind, projectId, name, label) {
   await safeShot(page, label);
   // A website login must restore in the online editor through the shared cookie.
   const restored = await newPage(context, `${label}-restored-editor`);
-  await restored.goto(`${ORIGIN}/editor/`, { waitUntil:'domcontentloaded' });
+  await restored.goto(`${ORIGIN}/editor/?ui=classic`, { waitUntil:'domcontentloaded' });
   await restored.waitForSelector('[data-pc="account-name"]', { visible:true });
   assert(!(await restored.$('[data-pc="account-projects"] input[name="password"]')), `${label}-cookie-restores-editor-without-password`);
   await safeShot(restored, `${label}-cookie-restore`);

@@ -245,7 +245,7 @@ async function scenario() {
   await page.setViewport({ width: 1440, height: 900 });
 
   // G1 以游客身份进入
-  await page.goto(`${ORIGIN}/editor/?nosetup=1`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${ORIGIN}/editor/?nosetup=1&ui=classic`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-pc="guest-enter"]', { timeout: 300_000 });
   await click(page, '[data-pc="guest-enter"]', '以游客身份进入');
   await page.waitForSelector('[data-pc="guest-row"]', { timeout: 60_000 });
@@ -265,7 +265,7 @@ async function scenario() {
   await watchLoginRequired(page, 'G2');
   check(await inEditor(page), 'G2-新建后进了编辑器');
   out.afterCreate = await pathOf(page);
-  const m = /^\/editor\/p\/([^/?]+)\?nosetup=1$/.exec(out.afterCreate);
+  const m = /^\/editor\/p\/([^/?]+)\?nosetup=1&ui=classic$/.exec(out.afterCreate);
   out.projectId = m?.[1] ?? null;
   check(!!m, 'G2-地址栏是直达地址', out.afterCreate);
   const savedProject = await P(page, () => { try { return JSON.parse(localStorage.getItem('pc.guest.v1') || 'null')?.project ?? null; } catch { return null; } });
@@ -319,7 +319,7 @@ async function scenario() {
   await P(page, () => window.dispatchEvent(new Event('pc-go-home')));
   await waitFor(() => has(page, '[data-pc="account-projects"]'), 60_000, '回到开始页');
   // 回首页后本页的游客状态还在(同一页里没刷新);刷新一次开始页,模拟线上「隔一会儿再来、点自己的项目」
-  await page.goto(`${ORIGIN}/editor/?nosetup=1`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${ORIGIN}/editor/?nosetup=1&ui=classic`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-pc="guest-enter"]', { timeout: 300_000 });
   await click(page, '[data-pc="guest-enter"]', '以游客身份进入(第二次)');
   await page.waitForSelector('[data-pc="guest-project-open"]', { timeout: 60_000 });

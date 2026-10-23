@@ -105,7 +105,7 @@ async function main() {
     const account = fixture.accounts[0], projectName = 'Shared dual account project';
 
     phase = 'login';
-    await page.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`${ORIGIN}/editor/?ui=classic`, { waitUntil: 'domcontentloaded' });
     await fill(page, 'input[name="username"]', account.name); await fill(page, 'input[name="password"]', account.password);
     const submit = '[data-pc="account-projects"] form button.sp-primary-btn';
     await page.waitForFunction(q => { const e = document.querySelector(q); return e && !e.disabled; }, {}, submit); await page.click(submit);
@@ -140,7 +140,7 @@ async function main() {
 
     // ---------- R1：重新进项目(已同意过告知、开关已开)，量面板多久能输入 ----------
     phase = 'enter-measured';
-    await page.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`${ORIGIN}/editor/?ui=classic`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('[data-pc="account-name"]', { visible: true });
     const clickedAt = await openProject();
     await page.waitForSelector('[data-pc="cloud-project-copy"]', { visible: true });

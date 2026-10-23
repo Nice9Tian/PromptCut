@@ -330,7 +330,7 @@ async function openDesktop(ed, state) {
   cdp.on('Network.webSocketFrameReceived', note('in'));
   cdp.on('Network.webSocketFrameSent', note('out'));
   await page.exposeFunction('__probeNative', nativeBridge(state));
-  await page.goto(`${ed.origin}/?editor`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${ed.origin}/?editor&ui=classic`, { waitUntil: 'domcontentloaded' });
   await waitFor(() => P(page, () => !!window.__pcSyncTest && window.__pcSyncTest.view().status === 'online'), 180_000, `${ed.tag} 页面接上本机文档服务`);
   await waitFor(() => P(page, () => !document.querySelector('[data-pc="probe-gate"]')), 300_000, `${ed.tag} 测量遮罩退下`).catch(() => null);
   await P(page, () => { for (const b of document.querySelectorAll('.ais-dialog .ais-btn')) if (b.textContent?.trim() === '关闭') b.click(); });
@@ -425,7 +425,7 @@ async function linkScenario({ A, B, pageA, pageB, stateA, stateB, projectId, aLo
   pageC.setDefaultTimeout(90_000); pageC.setDefaultNavigationTimeout(120_000);
   pageC.on('pageerror', (e) => say('pageerror', { tag: 'online', message: String(e?.message ?? e).slice(0, 300) }));
   const typeInto = async (selector, value) => { const input = await pageC.waitForSelector(selector, { visible: true }); await input.click({ clickCount: 3 }); await pageC.keyboard.press('Backspace'); await input.type(value); };
-  await pageC.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded' });
+  await pageC.goto(`${ORIGIN}/editor/?ui=classic`, { waitUntil: 'domcontentloaded' });
   await typeInto('[data-pc="account-projects"] input[name="username"]', fixture.accounts[1].name);
   await typeInto('[data-pc="account-projects"] input[name="password"]', fixture.accounts[1].password);
   await pageC.waitForFunction(() => { const b = document.querySelector('[data-pc="account-projects"] form button.sp-primary-btn'); return Boolean(b && !b.disabled); });
@@ -733,7 +733,7 @@ try {
   pageC.on('pageerror', (e) => say('pageerror', { tag: 'online', message: String(e?.message ?? e).slice(0, 300) }));
   const typeInto = async (selector, value) => { const input = await pageC.waitForSelector(selector, { visible: true }); await input.click({ clickCount: 3 }); await pageC.keyboard.press('Backspace'); await input.type(value); };
   const enterOnline = async ({ login }) => {
-    await pageC.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded' });
+    await pageC.goto(`${ORIGIN}/editor/?ui=classic`, { waitUntil: 'domcontentloaded' });
     if (login) {
       await typeInto('[data-pc="account-projects"] input[name="username"]', fixture.accounts[1].name);
       await typeInto('[data-pc="account-projects"] input[name="password"]', fixture.accounts[1].password);

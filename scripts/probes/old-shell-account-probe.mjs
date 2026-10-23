@@ -127,7 +127,7 @@ async function shot(page, name) {
 }
 
 async function startPage(mode) {
-  const page = await openPage(mode, '/?nosetup=1');
+  const page = await openPage(mode, '/?nosetup=1&ui=classic');
   await waitFor(() => has(page, '[data-pc="account-projects"]'), 120_000, `${mode} 开始页的云端项目`);
   // 等初始化走完：老外壳出说明、真错误出红条、正常出登录表单
   await waitFor(() => page.evaluate(() => !!document.querySelector('[data-pc="account-shell-old"], [data-pc="account-error"]') || [...document.querySelectorAll('[data-pc="account-projects"] .sp-primary-btn')].some((b) => b.textContent?.trim() === '登录账号')), 60_000, `${mode} 账号入口初始化完`);

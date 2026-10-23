@@ -99,7 +99,7 @@ const fill = async (page, selector, text) => {
 };
 const enabled = (page, selector) => page.waitForFunction((s) => { const el = document.querySelector(s); return el && !el.disabled; }, { timeout: TIMEOUT }, selector);
 async function login(page, account) {
-  await page.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+  await page.goto(`${ORIGIN}/editor/?ui=classic`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
   await fill(page, 'input[name="username"]', account.name); await fill(page, 'input[name="password"]', account.password);
   const submit = '[data-pc="account-projects"] form button.sp-primary-btn';
   await enabled(page, submit); await page.click(submit);

@@ -171,7 +171,7 @@ async function main() {
     phase = 'login';
     for (let i = 0; i < pages.length; i++) {
       const page = pages[i], account = fixture.accounts[i];
-      await page.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded' });
+      await page.goto(`${ORIGIN}/editor/?ui=classic`, { waitUntil: 'domcontentloaded' });
       await fill(page, 'input[name="username"]', account.name); await fill(page, 'input[name="password"]', account.password);
       const submit = '[data-pc="account-projects"] form button.sp-primary-btn';
       await enabled(page, submit); await page.click(submit);
@@ -336,7 +336,7 @@ async function main() {
     await clickDelete(owner, convD);
     check(await confirmDelete(owner) === 200, 'owner-deletes-shared-while-member-offline');
     const offlineBubble = cloudNoticeText({ recipientRole: 'participant', deletedByRole: 'owner', deletedByName: nameOwner, title: '第二个共有对话' });
-    await member.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded' });
+    await member.goto(`${ORIGIN}/editor/?ui=classic`, { waitUntil: 'domcontentloaded' });
     // 登录表单会先闪一下再恢复会话：先等账号名最多 12 秒，等不到才按没登录处理
     const landed = await member.waitForSelector('[data-pc="account-name"]', { visible: true, timeout: 12_000 }).then(() => 'logged-in', () => 'login-form');
     result.notes.push({ memberReopen: landed });
@@ -368,7 +368,7 @@ async function main() {
     await ownerB.setViewport({ width: 1500, height: 950 });
     ownerB.on('pageerror', error => result.pageErrors.push({ page: 'owner2', message: String(error?.message ?? error).slice(0, 160) }));
     phase = 'live-count step 1';
-    await ownerB.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded' });
+    await ownerB.goto(`${ORIGIN}/editor/?ui=classic`, { waitUntil: 'domcontentloaded' });
     await fill(ownerB, 'input[name="username"]', fixture.accounts[1].name); await fill(ownerB, 'input[name="password"]', fixture.accounts[1].password);
     await enabled(ownerB, '[data-pc="account-projects"] form button.sp-primary-btn'); await ownerB.click('[data-pc="account-projects"] form button.sp-primary-btn');
     await waitVisible(ownerB, '[data-pc="account-name"]');

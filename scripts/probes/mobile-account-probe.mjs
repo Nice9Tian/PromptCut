@@ -167,7 +167,7 @@ try {
   await shot(P, 'a1-site-account');
 
   /* ================ 3. 手机打开 /editor/:凭共享 cookie 进手机版开始页 ================ */
-  await P.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded' });
+  await P.goto(`${ORIGIN}/editor/?ui=classic`, { waitUntil: 'domcontentloaded' });
   const chip = await until('手机版开始页认出已登录的 test', () => P.$('[data-pcm="account-chip"]'), 60_000);
   const home = await P.evaluate(() => ({ mobile: !!document.querySelector('[data-pc="mobile-ui"]'), chip: document.querySelector('[data-pcm="account-chip"]')?.textContent?.trim() ?? null, passwordForm: !!document.querySelector('input[type="password"]') }));
   step('mobileHome', home);
@@ -257,7 +257,7 @@ try {
 
   /* ================ 9. 桌面:同一账号登录桌面界面,打开同一项目,内容一致 ================ */
   const D = await newPage(browser, 'desktop');
-  await D.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded' });
+  await D.goto(`${ORIGIN}/editor/?ui=classic`, { waitUntil: 'domcontentloaded' });
   await typeInto(D, '[data-pc="account-projects"] input[name="username"]', ACCOUNT.name);
   await typeInto(D, '[data-pc="account-projects"] input[name="password"]', ACCOUNT.password);
   await D.waitForFunction(() => !document.querySelector('[data-pc="account-projects"] form button.sp-primary-btn')?.disabled);
