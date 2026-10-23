@@ -22,9 +22,18 @@ import { BrandAurora } from "./BrandAurora";
 import "./brandCanvas.css";
 
 /** 画面参数。每一条都对应着色器里的一个 uniform,改数就换花样,不用动 GLSL */
-const LOOK = {
-  /** 走得多慢 */
-  speed: 0.025,
+export const LOOK = {
+  /**
+   * 循环一圈多少秒。预渲染出来的视频就是这么长,越长越不容易看出在循环,代价是文件大一点。
+   * 实时那一版也按同一个周期走,所以屏幕上和预渲染的是同一段动作
+   */
+  loopSeconds: 48,
+  /**
+   * 噪声域里那个圈有多大(噪声单位)。改之前是「每秒漂 0.025 个单位」一直往前,
+   * 一圈 48 秒就是 1.2 个单位的路程;圈的周长要跟它相当,画面动起来才和原来一样慢。
+   * 基频加二次谐波的那条闭合曲线,周长大约是 2π·R·1.3,所以 R ≈ 1.2 / (2π·1.3) ≈ 0.15
+   */
+  swirl: 0.15,
   /** 噪声尺度:大了碎,小了只剩一道平滑的渐变,看不出形 */
   scale: 0.9,
   /**
@@ -115,24 +124,36 @@ const LOOK = {
   fadeEdge: 0.6,
 };
 
-const VERT = `#version 300 es
+/**
+ * 顶点与片元着色器、以及那组画面参数,都**导出**:预渲染登录页左栏那段循环动画时,
+ * 生成用户卡源码的脚本要原样拿走它们(`scripts/login-art/make-card.mjs`),
+ * 这样屏幕上这一版和预渲染出来的那一版画的是同一段 GLSL,不会各自漂。
+ */
+export const VERT = `#version 300 es
 void main() {
   // 一个盖住整屏的三角形:不用顶点缓冲,靠顶点号算坐标
   vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
   gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
-const FRAG = `#version 300 es
+export const FRAG = `#version 300 es
 precision highp float;
 out vec4 fragColor;
 
 uniform vec2  uRes;
-uniform float uTime;
+/* 噪声域里那个圆的半径(噪声单位)。0 = 完全不动 */
+uniform float uSwirl;
+/* 循环相位,0→1 走满一圈。走满正好回到起点,所以第 0 帧和第 N 帧逐字节相同 */
+uniform float uLoop;
 uniform vec3  uCool;
 uniform vec3  uWarm;
 uniform float uScale, uYStretch, uSplit, uFalloff, uBlend, uMixWarp, uStreak, uGrain;
 uniform float uAxis, uSeeThrough, uFadeEdge;
 uniform float uRefPx, uPxScale;
+/* 压平:预渲染成视频时置 1。视频带不了 alpha,要把底色先合进来、输出不透明;屏幕上那一版置 0,照旧出预乘的半透明 */
+uniform float uFlatten;
+/* 压平时垫在底下的颜色(登录页的 --bg-canvas) */
+uniform vec3  uBg;
 uniform float uWarpA, uWarpB, uGamma, uGain, uFloor, uRoll, uSat;
 uniform float uStripeN, uStripeSkew, uFrostBlur, uFrost, uMilky, uEdge;
 uniform float uGrainSize, uGrainJitter, uGrainSoft;
@@ -198,13 +219,28 @@ void main() {
   vec2 anchor = vec2(uSplit * uRes.x, 0.5 * uRes.y) / max(0.0001, uPxScale);
   vec2 p = (cssPx - anchor) / max(1.0, uRefPx) * uScale;
   p.y *= uYStretch;
-  float t = uTime;
+  /*
+   * 时间在噪声域里**走一个闭合的圈**,不是一直往前漂。
+   *
+   * 为什么改(2026-10-24 用户定「左侧为渲染器经过预渲染的动画」):预渲染出来的是一段有限长的视频,
+   * 要能无缝循环播。原来四项都是 p + t * k 这种一直往前的平移,时间轴上不闭合,
+   * 截一段来循环会在接缝处跳一下。现在每一项的偏移都是 uLoop 的周期函数,
+   * uLoop 从 0 走到 1 正好回到出发点 —— 第 0 帧和第 N 帧算出来逐字节相同,接缝看不出来。
+   *
+   * 路径不是正圆,是一圈套一圈(基频 + 二次谐波):正圆走起来像在原地打转,一眼能看出是循环;
+   * 叠一个二次谐波之后轨迹是条卷曲的闭合曲线,走的路更长、更不像在转圈,而周期还是 1。
+   * 四项各给不同的相位与转向,免得四层一起动。
+   * 每一项都减去 loopAng = 0 时的值,所以 uLoop = 0 这一帧和改之前那一帧完全一样 —— 调参台上的那组数照旧能用。
+   * (变量叫 loopAng 不叫 a:这段着色器里已经有两个 a 了 —— 166 行噪声的四角之一、323 行的透明度。叫 a 会 ERROR: a : redefinition,整段编不过、当场退回 CSS 那一版。)
+   */
+  float loopAng = 6.2831853 * uLoop;
+  #define LOOPV(ph, dir, amp) (uSwirl * (amp) * (       vec2(sin(loopAng * (dir) + (ph)) - sin(ph), cos(loopAng * (dir) + (ph)) - cos(ph))     + vec2(sin(loopAng * 2.0 * (dir) + (ph)) - sin(ph), cos(loopAng * 2.0 * (dir) + (ph)) - cos(ph)) * 0.45))
 
   // 域扭曲两道:第一道把坐标推开,第二道拿推开的结果再推一次。
   // 参考图里那种「被搅过」的层次就是这么来的,一层噪声出不来
-  vec2 q = vec2(fbm(p + vec2(0.0, t)), fbm(p + vec2(5.2, 1.3) - t * 0.7));
-  vec2 r = vec2(fbm(p + uWarpA * q + vec2(1.7, 9.2) + t * 0.5),
-                fbm(p + uWarpA * q + vec2(8.3, 2.8) - t * 0.4));
+  vec2 q = vec2(fbm(p + LOOPV(0.0, 1.0, 1.0)), fbm(p + vec2(5.2, 1.3) + LOOPV(2.1, -1.0, 0.7)));
+  vec2 r = vec2(fbm(p + uWarpA * q + vec2(1.7, 9.2) + LOOPV(4.0, 1.0, 0.5)),
+                fbm(p + uWarpA * q + vec2(8.3, 2.8) + LOOPV(5.6, -1.0, 0.4)));
   // 条纹毛玻璃:一道道斜条里,底下的纹理被「磨」过 —— 少一层细节、还被横向推开一点,
   // 就像隔着磨砂玻璃看;条与条之间是清的。这是上一版那层 backdrop-filter 条纹磨砂在着色器里的等价做法
   // (用户点名要的就是「流动的极光 + 条纹毛玻璃 + 噪点」这三样,不能只剩前后两样)
@@ -296,7 +332,12 @@ void main() {
   // 预乘输出:颜色先乘上 alpha(上下文开的是预乘模式)。
   // 直通 alpha 在 GPU 合成那条路上会被当成不透明画出来(2026-10-24 用户报的那个毛病)
   float aOut = clamp(a, 0.0, 1.0);
-  fragColor = vec4(max(col, 0.0) * aOut, aOut);
+  vec3 rgbOut = max(col, 0.0);
+  // 压平那条路:把底色合进来、alpha 给 1。预渲染成视频要走这条 —— 视频带不了 alpha,
+  // 而且导出写的是直通 alpha 的 PNG,预乘的值直接当直通存会在淡出边缘出一圈红绿杂边。
+  fragColor = uFlatten > 0.5
+    ? vec4(mix(uBg, rgbOut, aOut), 1.0)
+    : vec4(rgbOut * aOut, aOut);
 }`;
 
 /** 十六进制 → 0..1 的 RGB */
@@ -400,12 +441,15 @@ export function BrandCanvas(): JSX.Element {
 
     const at = (n: string) => gl.getUniformLocation(prog, n);
     const uRes = at("uRes");
-    const uTime = at("uTime");
+    const uLoop = at("uLoop");
     const uCool = at("uCool");
     const uPxScale = at("uPxScale");
 
     // 一次性的那些:画面参数不随帧变,设一遍就够
     gl.uniform3f(at("uWarm"), ...hexToRgb(LOOK.warm, [0.886, 0.451, 0.122]));
+    gl.uniform1f(at("uFlatten"), 0);   // 屏幕上这一版要半透明,不压平
+    gl.uniform3f(at("uBg"), 0, 0, 0);  // 不压平时用不到,传个值免得驱动抱怨
+    gl.uniform1f(at("uSwirl"), LOOK.swirl);
     gl.uniform1f(at("uScale"), LOOK.scale);
     gl.uniform1f(at("uYStretch"), LOOK.yStretch);
     gl.uniform1f(at("uSplit"), LOOK.split);
@@ -464,7 +508,9 @@ export function BrandCanvas(): JSX.Element {
       if (frames % 30 === 0) {
         gl.uniform3f(uCool, ...(LOOK.cool ? hexToRgb(LOOK.cool, LOOK.coolFallback) : readColor("--ui-accent", LOOK.coolFallback)));
       }
-      gl.uniform1f(uTime, still ? 0 : ((performance.now() - started) / 1000) * LOOK.speed);
+      // 相位取小数部分:走满一圈回到 0,屏幕上这一版也就跟着无缝接上了
+      const secs = (performance.now() - started) / 1000;
+      gl.uniform1f(uLoop, still ? 0 : (secs / LOOK.loopSeconds) % 1);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       frames++;
     };
