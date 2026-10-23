@@ -379,3 +379,33 @@ test('声音段变速(音画分离出来的):照常出声,两条混音路和测�
   assert.deepEqual(m.inputs, ['-ss', '1', '-t', '4', '-i', '/x/s1'], '测响度同一份');
   assert.match(m.filters[0], /aresample=48000,asetrate=96000,aresample=48000,adelay/);
 });
+
+/* ---------- 变速的视频段当音频素材效果卡的声音输入(2026-10-23 用户定「放开。」) ---------- */
+
+test('变速的视频段上挂的音频素材效果卡:导出清单照收(原声仍不出);卡片声音的身份 1 倍逐字不变、变速时带上倍率', async () => {
+  const withAudioCard = (speed) => {
+    const p = fixture();
+    p.cardNodes = [...p.cardNodes, { id: 'au', adapter: 'card', cardId: 'gain', kind: 'audio', params: {}, inputs: { source: { nodeId: '@clip/v-plain/source' } } }];
+    return withClip(p, 'v-plain', { nodeId: 'au', ...(speed === 1 ? {} : { speed }) });
+  };
+  for (const speed of [1, 2]) {
+    const plan = buildAudioPlan(withAudioCard(speed), 'out', () => true, () => '/media/v1.mp4');
+    assert.equal(plan.filter((e) => e.clipId === 'v-plain' && !e.cardAudio).length, 0, '原声由卡接管(1 倍)/不出原声(变速),都不单独进清单');
+    const card = plan.filter((e) => e.cardAudio && e.clipId === 'v-plain');
+    assert.equal(card.length, 1, `${speed} 倍:音频素材效果卡那一条在清单里`);
+    assert.equal(card[0].nodeId, 'au');
+  }
+  const { cardAudioIdentity } = await import('../../src/kernel/cardAudioRendition.mjs');
+  // 另一张声画卡读变速段当输入:身份里输入素材那一项
+  const hooks = { getCard: () => ({ defaults: {} }), sourceVersionOf: () => 'v1' };
+  const owner = { id: 'own', cardId: 'av', nodeId: 'avn', start: 0, end: 1 };
+  const projectWith = (speed) => {
+    const p = withAudioCard(speed);
+    p.cardNodes = [...p.cardNodes, { id: 'avn', adapter: 'card', cardId: 'av', inputs: { source: { nodeId: '@clip/v-plain/source' } } }];
+    p.tracks = [...p.tracks, { id: 't4', clips: [owner] }];
+    return p;
+  };
+  const plain = cardAudioIdentity(projectWith(1), owner, hooks).inputs.source;
+  assert.deepEqual(plain, { media: 'h-v1', offset: 1.5, rate: 1 }, '1 倍:和以前逐字相同,没有 speed 一项');
+  assert.deepEqual(cardAudioIdentity(projectWith(2), owner, hooks).inputs.source, { ...plain, speed: 2 });
+});

@@ -1,4 +1,5 @@
 import { cardJson } from './cardGraph.mjs';
+import { clipSpeed } from './clipTime.mjs';
 
 /** 声画一体卡的声音属于原片段，不能当普通素材分离。纯音频素材效果卡不是声画卡。 */
 export const isAudiovisualCard = def => !!def && typeof def.audio === 'function' &&
@@ -49,7 +50,9 @@ export function cardAudioIdentity(project, clip, hooks = {}, saved = clip.cardAu
         if (!media?.hash) fail('missing', clip, '输入素材缺失或没有内容哈希');
         // 自己的素材已经按源时钟访问，split 的边补偿不能再使身份变化。
         const offset = sourceClip === owner ? (ref.offset ?? 0) + (node.timeOffset ?? 0) : (ref.offset ?? 0) + (sourceClip?.mediaOffset ?? 0);
-        inputs[name] = { media: media.hash, offset, rate: ref.rate ?? 1 };
+        // 输入素材段变了速,声音跟着变速变调(audioSources.ts 的 varispeedBlock),倍率进身份;1 倍不写,身份逐字不变
+        const speed = clipSpeed(sourceClip);
+        inputs[name] = { media: media.hash, offset, rate: ref.rate ?? 1, ...(speed !== 1 ? { speed } : {}) };
       } else {
         const upstream = nodes.get(ref.nodeId);
         if (!upstream) fail('missing', clip, '输入节点已删除');

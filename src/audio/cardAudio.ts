@@ -263,6 +263,16 @@ export function onlineCardAudioBlocker(project: unknown, nodeId: string): string
   return routed.route === null ? routed.reason : null;
 }
 
+/**
+ * 变速的视频段上挂的卡片声音出不出。**音频素材效果卡**(纯声音的卡,`kind: "audio"`)照常出:它读这一段素材的声音
+ * 当输入,随倍率变速变调(`render/cards/audioSources.ts` 的 `varispeedBlock`;2026-10-23 用户定「放开。」)。
+ * **声画一体卡**的声音仍按「变速的视频段不出原声」不出(〔裁〕第一版,`kernel/clipTime.mjs`)。导出那一路是
+ * `server/bakery/mux-audio.mjs` 的 `buildAudioPlan`(只收音频素材效果卡节点,所以那里直接不看速度)。
+ */
+export function speedMutesCardAudio(project: Project, clip: TrackClip): boolean {
+  return speedMutesSource(clip, project) && clipHasEmbeddedAudio(project, clip, hooks?.getCard);
+}
+
 /** A generated node owns a video-backed clip's audio too; callers must mute that native media element. */
 export function shouldMuteNativeAudio(project: Project, clip: TrackClip, globallyMuted = false) {
   // 变速的素材段不出原声(〔裁〕第一版,kernel/clipTime.mjs)
@@ -275,7 +285,7 @@ export function generatedCardAudioClipsAt(project: Project, t: number): { clip: 
   // 在线浏览器模式:素材效果卡(含音频素材效果卡)在这台设备上渲染不了(C10 契约第 9 节,由渲染节点出),
   // 不求值、不发 `/@media/<hash>/pcm` 请求;这一段的原生声音照旧被 `shouldMuteNativeAudio` 静掉,不拿素材声音顶上
   for (const track of project.tracks) for (const clip of track.clips) {
-    if (track.hidden || track.muted || clip.audioMuted || speedMutesSource(clip, project) || !cardAudioNodeOf(project, clip) || t < clip.start || t >= clip.end) continue;
+    if (track.hidden || track.muted || clip.audioMuted || speedMutesCardAudio(project, clip) || !cardAudioNodeOf(project, clip) || t < clip.start || t >= clip.end) continue;
     out.push({ clip, media: clip.mediaId ? project.media.find(m => m.id === clip.mediaId) : undefined, volume: opacityAt(clip, t) * (clip.audioVolume ?? 1) });
   }
   return out;

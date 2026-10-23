@@ -138,3 +138,84 @@ test('声画同片段使用源时钟且显式输入偏移只折算一次', async
   assert.equal(seen[0], 120007);
   assert.equal(logs[0].start, 168007, '源时间2.5秒+显式上游偏移1秒，不能重复加mediaOffset');
 }));
+
+/* ------------------------------------------------------------------ *
+ * 变速的素材段当声音输入(2026-10-23 用户定「放开。」):随倍率变速变调
+ * ------------------------------------------------------------------ */
+
+/** 回一条斜坡:第 k 帧(素材上的绝对帧号)两个声道都是 k。线性插值在斜坡上是精确的,可以逐个采样对数 */
+function rampFetch(log) {
+  globalThis.fetch = async (url) => {
+    const query = new URL(url, "http://local").searchParams;
+    const start = Number(query.get("start")), count = Number(query.get("count"));
+    log.push({ start, count });
+    const samples = new Float32Array(count * 2);
+    for (let i = 0; i < count; i++) samples[2 * i] = samples[2 * i + 1] = start + i;
+    return new Response(samples.buffer, { status: 200 });
+  };
+}
+
+const sped = (speed) => ({ ...project, tracks: [{ id: "t", clips: [{ ...project.tracks[0].clips[0], speed }, project.tracks[0].clips[1]] }] });
+
+test("变速的素材段(片段输入):下游第 i 个采样 = 素材第 mediaOffset + (start + 边.offset + i) × 倍率 个采样", async () => withSources(async ({ blockOf, clearAudioBlockCache }) => {
+  for (const speed of [2, 0.5, 1.25]) {
+    const log = []; rampFetch(log); clearAudioBlockCache();
+    const ctx = { graph: nodes, project: sped(speed), getCard: () => undefined, sampleRate: SR };
+    const out = await blockOf(ctx, { clipId: "src", offset: 0.5, rate: 1 }, 100, 480);
+    assert.equal(out.length, 960);
+    const local = 100 + 0.5 * SR, mediaStart = 2 * SR;
+    assert.equal(log.length, 1, "一次请求");
+    assert.equal(log[0].start, Math.floor(mediaStart + local * speed));
+    // 读「时长 × 倍率」那么长的素材(多 1~2 帧给插值)
+    assert.ok(Math.abs(log[0].count - 480 * speed) <= 2, `取了 ${log[0].count} 帧,应约 ${480 * speed}`);
+    for (const i of [0, 1, 7, 239, 479]) {
+      const want = mediaStart + (local + i) * speed;
+      assert.ok(Math.abs(out[2 * i] - want) < 0.05, `speed ${speed} 第 ${i} 个采样 ${out[2 * i]} ≠ ${want}`);
+      assert.equal(out[2 * i + 1], out[2 * i], "两个声道同样处理");
+    }
+  }
+}));
+
+test("变速的素材段:按块取与一次取逐个采样相同(块缝无缝)", async () => withSources(async ({ blockOf, clearAudioBlockCache }) => {
+  rampFetch([]); clearAudioBlockCache();
+  const ctx = { graph: nodes, project: sped(1.37), getCard: () => undefined, sampleRate: SR };
+  const whole = await blockOf(ctx, { clipId: "src" }, 3, 3000);
+  const parts = [await blockOf(ctx, { clipId: "src" }, 3, 1000), await blockOf(ctx, { clipId: "src" }, 1003, 1000), await blockOf(ctx, { clipId: "src" }, 2003, 1000)];
+  const joined = new Float32Array(6000); parts.forEach((p, k) => joined.set(p, k * 2000));
+  assert.deepEqual(joined, whole);
+}));
+
+test("变速的素材段(合成过的素材节点):节点上的 rate 优先,没有时按 clipId 查片段速度;1 倍不变", async () => withSources(async ({ blockOf, clearAudioBlockCache }) => {
+  const { projectCardGraph } = await import("../../kernel/cardGraph.mjs");
+  const { withMediaRates } = await import("../../kernel/clipTime.mjs");
+  const p = { ...sped(2), cardNodes: nodes };
+  for (const graph of [projectCardGraph(p), withMediaRates(p, projectCardGraph(p))]) {
+    const log = []; rampFetch(log); clearAudioBlockCache();
+    const out = await blockOf({ graph, project: p, getCard: () => undefined, sampleRate: SR }, { nodeId: "@clip/src/source" }, 10, 100);
+    assert.equal(log[0].start, 2 * SR + 20);
+    assert.equal(out[0], 2 * SR + 20);
+    assert.equal(out[2 * 99], 2 * SR + 2 * 109);
+  }
+  // 1 倍:还是原来那一次请求,位置、长度一个不差
+  const log = []; rampFetch(log); clearAudioBlockCache();
+  const plain = { ...project, cardNodes: nodes };
+  await blockOf({ graph: projectCardGraph(plain), project: plain, getCard: () => undefined, sampleRate: SR }, { nodeId: "@clip/src/source" }, 10, 100);
+  assert.deepEqual(log, [{ start: 2 * SR + 10, count: 100 }]);
+}));
+
+test("变速的素材段:接在它上面的音频素材效果卡递归求值也变速(片段自己的 nodeId 指向卡)", async () => withSources(async ({ evaluateCardAudio, clearAudioBlockCache }) => {
+  const { projectCardGraph } = await import("../../kernel/cardGraph.mjs");
+  const log = []; rampFetch(log); clearAudioBlockCache();
+  const def = { id: "gain", defaults: {}, kind: "audio", audio: (sources, range) => sources.source.block(range.start, range.count) };
+  const p = { media: [{ id: "m", kind: "video", hash: HASH }],
+    tracks: [{ id: "t", clips: [{ id: "c", cardId: "", mediaId: "m", nodeId: "fx", mediaOffset: 1, speed: 0.5, start: 0, end: 2, params: {} }] }],
+    cardNodes: [{ id: "fx", adapter: "card", cardId: "gain", kind: "audio", inputs: { source: { nodeId: "@clip/c/source" } } }] };
+  const out = await evaluateCardAudio({ graph: projectCardGraph(p, () => def), project: p, getCard: () => def, sampleRate: SR }, "fx", { start: 0, count: 4, sampleRate: SR });
+  assert.deepEqual([...out].filter((_, k) => k % 2 === 0), [SR, SR + 0.5, SR + 1, SR + 1.5]);
+}));
+
+test("变速的素材段 + 边上的 rate ≠ 1:边的速率仍是第一版不支持", async () => withSources(async ({ blockOf, clearAudioBlockCache }) => {
+  rampFetch([]); clearAudioBlockCache();
+  const ctx = { graph: nodes, project: sped(2), getCard: () => undefined, sampleRate: SR };
+  await assert.rejects(() => blockOf(ctx, { clipId: "src", rate: 2 }, 0, 480), /第一版不支持/);
+}));

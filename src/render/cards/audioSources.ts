@@ -17,6 +17,7 @@
  *   - `sampleRate` —— 本次求值的采样率(48000)。
  * - `ref: AudioSourceRef` —— **解析过的**输入:`{ nodeId }`(素材效果卡节点)或 `{ clipId }`
  *   (素材片段),都可以带边上的 `offset`(秒)/ `rate`(播放速率)。
+ * - 素材片段变了速(`clip.speed ≠ 1`)时,它的声音按倍率变速变调(`varispeedBlock`);边上的 `rate ≠ 1` 仍不支持。
  * - 返回 **交错**(frame-major)的 `Float32Array`,长度 = `count × 声道数`,和
  *   `cardAudio.ts` 的 `wavOf` 同一口径。
  *
@@ -156,6 +157,61 @@ export function paramsOfAudioNode(ctx: AudioSourceContext, node: CardNode): Reco
  * 取样
  * ------------------------------------------------------------------ */
 
+/** 素材节点的倍率:节点上的 `rate`(`withMediaRates` 加的)优先,其次是节点 clipId 指向的片段的速度,都没有为 1 */
+function mediaNodeSpeed(ctx: AudioSourceContext, node: CardNode): number {
+  const rate = Number(node.rate);
+  if (node.rate !== undefined && Number.isFinite(rate) && rate > 0) return rate;
+  const owner = typeof node.clipId === "string" ? clipOf(ctx.project, node.clipId) : undefined;
+  return owner ? clipSpeed(owner) : 1;
+}
+
+/** 一次向服务端要的最多帧数(`server/vite-plugin-media.ts` 的 `PCM_MAX_FRAMES`) */
+const MEDIA_PCM_MAX_FRAMES = 1_048_576;
+
+/** 素材的原始采样 `[position, position + count)`,超过路由上限时分几次取再拼起来 */
+async function mediaSpan(hash: string, position: number, count: number, sampleRate: number): Promise<Float32Array> {
+  if (count <= MEDIA_PCM_MAX_FRAMES) return mediaBlock(hash, position, count, sampleRate);
+  const out = new Float32Array(count * MEDIA_PCM_CHANNELS);
+  for (let done = 0; done < count; done += MEDIA_PCM_MAX_FRAMES) {
+    const n = Math.min(MEDIA_PCM_MAX_FRAMES, count - done);
+    out.set(await mediaBlock(hash, position + done, n, sampleRate), done * MEDIA_PCM_CHANNELS);
+  }
+  return out;
+}
+
+/**
+ * 变速段的声音(变速变调,不保调):下游第 `local + i` 个采样 = 素材第 `mediaStart + (local + i) × speed` 个采样。
+ * 和导出两条混音路(`kernel/clipTime.mjs` 的 `ffmpegVarispeed`)、在线浏览器导出(`resampleVarispeed`)是同一个语义:
+ * 读「时长 × 倍率」那么长的素材,压/拉成时长那么长。
+ *
+ * 为什么在页面里按倍率多取、取回来再插值,不让服务端的 ffmpeg 做:素材效果卡的声音是**一块一块**取的
+ * (生成卡片声音按 8192 帧一块,导出的离线混音按它自己的块),而块的起点落到素材上一般不在整数采样上。
+ * ffmpeg 的 `asetrate` 每次从块起点重新起滤镜,块与块之间相位对不上、首尾还有滤波器的过渡段,拼起来每块一声咔哒。
+ * 这里按**绝对采样坐标**算每个输出采样在素材上的位置,同一时刻不论落在哪一块都取到同一个值,块缝是无缝的;
+ * 插值和 `resampleVarispeed` 一样是线性插值(没有抗混叠滤波,失真问题随「可以分离,失真问题记待办」一并记待办)。
+ */
+async function varispeedBlock(hash: string, local: number, mediaStart: number, speed: number, count: number, sampleRate: number): Promise<Float32Array> {
+  const x0 = mediaStart + local * speed;
+  const first = Math.floor(x0);
+  // 最后一个输出采样要用到 floor(x_last) + 1 那个采样做插值
+  const last = Math.floor(mediaStart + (local + count - 1) * speed) + 1;
+  const raw = await mediaSpan(hash, first, last - first + 1, sampleRate);
+  const frames = raw.length / MEDIA_PCM_CHANNELS;
+  const out = new Float32Array(count * MEDIA_PCM_CHANNELS);
+  for (let i = 0; i < count; i++) {
+    // 按绝对坐标算(不累加步长),块缝两侧取到的是同一条曲线
+    const x = mediaStart + (local + i) * speed - first;
+    const k = Math.floor(x), f = x - k;
+    if (k < 0 || k >= frames) continue;
+    const k1 = k + 1 < frames ? k + 1 : k;
+    for (let c = 0; c < MEDIA_PCM_CHANNELS; c++) {
+      const a = raw[k * MEDIA_PCM_CHANNELS + c], b = raw[k1 * MEDIA_PCM_CHANNELS + c];
+      out[i * MEDIA_PCM_CHANNELS + c] = a + (b - a) * f;
+    }
+  }
+  return out;
+}
+
 /**
  * 取 `[start, start + count)` 这段采样(交错多声道)。`start` 是**下游**的本地采样序号;
  * 边上的 `offset`(秒)和素材的 `mediaOffset` 在这里一次折进请求位置。
@@ -168,11 +224,13 @@ export async function blockOf(ctx: AudioSourceContext, ref: AudioSourceRef, star
   if (ref.clipId !== undefined) {
     const clip = clipOf(ctx.project, ref.clipId);
     if (!clip) fail(`audio input clip ${ref.clipId} is missing`);
-    // 〔裁〕变速的素材段第一版不出原声(kernel/clipTime.mjs),也不能当声音输入:和 rate ≠ 1 的边同一个报法
-    if (clipSpeed(clip) !== 1) fail("变速的素材段第一版不出原声,不能当音频素材效果卡的声音输入");
     const media = mediaOf(ctx, clip!);
     // 服务端没有 offset 参数:clip.mediaOffset + 边.offset 折算一次,折进 start
-    const position = start + edge + Math.round((clip!.mediaOffset ?? 0) * ctx.sampleRate);
+    const mediaStart = Math.round((clip!.mediaOffset ?? 0) * ctx.sampleRate);
+    // 变速段(2026-10-23 用户定「放开。」):声音随倍率变速变调,见 `varispeedBlock`
+    const speed = clipSpeed(clip);
+    if (speed !== 1) return varispeedBlock(media.hash!.toLowerCase(), start + edge, mediaStart, speed, count, ctx.sampleRate);
+    const position = start + edge + mediaStart;
     return mediaBlock(media.hash!.toLowerCase(), position, count, ctx.sampleRate);
   }
   const node = nodeOf(ctx, ref.nodeId!);
@@ -180,11 +238,12 @@ export async function blockOf(ctx: AudioSourceContext, ref: AudioSourceRef, star
   if (node!.adapter === "media") {
     // projectCardGraph 已经合成过的素材节点:offset 就在节点上(cardGraph.mjs:121-122)
     const media = node!.media as MediaAsset | undefined;
-    // 变速段:节点上带了倍率(`withMediaRates`),或按节点的 clipId 在项目里查到的片段变了速
-    const owner = typeof node!.clipId === "string" ? clipOf(ctx.project, node!.clipId) : undefined;
-    if ((node!.rate !== undefined && Number(node!.rate) !== 1) || (owner && clipSpeed(owner) !== 1)) fail("变速的素材段第一版不出原声,不能当音频素材效果卡的声音输入");
     if (!media?.hash) fail(`素材节点 ${node!.id} 没有内容哈希,重新导入一次素材`);
-    const position = start + edge + Math.round((Number(node!.offset) || 0) * ctx.sampleRate);
+    const mediaStart = Math.round((Number(node!.offset) || 0) * ctx.sampleRate);
+    // 变速段:节点上带了倍率(`withMediaRates`)以它为准,没带时按节点的 clipId 在项目里查片段的速度
+    const speed = mediaNodeSpeed(ctx, node!);
+    if (speed !== 1) return varispeedBlock(media!.hash!.toLowerCase(), start + edge, mediaStart, speed, count, ctx.sampleRate);
+    const position = start + edge + mediaStart;
     return mediaBlock(media!.hash!.toLowerCase(), position, count, ctx.sampleRate);
   }
   // 素材效果卡节点:递归调它的 audio()
