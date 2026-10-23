@@ -61,6 +61,15 @@ export function ThumbStrip(props: {
     }
     return bl.length;
   };
+  /*
+   * 这里用的 `offsetLeft` 是相对 `.mainstrip` 量的，不是相对滚动容器 ——
+   * `.strip-scroll` 自己没有定位，`offsetParent` 落在外层 `.mainstrip` 上（它是 position: relative）。
+   * 算出来对，只是因为 `.strip-scroll` 在 `.mainstrip` 里恰好 x = 0、没有边框。
+   * **别给 `.strip-scroll` 加左边距或边框**，也别给它加 `position: relative`（那会让
+   * `offsetParent` 变成滚动容器本身，`offsetLeft` 从 padding 边量起、少掉左边那段留白），
+   * 两种都会让这里算错而且很难查。2026-10-25 把左右留白从占位 div 换成容器 padding 时
+   * 复核过：padding 不影响 `offsetLeft`（首卡仍是 50% 处），所以那次改动是安全的。
+   */
   const scrollForPos = (pos: number): number => {
     const el = sc.current!;
     const bl = blocks();
