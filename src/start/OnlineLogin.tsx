@@ -33,7 +33,14 @@ import { ensureDevice } from "../editor/sync/syncManager";
  * （2026-10-23 在官网那边实测到）。按钮由它自己画，不自制，免得违反它的品牌规范。
  */
 const GSI_SRC = "https://accounts.google.com/gsi/client?hl=zh-CN";
-/** 来源没授权时 Google 不给画按钮（`gsi/button` 回 403），等这么久还没画出来就当它不可用 */
+/**
+ * 等这么久按钮还没画出来，就当 Google 这一块不可用，显示一句说明。
+ *
+ * **它抓的是「按钮根本没画出来」**（脚本被拦、GIS 内部出错），不是「来源没授权」：
+ * 2026-10-23 实测，来源没授权时 `gsi/button` 虽然回 403，GIS 仍然自己把按钮画了出来，
+ * 要到用户点下去才由 Google 自己弹窗说「禁止访问：发生了授权错误 … 错误 400：origin_mismatch」。
+ * 那种情况我们这边拦不住也测不出，只能靠部署时把来源配对（见 VisuHive 的 docs/third-party-login.md）。
+ */
 const BUTTON_WAIT_MS = 2500;
 
 declare global {
@@ -43,13 +50,13 @@ declare global {
   } } } }
 }
 
+/**
+ * 把 Google 的脚本放进页面。已经在加载了就不再加一遍 —— 这时**不等它的 load 事件**：
+ * 事件可能在我们挂监听之前就过去了，等下去会一直挂着。等它装好交给下面的 `gsiApi()` 轮询。
+ */
 function loadGsi(): Promise<void> {
   if (window.google?.accounts?.id) return Promise.resolve();
-  const existing = document.querySelector<HTMLScriptElement>(`script[src="${GSI_SRC}"]`);
-  if (existing) return new Promise((resolve, reject) => {
-    existing.addEventListener("load", () => resolve());
-    existing.addEventListener("error", () => reject(new Error("gsi")));
-  });
+  if (document.querySelector<HTMLScriptElement>(`script[src="${GSI_SRC}"]`)) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const el = document.createElement("script");
     el.src = GSI_SRC; el.async = true; el.defer = true;
@@ -57,6 +64,20 @@ function loadGsi(): Promise<void> {
     el.addEventListener("error", () => reject(new Error("gsi")));
     document.head.append(el);
   });
+}
+
+/**
+ * 等 `window.google.accounts.id` 真的出现。
+ * 脚本的 load 事件和它把全局装好之间有一道缝，只查一次会误判成「没装载」（2026-10-23 真跑时撞到）。
+ */
+async function gsiApi(timeoutMs = 4000): Promise<NonNullable<NonNullable<NonNullable<Window["google"]>["accounts"]>["id"]> | null> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const api = window.google?.accounts?.id;
+    if (api) return api;
+    if (Date.now() >= deadline) return null;
+    await new Promise((r) => { window.setTimeout(r, 100); });
+  }
 }
 
 /** Google 这一块的状态：后端没开就整块不显示，连不上或来源没授权就显示一句说明 */
@@ -106,8 +127,8 @@ export function OnlineLogin(props: { onDone: () => void }): JSX.Element {
         if (alive) setGoogle({ kind: "unavailable", message: "连不上 Google，请用账号名和密码，或以游客身份进入。" });
         return;
       }
+      const api = await gsiApi();
       if (!alive) return;
-      const api = window.google?.accounts?.id;
       if (!api || !slot.current) return setGoogle({ kind: "unavailable", message: "Google 登录没能装载，请用账号名和密码。" });
 
       api.initialize({
@@ -131,11 +152,11 @@ export function OnlineLogin(props: { onDone: () => void }): JSX.Element {
         locale: document.documentElement.lang || "zh-CN", width: 320,
       });
       setGoogle({ kind: "ready" });
-      // 来源没授权时 Google 不给画按钮，槽位会是空的。这种情况不能只留一个点不动的空白
+      // 按钮没画出来(脚本被拦、GIS 内部出错)时,不能只留一块点不动的空白
       window.setTimeout(() => {
         if (!alive) return;
         if ((slot.current?.getBoundingClientRect().height ?? 0) < 20) {
-          setGoogle({ kind: "unavailable", message: "Google 登录在这个地址上没开通（控制台还没加这条来源），请用账号名和密码。" });
+          setGoogle({ kind: "unavailable", message: "Google 登录没能显示出来，请用账号名和密码，或以游客身份进入。" });
         }
       }, BUTTON_WAIT_MS);
     })().catch(() => { if (alive) setGoogle({ kind: "off" }); });
@@ -244,7 +265,12 @@ export function OnlineLogin(props: { onDone: () => void }): JSX.Element {
               </div>
             ) : (
               <>
-                {/* Google 把按钮画进这里。来源没授权时它什么都不画,所以下面那句说明要顶上 */}
+                {/*
+                  Google 把按钮画进这里。**这个槽要一直在**:effect 是往 `slot.current` 里画的,
+                  按状态把它摘掉就成了鸡生蛋 —— 还没问出结果时摘掉,等问出来要画了,槽已经不在了
+                  (2026-10-23 真跑时撞到:热更新保留住 `off` 状态,再跑 effect 就画不进去)。
+                  后端没开时它是个零高度的空 div,看不见;来源没授权时也一样,靠下面那句说明顶上。
+                */}
                 <div ref={slot} data-pc="start-login-google" aria-busy={googleBusy} />
                 {google.kind === "unavailable" ? (
                   <span className="ps-muted" data-pc="start-login-google-off">{google.message}</span>
