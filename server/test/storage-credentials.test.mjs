@@ -5,6 +5,7 @@
 // 不碰网络:Google 的令牌服务用假 fetch。
 import fs from 'node:fs';
 import os from 'node:os';
+import http from 'node:http';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { test, after } from 'node:test';
@@ -272,4 +273,148 @@ test('disconnect:Google 那边没撤成,本地那份照样删,并说明原因', 
   assert.equal(out.revoked, false);
   assert.match(out.why, /503/);
   assert.equal(await store.get(SCOPE), null, '用户点了断开,本地就不该再留着能用的凭据');
+});
+
+// ───────────────────────── HTTP 层的 A2 部分 ─────────────────────────
+
+import {
+  storageConfig, connectionScope, credentialDir, parseImportBody, callbackHtml,
+  handleConnect, handleConnections, handleDisconnect, handleStorageImport,
+} from '../storage-connectors/route.mjs';
+
+const FULL_ENV = {
+  PROMPTCUT_GOOGLE_CLIENT_ID: 'cid', PROMPTCUT_GOOGLE_API_KEY: 'key', PROMPTCUT_GOOGLE_PROJECT_NUMBER: '123',
+  PROMPTCUT_GOOGLE_CLIENT_SECRET: 'csecret', PROMPTCUT_GOOGLE_REDIRECT_URI: 'http://localhost:5321/oauth2callback',
+};
+const driveOf = (cfg) => cfg.providers.find((p) => p.kind === 'google-drive');
+
+test('config:只配前三样能用一次性授权，不能托管', () => {
+  const { PROMPTCUT_GOOGLE_CLIENT_SECRET: _s, PROMPTCUT_GOOGLE_REDIRECT_URI: _r, ...noSecret } = FULL_ENV;
+  const d = driveOf(storageConfig(noSecret));
+  assert.equal(d.configured, true);
+  assert.equal(d.canManage, false);
+  assert.match(d.manageReason, /CLIENT_SECRET/);
+});
+
+test('config:配齐五样才能托管，而且密钥永不下发', () => {
+  const cfg = storageConfig(FULL_ENV);
+  const d = driveOf(cfg);
+  assert.equal(d.canManage, true);
+  assert.equal(d.redirectUri, FULL_ENV.PROMPTCUT_GOOGLE_REDIRECT_URI);
+  assert.ok(!JSON.stringify(cfg).includes('csecret'), '客户端密钥不许出现在下发给页面的配置里');
+  assert.ok(!/secret/i.test(JSON.stringify(cfg).replace(/manageReason[^,}]*/g, '')));
+});
+
+test('connectionScope:本机一格，共享项目按项目 × 成员分', () => {
+  assert.deepEqual(connectionScope('google-drive'), { projectId: 'local', userId: 'local', provider: 'google-drive' });
+  assert.deepEqual(
+    connectionScope('google-drive', { projectId: 'P', authorizationId: 'U' }),
+    { projectId: 'P', userId: 'U', provider: 'google-drive' },
+  );
+});
+
+test('credentialDir:跟 PROMPTCUT_DATA_DIR 走，缺省落在 <root>/out', () => {
+  assert.equal(credentialDir('/r', {}), path.join('/r', 'out', 'storage-credentials'));
+  assert.equal(credentialDir('/r', { PROMPTCUT_DATA_DIR: '/d' }), path.join('/d', 'storage-credentials'));
+});
+
+test('parseImportBody:令牌现在可以不给（那是 A2），给了形状还是要对', () => {
+  assert.equal(parseImportBody({ kind: 'google-drive', fileId: 'f' }).token, null);
+  assert.equal(parseImportBody({ kind: 'google-drive', fileId: 'f', token: 't' }).token, 't');
+  assert.throws(() => parseImportBody({ kind: 'google-drive', fileId: 'f', token: 123 }), (e) => e.code === 'bad-request');
+  assert.throws(() => parseImportBody({ kind: 'google-drive', fileId: 'f', token: 'x'.repeat(5000) }), (e) => e.code === 'bad-request');
+});
+
+test('connect → connections → disconnect 走一圈', async () => {
+  const store = createCredentialStore({ dir: freshDir() });
+  const oauthFetch = jsonFetch((url) => (String(url).includes('revoke')
+    ? new Response('', { status: 200 })
+    : ok({ refresh_token: 'rt-Z', access_token: 'at', expires_in: 3599, scope: 'drive.file' })));
+  const ctx = { store, env: FULL_ENV, oauthFetch, root: '/r' };
+
+  const out = await handleConnect({ kind: 'google-drive', code: 'c', codeVerifier: 'v' }, ctx);
+  assert.equal(out.connected, true);
+  assert.ok(!JSON.stringify(out).includes('rt-Z'), 'connect 的回包里不许出现令牌');
+
+  const listed = await handleConnections(ctx);
+  assert.equal(listed.connections.length, 1);
+  assert.equal(listed.connections[0].provider, 'google-drive');
+  assert.ok(!JSON.stringify(listed).includes('rt-Z'), 'connections 的回包里不许出现令牌');
+
+  const off = await handleDisconnect({ kind: 'google-drive' }, ctx);
+  assert.equal(off.removed, true);
+  assert.equal(off.revoked, true);
+  assert.equal((await handleConnections(ctx)).connections.length, 0);
+});
+
+test('connect:没配客户端密钥时明确报 not-configured', async () => {
+  const { PROMPTCUT_GOOGLE_CLIENT_SECRET: _s, ...noSecret } = FULL_ENV;
+  await assert.rejects(
+    () => handleConnect({ kind: 'google-drive', code: 'c', codeVerifier: 'v' },
+      { store: createCredentialStore({ dir: freshDir() }), env: noSecret, root: '/r' }),
+    (e) => e.code === 'not-configured',
+  );
+});
+
+test('connect:缺授权码或 verifier 一律 bad-request', async () => {
+  const ctx = { store: createCredentialStore({ dir: freshDir() }), env: FULL_ENV, root: '/r' };
+  for (const body of [{ kind: 'google-drive' }, { kind: 'google-drive', code: 'c' }, { kind: 'google-drive', codeVerifier: 'v' }]) {
+    await assert.rejects(() => handleConnect(body, ctx), (e) => e.code === 'bad-request');
+  }
+});
+
+test('import 不带令牌时走托管凭据,一路拉到入库', async () => {
+  const buf = Buffer.from('x'.repeat(2048));
+  const store = createCredentialStore({ dir: freshDir() });
+  await store.put(connectionScope('google-drive'), { refreshToken: 'rt' });
+
+  const asset = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ ok: true, hash: 'c'.repeat(64), ext: 'mp4', name: 'v.mp4', bytes: buf.length }));
+    });
+  });
+  await new Promise((r) => asset.listen(0, '127.0.0.1', r));
+  after(() => asset.close());
+
+  // 换票打的是 oauth2.googleapis.com，取字节打的是 www.googleapis.com，分两个假 fetch
+  const oauthFetch = jsonFetch(() => ok({ access_token: 'at-managed', expires_in: 3600 }));
+  const seenAuth = [];
+  const driveFetch = async (url, init = {}) => {
+    seenAuth.push(init.headers?.Authorization);
+    if (!String(url).includes('alt=media')) {
+      return ok({ id: 'fid123', name: 'v.mp4', size: String(buf.length), mimeType: 'video/mp4' });
+    }
+    return new Response(buf, { status: 206 });
+  };
+
+  const out = await handleStorageImport({ kind: 'google-drive', fileId: 'fid123' }, {
+    store, env: FULL_ENV, oauthFetch, fetchImpl: driveFetch, root: '/r',
+    origin: () => `http://127.0.0.1:${asset.address().port}`,
+    tmpDir: path.join(TMP, 'a2-pull'),
+  });
+
+  assert.equal(out.hash, 'c'.repeat(64));
+  assert.equal(oauthFetch.calls.length, 1, '应当换过一次票');
+  assert.ok(seenAuth.every((a) => a === 'Bearer at-managed'), '取字节用的应当是托管凭据换出来的票');
+});
+
+test('import 不带令牌、也没托管过:说清楚要先授权', async () => {
+  await assert.rejects(
+    () => handleStorageImport({ kind: 'google-drive', fileId: 'fid123' }, {
+      store: createCredentialStore({ dir: freshDir() }), env: FULL_ENV, root: '/r',
+      origin: () => 'http://127.0.0.1:1', tmpDir: path.join(TMP, 'a2-none'),
+      oauthFetch: jsonFetch(() => ok({})),
+    }),
+    (e) => e.code === 'no-credential',
+  );
+});
+
+test('回调页:只发给同源开启方,页面上不显示授权码', () => {
+  const html = callbackHtml();
+  assert.match(html, /postMessage\(msg,\s*location\.origin\)/, '必须限定同源，不能用 "*"');
+  assert.ok(!html.includes("postMessage(msg, '*')") && !html.includes('postMessage(msg, "*")'));
+  assert.ok(!/textContent\s*=\s*[^;]*\bcode\b/.test(html), '不要把授权码写进页面文字');
+  assert.match(html, /promptcut-oauth/, '要带来源标记，页面才分得清是谁发的');
 });

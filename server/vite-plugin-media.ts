@@ -897,25 +897,39 @@ export function mediaMiddleware(root: string, options: ProjectMediaOptions = {})
       return res.end(JSON.stringify(storageConfig()));
     }
 
-    // POST /api/media/storage/import { kind, token, fileId, name? } —— 从用户的网盘拉一份进素材库。
-    // 回包形状和 /api/media/upload/<名> 一样,页面照 applyUploadedMedia 那条路登记。
-    // 页面交来的 access token 只在这一次请求里用:不落盘、不进日志、不进回包。
-    if (req.method === "POST" && req.url.split("?")[0] === "/api/media/storage/import") {
-      const { handleStorageImport, statusForCode }: any = await import("./storage-connectors/route.mjs");
+    // GET /oauth2callback —— A2 的授权弹窗落地页:把授权码 postMessage 回开它的页面,然后自己关掉。
+    // 这个地址要和 Google 控制台里登记的重定向 URI 逐字一致。
+    if (req.method === "GET" && req.url.split("?")[0] === "/oauth2callback") {
+      const { callbackHtml }: any = await import("./storage-connectors/route.mjs");
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      // 授权码在地址栏里,别让它进任何缓存
+      res.setHeader("Cache-Control", "no-store");
+      return res.end(callbackHtml());
+    }
+
+    // 网盘连接器的四个口(任务书第 5 节)。A3 把一次性令牌随 import 递进来;A2 先 connect 再 import(不带令牌)。
+    // 令牌与授权码只过手:不落盘、不进日志、不进回包。
+    if (req.method && req.url.split("?")[0].startsWith("/api/media/storage/")) {
+      const route = req.url.split("?")[0].slice("/api/media/storage/".length);
+      const mod: any = await import("./storage-connectors/route.mjs");
       const { assetServiceOrigin }: any = await import("./asset-client");
+      const ctx = { origin: assetServiceOrigin, root, ownership: null };
+      const send = (body: unknown, status = 200) => {
+        res.statusCode = status;
+        res.setHeader("Content-Type", "application/json");
+        return res.end(JSON.stringify(body));
+      };
       try {
-        const body = await readJsonBody(req);
-        const out = await handleStorageImport(body, { origin: assetServiceOrigin });
-        res.setHeader("Content-Type", "application/json");
-        return res.end(JSON.stringify({ ok: true, ...out }));
+        if (req.method === "POST" && route === "import") return send({ ok: true, ...(await mod.handleStorageImport(await readJsonBody(req), ctx)) });
+        if (req.method === "POST" && route === "connect") return send({ ok: true, ...(await mod.handleConnect(await readJsonBody(req), ctx)) });
+        if (req.method === "GET" && route === "connections") return send(await mod.handleConnections(ctx));
+        if (req.method === "POST" && route === "disconnect") return send({ ok: true, ...(await mod.handleDisconnect(await readJsonBody(req), ctx)) });
       } catch (err: any) {
-        res.statusCode = statusForCode(err?.code);
-        res.setHeader("Content-Type", "application/json");
-        return res.end(JSON.stringify({
+        return send({
           ok: false,
           error: String(err?.code || "error"),
           message: err instanceof Error ? err.message : String(err),
-        }));
+        }, mod.statusForCode(err?.code));
       }
     }
 

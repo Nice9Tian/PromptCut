@@ -131,6 +131,81 @@ export function forgetDriveToken(): void {
   cached = null;
 }
 
+// ───────────────────────── A2:授权码流程 ─────────────────────────
+
+const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
+
+function b64url(bytes: ArrayBuffer | Uint8Array): string {
+  const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let s = "";
+  for (const b of arr) s += String.fromCharCode(b);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function randomB64url(bytes = 48): string {
+  return b64url(crypto.getRandomValues(new Uint8Array(bytes)));
+}
+
+/**
+ * 走一次授权码流程,拿回**授权码**和 PKCE 的 verifier。取消返回 `null`。
+ *
+ * 页面**不自己兑换**这个码 —— 兑换要客户端密钥,那东西只在编辑器进程那一侧。
+ * 带 `access_type=offline` 与 `prompt=consent`:不带这两样 Google 不给 refresh token,
+ * 也就谈不上「关掉页面还能继续传」。
+ */
+export async function requestDriveAuthCode(cfg: StorageProviderConfig): Promise<{ code: string; codeVerifier: string } | null> {
+  if (!cfg.clientId) throw new Error("没有 OAuth 客户端 ID,服务端还没配好");
+  if (!cfg.redirectUri) throw new Error("没有重定向地址,服务端还没配好凭据托管");
+
+  const codeVerifier = randomB64url(48);
+  const challenge = b64url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(codeVerifier)));
+  const state = randomB64url(16);
+
+  const url = `${AUTH_URL}?${new URLSearchParams({
+    client_id: cfg.clientId,
+    redirect_uri: cfg.redirectUri,
+    response_type: "code",
+    scope: cfg.scope || "https://www.googleapis.com/auth/drive.file",
+    code_challenge: challenge,
+    code_challenge_method: "S256",
+    access_type: "offline",
+    prompt: "consent",
+    state,
+  })}`;
+
+  const popup = window.open(url, "promptcut-oauth", "width=520,height=640");
+  if (!popup) throw new Error("授权窗口被浏览器拦住了,请允许本站弹窗后重试");
+
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const finish = (fn: () => void) => {
+      if (done) return;
+      done = true;
+      window.removeEventListener("message", onMessage);
+      clearInterval(watch);
+      try { popup.close(); } catch { /* 已经关了 */ }
+      fn();
+    };
+
+    function onMessage(e: MessageEvent) {
+      // 只认同源的落地页发来的,授权码不会从别的源进来
+      if (e.origin !== window.location.origin) return;
+      const d = e.data;
+      if (!d || d.source !== "promptcut-oauth" || d.state !== state) return;
+      if (d.error) return finish(() => reject(new Error(`授权没通过:${d.error}`)));
+      if (typeof d.code !== "string" || !d.code) return finish(() => reject(new Error("授权回调里没有授权码")));
+      const code = d.code;
+      finish(() => resolve({ code, codeVerifier }));
+    }
+    window.addEventListener("message", onMessage);
+
+    // 用户自己把窗口关了:当取消,不报错
+    const watch = setInterval(() => {
+      if (popup.closed) finish(() => resolve(null));
+    }, 500);
+  });
+}
+
 /**
  * 打开 Picker 让用户选。取消返回 `null`(不是错误)。
  *

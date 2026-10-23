@@ -28,12 +28,27 @@ export interface StorageProviderConfig {
   kind: string;
   label: string;
   configured: boolean;
+  /** 这台机器支不支持 A2（把长期授权交给它保管）。只配了前三样时为假，仍可用一次性授权 */
+  canManage?: boolean;
   scope?: string | null;
   clientId?: string;
   apiKey?: string;
   appId?: string;
+  redirectUri?: string;
   /** 没配好时说明为什么,直接显示给用户 */
   reason?: string;
+  /** 能用一次性授权但不能托管时,说明为什么 */
+  manageReason?: string;
+}
+
+/** 已连接的网盘。只有元信息,没有任何令牌 */
+export interface StorageConnection {
+  projectId: string;
+  userId: string;
+  provider: string;
+  grantedScope: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface PickedFile {
@@ -63,6 +78,41 @@ export async function loadStorageProviders(): Promise<StorageProviderConfig[]> {
   } catch {
     return [];
   }
+}
+
+async function postJson(url: string, body: unknown): Promise<any> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.ok) throw new Error(String(data?.message || `请求失败(HTTP ${res.status})`));
+  return data;
+}
+
+/** A2:列出已连接的网盘。读不到就当没有 */
+export async function loadConnections(): Promise<StorageConnection[]> {
+  if (!storageImportSupported) return [];
+  try {
+    const res = await fetch("/api/media/storage/connections");
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data?.connections) ? (data.connections as StorageConnection[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** A2:把授权码交给编辑器进程换 refresh token。页面不碰 refresh token */
+export async function connectStorage(provider: string, code: string, codeVerifier: string): Promise<void> {
+  await postJson("/api/media/storage/connect", { kind: provider, code, codeVerifier });
+}
+
+/** A2:断开。回包里说明网盘那边撤没撤成 */
+export async function disconnectStorage(provider: string): Promise<{ revoked: boolean; why?: string }> {
+  const data = await postJson("/api/media/storage/disconnect", { kind: provider });
+  return { revoked: !!data.revoked, ...(data.why ? { why: String(data.why) } : {}) };
 }
 
 function kindOf(mimeType: string | undefined, name: string): MediaAsset["kind"] {
@@ -113,12 +163,13 @@ function probe(url: string, kind: MediaAsset["kind"], name: string): Promise<{ d
 /**
  * 把一份选中的网盘文件导进素材库。
  *
+ * @param token 一次性 access token（A3）。传 `null` 走 A2：编辑器进程用它托管的凭据自己换票
  * @param place 视频是否顺手放到播放头处(和本地导入视频一致)
  * @returns 新素材的 id
  */
 export async function importFromStorage(
   provider: string,
-  token: string,
+  token: string | null,
   file: PickedFile,
   { place = true }: { place?: boolean } = {},
 ): Promise<string> {
@@ -132,7 +183,8 @@ export async function importFromStorage(
     const res = await fetch("/api/media/storage/import", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: provider, token, fileId: file.id, name: file.name }),
+      // 不带 token 就是 A2:让编辑器进程用托管的凭据自己换票
+      body: JSON.stringify({ kind: provider, fileId: file.id, name: file.name, ...(token ? { token } : {}) }),
     });
     const data = await res.json().catch(() => null);
     if (!res.ok || !data?.ok) {

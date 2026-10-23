@@ -341,11 +341,13 @@ test('storageConfig:没配环境变量就 configured:false 并说明原因', () 
   assert.equal(drive.clientId, undefined);
 });
 
-test('storageConfig:配齐三样才算 configured,且只下发这三样', () => {
+test('storageConfig:配齐三样就能用一次性授权(A3)', () => {
   const cfg = storageConfig({
     PROMPTCUT_GOOGLE_CLIENT_ID: 'cid.apps.googleusercontent.com',
     PROMPTCUT_GOOGLE_API_KEY: 'AIzaKEY',
     PROMPTCUT_GOOGLE_PROJECT_NUMBER: '727415172612',
+    PROMPTCUT_GOOGLE_CLIENT_SECRET: 'THE-REAL-SECRET',
+    PROMPTCUT_GOOGLE_REDIRECT_URI: 'http://localhost:5321/oauth2callback',
   });
   const drive = cfg.providers.find((p) => p.kind === 'google-drive');
   assert.equal(drive.configured, true);
@@ -353,8 +355,9 @@ test('storageConfig:配齐三样才算 configured,且只下发这三样', () => 
   assert.equal(drive.appId, '727415172612');
   assert.equal(drive.scope, 'https://www.googleapis.com/auth/drive.file');
   assert.equal(drive.reason, undefined);
-  // 客户端密钥永远不下发给页面:整份配置里不许出现 secret 字样
-  assert.ok(!/secret/i.test(JSON.stringify(cfg)));
+  // 客户端密钥的**值**永远不下发给页面。
+  // （不能扫 /secret/i:没配密钥时 manageReason 里会正当地提到环境变量名 PROMPTCUT_GOOGLE_CLIENT_SECRET。）
+  assert.ok(!JSON.stringify(cfg).includes('THE-REAL-SECRET'));
 });
 
 test('storageConfig:缺一样就不算配好', () => {
@@ -375,10 +378,11 @@ test('storageConfig:Dropbox 只占位,标明还没做', () => {
 });
 
 test('parseImportBody:形状不对一律 bad-request', () => {
+  // 注意:「不带 token」不在这张表里 —— A2 做出来之后那是合法的(让这一侧用托管凭据换票),
+  // 对应的用例在 storage-credentials.test.mjs 里。
   const bad = [
     {},
     { kind: 'onedrive', token: 't', fileId: 'f' },
-    { kind: 'google-drive', fileId: 'f' },
     { kind: 'google-drive', token: '', fileId: 'f' },
     { kind: 'google-drive', token: 'x'.repeat(5000), fileId: 'f' },
     { kind: 'google-drive', token: 't' },
