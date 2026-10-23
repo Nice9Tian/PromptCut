@@ -11,10 +11,15 @@ import { cardPosAtTime, timeAtCardPos } from './mainContent.ts';
  * 忠实照抄 `src/mobile/ThumbStrip.tsx` 第 43~53 行 `posFromScroll`，
  * 仅把闭包读取的 `sc.current!` 与 `blocks()` 改为参数 `(el, bl)`，未改动任何表达式或边界判断。
  */
+/** 照抄 `ThumbStrip.tsx` 的 `spanOf`：第 i 段占的区间是「本卡左缘 → 下一卡左缘」，把转场标记那 30px 并进前一段 */
+function spanOf(bl, i) {
+  const l = bl[i].offsetLeft;
+  return [l, i + 1 < bl.length ? bl[i + 1].offsetLeft : l + bl[i].offsetWidth];
+}
 function posFromScroll(el, bl) {
   const x = el.scrollLeft + el.clientWidth / 2;
   for (let i = 0; i < bl.length; i++) {
-    const l = bl[i].offsetLeft, r = l + bl[i].offsetWidth;
+    const [l, r] = spanOf(bl, i);
     if (x < l) return i;
     if (x < r) return i + (x - l) / (r - l);
   }
@@ -29,7 +34,8 @@ function scrollForPos(el, bl, pos) {
   if (!bl.length) return 0;
   const i = Math.min(Math.floor(pos), bl.length - 1);
   const f = pos >= bl.length ? 1 : pos - i;
-  return bl[i].offsetLeft + f * bl[i].offsetWidth - el.clientWidth / 2;
+  const [l, r] = spanOf(bl, i);
+  return l + f * (r - l) - el.clientWidth / 2;
 }
 
 /**
@@ -333,4 +339,44 @@ test('SS5 posFromScroll 与 scrollForPos 来回一致性（1 段 6 秒）与 onS
     progSlAfter1_5px: progSl.current,
     scrubbedTimeAt1_5px: scrubbedTimes[0],
   });
+});
+
+/*
+ * 段边界那 30px 死区（2026-10-25 修）。改之前：`scrollForPos` 按卡宽算，pos 从 1−ε 跨到 1 时
+ * want 从上一段末尾直接跳到下一段左缘，中间那 30px（.mark 宽 24 + 左右各 3）不属于任何一段 ——
+ * 播到边界瞬移、手动滚进去时间卡住。改成按「本卡左缘 → 下一卡左缘」算之后两头都连续。
+ */
+test('SS6 段边界不再有 30px 死区：want 连续、来回可逆（3 段各 2 秒，中间两个 .mark）', () => {
+  const W = 390, CARD = 80, MARK = 30;
+  const el = { clientWidth: W, scrollLeft: 0 };
+  const left0 = W / 2;
+  const bl = [0, 1, 2].map((i) => ({ offsetLeft: left0 + i * (CARD + MARK), offsetWidth: CARD }));
+
+  // 1) want 在整条上单调且处处连续：相邻采样点的跨度不许出现 .mark 那一下 30px 的跳变
+  const STEP = 1 / 512;
+  let prev = scrollForPos(el, bl, 0), maxJump = 0;
+  for (let pos = STEP; pos <= 3; pos += STEP) {
+    const w = scrollForPos(el, bl, pos);
+    assert.ok(w >= prev - 1e-9, `want 必须单调不减，pos=${pos}`);
+    maxJump = Math.max(maxJump, w - prev);
+    prev = w;
+  }
+  // 每段跨 CARD+MARK=110px、512 步，单步约 0.215px；留宽到 1px 仍远小于 30
+  assert.ok(maxJump < 1, `相邻两步最大跨度 ${maxJump}px，不该出现 30px 的瞬移`);
+
+  // 2) 整条可逆：滚动位置 → pos → 滚动位置，误差可忽略（改之前 .mark 那 30px 恒回整数）
+  const maxScroll = scrollForPos(el, bl, 3);
+  for (let x = 0; x <= maxScroll; x += 1) {
+    el.scrollLeft = x;
+    const back = scrollForPos(el, bl, posFromScroll(el, bl));
+    assert.ok(Math.abs(back - x) < 1e-6, `x=${x} 来回不一致：回来是 ${back}`);
+  }
+  el.scrollLeft = 0;
+
+  // 3) 段边界左右各取一点，pos 必须连续穿过整数，不是两边都卡在 1
+  const boundary = scrollForPos(el, bl, 1);
+  el.scrollLeft = boundary - 5; const before = posFromScroll(el, bl);
+  el.scrollLeft = boundary + 5; const after = posFromScroll(el, bl);
+  assert.ok(before < 1 && before > 0.9, `边界左边应接近 1 但小于 1，实际 ${before}`);
+  assert.ok(after > 1 && after < 1.1, `边界右边应刚过 1，实际 ${after}`);
 });
