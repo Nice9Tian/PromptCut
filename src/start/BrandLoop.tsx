@@ -11,7 +11,7 @@
  * 所以第 0 帧和第 N 帧算出来**逐字节相同**。2026-10-24 实测：把项目拉到 49 秒、
  * 单独导第 0 帧与第 1152 帧，两张 SHA-256 完全一致、逐字节零差异。
  *
- * 兜底：视频放不出来（解码不支持、文件取不到、自动播放被拦）就退回实时着色器 `BrandCanvas`，
+ * 兜底：视频**真的坏了**（解码不支持、文件取不到）才退回实时着色器 `BrandCanvas`，
  * 那一版自己还有一层 CSS 兜底（`BrandAurora`）。所以这一块任何时候都不会是一片空白。
  *
  * 「减少动态效果」：不自动播，停在第一帧——有图、不动。
@@ -47,8 +47,17 @@ export function BrandLoop(): JSX.Element {
     if (!el) return;
     const still = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (still) { el.pause(); return; }
-    // 自动播放被拦（有些浏览器连静音视频也拦）不该让这一块变空：退回实时着色器
-    void el.play().catch(() => setFailed(true));
+    /*
+     * play() 被拒**不算坏**，所以这里只吞掉、由 canplay 再试一次。
+     * 页面刚加载、或者换皮肤刚换 src 时，浏览器常以「播放请求被新的加载打断」拒掉第一次，
+     * 可视频本身好好的。**2026-10-24 就栽在这儿**：原来写成一拒就 setFailed，
+     * 0.7.28 上线后线上登录页一直显示兜底的实时着色器 —— 视频 200、play() 手动调也成功，
+     * 只有组件自己那一次被拒，于是永久退回。真要撤回着色器只认一种情况：媒体自己报错（见 onError）。
+     */
+    const tryPlay = () => { void el.play().catch(() => {}); };
+    tryPlay();
+    el.addEventListener("canplay", tryPlay);
+    return () => el.removeEventListener("canplay", tryPlay);
   }, [src]);
 
   // 一个视频都没有（还没渲、或者被裁掉了）就走实时着色器，不留空白
@@ -64,7 +73,8 @@ export function BrandLoop(): JSX.Element {
       playsInline
       preload="auto"
       aria-hidden="true"
-      onError={() => setFailed(true)}
+      // 只认媒体自己的错（解码不支持、文件取不到）；error 事件里 el.error 为空的不算
+      onError={(e) => { if (e.currentTarget.error) setFailed(true); }}
     />
   );
 }
