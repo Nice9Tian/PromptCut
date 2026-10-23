@@ -150,9 +150,15 @@ export function DesktopStart(props: {
 
   /* ---------------- 动作 ---------------- */
 
-  /** 点进一个项目:读那份草稿载进 store,再进它的聊天页。已经开着就直接回聊天页 */
-  const openProject = (id: string) => {
-    if (openId === id) { setChatPage(true); return; }
+  /**
+   * 点进一个项目:读那份草稿载进 store,再进它的聊天页。已经开着就直接回聊天页。
+   *
+   * `intoClassic` 为真时载完直接切**传统式**(打开编辑界面)——「最近项目」那一排的缩略图卡片走这条
+   * (2026-10-23 用户定,原话:「红色区域是项目卡片，点击这个位置的卡片会进入传统式」),
+   * 和在线那一屏(`OnlineStart.tsx`)同一条规矩。侧栏的项目条目不带这个开关,仍然停在聊天页。
+   */
+  const openProject = (id: string, intoClassic = false) => {
+    if (openId === id) { if (intoClassic) enterEditor(); else setChatPage(true); return; }
     setNotice("");
     setBusy(true);
     // 换项目之前先把手上这个存了 —— 换完 store 就是另一个项目,没存的就找不回来了
@@ -162,6 +168,8 @@ export function DesktopStart(props: {
         setActiveDraftId(id);
         setOpenId(id);
         setChatPage(true);
+        // 刚载进来的草稿还没动过,不会有没存的改动,所以这里直接切,不用再存一次
+        if (intoClassic) props.onEnterEditor();
       })
       .catch((e: unknown) => setNotice(e instanceof Error ? e.message : "这个项目打不开。"))
       .finally(() => setBusy(false));
@@ -459,7 +467,7 @@ export function DesktopStart(props: {
                 projects={shown}
                 resetKey={scopeKeyOf(scope)}
                 onCreate={createBlank}
-                onOpen={openProject}
+                onOpen={(id) => openProject(id, true)}
                 empty={railEmpty}
               />
             </div>
