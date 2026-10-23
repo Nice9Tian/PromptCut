@@ -151,12 +151,29 @@
  * 换顺序那一下另说:它要求先选中、再长按拖,所以只给**选中的那一张卡**关掉原生滑动(下一条规则),
  * 免得长按拖动时浏览器把它当成滑动抢走。
  */
-.pcm .strip-scroll { display: flex; align-items: center; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding: 6px 0 10px; min-height: 80px; touch-action: pan-x; overscroll-behavior-x: contain; user-select: none; -webkit-user-select: none; }
+/*
+ * 左右那两段「让首尾也能走到正中」的留白，2026-10-25 从占位 div 改成容器自己的 padding。
+ *
+ * 为什么非改不可：WebKit **根本不把那两个占位 div 算进 scrollWidth**。它们是零高度的空盒
+ * （容器 align-items: center，占位没写 height，实测 141.5×0 / 187.5×0），WebKit 算滚动溢出时
+ * 当它们不存在，于是 scrollWidth === clientWidth、整条根本没有滚动区 ——
+ * 手指划不动、程序设 scrollLeft 也不动，连播放时当前帧那条白线都永远停在 0。
+ * Blink 算，所以桌面 Chrome 和无头仿真里一切正常，这个差异藏了很久。
+ *
+ * 用户 2026-10-25 在 iPhone（iOS 18.1.1）上拿五种写法逐一实测，只有这一种能滚：
+ *   占位 div 百分比 → 可滚 0；占位 div 固定 px → 0；内层包 max-content → 0；内层包 inline-flex → 0；
+ *   容器 padding → 可滚 126 px、JS 设得动、手指划得动。
+ * 读数留在 docs/reports/AGENT-claude-strip-snapback.md。
+ *
+ * 左边是 calc(50% - 46px) 而不是 50%：前面还有一颗 40px 宽、右外边距 6px 的「＋」，
+ * 减掉它首卡的左缘才正对正中那条线（和改之前的几何完全一致，offsetLeft 不变，
+ * 所以 ThumbStrip 里按 offsetLeft 算位置的那几处不用动）。
+ */
+.pcm .strip-scroll { display: flex; align-items: center; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding: 6px 50% 10px calc(50% - 46px); min-height: 80px; touch-action: pan-x; overscroll-behavior-x: contain; user-select: none; -webkit-user-select: none; }
 /* 选中的卡要能长按拖动换顺序:这一张上不许浏览器接管手势,拖动由 ThumbStrip 自己算 */
 .pcm .strip-scroll .mblock.sel { touch-action: none; }
 .pcm .strip-scroll::-webkit-scrollbar { display: none; }
-.pcm .sp-l { flex: none; width: calc(50% - 46px); }
-.pcm .sp-r { flex: none; width: 50%; }
+/* .sp-l / .sp-r 已删：改用上面那条容器 padding，WebKit 不认空占位 div */
 .pcm .cf-line { position: absolute; left: 50%; top: 2px; bottom: 6px; width: 2px; margin-left: -1px; background: var(--white); border-radius: var(--r-s); box-shadow: 0 0 0 1px var(--shade-weak); z-index: 6; pointer-events: none; }
 .pcm .madd { flex: none; width: 40px; height: 64px; border-radius: var(--r-m); background: var(--panel2); display: grid; place-items: center; margin-right: 6px; color: var(--text); }
 .pcm .madd svg { width: 22px; height: 22px; }

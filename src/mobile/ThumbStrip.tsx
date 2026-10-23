@@ -35,6 +35,16 @@ export function ThumbStrip(props: {
   const sc = useRef<HTMLDivElement>(null);
   /** 自己设的滚动位置(跟着当前时间走),滚动事件看到它就不回头改时间 */
   const progSl = useRef(0);
+  /**
+   * 最近一次「不是我们自己设的」滚动发生在什么时候。
+   *
+   * 下面那个同步 effect 没有依赖数组、每次渲染都跑，原来只在手指按着（`dragging`）时让开。
+   * 交给浏览器原生横滑之后这就不够了：**松手之后的惯性那一段 `dragging` 已经是 false**，
+   * 这期间只要有任何一次重渲染（卡片在测量、进度在跳、Agent 在改都会引起），
+   * effect 就把 scrollLeft 弹回「当前时间」对应的位置 —— 手感上就是「怎么划都回去，白线一动不动」。
+   * 所以再记一个时间戳：最近 400 毫秒内有用户自己的滚动，就别去碰它。
+   */
+  const userScrollAt = useRef(0);
   const suppressClick = useRef(false);
   const dragging = useRef(false);
 
@@ -63,7 +73,7 @@ export function ThumbStrip(props: {
   // 播放、点刻度、切换剪辑时,缩略时间轴跟着当前时间走(手指按着的时候不动)
   useLayoutEffect(() => {
     const el = sc.current;
-    if (!el || !el.clientWidth || dragging.current) return;
+    if (!el || !el.clientWidth || dragging.current || performance.now() - userScrollAt.current < 400) return;
     const want = scrollForPos(cardPosAtTime(clips, props.t));
     if (Math.abs(el.scrollLeft - want) < 1) return;
     el.scrollLeft = want;
@@ -75,6 +85,8 @@ export function ThumbStrip(props: {
     if (!el) return;
     const onScroll = () => {
       if (!el.clientWidth || Math.abs(el.scrollLeft - progSl.current) < 1.5) return;
+      // 和 progSl 对不上 = 这一下不是我们自己设的，是用户在滑（手指拖、惯性、滚轮都算）
+      userScrollAt.current = performance.now();
       progSl.current = el.scrollLeft;
       props.onScrub(timeAtCardPos(clips, posFromScroll()));
     };
@@ -150,7 +162,6 @@ export function ThumbStrip(props: {
           onPointerDown={onPointerDown}
           onClickCapture={(e) => { if (suppressClick.current) { e.stopPropagation(); e.preventDefault(); } }}
         >
-          <div className="sp-l" />
           <button type="button" className="madd" aria-label="添加素材" title="添加素材" data-pcm="main-add" onClick={props.onAddMedia}><Icon name="plus" /></button>
           {clips.map((c, i) => {
             const tr = i < clips.length - 1 ? boundaryTransition(project, c, clips[i + 1]) : null;
@@ -178,7 +189,6 @@ export function ThumbStrip(props: {
               ),
             ];
           })}
-          <div className="sp-r" />
         </div>
       </div>
     </>
