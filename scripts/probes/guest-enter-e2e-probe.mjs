@@ -179,6 +179,9 @@ async function enteredEditor(page, what) {
   const outcome = await waitFor(async () => (await inEditor(page)) ? 'editor' : (await textOf(page, '[data-pc="account-error"]')) ? 'error' : null, 180_000, what);
   if (outcome === 'error') throw new Error(`${what}:开始页报「${await textOf(page, '[data-pc="account-error"]')}」`);
   await waitGateGone(page);
+  // 编辑台的样式表是按需加载的:等它们都到了再往下(不然截出来是没上样式的页面)
+  await waitFor(() => P(page, () => [...document.querySelectorAll('link[rel="stylesheet"]')].every(l => !!l.sheet) &&
+    getComputedStyle(document.querySelector('[data-pc="members-button"]')).height === '26px'), 60_000, '编辑台样式表加载完').catch(() => null);
   await dismissConsent(page, 3000);
 }
 /** 素材库「图片」组:几个项、缩略图是不是真画出来了(读的是素材服务里的字节,不是本页的临时副本) */
