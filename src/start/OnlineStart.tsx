@@ -262,6 +262,8 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
     if (it.kind === "skip") { setSkipped(true); return; }
     void ap.perform(async () => {
       if (it.kind === "guest") await ap.enterAsGuest();
+      // Google 那条路已经在登录页里登成功了,这里只是让业务层这一侧把会话认下来(`useAccountProjects` 的 `adoptSession`)
+      else if (it.kind === "third-party") await ap.adoptSession();
       else await ap.login(it.name, it.password, it.remember);
       if (it.link) setJoin({ askPassword: false });
     });
