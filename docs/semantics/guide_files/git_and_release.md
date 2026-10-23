@@ -6,14 +6,13 @@
 
 - 提交信息用中文，开头写类别，冒号后写做了什么。常用类别：文档、探针、重构、修、测试、合并。
 - 子分支合并进 main 用 `--no-ff`，合并提交写成「合并 <分支或步骤名>:摘要」。
-- 提交 PR 之前自己先过一遍：`npm run build` 成功，这次改动影响范围内的测试零失败（范围怎么算见 `verification.md`）。不推进 `release`，`release` 只在发版时动。
 
 ## release 分支
 
-- `release` 指向最近一次正式发布的版本：它永远能构建、能运行、能使用。main 是日常合入的地方，功能随时往里合；`release` 不跟着动。
-- **时机：只在发版时推进一次。** 发版时 `git checkout release && git merge --ff-only main`，之后 main 继续前进，`release` 留在原地等下一次发版。`release` 只从 main 前进，不直接提交，不改写历史。
-- 合入条件，四条同时满足：类型检查零错误；**全量 `npm test` 零失败**（`verification.md`，这是全量唯一一次必跑的时机）；整套验收跑过（G0、G0-R、全部历史探针）；`npm run build` 成功，改动涉及桌面壳、Chrome、ffmpeg、内置 Python 或运行时目录布局时，`desktop/` 下的发版构建也成功。
-- 合入 main 的门槛不含上面这些，见 `verification.md`「小阶段与发版分别验什么」：类型检查、受影响范围的测试、对应探针，三条即可。
+- `release` 是随时可用的完整版本：无论项目在哪一步停下，它指向的都是一个能构建、能运行、能使用的版本。「完整」指软件完整，不指计划做完：一个功能合入后软件仍能编译、运行、使用，它就该进 `release`。
+- 合入条件，三条同时满足：基线全绿（`verification.md`）；`npm run build` 成功；改动涉及桌面壳、Chrome、ffmpeg、内置 Python 或运行时目录布局时，`desktop/` 下的发版构建也成功。
+- 时机：每次有功能合入 main 后立刻判断一次。满足就 `git checkout release && git merge --ff-only main`，不满足就留在 main，下次合入后再判。`release` 只从 main 前进，不直接提交，不改写历史。
+- 暂停或交接之前必须先判一次，让 `release` 落在最近一次可用版本上。
 
 ## 构建
 
