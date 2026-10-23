@@ -239,7 +239,9 @@ try {
   await shot(P, '04-chat-ext');
   await P.click('[data-pc="start-ext-detail"]');
   const detail = await until('详细编辑', () => P.$('[data-pc="start-detail"] [data-pc="start-detail-stage"] [data-pc="preview"]'), 30_000);
-  const detailInfo = await P.evaluate(() => ({ tracks: document.querySelectorAll('.ps-detail-lane').length, clips: document.querySelectorAll('[data-pc="start-detail-clip"]').length, empty: document.querySelector('[data-pc="start-detail-empty"]')?.textContent ?? null, extStage: !!document.querySelector('[data-pc="start-ext-stage"]') }));
+  // 详细编辑 2026-10-23 换成真时间轴(`src/editor/timeline` 的 TimelineView,见 DetailEdit.tsx),
+  // 原来那套只读轨道的 `.ps-detail-lane` / `[data-pc="start-detail-clip"]` 不存在了;这里只记录,不参与判定
+  const detailInfo = await P.evaluate(() => ({ timeline: !!document.querySelector('[data-pc="start-detail-tl"] [data-pc="timeline"]'), tracks: document.querySelectorAll('[data-pc="start-detail-tl"] [data-track-id]').length, clips: document.querySelectorAll('[data-pc="start-detail-tl"] [data-clip-id]').length, extStage: !!document.querySelector('[data-pc="start-ext-stage"]') }));
   step('5-ext-detail', { stage: !!stage, detail: !!detail, ...detailInfo });
   check(!!stage && !!detail && !detailInfo.extStage, '拓展栏与详细编辑挂的是真预览,同一时刻只挂一份');
   await sleep(2000);
