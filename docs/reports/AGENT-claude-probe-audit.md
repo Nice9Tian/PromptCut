@@ -41,7 +41,7 @@ B06 块第一版把手机版语义安在不存在的小节上；B09 块第一版
 
 ## 三、已执行的处置
 
-`scripts/probes` 下的文件从 **368** 降到 **336**：删 4 支、归档 25 支（另一支 R01 探针在本次开审前已随返工删除）、改 46 支。守门从「不过」转为**通过**。
+`scripts/probes` 下的文件从 **368** 降到 **330**：删 **10** 支、归档 **27** 支（另一支 R01 探针在本次开审前已随返工删除）、改 **48** 支。守门从「不过」转为**通过**。
 
 ### 1. 补登记三支，守门转通过（提交 `c4b2e1`，见 git log）
 
@@ -84,6 +84,24 @@ B06 块第一版把手机版语义安在不存在的小节上；B09 块第一版
 - **修一处会卡住整条测试链的失配补丁**：`reopen-native-fixture.mjs` 的边车端口补丁。`lib.rs` 现在写 `"--port", &editor_port.to_string()`，而 `editor_port` 由 `account_editor_port()` 从 `EDITOR_PORT` 推出、上一条补丁已把它改成 5203，这条补丁多余且目标串一次都不命中，会抛「native source isolation patch no longer matches」，把 `reopen-native`、`reopen-native-upgrade`、`reopen-installed --rehearse-fixture` 全卡在夹具构建这一步。核过剩下 7 条补丁串全部命中。
 - **清台账**：守门 `coverageReport()` 新增「既被清单项点名、又写在排除表里」的检查并判红（原先这种自相矛盾静默通过）；收掉 `claim-gate-judge.mjs`、`render-host-probe.mjs`、`card-policy-probe.mjs` 三处重复登记；清单里点名的夹具目录 `fixtures/online-card-attacks/` 全仓不存在，改成真名 `fixtures/render-isolation/`。
 
+### 6. 快照家族：删 5 支、归档 1 支、改 2 支（不删）
+
+**大前提我自己核过**：每张卡的 HTML 快照 2026-10-16（己二）撤掉 —— `server/snapshot-tier.mjs` 的 `snapshotTier()` 对所有卡恒回 `'none'`（注释写「快照作废以后（2026-10-13 用户定）」）、
+页面侧 `src/online/pageStreamPlan.ts` 同样恒回 `none`、`server/render-node/split.mjs` 因此一个快照任务都不发、`src/StageView.tsx` 的 `setSnapshots` 只剩空桩（注释写「HTML 快照已由己二撤掉，留作空桩兼容旧接口」）。
+但语义里**仍保留**产流过程中「当场生成这张卡的快照、画成位图送进编码器，快照用完就丢」（`mechanism/rendering.md`）与整场景的 HTML 采样，所以不能一刀切。
+
+| 探针 | 处置 | 依据 |
+|---|---|---|
+| `scrub-hold-snapshot-probe` | 删 | 等就绪索引里的 `html` 层铺满，必超时 |
+| `snapshot-hash-probe` | 删 | 要求 `tier === 'shared'`，现在恒为 `'none'` |
+| `snapshot-diff-apply-probe` | 删 | 输入是帧库存下的 `controls-html`，不再产生；对应契约第 7 节整节作废 |
+| `swap-cost-probe` | 删 | 量的是 `setSnapshots` 两批空调用之差，`prep.plane` 恒 `false`，退出码照样 0（在测空桩） |
+| `png-adopt-probe` | 删 | PNG 取回搭在快照清单上，一并失效 |
+| `snapshot-size-probe` | 归档 | 入口（整场景 HTML 采样）还在、跑得完，但判据是已撤销的快照投递上限 |
+| `browser-stream-e2e-probe`、`browser-stream-node-probe` | **改，不删** | 它们的主线是**产流**（浏览器节点 `bakeStream` → 舞台当场 `createSnapshot` → `renderSnapshotBitmap` 送编码器），只是等待条件把「快照任务也做完」算进了 `completed`，撤快照后那个数永远凑不满、必超时。改掉门槛与两条恒真断言、删掉 node 版的「快照回归」一节。**不能删**：浏览器流与 ffmpeg 参照流逐帧比、桌面把浏览器产的流拉回去、队列任务的让路与中止、切分方关流那一轮，只有这两支覆盖 |
+
+两支改过的探针文件头留了一个**待实跑确认**的点：产流那几处的帧数与分段数门槛是撤快照之前的读数，2026-10-14 起空项目加第一张卡会先产一遍稀疏版，可能让这些数翻倍；跑通一次看 `diag.streams.frames` 是 48 还是 96 再定，不要先改。
+
 ## 四、我推翻的子 Agent 结论（照口径逐条核过）
 
 | 子 Agent 的建议 | 主 Agent 的判定 | 依据 |
@@ -97,6 +115,10 @@ B06 块第一版把手机版语义安在不存在的小节上；B09 块第一版
 | B12a：`editor-preview-smoke` 的 `--legacy`、B12b：`reveal-probe` 验的 `?preview=legacy` 已过时 | **不算过时，两支都留** | `?preview=legacy` 在产品代码里还活着（`src/editor/previewMode.ts`、`Preview.tsx`、`StageView.tsx`、`render/frameClient.ts` 都有） |
 | B02b：`cloud-tools-w2-probe.mjs:257` 的断言「现在跑起来必然失败」 | **不改** | 该块 manager 已用代码推翻：`initiatorOffline` 自己先走 `modelToolName` 归一新旧名，两侧产出同一对象 |
 | B09：整支删 `reopen-native-association.mjs` | **只删 `explorerNativeLaunch` 那一半** | `prepareStandaloneLaunch` 还被 `reopen-native.mjs --standalone-smoke` 用着 |
+| B08b：删 `small-tier-probe`，「测的预渲染小尺寸 `.small.webp` 已废除」 | **留** | `small.webp` 在产品代码里还在：`server/bakery/small-bitmap.mjs`、`server/frame-pipeline.mjs`、`src/editor/browserNodeHost.ts`、`server/artifact-transfer.mjs`；在用探针 `c10a-demo-probe` 还断言「手机：预渲染只有 px/ 小位图」 |
+| B08b：删 `queue-single-pass-probe`，「100% 测已废除的 HTML 快照」 | **留** | 产品 `server/frame-pipeline.mjs` 里 `renderCardSnapshotRange`、`queueSinglePass()`、`queueSinglePassOff` 都还在，后者的注释明写「**对照探针用**」—— 产品专门留了这个钩子给它 |
+| B08b：改 `tiers-probe` 第 299 行，「`longtasksOver50 === 0` 是耗时闸门」 | **不改** | 那是**长任务数**，`verification.md` 明写「不看时间的断言照旧是通过条件……长任务数」属于保留项；它引的清单第 419 行其实是一个分节标题，不是对这条的注释 |
+| B08b：改 `shared-project-lan.mjs` 第 401 行「发现耗时 ≤ 5 秒」 | **不改** | 另一个 Opus 判它是机制时限（协议窗口 3 + 0.5 秒推出来的功能判据），我采这一判；真要动，应按三级把那个常数补进语义，走 dry run |
 | 我自己交给 B05b/B12a 的框定「渲染重构已合入，现在就是另议的时候」 | **是我说错了** | `TODO.md` 第 27 行写明渲染重构整体「任务书已写，未开工」；只有 R8、R9 两个子项合入。那 40 支挂着「重构合入后另议」的探针继续挂着，读那两份报告时相应打折 |
 
 ## 五、还没动、记为待办的（都有具体行号，供用户定先后）
@@ -108,7 +130,8 @@ B06 块第一版把手机版语义安在不存在的小节上；B09 块第一版
 5. **`stream-canvas-direct-probe` 与产品的落实差**：语义（`product/rendering.md`、`mechanism/rendering.md`，2026-10-14 用户定）写「画布卡产轨道流一律直接从画布取像素，不再每段实测对比」，但 `server/bakery/capture-canvas.mjs` 只把默认模式从 `auto` 改成 `always`，仍保留每段首帧截图对比，探针也还在强断言它。要么改代码和探针，要么修语义表述。
 6. **`mechanism/rendering.md`「哪些卡有流」那一段仍有 R02 之前的旧话**「浏览器节点和在线页面本页不产」：R01 退回后前半句又对了，后半句与已做成的 R02 冲突。这一本正被 0.7.21 的发版会话改着，我没去抢改。
 7. **`probe-gate-probe.mjs` 第 244 行**仍以 `out.raf.p50 <= 20` 毫秒当通过条件（它在排除表里，所以这次没一起改）。
-8. 还有两块（B08a 预渲染队列与跨机、B08b 托管渲染与共享项目）的 Argon 报告没回，这 51 支只过了主 Agent 自己的机械核查（台账、指针、时间断言），没有逐支对语义。
+8. **B08b 提的另外几处改**（我核过属实、但这次没动，因为都要改到产品代码或重写较大段断言）：`queue-mode-probe` 与 `render-host-probe` 里对已废除 `<帧>.html` 快照的比对段应删；`render-queue-e2e` 的排除行与它被 `S1-2`/`S1-r2` 点名自相矛盾（我已修掉同类的三处，这一处留给它那块的结论一起办）；`shared-project-probe --mode internet` 只验「留在仓库不删的旧云端路径」，该在文件头与台账里标明。
+9. **B08a（预渲染队列与跨机，26 支）的 Argon 报告没回**，这 26 支只过了主 Agent 自己的机械核查（台账、失效指针、时间断言扫描），没有逐支对语义。
 
 ## 六、验证
 
@@ -121,7 +144,7 @@ B06 块第一版把手机版语义安在不存在的小节上；B09 块第一版
 | 影响范围测试：`four-stage-acceptance`、`four-stage-acceptance-v18`、`bakery-deps`、`probe-timings` | **48 项全过**（含读探针源码的 PT-05、PT-06） |
 | 覆盖它所删探针的单测：`asset-project-http`、`asset-project-entries` | **8 项全过** |
 | 每个改过或归档的脚本 | `node --check` 全部通过 |
-| 删／归档的 29 个文件名在单测里的引用 | 逐个搜过，只有一处同名字符串（流键），不是文件引用 |
+| 删／归档的 37 个文件名在单测里的引用 | 逐个搜过，只有一处同名字符串（流键），不是文件引用 |
 
 没跑：全量 `npm test`（按上面那条用户决定；合 main 前要不要全量由用户定）、渲染附加项（本次没改画面代码，只改探针与验收台账；唯一碰到的产品文件 `src/render/snapshotRename.ts` 只改了一行注释里的路径）。
 
