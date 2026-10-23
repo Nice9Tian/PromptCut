@@ -5,7 +5,8 @@
  */
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { Project, TrackClip } from "../kernel/project";
-import { clipSpeed, isSpeedChanged, speedLabel, speedMutesSource } from "../kernel/clipTime.mjs";
+import { clipSpeed, isSpeedChanged, speedLabel } from "../kernel/clipTime.mjs";
+import { clipMakesNoSound } from "../editor/timeline/clipSilence";
 import { ThumbImg, useThumb } from "./Thumb";
 import type { Transition } from "../kernel/transitions";
 import { boundaryTransition, cardPosAtTime, clipKind, mainTotal, timeAtCardPos } from "./mainContent";
@@ -147,7 +148,7 @@ export function ThumbStrip(props: {
           {clips.map((c, i) => {
             const tr = i < clips.length - 1 ? boundaryTransition(project, c, clips[i + 1]) : null;
             // 变速段原声不出(〔裁〕,kernel/clipTime.mjs):和静音一样挂静音图标,时长后面带倍数
-            const muted = !!c.audioMuted || speedMutesSource(c, project);
+            const muted = !!c.audioMuted || clipMakesNoSound(project, c);
             // 补空档补进来的长段可能在几处各出现一截(同一个 id),键带上起点
             const key = `${c.id}@${c.start}`;
             return [
