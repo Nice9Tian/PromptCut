@@ -52,9 +52,13 @@ const rect = (page, sel) => page.evaluate((s) => { const e = document.querySelec
 const tap = async (page, sel) => { const r = await rect(page, sel); if (!r) throw new Error(`点不到 ${sel}`); await page.touchscreen.tap(r.x + r.w / 2, r.y + r.h / 2); await sleep(400); };
 const store = (page, src, ...a) => page.evaluate((s, a2) => new Function('S', 'args', s)(window.__pcStore, a2), src, a);
 const clipOf = (page, id) => store(page, 'return S.getState().project.tracks.flatMap((t) => t.clips).find((x) => x.id === args[0]) ?? null;', id);
+/** 关掉所有打开着的面板(点面板头的「关闭」,点到没有为止) */
 const closeSheet = async (page) => {
-  const r = await page.evaluate(() => { const bs = [...document.querySelectorAll('.sheet-head button[aria-label="关闭"]')]; const b = bs[bs.length - 1]; if (!b) return null; const q = b.getBoundingClientRect(); return { x: q.x + q.width / 2, y: q.y + q.height / 2 }; });
-  if (r) { await page.touchscreen.tap(r.x, r.y); await sleep(450); }
+  for (let i = 0; i < 5; i++) {
+    const n = await page.evaluate(() => { const bs = [...document.querySelectorAll('.sheet-head button[aria-label="关闭"]')]; bs.forEach((b) => b.click()); return bs.length; });
+    if (!n) return;
+    await sleep(500);
+  }
 };
 
 const NAME = `cs-${Date.now().toString(36)}`;
@@ -79,7 +83,7 @@ try {
   await (await A.waitForSelector('[data-pcm="import-input"]')).uploadFile(mp4);
   const vid = await until('视频进素材库且有时长', () => store(A, 'const m = S.getState().project.media.find((x) => x.kind === "video"); return m && m.duration ? { id: m.id, duration: m.duration } : null;'), 120_000);
   await tap(A, `[data-pcm="asset"][data-media="${vid.id}"]`);
-  if (await A.$('[data-pcm="sheet-assets"]')) await closeSheet(A);
+  await closeSheet(A);
   const placed = await until('视频段放上时间轴', () => store(A, 'return S.getState().project.tracks.flatMap((t) => t.clips).find((c) => c.mediaId === args[0]) ?? null;', vid.id));
   step('placed', placed && { id: placed.id, start: placed.start, end: placed.end, mediaOffset: placed.mediaOffset ?? 0 });
 
@@ -89,9 +93,12 @@ try {
   step('P4-before', { audioLayer: !!audioBefore });
 
   /* ---------- P1 时间轴分页选中 → 子导航栏有「速度」 ---------- */
+  await closeSheet(A);
   await tap(A, '[data-pcm="pg-timeline"]');
   await A.waitForSelector(`[data-pcm="clip"][data-id="${placed.id}"]`, { visible: true, timeout: 20_000 });
+  // 点时间轴上的这一段选中它(选中态在 store 的 selection 里;点不中就直接选)
   await tap(A, `[data-pcm="clip"][data-id="${placed.id}"]`);
+  if (!(await A.$('[data-pcm="sub-speed"]'))) await store(A, 'S.actions.select([args[0]]); return true;', placed.id);
   await until('子导航栏出现片段工具', async () => (await A.$('[data-pcm="sub-speed"]')) ? true : null, 10_000);
   const tools = await A.$$eval('.subnav [data-pcm]', (bs) => bs.map((b) => b.dataset.pcm));
   await shot(A, 'P1-subnav');
@@ -130,14 +137,23 @@ try {
 
   /* ---------- P5 播放中舞台视频按 2 倍放 ---------- */
   await store(A, 'S.actions.seek(args[0]); S.actions.play(); return true;', placed.start + 0.1);
-  await sleep(1800);
-  const rates = [];
+  // 等到舞台里有视频在放(起播有延迟),最多 8 秒
+  let rates = [];
+  for (let k = 0; k < 32 && !rates.length; k++) {
+    await sleep(250);
+    for (const f of A.frames()) {
+      const r = await f.evaluate(() => [...document.querySelectorAll('video')].filter((v) => !v.paused).map((v) => ({ rate: v.playbackRate, t: +v.currentTime.toFixed(2) }))).catch(() => []);
+      if (r.length) rates.push({ url: f.url().slice(0, 60), r });
+    }
+  }
+  const playState = await store(A, 'const s = S.getState(); return { playing: s.playing, t: s.t };');
+  const allVideos = [];
   for (const f of A.frames()) {
-    const r = await f.evaluate(() => [...document.querySelectorAll('video')].filter((v) => !v.paused).map((v) => ({ rate: v.playbackRate, t: +v.currentTime.toFixed(2) }))).catch(() => []);
-    if (r.length) rates.push({ url: f.url().slice(0, 60), r });
+    const r = await f.evaluate(() => [...document.querySelectorAll('video')].map((v) => ({ paused: v.paused, rate: v.playbackRate, t: +v.currentTime.toFixed(2), src: (v.currentSrc || '').slice(-24) }))).catch((e) => [{ err: String(e).slice(0, 80) }]);
+    allVideos.push({ url: f.url().slice(0, 70), r });
   }
   await store(A, 'S.actions.pause(); return true;');
-  step('P5', { rates });
+  step('P5', { rates, playState, allVideos });
   const playing = rates.flatMap((x) => x.r);
   check(playing.length > 0 && playing.every((v) => v.rate >= 1.8 && v.rate <= 2.2), 'P5 舞台里放变速段的视频按 2 倍(±10%)', rates);
 
@@ -152,6 +168,12 @@ try {
   await env.enter(B, { username: 'er' });
   await until('桌面页同步到视频段', () => clipOf(B, placed.id), 60_000);
   await store(B, 'S.actions.select([args[0]]); return true;', placed.id);
+  await sleep(1500);
+  // 左栏切到「编辑」分区
+  await B.evaluate(() => { const b = [...document.querySelectorAll('[data-pc="left-rail"] button, [data-pc="left-rail"] [role="tab"]')].find((x) => x.textContent.trim() === '编辑'); b?.click(); });
+  await sleep(800);
+  await shot(B, 'D0-selected');
+  step('D0', { leftTabs: await B.$$eval('[data-pc]', (es) => es.map((e) => e.dataset.pc).filter((x) => /tab|section|left/i.test(x)).slice(0, 30)) });
   const form = await until('编辑分区出现速度一栏', async () => (await B.$('[data-pc="clip-speed"]')) ? true : null, 20_000);
   if (form) {
     const dnote = await B.$eval('[data-pc="clip-speed-note"]', (e) => e.textContent);
@@ -165,7 +187,13 @@ try {
     step('D1', { note: dnote, after: slow && { start: slow.start, end: slow.end, speed: slow.speed } });
     step('D2', { label, badgeTitle });
     check(/变速后这一段不出原声/.test(dnote ?? ''), 'D1 桌面编辑分区写明变速段不出原声', dnote);
-    check(!!slow && Math.abs((slow.end - slow.start) - (placed.end - placed.start) * 2) < 1e-6, 'D1 0.5× 时长翻倍', slow && [slow.start, slow.end]);
+    // 0.5× 要 2 倍时长;同一序列后面紧挨着别的片段时截到它的起点(store.setClipSpeed 的规则),面板提示截断
+    const blocker = await store(B, 'const t = S.getState().project.tracks.find((tr) => tr.clips.some((c) => c.id === args[0])); return Math.min(Infinity, ...t.clips.filter((c) => c.id !== args[0] && c.start >= args[1] - 1e-9).map((c) => c.start));', placed.id, placed.end);
+    const wantEnd = Math.min(placed.start + (placed.end - placed.start) * 2, blocker ?? Infinity);
+    const capMsg = await B.$eval('[data-pc="clip-speed-msg"]', (e) => e.textContent).catch(() => null);
+    step('D1-cap', { blocker, wantEnd, capMsg });
+    check(!!slow && Math.abs(slow.end - wantEnd) < 1e-6, 'D1 0.5× 终点 = min(时长翻倍, 下一段起点)', slow && [slow.start, slow.end, wantEnd]);
+    if (wantEnd < placed.start + (placed.end - placed.start) * 2) check(/放不下/.test(capMsg ?? ''), 'D1 截断时面板提示', capMsg);
     check(/0\.5×/.test(label ?? ''), 'D2 时间轴片段名带「0.5×」', label);
     check(/变速段不出原声/.test(badgeTitle ?? ''), 'D2 静音标记写明原因', badgeTitle);
     // 手机页同步到同一个速度

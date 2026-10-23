@@ -9,7 +9,7 @@
 ## 结论
 
 - **做通了**：画面（导出、预渲染、舞台、Agent 看画面、导出兼容旁路、剪辑段里、套了素材效果卡的视频段）按「素材时刻 = mediaOffset + (t − start) × speed」取帧，逐帧比对 480/480；声音按〔裁〕变速段不出原声，两条导出混音路都实测无声；手机版与桌面都有入口，界面写明。
-- **像素基线**：见「门槛」一节（与 `5f4523d0` 的全长导出比对）。
+- **像素基线没有变**：与开工提交 `5f4523d0` 的全长导出逐字节相同 1800/1800。
 - **身份键缺省 1 逐字不变**：固定样例在开工提交与当前工作区上 57/57 项逐字相同（帧身份、轨道前缀、镜像哈希、层表输入签名、卡片计划的六个键与其余字段、混音清单、取帧时刻、导出兼容旁路参数）。
 - **一处任务书没写到的硬约束**：素材节点的倍率原打算写进 `src/kernel/cardGraph.mjs` 的 `projectCardGraph`，全量测试捞出它在**三张内置有声卡的源码导入闭包**里（守门 `src/render/audioCardSourceVersion.test.mjs`），改一个字就会让用户已生成的卡片声音全部判「已过期」。已还原 `cardGraph.mjs`（与 main 逐字相同），改由新函数 `withMediaRates` 在出画面、出键的五处补倍率。
 
@@ -175,4 +175,95 @@ export function normalizeSpeed(v)          // 夹到 [0.25, 4]、取到 0.01;不
 
 排查记录：G 段第一次 0/60（整幅白），起因是探针夹具里 G 段没带 `cardId`（apply_card 挂上之后片段同时带 `cardId` 和 `mediaId`）；把 G 改成 1× 复跑同样 0/60，确认与速度无关，修夹具后 1× 60/60、2× 60/60。顺带发现 `setClipSpeed` 原先拒绝带 `cardId` 的视频段，已放开（〔裁〕第 1 条）。
 
-（门槛、像素基线、界面探针各节在下面补。）
+
+### 界面探针（手机版与桌面）
+
+`npx vite build --mode online` 之后 `node scripts/probes/clip-speed-ui-probe.mjs --dist dist-online --out out/speed/ui`（本机托管组合 + 仿 nginx 代理，端口 5930～5932、5936、5937），退出码 0，`"ok":true,"fails":[]`。要点原文：
+
+```
+"P1":{"tools":["sub-ref","sub-split","sub-dup","sub-mute","sub-speed","sub-adjust","sub-del"]}
+"P2":{"note":"声音：变速后这一段不出原声（第一版不做变速声音）；改回 1× 恢复。", …,"after":{"start":0,"end":3,"mediaOffset":0,"speed":2}}
+"P3":{"badge":"2× 无原声"}
+"P4-before":{"audioLayer":true}   "P4-after":{"audioLayer":false}
+"P5":{"rates":[{"url":"http://s1.pc.localhost:5931/editor/stage.html?…","r":[{"rate":2.0239381333333335,"t":0.73}]}]}
+"P6":{"speedField":false,"end":6}
+"D1":{"note":"变速后这一段不出原声（第一版不做变速声音）；改回 1× 恢复。","after":{"start":0,"end":6,"speed":0.5}}
+"D1-cap":{"blocker":6,"wantEnd":6,"capMsg":"后面放不下，已截到下一段的起点"}
+"D2":{"label":"tone.mp4 · 0.5×","badgeTitle":"tone.mp4：已变速 0.5×，变速段不出原声"}
+"D-sync":{"phoneSeesHalf":true}   "errors":{"phone":[],"desktop":[]}
+```
+
+即：手机版子导航「静音、速度、调整」顺序同演示稿；点 2× 后起点、素材起点不动、时长 6 → 3 秒；预览主文档里这一段的 `<audio>` 变速前在、变速后没了；播放时舞台里这段视频 `playbackRate` 2.02（2 倍上叠了纠偏）；撤销一步回 1× 且不留 `speed` 字段；桌面编辑分区「速度」一栏改 0.5×，后面 6 秒处有另一段，按规则截到 6 秒并提示；时间轴名字带「· 0.5×」、静音标记写明原因；手机页同步到 0.5×。
+
+看过的图：`out/speed/ui/P2-sheet-after.png`（手机速度面板，2× 高亮、说明框、toast「已改成 2×，这一段不出原声」）、`P3-timeline-badge.png`、`D2-timeline.png`（桌面编辑分区与时间轴的「· 0.5×」「已静音」）、`D0-selected.png`。
+
+探针调通前的三次失败都是探针自己的问题，记下来：素材库面板没关上挡住了分页按钮（改成点到没有面板为止）；桌面左栏默认在「素材库」分区，要先点「编辑」；有一遍 P5 在 8 秒内没等到舞台里有视频在放（起播慢），另一遍 1.8 秒就放上了，这一条的等待只为防卡死。
+
+## 门槛
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 类型检查 | `npx tsc -b --force` | 退出码 0，输出 0 字节（`out/speed/tsc-final.log`，在最后一个代码提交上） |
+| 全量测试 | `npm test`（两个账号变量用反斜杠） | 汇总行原文 `ℹ tests 7704` `ℹ pass 7689` `ℹ fail 0` `ℹ cancelled 0` `ℹ skipped 15` `ℹ duration_ms 242722.9162`；退出码 0；日志 927,111 字节（`out/speed/npm-test-full-2.log`） |
+| 网页构建 | `npm run build` | 退出码 0（`✓ built`） |
+| 在线构建 | `npx vite build --mode online` | 退出码 0（`✓ built`） |
+| 与 `5f4523d0` 的全长导出比对 | 两棵树各起自己的开发服务器跑 `scripts/export-frames.mjs --url <origin>/?export=1 --fps 30 --workers 1 --no-video`（基准 5926、候选 5929，驱动 `out/speed/render-gate.mjs`），再 `export-baseline-compare.mjs` | 原文 `逐字节:相同 1800/1800` `✅ 全长导出逐字节相同`，退出码 0 |
+| 导出确定性 | `scripts/verify-determinism.mjs --url <origin>/?export=1 --fps 30`（5932） | `Total Frames: 1800` `Identical: 1800` `Different: 0`，退出码 0 |
+| 快照重放 | `scripts/verify-unified-frames.mjs --origin <origin>`（5926） | `PASS: no video during B; all HTML frames; exact video seek; random replay; cache hits; cumulative C equals A; …`，退出码 0 |
+
+第一遍全量（`out/speed/npm-test-full-1.log`，7704 条、**6 条失败**）就是上面说的有声卡源码闭包守门：`av-pulse` / `sound-notification` / `sound-keyboard` 三张卡各两条（闭包多了 `/src/kernel/clipTime.mjs`；`cardGraph.mjs` 内容变了，源码版本从钉住的 `535ba03a…` / `1a663d9c…` 变了）。按测试文件头「红了先停、问过用户再改钉住值」，我没有改钉住值，而是把 `cardGraph.mjs` 还原、改用 `withMediaRates`；第二遍全量 0 失败。
+
+像素基线的演示项目里没有视频，所以它只证明「缺省路径没动」；变速的画面由上面自造项目的逐帧比对证明。
+
+## 没做成的及原因
+
+1. **Agent 改速度**：没有加工具，只让 Agent 在时间轴一览里看得到 `speed`。加工具要改 `product/agent.md` 的工具清单，属二级，待用户定。
+2. **导出时新视频元素第一帧偶发取到素材第 0 帧**：变速项目第 1 遍 480 帧里有 1 帧（E 段第一帧），第 2 遍 0 帧。和改前同一个 seek 目标、同一种「新建元素第一次出画」的时机，判断是 `frameMedia.ts` 原有的那类竞态，不是这次引入的；没有深挖，建议另开一条用 `video-seek-race-probe` 的办法量一下「新挂元素」这种情形。
+3. **手机版主要内容变速后留空档**：主要内容（缩略时间轴）是按顺序排的，改速度保住起点、不推后面的段，所以 2× 后中间空出一截、0.5× 时被下一段截断。这是按「保住入点、按新速度重算终点」做的；要不要在主要内容上改成「后面的段跟着挪」（像剪映那样），是交互决定，待用户定。
+4. **保调变速**：按〔裁〕不做。
+5. 没跑的：`video-seek-race-probe`、`video-source-cadence-probe` 等其余 G0-R 探针（任务门槛没要求；取帧只改了时刻的算法，取帧本身的机制没动）；桌面版（Tauri）里没有实测，只测了开发服务器与在线构建两种页面。
+
+## 对〔裁〕的意见
+
+- 「第一版变速段原声自动静音」：我认为**不该推翻**。实测下来它是唯一能让两条混音路（Chrome 离线混音与 ffmpeg）结果一致的做法，两条路逐段都是 −200 dBFS（数字静音），预览也一致；改前则是变速段照常出 1 倍原声（−21.1 dBFS），声音和画面错开。只补一句建议：界面现在写的是「第一版不做变速声音」，等以后做保调变速，这句话要跟着改。
+
+## 语义要改哪几句（只写建议，没有改 `docs/semantics/**`）
+
+### 1. `product/project-model.md`「片段」·素材段（二级）
+
+修改前：
+
+> - **素材段**：用哪段素材、从素材的哪一秒开始，以及和卡片段相同的框、淡入淡出、不透明度；音频段的不透明度即音量。素材段可挂滤镜、像素映射、音频效果。
+
+修改后：
+
+> - **素材段**：用哪段素材、从素材的哪一秒开始，以及和卡片段相同的框、淡入淡出、不透明度；音频段的不透明度即音量。素材段可挂滤镜、像素映射、音频效果。
+> - **视频段的速度**：视频段另有播放速度，缺省 1 倍，可设 0.25～4 倍（套了素材效果卡的视频段同样可设）。改速度保住入点（起点和从素材第几秒开始不变），用到的那截素材不变，时长按新速度重算；后面紧挨着别的片段、拉长放不下时截到下一段的起点；挂着转场的段不能改速度（同「转场」一节：组内不能单独改时长）。切分时后半段的素材起点按速度推进。预览、导出、Agent 看画面按同一个速度取帧。〔裁：clip-speed 2026-10-23〕第一版变速段不出原声，挂在它上面的音频效果、卡片声音同样不出，也不能音画分离或转换为声音；界面写明（〔裁〕已由主会话 2026-10-22 定，见 `docs/plan/three-versions-progress.md`「『速度』入口」）。
+
+### 2. `mechanism/project-model.md` 新增一节「片段速度」（三级，〔裁：clip-speed 2026-10-23〕）
+
+> ## 片段速度
+>
+> - 素材时刻 = `mediaOffset + (t − start) × speed`，全项目只此一个纯函数（`src/kernel/clipTime.mjs`），各处调它；速度不是有限正数时按 1。
+> - 等于 1 时不写 `speed` 字段（store 改回 1 就删掉），不留 `speed: 1`：整份序列进哈希的三处身份（镜像的项目哈希、快照签名、帧服务的帧身份）因此逐字不变；按字段挑着进键的层表输入签名只在不是 1 时加 `speed`；卡片图里变速段的素材节点由 `withMediaRates` 在出画面、出键的几处补上倍率 `rate`（导出页的画面与卡片计划、舞台、剪辑段的嵌套场景、在线页面的卡片计划），不写在 `projectCardGraph` 里——`cardGraph.mjs` 在内置有声卡的源码导入闭包里，改它会让已生成的卡片声音全部过期。
+> - 导出与预渲染取帧（`data-pc-media-time`）在速度为 1 时保留原来的运算顺序 `(mediaOffset + t) − start`，变速时按统一换算；导出的兼容旁路（`--media ffmpeg`）读的素材长度乘速度、时间戳 `setpts=PTS/speed+…`。
+> - 预览的视频元素以片段速度为基准播放速率，纠偏的 ±10% 乘在它上面，暂停时也停在它上面。
+> - 变速段原声不出的判断只有一条（`speedMutesSource`：有素材、速度不是 1），预览的声音层、导出混音的两条路（Chrome 离线混音与 ffmpeg）、测响度共用；变速段不能当音频素材效果卡的声音输入。
+
+### 3. `workflow/editing.md`（一级，由用户定；这里只给建议）
+
+「手机版界面」一节末尾加一条：
+
+> - 选中视频段时，子导航栏是「引用、分割、复制、静音、速度、调整、删除」（同演示稿）；「速度」打开速度面板，几档倍数，写明「变速后这一段不出原声」。完整时间轴上变速段标出「2× 无原声」，缩略卡的时长后面带倍数和静音图标。
+
+「编辑界面」（桌面）加一条：
+
+> - 视频段的编辑分区有「速度」一栏（几档倍数，同一句「变速后这一段不出原声」）；时间轴上变速段的名字后带倍数，静音标记写明「已变速 2×，变速段不出原声」。
+
+### 4. `product/agent.md`（二级，建议，待用户定）
+
+现状：Agent 的时间轴一览（`timelineDigest`）里变速段带 `speed`，Agent 看得到；但没有改速度的工具。建议用户定：要不要给 Agent 一个改速度的工具（比如 `set_clip_speed`），还是第一版只让人改。
+
+### 5. `docs/plan/three-versions-progress.md`（计划文档，建议更正）
+
+- 「`grep -rln mediaOffset` 共 38 个非测试文件」：`src/` 与 `server/` 下实际 39 个（另有 15 个在 `scripts/`）。其中 11 个不用改（见报告逐文件表），`cardGraph.mjs` 是**不能改**（有声卡源码闭包），改由 `withMediaRates` 在出画面出键处补倍率。
