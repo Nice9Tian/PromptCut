@@ -23,6 +23,9 @@
  *   E   桌面导出(`window.__pcIo.exportVideo()`)成功,且没有再生成声音
  *   A/B/C/D1/D2  成片各段中间(去掉两头 0.3 秒)有声(高于 −30 dBFS),主频(过零点与 DFT 峰)在期望值 ±2% 内
  *   DX  跨切点的窗口(7.5～8.5 秒)同样 880 Hz、响度与 D1 差不到 1 dB(切开处没有断档)
+ *   V   画面:卡的红条宽 = 卡片时钟 ÷ 10 秒 × 画宽。切点前一帧(第 239 帧,前半段片段内 1.967 秒)与切点那一帧(第 240 帧,后半段 0 秒)
+ *       红条宽度差不到 4 像素,且都约为 0.4 × 640 = 256 像素(卡片时钟 = mediaOffset ÷ 倍率 + 片段内时间 = 4/2 + 2 = 4 秒);
+ *       改前卡片时钟起点是 mediaOffset(素材秒),前一帧约 382 像素、切点那一帧跳到 512 像素。两帧存成 PNG 在 --out 下
  *   E0  页面零报错
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
@@ -70,12 +73,14 @@ function makeVideo() {
 const CARD_SOURCE = [
   'import type { CardDef, CardProps } from "../../kernel/types";',
   '',
-  '/** 探针用(av-card-speed-sound-probe.mjs 临时写进改动层):声画一体卡,声音把输入的声音原样交出去 */',
-  'function Frame(_props: CardProps<{ gain: number }>) { return null; }',
+  '/** 探针用(av-card-speed-sound-probe.mjs 临时写进改动层):声画一体卡,声音把输入的声音原样交出去;画面是一根红条,宽 = 卡片时钟 ÷ 10 秒 */',
+  'function Frame({ t = 0 }: CardProps<{ gain: number }>) {',
+  '  return <div style={{ position: "absolute", left: 0, top: 0, height: "100%", width: `${Math.min(1, Math.max(0, t / 10)) * 100}%`, background: "#ff0000" }} />;',
+  '}',
   'export const probeAvPass: CardDef<{ gain: number }> = {',
   `  id: "${PASS}",`,
   '  name: "速度探针:声画直通",',
-  '  description: "画面不画东西,声音把输入原样输出",',
+  '  description: "画面画卡片时钟,声音把输入原样输出",',
   '  source: "user",',
   '  kind: "animation",',
   '  frameMode: "direct",',
@@ -111,6 +116,19 @@ function projectOf(media) {
   }
   return { version: 1, id: 'p-av-card-speed', name: 'av-card-speed-sound', width: W, height: H, fps: FPS, duration: DURATION, themeId: 'midnight',
     media: [media], filters: [], audioFx: [], cardNodes, tracks: [{ id: 't-main', name: '序列 1', clips }] };
+}
+
+/** 成片第 n 帧(rgb24),量第 y 行最左边连续红色像素的个数 */
+function redBar(file, n, png) {
+  // 滤镜参数里的逗号要转义成「\,」(不经 shell,原样交给 ffmpeg)
+  const vf = `select=eq(n\\,${n})`;
+  const buf = execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-i', file, '-vf', vf, '-vframes', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'],
+    { windowsHide: true, maxBuffer: 1 << 26 });
+  execFileSync('ffmpeg', ['-y', '-hide_banner', '-loglevel', 'error', '-i', file, '-vf', vf, '-vframes', '1', png], { windowsHide: true });
+  const y = Math.floor(H / 2);
+  let w = 0;
+  for (let x = 0; x < W; x++) { const i = (y * W + x) * 3; if (buf[i] > 180 && buf[i + 1] < 90 && buf[i + 2] < 90) w = x + 1; else if (w) break; }
+  return w;
 }
 
 function pcmOf(file) {
@@ -235,6 +253,9 @@ try {
     report.segs.DX = { zeroCrossHz: +dx.hz.toFixed(1), dftPeakHz: dx.peak, dBFS: +dx.db.toFixed(1) };
     check('DX', Math.abs(dx.hz - 880) <= 880 * 0.02 && Math.abs(dx.peak - 880) <= 880 * 0.02 && Math.abs(dx.db - report.segs.D1.dBFS) < 1,
       `跨切点 ${SPLIT_AT - 0.5}～${SPLIT_AT + 0.5} 秒:过零 ${dx.hz.toFixed(1)} Hz、DFT 峰 ${dx.peak} Hz、${dx.db.toFixed(1)} dBFS(D1 ${report.segs.D1.dBFS})`);
+    const before = redBar(mp4, SPLIT_AT * FPS - 1, path.join(OUT, `frame-${SPLIT_AT * FPS - 1}.png`)), at = redBar(mp4, SPLIT_AT * FPS, path.join(OUT, `frame-${SPLIT_AT * FPS}.png`));
+    report.bar = { before, at, expect: 0.4 * W };
+    check('V', Math.abs(at - before) < 4 && Math.abs(at - 0.4 * W) < 6, `画面:切点前一帧红条 ${before} 像素、切点那一帧 ${at} 像素(应都约 ${0.4 * W})`);
   }
   check('E0', errors.length === 0, '页面零报错', errors);
 } catch (error) {
