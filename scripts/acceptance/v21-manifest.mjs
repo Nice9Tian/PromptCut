@@ -9,6 +9,11 @@
  *   V21-cut-online-br   在线浏览器替剪辑段里的重卡产流（〔裁〕R02，`claude/cut-stream` 留下的那一支；
  *                       同一轮的 R01 已被用户推翻、它的探针随返工删掉）
  *
+ * **与 `claude/probe-audit` 的合并须知（2026-10-23）**：那条分支（探针总审与清理，基准 `2249179a`）把
+ * `cut-online-browser-probe`、`account-direct-address-probe`、`update-notice-probe` 三支写进了
+ * `v19-manifest.mjs` 的 `V19_EXCLUDED`（排除、不跑）。本文件把它们登记成**会跑的验收项**，更严。
+ * 两边合并时**以本文件为准**：把那三行从 `V19_EXCLUDED` 里去掉，保留这里的 V21 项。
+ *
  * 端口：这三支探针各自限定了自己的端口段（`update-notice-probe` 只认 6410～6419，
  * `account-direct-address-probe` 的夹具缺省 6430 起，`cut-online-browser-probe` 缺省 5910 起），
  * 所以这里按它们自己的段给，不用整套清单的 5690～5699。

@@ -146,3 +146,39 @@ test('MCA10 一段垫底的长卡片可以在几处空档各补一截,两端都�
   assert.equal(mainTrackOf(p).id, 't1');
   assert.deepEqual(span(shapeOk(p, '垫底卡片')), [['bg', 0, 2], ['v1', 2, 5], ['bg', 5, 7], ['v2', 7, 10], ['bg', 10, 12]]);
 });
+
+test('MCA11 变速把主轨上的段改短:留下的空档照常补块,被补的长卡片只取那一截', () => {
+  // 速度（claude/clip-speed，用户 2026-10-23 定）：变短时尾部留空、后面的段不动。
+  // 这里模拟 b 由 4～10 提速到 4～7，主轨上留下 7～10 的空档；底下垫着一张 0～10 的卡片。
+  const p = project([
+    { id: 't1', name: '底', clips: [clip('bg', 0, 10)] },
+    { id: 't2', name: '主', clips: [vid('a', 0, 4), vid('b', 4, 7, { speed: 2 })] },
+  ]);
+  assert.equal(mainTrackOf(p).id, 't2');
+  // 空档只补那一截（7～10），不是整张 0～10；同一时刻仍然只有一块
+  assert.deepEqual(span(shapeOk(p, '变速留空')), [['a', 0, 4], ['b', 4, 7], ['bg', 7, 10]]);
+});
+
+test('MCA12 变速在主轨中间造出空档:没有别的序列盖住时就是空的，两端仍有块', () => {
+  // 同样是变短留空，但底下没有垫着的卡片：空档没得补，块数不变、不报错、两端照常有块
+  const p = project([
+    { id: 't1', name: '主', clips: [vid('a', 0, 4), vid('b', 4, 7, { speed: 2 }), vid('c', 10, 14)] },
+  ]);
+  assert.deepEqual(span(shapeOk(p, '中间空档没得补')), [['a', 0, 4], ['b', 4, 7], ['c', 10, 14]]);
+});
+
+test('MCA13 短项目的门槛按总长 5% 算:比门槛小的缝不补,比门槛大的缝才补', () => {
+  // 总长 4 秒 → 门槛 min(0.5, 4×0.05) = 0.2 秒。
+  // 0.1 秒的缝（相邻两段之间的误差）不该补出碎块；0.5 秒的缝（例如 1 秒的素材改成 2×）该补。
+  const tiny = project([
+    { id: 't1', name: '底', clips: [clip('bg', 0, 4)] },
+    { id: 't2', name: '主', clips: [vid('a', 0, 2), vid('b', 2.1, 4)] },
+  ]);
+  assert.deepEqual(span(shapeOk(tiny, '短项目·小缝')), [['a', 0, 2], ['b', 2.1, 4]]);
+
+  const wide = project([
+    { id: 't1', name: '底', clips: [clip('bg', 0, 4)] },
+    { id: 't2', name: '主', clips: [vid('a', 0, 2), vid('b', 2.5, 4)] },
+  ]);
+  assert.deepEqual(span(shapeOk(wide, '短项目·大缝')), [['a', 0, 2], ['bg', 2, 2.5], ['b', 2.5, 4]]);
+});
