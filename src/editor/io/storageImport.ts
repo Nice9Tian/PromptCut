@@ -1,6 +1,7 @@
 import { actions, getState } from "../../store/project";
 import type { MediaAsset } from "../../kernel/project";
 import { applyUploadedMedia, type UploadedMedia } from "./mediaUpload";
+import { onlineUnsupported } from "../../online/pageFlag";
 
 /**
  * 从用户的网盘导入素材(任务书 `docs/plan/drive-connector-task.md` 第 5 节)。
@@ -80,6 +81,20 @@ export async function loadStorageProviders(): Promise<StorageProviderConfig[]> {
   }
 }
 
+/**
+ * 在线浏览器构建里 `/api/media/storage/*` 都没有对端:这些口由**本机编辑器进程**发,在线页面没有它。
+ *
+ * 下面每个函数开头都内联写一遍 `if (!storageImportSupported) throw …`,**不抽成辅助函数**。
+ * 抽成函数就剪不掉了:`storageImportSupported` 在在线构建里是编译期常量 `false`,内联的判断恒真、
+ * 后面的代码连同 `/api/…` 字面量一起被打包器剪掉;换成函数调用,打包器没法静态判定后面不可达,
+ * 字面量就留在产物里。
+ *
+ * **这不只是省几行**:C10A-API-03 那道在线 API 棘轮要求「产物里的 `/api/` 路径」和
+ * `server/test/c10a-online-api-paths.json` 逐条一致。2026-10-24 合入时 connect / disconnect / import
+ * 三个函数漏了这道判断,字面量进了在线产物、把那道门弄红过一次;补上之后它们不再出现,清单里那三条
+ * 也一并删掉(该测试同时断言清单里不许有产物中已没有的路径)。我第一次是抽成函数写的,产物里照旧有,
+ * 改成内联才剪掉 —— 这就是为什么这里看着啰嗦。
+ */
 async function postJson(url: string, body: unknown): Promise<any> {
   const res = await fetch(url, {
     method: "POST",
@@ -106,11 +121,13 @@ export async function loadConnections(): Promise<StorageConnection[]> {
 
 /** A2:把授权码交给编辑器进程换 refresh token。页面不碰 refresh token */
 export async function connectStorage(provider: string, code: string, codeVerifier: string): Promise<void> {
+  if (!storageImportSupported) throw new Error(onlineUnsupported("从网盘导入"));
   await postJson("/api/media/storage/connect", { kind: provider, code, codeVerifier });
 }
 
 /** A2:断开。回包里说明网盘那边撤没撤成 */
 export async function disconnectStorage(provider: string): Promise<{ revoked: boolean; why?: string }> {
+  if (!storageImportSupported) throw new Error(onlineUnsupported("从网盘导入"));
   const data = await postJson("/api/media/storage/disconnect", { kind: provider });
   return { revoked: !!data.revoked, ...(data.why ? { why: String(data.why) } : {}) };
 }
@@ -173,6 +190,7 @@ export async function importFromStorage(
   file: PickedFile,
   { place = true }: { place?: boolean } = {},
 ): Promise<string> {
+  if (!storageImportSupported) throw new Error(onlineUnsupported("从网盘导入"));
   const kind = kindOf(file.mimeType, file.name);
 
   // 先占位:用户立刻看得见这条在传
