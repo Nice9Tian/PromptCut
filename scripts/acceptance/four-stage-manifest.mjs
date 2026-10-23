@@ -30,7 +30,7 @@ import '../lib/no-user-dirs.mjs'; // 清单里写着会起编辑器与导出的�
 import { V18_ITEMS, G0_2_SKIPS, OLD_ITEM_ROWS, STALE_OLD_ENTRY, V18_EXCLUDED, V, OLD_ITEM_KNOWN } from './v18-manifest.mjs';
 import { V18_ROWS } from './v18-rows.mjs';
 import { V19_ITEMS, V19_REQS, V19_TAGS, V19_EXCLUDED } from './v19-manifest.mjs';
-import { V21_ITEMS } from './v21-manifest.mjs';
+import { V21_ITEMS, V21_EXCLUDED } from './v21-manifest.mjs';
 import { whereOf } from './acceptance-lib.mjs';
 export { V18_ROWS as ROWS, G0_2_SKIPS, V19_REQS };
 
@@ -46,6 +46,7 @@ const P = (n = 0) => String(V + n); // 渲染附加项的端口:挂在 0.7.18 �
 export const EXCLUDED_PROBE_FILES = {
   ...V18_EXCLUDED,
   ...V19_EXCLUDED,
+  ...V21_EXCLUDED,
   // 公共件与工具,不单独跑
   'asset-lan-discover.mjs': '公共件(局域网发现),单测在 server/test',
   'claim-gate-judge.mjs': '认领闸探针的判定函数,单测直接测',

@@ -37,6 +37,11 @@ function PR21(id, name, script, args, o = {}) {
   };
 }
 
+/** 不进整套的探针文件与原因（`--check-coverage` 对照；并进 `four-stage-manifest.mjs` 的 EXCLUDED_PROBE_FILES） */
+export const V21_EXCLUDED = {
+  'drive-range-probe.html': '网盘连接器 D1 的可行性探针页（`claude/drive-connector`）：要人在浏览器里用真实 Google 账号点完授权、选文件，脚本跑不了。结论（drive.file 够用、files.get?alt=media 支持 Range）已落进 docs/plan/drive-connector-task.md 第 6.1 节。网盘连接器这个功能不随 0.7.21 发（〔裁〕V21-18），它的自动化验收随功能本身那一版建',
+};
+
 export const V21_ITEMS = [
   PR21('V21-update-notice', '在线编辑器的新版本提示（U0～U6：启动不取、切回前台取一次、换了版本挂提示条、换回去撤下、点刷新真重载、舞台与导出页不提示、手机上一行放得下）',
     'update-notice-probe', ['--dist', '{dist}', '--port', '6410'],
