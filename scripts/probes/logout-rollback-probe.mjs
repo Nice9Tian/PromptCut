@@ -29,7 +29,10 @@ const arg = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 ? argv
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const DIST = path.resolve(arg('--dist', path.join(ROOT, 'dist-online')));
 const OUT = path.resolve(arg('--out', path.join(ROOT, 'out', 'logout-rollback')));
-const SITE = arg('--site', process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT ? path.join(process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT, 'site') : null);
+// 规范化：Windows 上 path.join 回的是反斜杠，命令行给正斜杠时下面那道 file.startsWith(SITE) 的目录逃逸防护会永远不匹配、
+// 把所有请求判成 404（2026-10-23 踩到）。两边都过 path.resolve 就不受分隔符写法影响。
+const SITE_RAW = arg('--site', process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT ? path.join(process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT, 'site') : null);
+const SITE = SITE_RAW ? path.resolve(SITE_RAW) : null;
 fs.mkdirSync(OUT, { recursive: true });
 
 const fails = [];

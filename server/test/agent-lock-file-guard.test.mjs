@@ -28,7 +28,10 @@ const OWNER = 'server/agent-service/conversation-control-client.mjs';
 const SUFFIX = '.agent-instance-lock';
 const TOKENS = [SUFFIX, 'AGENT_DATA_DIR_LOCK_SUFFIX', 'acquireDataDirLock'];
 const DIRS = ['server', 'src', 'scripts', 'desktop', 'tools'];
-const SKIP_DIRS = new Set(['node_modules', 'dist', 'out', '.worktrees', '.git', 'release', 'build']);
+// `runtime`、`target` 是 Tauri 的构建产物（desktop/src-tauri/.gitignore 第 1、2 行），里面是整份 app 源码的副本。
+// 不跳过的话，谁跑过一次发版构建、再跑全量就会被那份副本判成「第二处引用」而误红（2026-10-23 踩到）。
+// 仓库里没有被 git 跟踪的同名目录，跳过它们不会漏掉真的产品代码。
+const SKIP_DIRS = new Set(['node_modules', 'dist', 'out', '.worktrees', '.git', 'release', 'build', 'runtime', 'target']);
 const CODE = /\.(mjs|cjs|js|jsx|ts|tsx|mts|cts|sh|ps1|py|json|service)$/;
 const isTest = rel => /(^|\/)test\//.test(rel) || /\.test\.[a-z]+$/.test(rel) || /(^|\/)fixtures\//.test(rel);
 
