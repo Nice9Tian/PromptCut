@@ -138,7 +138,20 @@
 .pcm .mainhead b { font-size: var(--fs-l); }
 .pcm .mainhead span { font-size: var(--fs-m); color: var(--text); font-variant-numeric: tabular-nums; }
 .pcm .mainstrip { flex: none; position: relative; }
-.pcm .strip-scroll { display: flex; align-items: center; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding: 6px 0 10px; min-height: 80px; touch-action: none; user-select: none; -webkit-user-select: none; }
+/*
+ * touch-action 从 none 改成 pan-x(2026-10-24 用户报「手机版传统式缩略时间轴用触屏没法滑动查看」)。
+ *
+ * 原来写 none,等于把浏览器的原生横向滑动整个关掉,滚动全靠 ThumbStrip 的 onPointerDown 手动改
+ * scrollLeft —— 鼠标上没问题,手指上这条路不稳,而且就算推得动也没有惯性滑动,和手机上别的横向列表不是一个手感。
+ * pan-x 之后横向交给浏览器自己滑(带惯性),竖向手势照样能滚页面;滚动位置换算成当前时间那一段本来就挂在
+ * scroll 事件上,原生滑动照样驱动它,不用改。
+ *
+ * 换顺序那一下另说:它要求先选中、再长按拖,所以只给**选中的那一张卡**关掉原生滑动(下一条规则),
+ * 免得长按拖动时浏览器把它当成滑动抢走。
+ */
+.pcm .strip-scroll { display: flex; align-items: center; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding: 6px 0 10px; min-height: 80px; touch-action: pan-x; user-select: none; -webkit-user-select: none; }
+/* 选中的卡要能长按拖动换顺序:这一张上不许浏览器接管手势,拖动由 ThumbStrip 自己算 */
+.pcm .strip-scroll .mblock.sel { touch-action: none; }
 .pcm .strip-scroll::-webkit-scrollbar { display: none; }
 .pcm .sp-l { flex: none; width: calc(50% - 46px); }
 .pcm .sp-r { flex: none; width: 50%; }
