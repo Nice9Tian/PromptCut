@@ -13,7 +13,7 @@
  * WebKit 27.2 **算**（本机实测两种写法都是 `scroll 494 / 可滚 80`，尾占位量出来 `207x0` 也照样计入）。
  * 所以**本机两版读数一样，不等于用户手机上也一样**：它只能证明「新 WebKit 上没这个差异」，
  * 证明不了旧 iOS。真要确认旧 iOS 的行为，只有让用户在手机上开诊断页（做法见
- * `docs/reports/AGENT-claude-strip-snapback.md` 的「这次学到的」第 2 条）。
+ * `docs/archive/agent-reports/AGENT-claude-strip-snapback.md` 的「这次学到的」第 2 条）。
  */
 import { webkit } from 'playwright-core';
 
