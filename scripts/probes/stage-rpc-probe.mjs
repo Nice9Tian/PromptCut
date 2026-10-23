@@ -210,7 +210,7 @@ try {
   out.drag = { ...drag, setPaths: paths.filter((p) => p === 'set').length };
   check(drag.kept, 'wrappers (playToken) unchanged across 60 setTime', out.drag);
   check(out.drag.setPaths > 0 && paths.every((p) => p === 'set' || p === 'continuous'), 'setTime paths', paths.slice(0, 8));
-  check(drag.p90 <= 5, 'setTime stage main thread p90 ≤ 5 ms', { p90: drag.p90, max: drag.max });
+  check(typeof drag.p90 === 'number', 'setTime 的舞台主线程耗时量到了 p90(只记录;原先要求 ≤ 5 ms —— 耗时只记录,不当闸门(verification.md,2026-10-07 用户改定);2026-10-23 探针总审第二遍扫描补改)', { p90: drag.p90, max: drag.max });
 
   // 同一组拖动在含三维卡的项目上再量一遍,只报数不判(卡自己的渲染代价)
   await page.evaluate(async (p) => { await window.__rpc.setProject(p, { reset: true }); await window.__rpc.setTime(0.5); }, small);

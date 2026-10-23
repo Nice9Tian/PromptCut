@@ -241,7 +241,7 @@ try {
 
   out.raf = await rafTask;
   if (out.raf && out.raf.n > 30) {
-    check(out.raf.p50 <= 20, '探针期间可见舞台的帧间隔中位数 ≤ 20 ms', out.raf);
+    check(typeof out.raf.p50 === 'number', '探针期间量到了可见舞台的帧间隔中位数(只记录;原先要求 ≤ 20 ms —— 耗时只记录,不当闸门(verification.md,2026-10-07 用户改定);2026-10-23 探针总审第二遍扫描补改)', out.raf);
   } else {
     out.rafNote = '没量到足够的帧(探针跑得太快或者舞台 iframe 没找到),这一条跳过';
   }

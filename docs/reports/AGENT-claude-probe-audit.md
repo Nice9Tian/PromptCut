@@ -81,6 +81,8 @@ B06 块第一版把手机版语义安在不存在的小节上；B09 块第一版
 
 - **把机器快慢当通过条件的 10 处降为只记录**（`verification.md` 2026-10-07「耗时只记录，不当闸门」）：`c65-editor-probe` 两处「对方改动 5 秒内看到」、`c66-t9-probe` 两处「5 秒内装上 v2 / 重测」、`account-card-sync-probe` 两处（接回 10 秒、收到改动 15 秒；登录后 100 秒写完）、`agent-panel-smooth-probe` 的 300 毫秒、`placeholder-probe` 的每拍 p90 差、`below-online-e2e-probe` 与 `cut-online-e2e-probe` 的「≤1 秒撤旧流」。
   逐条先查语义里有没有对应的时间承诺，**没有的才改**；产品自己的时间界线与护栏一律不动（占位符 120 毫秒、声音起音误差 ≤ 一帧、长任务数、防卡死的等待时限、局域网发现 3+0.5 秒的协议窗口都保留）。
+- **第二遍扫描补的 5 处**（我第一遍的机械扫描只认三位数以上的阈值，一两位数的全漏了 —— 这是 B05b、B08a 两块的 manager 查出来的）：`stream-play-probe`「贴流不拖慢节拍（相差 ≤ 3 ms）」与「冷 seek ≤ 60 ms」、`stage-rpc-probe`「setTime 主线程 p90 ≤ 5 ms」、`probe-gate-probe`「帧间隔中位数 ≤ 20 ms」、`claim-gate-probe` 等 Agent 落定的 15 秒上限（判据函数 `claim-gate-judge.mjs` 一字未动 —— 它有自己的单测，只把探针这一侧改成记进 `out.agentWaitNotes`、不进 `fails`）。
+  同一遍扫出的另外十几处核过**不改**：产品承诺与护栏（托管渲染服务 30 秒保持期、占位符 120 毫秒、声音起音误差 ≤ 一帧）、功能判据（30/60 fps 的到达间隔均值、注入 100 ms 慢帧后「舞台真的等」、舞台独立进程时父页不卡、换档 300 ms 内无黑帧）、采样窗口，以及一大批 `if (Date.now() - t0 > ms) fails.push('等不到…')` 的防卡死时限（`verification.md` 明写「探针里的等待时限只为防卡死」）。
 - **删掉一条恒真断言**：`placeholder-probe.mjs` 原有 `check('main_thread_component_script', true, …)` —— 条件写死 `true`，什么也不证；它想说的「占位符自己不排 JS」由同一段的 `steady_trace` 证明。
 - **修 33 支的失效指针**：文件头指向的 AGENT 报告按子 Agent 协议搬进了 `docs/archive/agent-reports/`，路径没跟着改。逐条核过目标在归档目录里确实存在、原位置确实没有才改。
 - **修一处会卡住整条测试链的失配补丁**：`reopen-native-fixture.mjs` 的边车端口补丁。`lib.rs` 现在写 `"--port", &editor_port.to_string()`，而 `editor_port` 由 `account_editor_port()` 从 `EDITOR_PORT` 推出、上一条补丁已把它改成 5203，这条补丁多余且目标串一次都不命中，会抛「native source isolation patch no longer matches」，把 `reopen-native`、`reopen-native-upgrade`、`reopen-installed --rehearse-fixture` 全卡在夹具构建这一步。核过剩下 7 条补丁串全部命中。

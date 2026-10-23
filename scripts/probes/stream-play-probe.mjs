@@ -207,8 +207,8 @@ try {
   // 节拍
   out.beats = beatsOf(await page.evaluate(() => window.__frames), PROJECT.fps);
   check(out.beats.noSkip, '播放中 frame 的 sec 差恒为 1/fps(不跳帧)', out.beats.secStepsUnique);
-  check(out.beats.gapMedianMs !== null && out.beatsNoStreams.gapMedianMs !== null && out.beats.gapMedianMs <= out.beatsNoStreams.gapMedianMs + 3,
-    '贴流不拖慢节拍(frame 间隔中位数和不挂流平面时相差 ≤ 3 ms)', { streams: out.beats, none: out.beatsNoStreams });
+  check(out.beats.gapMedianMs !== null && out.beatsNoStreams.gapMedianMs !== null,
+    '贴流前后都量到了 frame 间隔中位数(两者之差只记录,不当闸门;原先要求 ≤ 3 ms —— 耗时只记录,不当闸门(verification.md,2026-10-07 用户改定);2026-10-23 探针总审第二遍扫描补改)', { streams: out.beats, none: out.beatsNoStreams, deltaMs: out.beats.gapMedianMs - out.beatsNoStreams.gapMedianMs });
   // 解码器状态
   const d = await diagA();
   out.diagMid = mid.streams;
@@ -329,7 +329,7 @@ try {
       await wait(1);
     }
   }, 3.9, PROJECT.fps);
-  check(out.seek.ms !== null && out.seek.ms <= 60, '冷 seek 到解出目标帧 ≤ 60 ms', out.seek);
+  check(out.seek.ms !== null, '冷 seek 解出了目标帧(用时只记录;原先要求 ≤ 60 ms —— 耗时只记录,不当闸门(verification.md,2026-10-07 用户改定);2026-10-23 探针总审第二遍扫描补改)', out.seek);
   // 缺分段:粒子背景只给前两段(0～29 帧)就绪,从第 1 秒起播 —— 第 30 帧起那一层透明、播放头照走
   if (!GROUP) {
     const bgPlane = planes.find(p => p.clipIds.length === 1 && p.clipIds[0] === 'clip-bg');
