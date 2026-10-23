@@ -12,7 +12,7 @@
 
 - `release` 指向最近一次正式发布的版本：它永远能构建、能运行、能使用。main 是日常合入的地方，功能随时往里合；`release` 不跟着动。
 - **时机：只在发版时推进一次。** 发版时 `git checkout release && git merge --ff-only main`，之后 main 继续前进，`release` 留在原地等下一次发版。`release` 只从 main 前进，不直接提交，不改写历史。
-- 合入条件，四条同时满足：类型检查零错误；**全量 `npm test` 零失败**（`verification.md`，这是全量唯一一次必跑的时机）；整套验收跑过（G0、G0-R、全部历史探针）；`npm run build` 成功，改动涉及桌面壳、Chrome、ffmpeg、内置 Python 或运行时目录布局时，`desktop/` 下的发版构建也成功。
+- 合入条件，四条同时满足：类型检查零错误；**全量 `npm test` 零失败**（`verification.md`，这是全量唯一一次必跑的时机）；整套验收跑过（G0 通用门槛、G0-R 渲染附加项，项目与标准见 `../../plan/Master-Execution-Plan.md` 第 8 节；加全部历史探针）；`npm run build` 成功，改动涉及桌面壳、Chrome、ffmpeg、内置 Python 或运行时目录布局时，`desktop/` 下的发版构建也成功。
 - 合入 main 的门槛不含上面这些，见 `verification.md`「PR、main、release 分别验什么」：类型检查、受影响范围的测试、对应探针，三条即可。
 
 ## 构建
