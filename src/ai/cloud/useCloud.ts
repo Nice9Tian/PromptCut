@@ -21,7 +21,8 @@ import { titleOf } from "./events";
 import { bubbleAttachments, type CloudAttachmentInfo } from "./attach";
 import type { ChatAttachment } from "../types";
 import type { CloudChatItem, CloudInfo, CloudSendBody } from "./types";
-import { CLOUD_CHAT_LIMIT, CLOUD_CHAT_TEXT, cloudNoticeText } from "./chatTexts";
+import { CLOUD_CHAT_TEXT, chatLimitOf, cloudNoticeText } from "./chatTexts";
+import { isGuestId } from "../../account/guest";
 import { createPoller } from "./poll";
 import { chatKey, freshKey, legacyCloudChatId, persistScopeOf, titlesKey } from "./persistKeys";
 import { cloudHistoryFor, type CloudHistoryEntry, type CloudHistorySnapshot } from "./historyStore";
@@ -294,8 +295,12 @@ export interface CloudChat {
   history: { items: CloudChatItem[]; loading: boolean; refresh: (silent?: boolean, maxAgeMs?: number) => Promise<boolean>;
     /** 这个项目的对话列表读到过（几个分页共用一份，进入项目就开始读；打开分页时通常已经有了） */
     loaded: boolean;
-    /** 这位账号在这个项目里自己开的对话数（共有对话算在开它的人名下）；满 CLOUD_CHAT_LIMIT 个就不让新建 */
-    ownedCount: number; atLimit: boolean };
+    /** 这位账号在这个项目里自己开的对话数（共有对话算在开它的人名下）；满 `limit` 个就不让新建（账号 50 个，游客 1 个） */
+    ownedCount: number; atLimit: boolean;
+    /** 这个上限是几个：账号 50，游客 1（`chatLimitOf`） */
+    limit: number;
+    /** 当前身份是游客：满额时界面不是「删几个再建」，而是「游客每个项目只能开一个对话，注册账号才能多开」，新建入口置灰 */
+    guest: boolean };
   revoked?: boolean;
   model: string;
   setModel: (m: string) => void;
@@ -586,7 +591,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
       if (err instanceof CloudError && err.code === "consent-required" && cloud.accountId)
         reportCloudConsentRequired({ accountId: cloud.accountId, bindingVersion: consent.bindingVersion }, tabId);
       // 满额被拒：列表可能是旧的，重读一次让「已满」的提示和实际对上
-      if (err instanceof CloudError && err.code === "conversation-limit") void refreshHistoryRef.current();
+      if (err instanceof CloudError && (err.code === "conversation-limit" || err.code === "guest-chat-limit")) void refreshHistoryRef.current();
       return false;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -629,7 +634,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
       else await api.send(item.conversationId, body);
     } catch (err) {
       if (err instanceof CloudError && err.code === "consent-required") reportCloudConsentRequired(binding, tabId);
-      if (err instanceof CloudError && err.code === "conversation-limit") void refreshHistoryRef.current();
+      if (err instanceof CloudError && (err.code === "conversation-limit" || err.code === "guest-chat-limit")) void refreshHistoryRef.current();
       return isTransientError(err, browserOffline()) ? retry : failed(OUTBOX_TEXT.failed(reason(err)));
     }
     if (here && projectId) lsSet(freshKey(projectId, tabId, persistScope), "");
@@ -715,7 +720,16 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     sessionRef.current?.showOutbox((outboxRef.current?.items ?? []).map(shownOutboxItem));
   }, [projectId, tabId, persistScope, cloud.accountMode, key]);
 
-  const newChat = useCallback(() => switchTo(newCloudChatId(), true), [switchTo]);
+  // 游客每个项目只能开一个对话（2026-10-23 用户定）：上限是几个、已经开了几个。服务端在建对话时也拦（`guest-chat-limit`），
+  // 这里先拦下是为了别让游客点了「新对话」、写了一段话，发出去才被拒
+  const chatGuest = cloud.accountMode && isGuestId(cloud.accountId);
+  const chatLimit = chatLimitOf(cloud.accountId);
+  const ownedCount = cloud.accountMode && cloud.accountId ? histItems.filter((x) => x.ownerAccountId === cloud.accountId).length : 0;
+  const atLimit = cloud.accountMode && ownedCount >= chatLimit;
+  const newChat = useCallback(() => {
+    if (chatGuest && atLimit) { setNotice(CLOUD_CHAT_TEXT.guestLimit); return; }
+    switchTo(newCloudChatId(), true);
+  }, [switchTo, chatGuest, atLimit]);
 
   /**
    * 读一次对话列表(大家共用的那一份)。`silent`：不闪「读取中」、失败也不弹提示。
@@ -786,9 +800,6 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     }
   }, [api, cloud.accountMode, cloud.accountId, consent.bindingVersion, key, operationScope, switchTo, refreshHistory]);
 
-  const ownedCount = cloud.accountMode && cloud.accountId ? histItems.filter((x) => x.ownerAccountId === cloud.accountId).length : 0;
-  const atLimit = cloud.accountMode && ownedCount >= CLOUD_CHAT_LIMIT;
-
   const blocked = cloud.accountMode && (!key || keyRef.current !== key || sessionKeyRef.current !== key);
   return {
     store,
@@ -847,7 +858,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     removeChat,
     history: { items: blocked ? [] : histItems, loading: blocked ? false : histLoading, refresh: refreshHistory,
       loaded: blocked ? false : histSnap.loaded,
-      ownedCount: blocked ? 0 : ownedCount, atLimit: blocked ? false : atLimit },
+      ownedCount: blocked ? 0 : ownedCount, atLimit: blocked ? false : atLimit, limit: chatLimit, guest: chatGuest },
     revoked: Boolean(view.revoked),
     model,
     setModel,

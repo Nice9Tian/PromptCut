@@ -33,6 +33,8 @@ export interface ComposerMenuProps {
   canDiagnose: boolean;
   onOpenDiagnostics: () => void;
   onNewChat: () => void;
+  /** 新对话开不了（游客每个项目只能开一个对话）时的说明：给了就把「新对话」置灰、悬停写这一句；不给照常 */
+  newChatDisabledReason?: string;
   /** 「云端」接入方式:一键配特效在云端下置灰(悬停写原因);诊断报告照常可用,内容换成这段云端对话的(〔用户 2026-10-07 定〕) */
   cloudMode?: boolean;
 }
@@ -115,7 +117,7 @@ function providerLabel(p: ProviderInfo): string {
 
 /** 工具条上的「✦」菜单 */
 function ComposerMenu(props: ComposerMenuProps & { streaming: boolean; readOnly?: boolean; readOnlyReason?: string }) {
-  const { workflowRoles, onRunWorkflow, canDiagnose, onOpenDiagnostics, onNewChat, streaming, cloudMode } = props;
+  const { workflowRoles, onRunWorkflow, canDiagnose, onOpenDiagnostics, onNewChat, newChatDisabledReason, streaming, cloudMode } = props;
   const pop = usePopover();
   // 这个项目只给了只读权限(游客):一键配特效、新对话都是要给 Agent 发话,置灰;诊断报告只读对话内容,照常
   const ro = { locked: !!props.readOnly, why: props.readOnlyReason ?? "", title: (own?: string) => (props.readOnly ? props.readOnlyReason : own) };
@@ -164,7 +166,7 @@ function ComposerMenu(props: ComposerMenuProps & { streaming: boolean; readOnly?
           诊断报告
         </button>
         <div className="ai-menu-sep" role="separator" />
-        <button type="button" role="menuitem" className="ai-menu-item" data-pc="ai-new-chat" disabled={ro.locked} title={ro.title()} onClick={pick(onNewChat)}>
+        <button type="button" role="menuitem" className="ai-menu-item" data-pc="ai-new-chat" disabled={ro.locked || !!newChatDisabledReason} title={ro.locked ? ro.title() : newChatDisabledReason ?? undefined} onClick={pick(onNewChat)}>
           <span className="ai-menu-icon" aria-hidden="true">＋</span>
           新对话
         </button>

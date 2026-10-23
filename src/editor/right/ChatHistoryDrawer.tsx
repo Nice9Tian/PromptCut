@@ -18,6 +18,10 @@ export interface CloudHistoryGroup {
   limitReached?: boolean;
   /** 这位账号在这个项目里自己开的对话数(实时)：显示在「云端」标题后面 */
   ownedCount?: number;
+  /** 这个账号在一个项目里最多能开几个（账号 50，游客 1）；不给按 50 */
+  limit?: number;
+  /** 满额时顶上那一行用什么话；不给用账号那一句（「已满，先删几个」）。游客用「每个项目只能开一个对话」那一句 */
+  limitText?: string;
 }
 
 export interface ChatHistoryDrawerProps {
@@ -32,6 +36,8 @@ export interface ChatHistoryDrawerProps {
   onDelete(id: string): void;
   /** 头部的「新对话」:清掉当前分页的消息、另起一段会话归档(「✦」菜单里也有同一项) */
   onNewChat?(): void;
+  /** 新对话开不了（游客每个项目只能开一个对话）时的说明：给了就把头部的「新对话」置灰、悬停写这一句 */
+  newChatDisabledReason?: string;
   /** 「云端」一组;不给就没有这一组(放本机的项目、没开协作的项目) */
   cloud?: CloudHistoryGroup;
   /** 在线页面没有本机对话记录:只列云端一组 */
@@ -73,6 +79,7 @@ export function ChatHistoryDrawer(props: ChatHistoryDrawerProps) {
     onPick,
     onDelete,
     onNewChat,
+    newChatDisabledReason,
     cloud,
     hideLocal,
   } = props;
@@ -88,7 +95,7 @@ export function ChatHistoryDrawer(props: ChatHistoryDrawerProps) {
         <span className="chat-drawer-title">对话历史</span>
         <div className="chat-drawer-head-actions">
           {onNewChat && (
-            <button type="button" className="chat-drawer-new-btn" data-pc="chat-new" onClick={onNewChat}>
+            <button type="button" className="chat-drawer-new-btn" data-pc="chat-new" disabled={!!newChatDisabledReason} title={newChatDisabledReason} onClick={onNewChat}>
               新对话
             </button>
           )}
@@ -155,8 +162,8 @@ export function ChatHistoryDrawer(props: ChatHistoryDrawerProps) {
         )}
         {cloud && (
           <div className="chat-drawer-group" data-pc="chat-cloud-group">
-            <div className="chat-drawer-group-title">云端{cloud.ownedCount !== undefined && <span data-pc="chat-cloud-count" data-owned={cloud.ownedCount}> · {CLOUD_CHAT_TEXT.countLabel(cloud.ownedCount)}</span>}</div>
-            {cloud.limitReached && <div className="chat-drawer-limit" data-pc="chat-cloud-limit" role="status">{CLOUD_CHAT_TEXT.limitHint}</div>}
+            <div className="chat-drawer-group-title">云端{cloud.ownedCount !== undefined && <span data-pc="chat-cloud-count" data-owned={cloud.ownedCount}> · {CLOUD_CHAT_TEXT.countLabel(cloud.ownedCount, cloud.limit)}</span>}</div>
+            {cloud.limitReached && <div className="chat-drawer-limit" data-pc="chat-cloud-limit" role="status">{cloud.limitText ?? CLOUD_CHAT_TEXT.limitHint}</div>}
             {cloud.loading && cloudItems.length === 0 ? (
               <div className="chat-drawer-empty">读取中…</div>
             ) : cloudItems.length === 0 ? (

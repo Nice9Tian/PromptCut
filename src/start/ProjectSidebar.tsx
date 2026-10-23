@@ -147,6 +147,8 @@ export function ProjectSidebar(props: {
   onOpen: (id: string) => void;
   onOpenChat: (chat: VibeChat) => void;
   onNewChat: (projectId: string) => void;
+  /** 某个项目底下的「新对话」开不了（游客每个项目只能开一个对话）时的说明；有说明的那一行置灰、悬停写它，点一下仍交给 `onNewChat`（由它把这句话摆出来） */
+  newChatBlocked?: (projectId: string) => string | null;
   onNewGroup: () => void;
   /** 「项目」那张卡顶上的一行状态(正在取列表、取不到、重试);没有就不显示 */
   notice?: ReactNode;
@@ -336,13 +338,17 @@ export function ProjectSidebar(props: {
     });
 
   /** 一个项目,连同它底下的项目 Agent */
-  const newChatRow = (projectId: string) => (
-    <button key="new-chat" type="button" className="ps-row is-agent" data-pc="start-side-new-chat" aria-label="新对话" onClick={() => props.onNewChat(projectId)}>
+  const newChatRow = (projectId: string) => {
+    const blocked = props.newChatBlocked?.(projectId) ?? null;
+    return (
+    <button key="new-chat" type="button" className={`ps-row is-agent${blocked ? " is-blocked" : ""}`} data-pc="start-side-new-chat" aria-label="新对话"
+      aria-disabled={blocked ? true : undefined} title={blocked ?? undefined} onClick={() => props.onNewChat(projectId)}>
       <span className="ps-row-caret" data-empty aria-hidden="true">›</span>
       <span className="ps-row-icon is-agent" aria-hidden="true">＋</span>
       <span className="ps-row-name ps-muted">新对话</span>
     </button>
-  );
+    );
+  };
 
   const projectBlock = (p: VibeProject) => {
     const chats = chatsOfProject(p.id);

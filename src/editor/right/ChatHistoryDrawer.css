@@ -72,6 +72,11 @@
 .chat-drawer-new-btn:hover {
   filter: brightness(1.1);
 }
+.chat-drawer-new-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+  filter: none;
+}
 .chat-drawer-new-btn:focus-visible {
   outline: none;
   box-shadow: var(--ui-focus-ring, 0 0 0 2px #00DBDB);
