@@ -56,4 +56,9 @@ reply_to_users_goal.md
 
 # 本机说明:只和这台机器有关的环境信息(docs/semantics/guide_files/constraints.md 的「本机信息不进仓库」)
 docs/local.md
-docs/auto_long_work/local.md
+
+# 给本机 Agent 的入口与简版要求：会被各家工具无条件注入，不入库
+/AGENTS.md
+/CLAUDE.md
+# 给读不到本机技能的工具（codex、agy 等）准备的简版要求，由 promptcut-dev 技能生成
+/my_agent/

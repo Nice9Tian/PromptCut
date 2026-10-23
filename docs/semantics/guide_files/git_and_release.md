@@ -1,6 +1,6 @@
 # 提交与发版
 
-索引见 `../developer_guide.md`。写 main 的操作须按 `suggested_agent_behavior.md` 原则 4 先得到用户授权。
+索引见 `../README.md`。
 
 ## 提交
 
