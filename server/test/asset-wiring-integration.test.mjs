@@ -13,6 +13,7 @@ import { stageHostedAssetFiles } from '../hosted/files.mjs';
 import { createAssetDocClient, createAssetReadyProbe } from '../hosted/asset-doc-client.mjs';
 import { StreamStore } from '../asset-store/stream-store.mjs';
 import { publicationMarker } from '../asset-store/project-io.mjs';
+import { projectStorageKey } from '../asset-store/project-stores.mjs';
 import { freePorts } from './free-ports.mjs';
 import { assetWiringPki } from './fixtures/asset-wiring-pki.mjs';
 
@@ -188,4 +189,9 @@ test('真实provider→combo→独立stage asset入口：mTLS/head就绪、全�
   assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
   assert.equal((await fetch(assetOrigin + `/api/asset/media/${hash}`, { headers: { authorization: `Bearer ${joined.body.assetTicket}` } })).status, 404, 'deleted A cannot be read via a still-valid other member login');
   const survived = await request(1, `/api/asset/media/${hash}`); assert.equal(survived.status, 200); assert.deepEqual(Buffer.from(await survived.arrayBuffer()), bytes, 'deleting A does not affect B same hash');
+  // 删掉的项目,素材服务把它的字节整个删掉(`project-reaper.mjs`,claude/guest-fix 审查 C);B 的同一个哈希照旧在
+  const deletedDir = path.join(assetDir, 'assets-v2', 'projects', projectStorageKey(projects[0]));
+  await waitFor(async () => !fs.existsSync(deletedDir), 'deleted project bytes reclaimed by the asset service');
+  assert.ok(fs.existsSync(path.join(assetDir, 'assets-v2', 'projects', projectStorageKey(projects[1]))), 'other project untouched');
+  assert.equal((await request(1, `/api/asset/media/${hash}`)).status, 200);
 });

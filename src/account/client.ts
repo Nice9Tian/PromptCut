@@ -179,8 +179,10 @@ export function createAccountClient(options: AccountClientOptions) {
   }
   async function website() { const value = await request('/api/account/me'); csrf = value.csrfToken || ''; websiteAccount = value.account ?? null; return websiteAccount; }
   /**
-   * 游客（`server/account/guest.mjs`）：向文档服务领一张令牌。带着手里那一张就是续期、编号不变；
-   * 不带、或者它已经过期，服务端就随机一个新身份。编号只由服务端给，这里报什么都不算数。
+   * 游客（`server/account/guest.mjs`）：向文档服务领一张令牌。带着手里那一张就是续期、编号不变（过期不太久的也续，
+   * `authority.mjs` 的 `issueGuest`）；不带、或者续不了，服务端就随机一个新身份。编号只由服务端给，这里报什么都不算数。
+   * **每次领到都写回本机**（claude/guest-fix，审查 B：原先页面续期只在内存里，本机存的始终是第一次领的那张，
+   * 第二天回来交的是一张过期很久的旧令牌）。
    *
    * 只在线页面有这条路：桌面版走外壳的账号桥，桥只放行 create / join / session / admin / members 五条，
    * 加一条要换外壳（`desktop/src-tauri/src/account_vault.rs`），所以桌面版点游客时如实说要用官网。
@@ -192,8 +194,17 @@ export function createAccountClient(options: AccountClientOptions) {
       !Number.isSafeInteger(value.expiresAt) || value.expiresAt <= now()) throw new AccountFailure(503, 'account-protocol');
     const before = authIdentity();
     guest = { id: value.guestId, name: guestName(value.guestId), token: value.token, expiresAt: value.expiresAt };
+    adoptGuestSession({ id: guest.id, token: guest.token, expiresAt: guest.expiresAt });
     if (authIdentity() !== before) authChanged();
     return guest;
+  }
+  /**
+   * 作废手里这个游客身份（登录账号之后游客身份作废，product/document-service.md「游客」；审查 S9）。
+   * 尽力而为：发不出去也不拦着登录，本机那一份照样清掉。
+   */
+  function revokeGuestOnServer(token: string | undefined) {
+    if (!options.online || !token) return;
+    void request('/hosted/shared/account/guest', { token, revoke: true }).catch(() => {});
   }
   /** 游客手里那一张摆成登录的样子：下面 `/hosted/shared/account/*` 那几条不用分辨这是账号还是游客 */
   const asLogin = (g: GuestLogin): EditorLogin =>
@@ -237,6 +248,7 @@ export function createAccountClient(options: AccountClientOptions) {
     /** 不当游客了（去登录账号，或者离开）。本机那一份一并清掉：留着也用不上，还会被下次进入捡回来 */
     leaveGuest() {
       if (!guest) return;
+      revokeGuestOnServer(guest.token);
       guest = null; clearGuest(); authChanged();
     },
     subscribeAuth(listener: () => void) { authListeners.add(listener); return () => { authListeners.delete(listener); }; },
@@ -244,7 +256,7 @@ export function createAccountClient(options: AccountClientOptions) {
       const value = await native('recover', options.device); if (value === null) return null; return accept(check(value)).account; },
     async login(identifier: string, password: string, remember: boolean, requestId: string = crypto.randomUUID()) {
       // 登录了账号就不再是游客:`ensureLogin` 在游客模式下问的是游客令牌,不清掉的话登录完还在拿游客身份行事
-      if (guest) { guest = null; clearGuest(); }
+      if (guest) { revokeGuestOnServer(guest.token); guest = null; clearGuest(); }
       if (!options.online) return accept(check(await native('login', { ...options.device, name: identifier, password, requestId }))).account;
       await website(); const value = await request('/api/account/login', { name: identifier, password, remember });
       csrf = value.csrfToken || ''; websiteAccount = value.account; login = null; authChanged();

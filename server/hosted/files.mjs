@@ -108,9 +108,12 @@ export const HOSTED_ASSET_DEPLOY_FILES = Object.freeze([
   'server/asset-store/fs-store.mjs',
   'server/asset-store/guest-quota.mjs',
   'server/asset-store/index.mjs',
+  // 游客视频按文件头认（`guest-quota.mjs` 引它）、删掉的项目回收字节（`hosted/asset-runtime.mjs` 引它），claude/guest-fix
+  'server/asset-store/media-sniff.mjs',
   'server/asset-store/memory-store.mjs',
   'server/asset-store/project-access.mjs',
   'server/asset-store/project-io.mjs',
+  'server/asset-store/project-reaper.mjs',
   'server/asset-store/project-revocations.mjs',
   'server/asset-store/project-stores.mjs',
   'server/asset-store/px-evict.mjs',

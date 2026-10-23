@@ -9,7 +9,8 @@
  *    前两条在这里，只读在 `authority.mjs` 的 `joinProject`（游客入别人的名单时按 `'r'` 落账）。
  *
  * 令牌是**持有即身份**的东西：编号由服务端随机生成，不收页面报上来的编号，否则谁都能自称是别人。
- * 页面把令牌存在自己那一侧（`src/account/guest.ts`），续期时把旧的交回来换一张新的；过期了就换一个新身份。
+ * 页面把令牌存在自己那一侧（`src/account/guest.ts`），续期时把旧的交回来换一张新的，换来的那张也写回本机；
+ * 过期了也照样续成同一个编号，过期超过 `renewGraceMs` 才换一个新身份（`authority.mjs` 的 `issueGuest`）。
  *
  * 形状：`gst1` + `base64url(JSON)` + 43 个字符的 `base64url(HMAC-SHA256)`，整串只有 `[A-Za-z0-9_-]`。
  * **不带点号**是硬要求：它要当 `Authorization: Bearer` 送出去，而那一层只认这个字符集
@@ -54,11 +55,12 @@ const MAX_TOKEN_LENGTH = 1024;
 /**
  * 游客的限额（三级机制的数，2026-10-23 用户定）。要改只改这里：
  *   projects    自己能建几个项目
- *   videos      能传几条视频。只数视频的**原尺寸档**：小档是系统给它生成的代理，不占额；图片、音频不计数
- *               （用户原话「总视频素材不能大于三条」只说视频）。怎么数见 `server/asset-store/guest-quota.mjs`
+ *   videos      能传几条视频（不同的视频源；在线编辑器一条视频传小档和原尺寸两个文件，算一条）；图片、音频不计数
+ *               （用户原话「总视频素材不能大于三条」只说视频）。怎么数、怎么认是不是视频见 `server/asset-store/guest-quota.mjs`
  *   assetBytes  **每一条源文件**最大多少字节：视频、图片、音频、小档，传上来的每个文件都查
  *   ttlMs       建起来多久之后清理（项目和素材一起清）
- *   tokenTtlMs  一张令牌多久过期。比 ttlMs 短，页面在这期间续期；过了就换一个新身份
+ *   tokenTtlMs  一张令牌多久过期。比 ttlMs 短，页面在这期间续期
+ *   renewGraceMs 过期了多久之内交回来还能续成同一个编号。和 ttlMs 一样长：超过这么久没来，他建的项目也清掉了
  */
 export const GUEST_LIMITS = Object.freeze({
   projects: 1,
@@ -66,6 +68,7 @@ export const GUEST_LIMITS = Object.freeze({
   assetBytes: 100 * 1024 * 1024,
   ttlMs: 3 * 24 * 60 * 60 * 1000,
   tokenTtlMs: 24 * 60 * 60 * 1000,
+  renewGraceMs: 3 * 24 * 60 * 60 * 1000,
 });
 
 const b64url = buffer => Buffer.from(buffer).toString('base64url');
@@ -155,14 +158,14 @@ export const guestProjectLimitReached = ({ accountId, ownedCount }) =>
   isGuestId(accountId) && (ownedCount ?? 0) >= GUEST_LIMITS.projects;
 
 /**
- * 这个文件收不收：游客传的每一个文件都不超过 `assetBytes`；算数的（视频的原尺寸档）最多 `GUEST_LIMITS.videos` 条。
+ * 这个文件收不收：游客传的每一个文件都不超过 `assetBytes`；算数的（视频）最多 `GUEST_LIMITS.videos` 条。
  * 账号不受这两条限制，直接放行。
  *
  * @param {object} args
  * @param {string} args.accountId 谁在传
  * @param {number} args.bytes 这个文件多大
- * @param {boolean} [args.countsAsVideo] 这个文件算不算一条视频（视频的原尺寸档）。不算的只查尺寸
- * @param {number} [args.storedVideos] 他已经存着（或正在收）几条算数的视频
+ * @param {boolean} [args.countsAsVideo] 这个文件算不算一条新的视频。不算的只查尺寸
+ * @param {number} [args.storedVideos] 不算这一条，他已经存着（或正在收）几条视频
  * @returns {{ ok: true } | { ok: false, code: string }}
  */
 export function checkGuestAsset({ accountId, bytes, countsAsVideo = false, storedVideos = 0 }) {
