@@ -27,6 +27,15 @@
 - 子 Agent 交回的分支由主 Agent 开 PR 回 main；审查通过后用 `--no-ff` 合并。合并进 main 须按 `suggested_agent_behavior.md` 原则 4 先得到用户授权。
 - 审查不通过或验证没过，分支保留，按 `suggested_agent_behavior.md`「验证」一节告诉用户。
 
+## 子 Agent 的分支怎么回 main（2026-10-23 用户定）
+
+- 判断标准只有一条：**这条子分支能不能单独过合入 main 的门槛**（门槛见 `verification.md`「PR、main、release 分别验什么」）。
+  - 能 → 它自己开 PR 回 main，和主 Agent 那条各走各的。评审范围小，出事好定位。
+  - 不能（例如子 Agent 只改了探针，它测的功能在主 Agent 那条分支上）→ 先并进主 Agent 的分支，一个 PR 一起回 main。不要因为「是子 Agent 做的」就默认并进来：并进来 PR 的 diff 就变大，评审负担是实打实增加的。
+- 并进来的顺序：子 Agent 先把活干完、提交、推分支 → 主 Agent 在自己分支上先合最新 main，再用 `--no-ff` 合子分支 → 按**合并后**的范围跑门槛三条 → 开 PR。先合 main 是为了基底不过时，否则 PR 页面上的 diff 和实际要合的东西对不上。
+- 合子分支之前告诉那个子 Agent「封板，别再推」。封板之后它又推了，主 Agent 要在自己分支上再合一次。
+- PR 合入 main 之后再删子分支，前置条件和顺序见下一节「清理 worktree 与子 Agent」。GitHub 上 PR 合并后的 "Delete branch" 按钮删的是 PR 那条分支，不是并进来的子分支；子分支的远端副本要自己 `git push origin --delete <分支名>`。
+
 ## 清理 worktree 与子 Agent
 
 - **删之前确认没有会话正在用它**（2026-10-23 加：0.7.21 发版收尾时，主会话按「分支已合入」一刀切地拆 worktree，把一个**还在开发中的会话**的工作区一起删了 —— 那条分支只合了一截进发版，会话还在上面接着做）。判断办法：看这个 worktree 对应的分支最近有没有新提交、`mcp__ccd_session_mgmt__list_sessions` 里有没有会话在跑它、或者直接问那个会话。**分支已经合入 main 不等于没人在用它。**
