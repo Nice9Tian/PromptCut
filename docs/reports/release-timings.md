@@ -427,7 +427,7 @@ node scripts/acceptance/four-stage-acceptance.mjs --timings-from <输出目录>/
 
 - 完整安装包：`PromptCut-0.7.20-setup.exe` 473,453,478 字节，SHA-256 `b84634932c379d9ff1294ccf804e8c5dd9eb001241c0667c21a6f3fb36618edb`
 - 兼容补丁：`PromptCut-patch-0.7.20.exe` 57.0 MB，SHA-256 `f1190573a7591da3f6295e0175dc1d5d85c2ba0c408e542ec1718a524dfd68b5`，适用外壳 0.2.0 或更新，不含依赖
-- 外壳保持 0.2.8（`desktop/src-tauri` 一行未动），老用户走更新补丁
+- 外壳保持 0.2.8（`desktop/src-tauri` 一行未动）。**补丁已构建但没有发布**（2026-10-23 实测：官网上 `PromptCut-patch-0.7.19.exe`、`-0.7.20.exe` 都 404，下载页无补丁链接），所以老用户实际只能下完整安装包；原记录写「老用户走更新补丁」说过了头。补丁也从未做过升级安装演练。0.7.21 起按 `REPORT-021.md` 把补丁一并传上官网并记真实地址
 
 ### 真实网络环境验收
 
