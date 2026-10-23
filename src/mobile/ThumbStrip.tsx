@@ -50,12 +50,25 @@ export function ThumbStrip(props: {
 
   const blocks = () => [...(sc.current?.querySelectorAll<HTMLElement>(".mblock") ?? [])];
   /** 当前帧标记(正中)落在卡序列里的位置:整数部分第几张,小数部分卡内比例 */
+  /**
+   * 第 i 张卡在滚动方向上占多长：从它的左缘量到**下一张卡的左缘**（最后一张量到自己的右缘）。
+   *
+   * 为什么不是「卡自己的宽度」：两段之间还夹着转场标记 `.mark`（宽 24、左右各 3 的外边距，共 30px）。
+   * 按卡宽算的话这 30px 不属于任何一段，于是两头都出毛病 —— 播到段边界时缩略条瞬移 30px；
+   * 用户手动滚进这 30px 时 `posFromScroll` 恒回整数，时间卡在下一段开头不动。段数越多、这种死区越多。
+   * 把间隙并进前一段之后，位置换算在整条上连续且可逆，白线走过转场标记时上一段正好播到尾，读着也顺。
+   * （2026-10-25 查 iOS 滑不动那条时顺带发现的，用户当场说「修好」。）
+   */
+  const spanOf = (bl: HTMLElement[], i: number): [number, number] => {
+    const l = bl[i].offsetLeft;
+    return [l, i + 1 < bl.length ? bl[i + 1].offsetLeft : l + bl[i].offsetWidth];
+  };
   const posFromScroll = (): number => {
     const el = sc.current!;
     const x = el.scrollLeft + el.clientWidth / 2;
     const bl = blocks();
     for (let i = 0; i < bl.length; i++) {
-      const l = bl[i].offsetLeft, r = l + bl[i].offsetWidth;
+      const [l, r] = spanOf(bl, i);
       if (x < l) return i;
       if (x < r) return i + (x - l) / (r - l);
     }
@@ -76,7 +89,8 @@ export function ThumbStrip(props: {
     if (!bl.length) return 0;
     const i = Math.min(Math.floor(pos), bl.length - 1);
     const f = pos >= bl.length ? 1 : pos - i;
-    return bl[i].offsetLeft + f * bl[i].offsetWidth - el.clientWidth / 2;
+    const [l, r] = spanOf(bl, i);
+    return l + f * (r - l) - el.clientWidth / 2;
   };
 
   // 播放、点刻度、切换剪辑时,缩略时间轴跟着当前时间走(手指按着的时候不动)
