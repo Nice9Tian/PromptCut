@@ -47,14 +47,14 @@
 
 ### 游客身份的两个口子（2026-10-23，claude/guest-fix 记；审查 REVIEW-guest-identity 的 A3、S8）
 
-会话不自己定数、不自己关功能，等用户拍板。报告 `docs/reports/AGENT-claude-guest-fix.md`「待用户项」。
+会话不自己定数、不自己关功能，等用户拍板。报告 `docs/archive/agent-reports/AGENT-claude-guest-fix.md`「待用户项」。
 
 - **游客没有总字节上限（A3）**：图片、音频不限条数，每个文件 100 MB；视频按条数管（最坏 6 个文件）。游客不要登录、每个 IP 每小时能领 20 个新身份、每个身份一个项目，所以这是一个公开的磁盘耗尽口子。2026-10-23 修好三天清理真的回收字节之后，占的盘最多留 3 天，风险降了但还在。可选：给游客项目设一个总字节上限（数多少要用户定），或者给图片、音频也设条数，或者维持现状。
 - **游客自己的项目默认开着云端 Agent（S8）**：游客建的项目和账号建的一样，托管方的渲染节点和云端 Agent 缺省开（`hosted: { render: true, agent: true }`），匿名用户能触发云端 Agent，也就是托管方的模型费用。语义只写了「游客进别人的项目不能给云端 Agent 发消息」，没写游客自己的项目能不能用。可选：游客项目缺省关云端 Agent、游客不许开；或者开着但另设用量上限；或者维持现状。
 
 ## 已做步骤的遗留
 
-- **〔已修，2026-10-13 `claude/rr-preview-fixes`，`3c660f2a`：两处都查清根因并修好，各有探针 `scripts/probes/seek-back-exact-probe.mjs`、`scrub-hold-snapshot-probe.mjs`（这支 2026-10-23 随每张卡的快照撤除一并删掉，见 `docs/reports/AGENT-claude-probe-audit.md`）；报告 `docs/reports/AGENT-rr-preview-fixes.md`〕预览里的两处老问题**（2026-10-12 做「拖动时贴轨道流」的原型时在 `main` 上查出来；复现办法和数字在分支 `claude/scrub-streams` 的 `docs/reports/AGENT-scrub-streams.md`「发现」一节）。两处都排在渲染重构的「己」之前修，见 `render-refactor-task.md`「己」的「先要修的两处」。
+- **〔已修，2026-10-13 `claude/rr-preview-fixes`，`3c660f2a`：两处都查清根因并修好，各有探针 `scripts/probes/seek-back-exact-probe.mjs`、`scrub-hold-snapshot-probe.mjs`（这支 2026-10-23 随每张卡的快照撤除一并删掉，见 `docs/archive/agent-reports/AGENT-claude-probe-audit.md`）；报告 `docs/reports/AGENT-rr-preview-fixes.md`〕预览里的两处老问题**（2026-10-12 做「拖动时贴轨道流」的原型时在 `main` 上查出来；复现办法和数字在分支 `claude/scrub-streams` 的 `docs/reports/AGENT-scrub-streams.md`「发现」一节）。两处都排在渲染重构的「己」之前修，见 `render-refactor-task.md`「己」的「先要修的两处」。
   - **粒子卡往回跳以后停下，画布上的画面不是这一刻的。** 同一帧，往回跳到达和往前到达的两张画面，差得和两个不相干的帧一样大；再往前挪一步就对了。违反 `product/rendering.md`「停下就精确」。
   - **手按着标尺不动时，快照有时一直贴不上。** 快照的字节在设时间之后 33 毫秒内到货时，补投被换帧的节流挡掉，之后没有人再投；那一层藏 500 毫秒后露出活组件，直到下一次拖动。按住 12 处有 4 处没贴上。
 - **导出里的四处老问题**（前三处是 2026-10-12 渲染重构「辛」量两条导出路时在 `main` 上遇到的，现象和次数在 `docs/reports/AGENT-rr-export-measure.md`；第四处是 2026-10-13 核对导出像素基线时查到的。没标「已修」的都还没修、没查根因）。

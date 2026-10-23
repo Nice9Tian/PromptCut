@@ -39,7 +39,7 @@ isMainKind() → clipKind(p, clip) 是 "video" | "image" | "cut"
    - 阈值、取舍这类数字属三级，自己定，写进 `docs/semantics/mechanism/` 对应的那一本或代码注释，不要散落。
 4. **顺序与时间对得上**：块按时间先后排；按住拖动 = 调整当前时间这套交互不许坏（`ThumbStrip.tsx` 里 `posFromScroll` / `timeAtCardPos` / `cardPosAtTime` 那一组）。
 5. **不许回归**：手机版现有的测试（`src/mobile/*.test.mjs`，含 `thumbs.test.mjs`、`mobile.test.mjs`）全过；`npx tsc -b --force` 零错误。
-6. **真看一眼**：用仓库里的 puppeteer 无头跑在线构建，手机仿真（390 宽）进一个只有卡片段的项目和一个有视频段的项目，各截一张缩略时间轴的图，图放 `docs/reports/AGENT-claude-mobile-thumbstrip-shots/`，报告里写清每张图证明了什么。内置浏览器窗格隐藏时 CSS 动画会停在第 0 帧、截图像空白，所以**不要用内置浏览器窗格截图**。
+6. **真看一眼**：用仓库里的 puppeteer 无头跑在线构建，手机仿真（390 宽）进一个只有卡片段的项目和一个有视频段的项目，各截一张缩略时间轴的图，图放 `docs/archive/agent-reports/AGENT-claude-mobile-thumbstrip-shots/`，报告里写清每张图证明了什么。内置浏览器窗格隐藏时 CSS 动画会停在第 0 帧、截图像空白，所以**不要用内置浏览器窗格截图**。
 
 ## 能改哪些文件
 
@@ -47,7 +47,7 @@ isMainKind() → clipKind(p, clip) 是 "video" | "image" | "cut"
 - `src/mobile/ThumbStrip.tsx`、`src/mobile/Thumb.tsx`、`src/mobile/thumbs.ts`（显示与取图兜底）
 - `src/mobile/mobile.css`（只在布局挡着显示时改）
 - 上述文件对应的测试：`src/mobile/*.test.mjs`（可新建 `mainContent.test.mjs`）
-- 报告与截图：`docs/reports/AGENT-claude-mobile-thumbstrip*`
+- 报告与截图：`docs/archive/agent-reports/AGENT-claude-mobile-thumbstrip*`
 - 语义：见下一节
 
 **别的文件一个都不要动**，特别是：桌面版时间轴（`src/editor/timeline/`）、`src/kernel/`、`server/`、别的 worktree。`src/mobile/` 下列表之外的文件（`MobileEditor.tsx`、`FullTimeline.tsx`、`MobileStart.tsx`、`sheets.tsx`、`ui.tsx` 等）**不要改**：另外三条在飞分支（`claude/guest-identity`、`claude/browser-start-ui`、`claude/clip-speed`）正在改它们，主会话最后要人工解冲突，你的 diff 越小越好。
@@ -72,4 +72,4 @@ isMainKind() → clipKind(p, clip) 是 "video" | "image" | "cut"
 
 ## 报告要写什么
 
-`docs/reports/AGENT-claude-mobile-thumbstrip.md`：做了什么（按提交列）、最终选的算法规则与为什么、验收六条逐条的结果与证据（命令原样输出的关键行、截图路径）、没做成的与原因、对任务书或语义的更正建议、标了哪些〔裁〕（二级单列一节）。
+`docs/archive/agent-reports/AGENT-claude-mobile-thumbstrip.md`：做了什么（按提交列）、最终选的算法规则与为什么、验收六条逐条的结果与证据（命令原样输出的关键行、截图路径）、没做成的与原因、对任务书或语义的更正建议、标了哪些〔裁〕（二级单列一节）。
