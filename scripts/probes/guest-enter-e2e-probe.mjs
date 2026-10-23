@@ -19,6 +19,7 @@
  *   （要设 PROMPTCUT_ACCOUNT_PROVIDER_ROOT、PROMPTCUT_PASSWORD_ORDER_MODULE，同账号那几条测试；要先 `npx vite build --mode online`；
  *    跑的时候带 PROMPTCUT_NO_PORT_FILE=1）
  *
+ * 排查时设 GUEST_PROBE_DEBUG=1：另打出页面的 /hosted、/media 请求（地址里的票据打码）和导入后十几秒里素材库的样子。
  * 端口：夹具 6490～6496（入口 6496）；夹具里云端 Agent 的入口探针用不到，给 0 由系统挑。
  * 输出：过程写 stderr；截图与 evidence.json 在 --out 下；stdout 最后一行是一行 JSON（`fails` 为空才算过）。不打印令牌、票据。
  */
