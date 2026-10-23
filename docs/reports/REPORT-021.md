@@ -65,6 +65,9 @@
 | **GR-1** main 基准树全长导出 1800 帧 | pass（194 秒） |
 | **GR-2** 候选树全长导出 1800 帧 | pass（171 秒） |
 | **GR-3 与线上提交 `0629bbc9`（0.7.20）的像素比对** | **pass：全长导出逐字节相同，0 不同、0 缺失** —— 这八条一帧画面都没改到 |
+| **GR-4** 导出确定性 | pass：`All frames are identical. Determinism verified!` |
+| **GR-5** 导出与快照重放一致 | pass（14 秒） |
+| **部署影响：指纹** | 进共享快照键代码指纹的那组文件（`server/bakery/` 七个模块 + capture 系列 + `frame-pipeline.mjs`、`frame-identity.mjs`、`src/render/gl/canvasGrab.ts`）从 `0629bbc9` 到现在**一个都没改**，所以**上线不会触发轨道流全量重产**（0.7.20 那次因为 `capture-below.mjs` 进指纹，重产过一轮）。`claude/clip-speed` 合进来也只动 `server/bakery/mux-audio.mjs`，它不在指纹清单里 |
 
 （最终 main 上的整套验收在发版前再跑一遍，结果另补。）
 
