@@ -77,7 +77,10 @@ export function useAccountProjects({ online, onEnterEditor }: { online: boolean;
       if (invited) setLink(linkOf(serviceOrigin, invited));
       direct.current = online && invited?.kind === 'project' ? invited.projectId : null;
       const c = createAccountClient({ online, origin: serviceOrigin, device, ...(!online ? { native: desktopAccountBridge } : {}) }); client.current = c;
-      try { const current = await c.restore(); if (alive) { setAccount(current); if (current) { const l = await refreshLists(); if (alive) await enterDirect(l); } } }
+      try { const current = await c.restore(); if (alive) { setAccount(current); if (current) { const l = await refreshLists(); if (alive) await enterDirect(l); }
+        // 游客在自己的项目里刷新(地址栏是直达地址):这台浏览器记着他,接着以同一个游客身份进(`workflow/project.md`「刷新后还在这个项目里」)。
+        // 只在直达地址时自动接上;普通打开开始页照旧由他自己点「以游客身份进入」(claude/guest-enter)
+        else if (online && direct.current && loadGuest()?.token) { const g = await c.enterAsGuest(); if (alive) { setGuest(g); setGuestProject(loadGuest()?.project ?? null); await enterDirect(null); } } } }
       catch (e) { if (alive) { if (isDesktopShellTooOld(e)) setShellOld(true); else setError(e instanceof Error ? e.message : '登录恢复失败，请重新登录。'); } }
       finally { if (alive) setBusy(false); }
     })().catch(e => { if (alive) { if (isDesktopShellTooOld(e)) setShellOld(true); else setError(e instanceof Error ? e.message : '账号入口初始化失败。'); setBusy(false); } });
@@ -126,7 +129,9 @@ export function useAccountProjects({ online, onEnterEditor }: { online: boolean;
   }
   async function logout() { await client.current!.logout(); setAccount(null); setLists(null); clearRequest(); }
   /** 以游客身份进来：本机记着的那一张交回去续期（还是同一个人），没有就领一个新身份 */
-  async function enterAsGuest() { setGuest(await client.current!.enterAsGuest()); setGuestProject(loadGuest()?.project ?? null); }
+  async function enterAsGuest() { setGuest(await client.current!.enterAsGuest()); setGuestProject(loadGuest()?.project ?? null);
+    // 从直达地址打开、点了游客进来:和登录之后一样接着进那个项目(进不去就留在开始页说明原因)
+    await enterDirect(null); }
   /** 「换一个」：不交旧令牌，服务端给个新的 */
   async function newGuest() { setGuest(await client.current!.newGuest()); setGuestProject(null); }
   /** 不当游客了（去登录账号）。本机那一份一并清掉 */

@@ -21,6 +21,8 @@ const TAB = "offline-probe";
 
 const fakeClient = {
   account: { id: ACCOUNT, name: "探针 A" },
+  // 告知那一层按 `principal`(账号或游客)认绑定的是谁(claude/guest-enter)
+  principal: { id: ACCOUNT, name: "探针 A" },
   subscribeAuth: () => () => {},
   async cloudAgentConsent() {
     const res = await fetch("/probe-account/consent", { cache: "no-store" });

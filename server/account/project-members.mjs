@@ -1,5 +1,6 @@
 import { accountError } from './client.mjs';
 import { secondaryPasswordPending } from './authority.mjs';
+import { isGuestId } from './guest.mjs';
 
 const fail = (status, code) => { throw accountError(status, code); };
 /**
@@ -8,6 +9,8 @@ const fail = (status, code) => { throw accountError(status, code); };
  */
 const PROJECT_ID = /^(?:sp_[a-z2-7]{26}|[A-Za-z0-9_-]{8,64})$/;
 const accountOK = id => typeof id === 'string' && /^acc_[a-f0-9]{24}$/.test(id);
+/** 连接上的主体:账号或游客(`guest.mjs`)。游客的连接原先在这里被滤掉,成员浮层里看不到他的设备和在线(claude/guest-enter) */
+const principalOK = id => accountOK(id) || isGuestId(id);
 /** 连接归在哪台「设备」下。云端 Agent 的任务连接(`role: 'agent'`、`service: 'agent'`)不带设备号,
  * 按这一轮的任务号归成一项 `run:<任务号>`;它仍按 `accountId` 记在发起成员名下(语义 `product/agent.md`「成员列表怎么数」) */
 const deviceOf = p => typeof p?.deviceId === 'string' && p.deviceId ? p.deviceId
@@ -47,7 +50,7 @@ export function createProjectMembers({ ledger, authority, getConnections }) {
     for (const connection of connections) {
       const p = connection?.principal, deviceId = deviceOf(p);
       if (!connection.transport || connection.detached || p?.realm !== 'account' || p.identityVersion !== 2 ||
-          p.tenantId !== project.projectId || !accountOK(p.accountId) || !['page', 'agent', 'render'].includes(p.role) ||
+          p.tenantId !== project.projectId || !principalOK(p.accountId) || !['page', 'agent', 'render'].includes(p.role) ||
           !deviceId || project.bans[p.accountId] ||
           !project.members[p.accountId] || state.revokedLogins[`login:${p.loginId}`]) continue;
       const name = nameOf(p.accountName);

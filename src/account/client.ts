@@ -31,6 +31,11 @@ export interface ThirdPartyProvider { provider: 'google'; clientId: string }
 export type ThirdPartyLogin =
   | { kind: 'signed-in'; account: Account }
   | { kind: 'need-name'; ticket: string; email: string | null };
+/**
+ * 云端项目里的主体编号：账号 `acc_` 或游客 `gst_`，后面都是 24 位十六进制（服务端 `server/account/authority.mjs` 的 `accountIdOK`）。
+ * 成员名单、踢人、禁入都按它认；只有「凭账号做的事」（登录、项目列表、云端 Agent 的告知、申请加入）才只认 `acc_`。
+ */
+export const PRINCIPAL_ID_RE = /^(?:acc|gst)_[0-9a-f]{24}$/;
 export interface CloudAgentConsent { accountId: string; accepted: boolean; noticeVersion: 1; acceptedAt?: number }
 /** Keep the standard transport protocol alongside the opaque account credential. */
 export function accountConnectionProtocols(session: ProjectSession): string[] { return ['promptcut.v1', `promptcut.account.${session.connectionTicket}`]; }
@@ -104,6 +109,8 @@ export function accountErrorText(status: number, code: string): string {
     'guest-rate-limited': '领取游客身份的次数太多了，请过一会儿再试，或者登录网站账号。',
     'guest-project-limit': `游客只能建 ${GUEST_LIMITS.projects} 个项目。要建更多，请注册一个账号。`,
     'guest-read-only': '你在这个项目里只能查看，改不了内容。',
+    // 云端 Agent 的告知记在网站账号上（`/api/account/cloud-agent-consent`），游客没地方记、服务端也核不了 —— 待用户定（claude/guest-enter）
+    'guest-agent-unavailable': '游客暂时用不了云端 Agent。要用的话，请登录网站账号。',
     'guest-video-limit': `游客最多上传 ${GUEST_LIMITS.videos} 条视频。要传更多，请注册一个账号。`,
     'guest-file-too-large': `游客上传的每一条源文件不能超过 ${GUEST_LIMITS.assetMB} MB。`,
     'invalid-asset': '这条素材的信息不完整，请重新选择。',
@@ -246,7 +253,14 @@ export function createAccountClient(options: AccountClientOptions) {
     return renewTask;
   }
   return {
+    /** 网站账号（桌面版是编辑器登录的那个账号）；游客时是 null。只有「凭账号做的事」才看它 */
     get account() { return login?.account ?? websiteAccount; },
+    /**
+     * 这台页面在云端项目里以谁的身份行事：游客模式下是游客（编号 `gst_…`、显示名「游客-XXXX」），否则是账号。
+     * 进项目、成员与在场、合并表、云端 Agent 的绑定都按它认（claude/guest-enter：原先都看 `account`，游客那里必是 null，
+     * 游客进自己的项目报「请先登录账号。」）。和 `ensureLogin` 的游客分支同一个判断：游客模式下不去问网站账号
+     */
+    get principal(): Account | null { return guest ? { id: guest.id, name: guest.name } : login?.account ?? websiteAccount; },
     /** 这台页面此刻的游客身份；不是游客就是 null。界面拿它取名字和头像 */
     get guest() { return guest; },
     get authVersion() { return authVersion; },
@@ -347,6 +361,7 @@ export function createAccountClient(options: AccountClientOptions) {
       login = null; websiteAccount = null; authChanged();
     },
     async cloudAgentConsent(): Promise<CloudAgentConsent> {
+      if (guest) throw new AccountFailure(403, 'guest-agent-unavailable');
       const current = await ensureLogin();
       const identity = authIdentity(), revision = authVersion;
       if (options.online && (await website())?.id !== current.account.id) throw new AccountFailure(401, 'credential-revoked');
@@ -355,6 +370,7 @@ export function createAccountClient(options: AccountClientOptions) {
       return validateConsent(result, current.account.id);
     },
     async acceptCloudAgentConsent(requestId: string = crypto.randomUUID()): Promise<CloudAgentConsent> {
+      if (guest) throw new AccountFailure(403, 'guest-agent-unavailable');
       const current = await ensureLogin();
       const identity = authIdentity(), revision = authVersion;
       if (options.online && (await website())?.id !== current.account.id) throw new AccountFailure(401, 'credential-revoked');
@@ -455,7 +471,8 @@ export function createAccountClient(options: AccountClientOptions) {
       const okRevision = (x: unknown) => Number.isSafeInteger(x) && (x as number) >= 0;
       let body: Record<string, unknown>;
       if (operation.op === 'kick' || operation.op === 'unban') {
-        if (!/^acc_[a-f0-9]{24}$/.test(operation.accountId) || !okRevision(operation.expectedAccessRevision) || !okRequest) throw new AccountFailure(400, 'invalid-member');
+        // 踢的、解禁的可以是游客(游客凭链接进了账号的项目,是只读成员)
+        if (!PRINCIPAL_ID_RE.test(operation.accountId) || !okRevision(operation.expectedAccessRevision) || !okRequest) throw new AccountFailure(400, 'invalid-member');
         body = { projectId, op: operation.op, accountId: operation.accountId, expectedAccessRevision: operation.expectedAccessRevision, requestId: operation.requestId };
       } else if (operation.op === 'set-entry') {
         if (typeof operation.allowLinkJoin !== 'boolean' || !okRevision(operation.expectedAccessRevision) || !okRequest) throw new AccountFailure(400, 'invalid-entry');
@@ -519,7 +536,11 @@ function validateJoinRequest(value: Record<string, any>, projectId: string): Joi
 }
 function validateMembers(value: Record<string, any>, projectId: string, accountId: string): AccountMembersSnapshot {
   const bad = () => { throw new AccountFailure(503, 'account-protocol'); };
-  const id = (x: unknown) => typeof x === 'string' && /^acc_[a-f0-9]{24}$/.test(x);
+  // 成员、设备、禁入、创建者都可以是游客;申请只有账号能发(服务端 `project-members.mjs` 的 `pendingRequestsOf`)
+  const id = (x: unknown) => typeof x === 'string' && PRINCIPAL_ID_RE.test(x);
+  const accountOnly = (x: unknown) => typeof x === 'string' && /^acc_[a-f0-9]{24}$/.test(x);
+  /** 游客没有账号名:服务端没给名字时(早先建的项目记录里没存)按编号拼「游客-XXXX」,和他自己页面上显示的一样 */
+  const shown = (accountId: string, accountName: string | null) => accountName ?? (GUEST_ID_RE.test(accountId) ? guestName(accountId) : null);
   const name = (x: unknown) => x === null || (typeof x === 'string' && x.length > 0 && x.length <= 200 && !/[\u0000-\u001f]/.test(x));
   const access = (x: unknown) => x === 'r' || x === 'rw';
   if (value.v !== 2 || value.projectId !== projectId || typeof value.authorityId !== 'string' || !value.authorityId ||
@@ -534,7 +555,7 @@ function validateMembers(value: Record<string, any>, projectId: string, accountI
     if (!id(row?.accountId) || memberIds.has(row.accountId) || !name(row.accountName) || !access(row.access) ||
         !(row.joinedAt === null || (Number.isSafeInteger(row.joinedAt) && row.joinedAt >= 0))) bad();
     memberIds.add(row.accountId);
-    return { accountId: row.accountId, accountName: row.accountName, access: row.access, joinedAt: row.joinedAt };
+    return { accountId: row.accountId, accountName: shown(row.accountId, row.accountName), access: row.access, joinedAt: row.joinedAt };
   });
   if (!memberIds.has(accountId) || !memberIds.has(value.creatorAccountId)) bad();
   const rows = value.devices.map((row: any) => {
@@ -551,16 +572,16 @@ function validateMembers(value: Record<string, any>, projectId: string, accountI
       return { role: conn.role, ...(conn.service !== undefined ? { service: conn.service } : {}),
         ...(conn.conversation !== undefined ? { conversation: conn.conversation } : {}) };
     });
-    return { accountId: row.accountId, accountName: row.accountName, deviceId: row.deviceId, deviceName: row.deviceName, creator: row.creator, conns };
+    return { accountId: row.accountId, accountName: shown(row.accountId, row.accountName), deviceId: row.deviceId, deviceName: row.deviceName, creator: row.creator, conns };
   });
   const banned = value.bans?.map((row: any) => {
     if (!id(row?.accountId) || bans.has(row.accountId) || memberIds.has(row.accountId) || !name(row.accountName) || row.reason !== 'kick') bad();
-    bans.add(row.accountId); return { accountId: row.accountId, accountName: row.accountName, reason: 'kick' as const };
+    bans.add(row.accountId); return { accountId: row.accountId, accountName: shown(row.accountId, row.accountName), reason: 'kick' as const };
   });
   // 申请:只给创建者;一个账号一条;不能同时是成员或已被禁入;字段只收这四样
   const requested = new Set<string>();
   const requests = value.requests?.map((row: any) => {
-    if (!id(row?.accountId) || requested.has(row.accountId) || memberIds.has(row.accountId) || bans.has(row.accountId) ||
+    if (!accountOnly(row?.accountId) || requested.has(row.accountId) || memberIds.has(row.accountId) || bans.has(row.accountId) ||
         typeof row.joinRequestId !== 'string' || !/^jr_[a-f0-9]{24}$/.test(row.joinRequestId) || !name(row.accountName) ||
         !Number.isSafeInteger(row.createdAt) || row.createdAt < 0) bad();
     requested.add(row.accountId);

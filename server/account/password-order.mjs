@@ -1,5 +1,21 @@
-import { createPublicKey, sign, verify } from 'node:crypto';
+import { createPrivateKey, createPublicKey, randomBytes, sign, verify } from 'node:crypto';
 import { canonical, digest, historyError } from '../docservice/modules/operation-history.mjs';
+import { isGuestId } from './guest.mjs';
+
+/**
+ * 游客的写入由文档服务自己定序（claude/guest-enter）。
+ *
+ * 账号的每一步写入都要账号服务（VisuHive）签一份顺序见证：它要把写入和改密码、退出登录这些账号事件排在同一条序列上，
+ * 改密退出时才找得出「旧登录在改密之后还写了哪几步」（`logout-rollback.mjs`）。游客不在账号服务那里
+ * （编号、令牌都由文档服务签发和核对，`guest.mjs`；语义 `product/document-service.md`「游客」），账号服务也不认 `gst_` 编号
+ * （它回 400 `bad-actor`，0.7.21 线上游客建了项目也一步都写不进去）；游客也没有密码可改、没有账号事件要排。
+ * 所以游客的那一步由文档服务用自己的证明钥签一份同形状的见证（域 `promptcut.guest-order`），顺序号是这个项目里游客见证自己的一条序列；
+ * 账号见证与游客见证各自单调（`operation-history.mjs` 按见证的域分开核）。只给写入身份是游客的操作签，账号的操作照旧只认账号服务的见证。
+ */
+export const GUEST_ORDER_DOMAIN = 'promptcut.guest-order';
+const GUEST_ORDER_ISSUER = 'promptcut-doc';
+const actorOfOperation = (operation) => operation?.actorRef ?? operation?.actor;
+export const isGuestOperation = (operation) => isGuestId(actorOfOperation(operation)?.accountId);
 
 const fields = ['requestId', 'docAuthorityId', 'projectId', 'opId', 'payloadDigest', 'preparedDigest'];
 export function operationBinding(operation) {
@@ -98,7 +114,38 @@ export function createPasswordOrder({ history, account, verifyWitness, checkGate
   if (!history || !account || typeof verifyWitness !== 'function' || typeof checkGate !== 'function') throw historyError('order-unavailable', 503);
   const queues = new Map();
   const reconciled = new Set();
-  async function query(witnessId) { try { return await account.get(witnessId); } catch (error) { if (error.code === 'witness-not-found' || error.status === 404) throw historyError('needs-reconciliation'); throw error; } }
+  // 游客见证用文档服务的证明钥签、自己核（见文件头 GUEST_ORDER_DOMAIN）。没配证明钥的部署没有游客写入这条路，照旧回 order-unavailable
+  let guestKey = null;
+  try { guestKey = docAttestationPrivateKey ? (docAttestationPrivateKey.type === 'private' ? docAttestationPrivateKey : createPrivateKey(docAttestationPrivateKey)) : null; } catch { guestKey = null; }
+  const guestPublic = guestKey ? createPublicKey(guestKey) : null;
+  function guestWitness(operation, fields) {
+    if (!guestKey) throw historyError('order-unavailable', 503);
+    return signDocProof({ v: 1, domain: GUEST_ORDER_DOMAIN, issuer: GUEST_ORDER_ISSUER, kind: 'operation', ...operationBinding(operation), ...fields }, guestKey);
+  }
+  /** 和账号服务的定序接口同样的四个动作；顺序号只在封口时取（项目锁里），是这个项目游客见证的下一个号 */
+  const guestOrder = (operation) => ({
+    reserve: () => guestWitness(operation, { witnessId: `gw_${randomBytes(12).toString('hex')}`, state: 'reserved', orderSeq: null }),
+    seal: (witnessId) => guestWitness(operation, { witnessId, state: 'sealed', orderSeq: history.lastOrderSeq(operation.projectId, GUEST_ORDER_DOMAIN) + 1 }),
+    cancel: (witnessId) => guestWitness(operation, { witnessId, state: 'cancelled', orderSeq: null }),
+  });
+  const orderOf = (operation) => isGuestOperation(operation) ? guestOrder(operation) : account;
+  function verifyGuestWitness(witness, operation) {
+    const { signature, ...body } = witness ?? {};
+    let valid = false;
+    try { valid = !!guestPublic && verify(null, Buffer.from(canonical(body)), guestPublic, Buffer.from(signature, 'base64url')); } catch {}
+    if (!valid || body.v !== 1 || body.issuer !== GUEST_ORDER_ISSUER || !['reserved', 'sealed', 'cancelled'].includes(body.state) ||
+        (body.state === 'sealed' ? !Number.isSafeInteger(body.orderSeq) || body.orderSeq < 1 : body.orderSeq !== null)) throw historyError('bad-witness', 403);
+    if (operation && (body.kind !== 'operation' || !isGuestOperation(operation) || canonical(operationBinding(witness)) !== canonical(operationBinding(operation))))
+      throw historyError('witness-binding-mismatch', 403);
+    return witness;
+  }
+  /** 游客域的见证只给游客的操作、自己核；别的一律交账号服务的核对（它只认账号服务签的） */
+  const checkWitness = (witness, operation) => witness?.domain === GUEST_ORDER_DOMAIN ? verifyGuestWitness(witness, operation) : verifyWitness(witness, operation);
+  async function query(operation) {
+    // 游客见证没有别处可问:文档服务自己就是签发方,历史里存的那一份就是它(签名照样核)
+    if (isGuestOperation(operation)) { if (!operation.witness) throw historyError('needs-reconciliation'); return operation.witness; }
+    try { return await account.get(operation.witness.witnessId); } catch (error) { if (error.code === 'witness-not-found' || error.status === 404) throw historyError('needs-reconciliation'); throw error; }
+  }
   function locked(projectId, fn) {
     const work = (queues.get(projectId) ?? Promise.resolve()).then(fn);
     const tail = work.catch(() => {}); queues.set(projectId, tail);
@@ -114,7 +161,7 @@ export function createPasswordOrder({ history, account, verifyWitness, checkGate
     return result;
   }
   async function accept(operation, witness) {
-    verifyWitness(witness, operation);
+    checkWitness(witness, operation);
     if (witness.state !== 'sealed') throw historyError('not-accepted');
     history.verifyPrepared(operation);
     const accepted = history.recordAcceptedOperation(operation, witness); failpoint('accepted-after-commit');
@@ -125,19 +172,20 @@ export function createPasswordOrder({ history, account, verifyWitness, checkGate
   async function resolveWitness(operation, { resume = false } = {}) {
     history.verifyPrepared(operation);
     const binding = operationBinding(operation);
-    let witness = operation.witness ? await query(operation.witness.witnessId) : await account.reserve(binding);
-    verifyWitness(witness, operation);
+    const order = orderOf(operation);
+    let witness = operation.witness ? await query(operation) : await order.reserve(binding);
+    checkWitness(witness, operation);
     if (witness.state === 'sealed') return accept(operation, witness);
     if (witness.state === 'cancelled') return history.cancelOperation(operation, witness);
     history.recordWitness(operation, witness); failpoint('reserved-after-commit');
     if (!resume) {
-      witness = await account.cancel(witness.witnessId, binding); verifyWitness(witness, operation);
+      witness = await order.cancel(witness.witnessId, binding); checkWitness(witness, operation);
       return witness.state === 'sealed' ? accept(operation, witness) : history.cancelOperation(operation, witness);
     }
     let authorization;
     try { authorization = await gate(operation, 'before-seal', witness); }
     catch (error) {
-      const cancelled = await account.cancel(witness.witnessId, binding); verifyWitness(cancelled, operation);
+      const cancelled = await order.cancel(witness.witnessId, binding); checkWitness(cancelled, operation);
       if (cancelled.state === 'sealed') return accept(operation, cancelled);
       history.cancelOperation(operation, cancelled); throw error;
     }
@@ -150,7 +198,7 @@ export function createPasswordOrder({ history, account, verifyWitness, checkGate
       body.rollbackProof = rollbackOperationProof(operation, witness, authorization.rollbackGrant, docAttestationPrivateKey);
     }
     let sealed;
-    try { sealed = await account.seal(witness.witnessId, body); }
+    try { sealed = await order.seal(witness.witnessId, body); }
     catch (error) {
       if (!body.activeRunProof || error.status !== 401) throw error;
       // Account may see exit before doc receives its event. Recheck under THIS lock;
@@ -158,7 +206,7 @@ export function createPasswordOrder({ history, account, verifyWitness, checkGate
       const renewed = await gate(operation, 'active-seal-rejected', witness);
       if (!renewed.retainedGrant) throw error;
       const retainedProof = retainedOperationProof(operation, witness, renewed.retainedGrant, docAttestationPrivateKey);
-      sealed = await account.seal(witness.witnessId, { ...binding, retainedProof });
+      sealed = await order.seal(witness.witnessId, { ...binding, retainedProof });
     }
     failpoint('seal-ack');
     return accept(operation, sealed);
@@ -169,7 +217,7 @@ export function createPasswordOrder({ history, account, verifyWitness, checkGate
     history.validate(projectId);
     if (!reconciled.has(projectId)) {
       for (const op of history.accepted(projectId)) {
-        const witness = await query(op.witness.witnessId); verifyWitness(witness, op);
+        const witness = await query(op); checkWitness(witness, op);
         if (canonical(witness) !== canonical(op.witness)) throw historyError('needs-reconciliation');
       }
       reconciled.add(projectId);
@@ -184,7 +232,7 @@ export function createPasswordOrder({ history, account, verifyWitness, checkGate
       if (prior) {
         history.validate(spec.projectId);
         history.prepareOperation(spec); // Checks the complete immutable request, including actor and result.
-        if (prior.state === 'materialized') { const witness = await query(prior.witness.witnessId); verifyWitness(witness, prior); if (canonical(witness) !== canonical(prior.witness)) throw historyError('needs-reconciliation'); return prior; }
+        if (prior.state === 'materialized') { const witness = await query(prior); checkWitness(witness, prior); if (canonical(witness) !== canonical(prior.witness)) throw historyError('needs-reconciliation'); return prior; }
         if (prior.state === 'cancelled') throw historyError('operation-cancelled');
         return resolveWitness(prior, { resume: true });
       }
