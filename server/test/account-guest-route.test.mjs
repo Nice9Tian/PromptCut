@@ -171,3 +171,31 @@ test('GR-6 领令牌按 IP 限流：到数回 429 并带 Retry-After，换个 IP
   at += 60_001;
   assert.equal((await claim('198.51.100.5')).status, 200);
 });
+
+test('GR-7 续期不算进限流：同一个 IP 到数之后，带着旧令牌来照样续上（审查 E）', async t => {
+  let at = Date.now();
+  const f = await fixture(t, { guestRateLimit: createGuestRateLimit({ max: 2, windowMs: 60_000, now: () => at }) });
+  const claim = (body) => f.post(null, '/hosted/shared/account/guest', body, { peer: '198.51.100.9' });
+  const first = (await claim({})).value;
+  assert.equal((await claim({})).status, 200);
+  assert.equal((await claim({})).status, 429, '发新身份到数');
+  for (let i = 0; i < 30; i++) {
+    const r = await claim({ token: first.token });
+    assert.equal(r.status, 200, `第 ${i + 1} 次续期`);
+    assert.equal(r.value.guestId, first.guestId);
+  }
+  // 拿不出有效旧令牌的（乱写的）算发新身份，照样数
+  assert.equal((await claim({ token: 'gst1garbage' })).status, 429);
+});
+
+test('GR-8 带 revoke 作废手里那一张：之后拿它进不了、续不了（审查 S9）', async t => {
+  const f = await fixture(t);
+  const g = await f.guest();
+  const made = await f.create(g.token);
+  assert.equal(made.status, 201);
+  const out = await f.post(null, '/hosted/shared/account/guest', { token: g.token, revoke: true });
+  assert.deepEqual([out.status, out.value.revoked], [200, true]);
+  assert.equal((await f.create(g.token)).status, 401, '作废的令牌核不过');
+  const again = await f.guest(g.token);
+  assert.notEqual(again.guestId, g.guestId, '作废的续不了期');
+});

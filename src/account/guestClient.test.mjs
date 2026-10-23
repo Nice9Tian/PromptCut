@@ -114,14 +114,19 @@ test('令牌快过期了：打之前先续一张，再用新的那张去打', as
   assert.deepEqual(guestCalls[1].body, { token: first.token });
   assert.equal(calls.find(x => x.path.endsWith('/session')).auth, `Bearer ${c.guest.token}`);
   assert.notEqual(c.guest.token, first.token);
+  // 续来的那张写回本机(claude/guest-fix,审查 B):不然第二天回来交的还是第一次领的那张
+  assert.equal(loadGuest()?.token, c.guest.token);
+  assert.equal(loadGuest()?.expiresAt, c.guest.expiresAt);
 });
 
-test('不当游客了：本机存档清掉，之后再进来是新身份', async t => {
+test('不当游客了：本机存档清掉、服务端那张也作废，之后再进来是新身份', async t => {
   const store = withStorage(t);
-  const { fetcher } = server();
+  const { calls, fetcher } = server();
   const c = client(fetcher);
   const first = await c.enterAsGuest();
   c.leaveGuest();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(calls.filter(x => x.body?.revoke).map(x => x.body), [{ token: first.token, revoke: true }], '作废请求带着那张令牌(审查 S9)');
   assert.equal(c.guest, null);
   assert.equal(store.has(GUEST_STORAGE_KEY), false, '留着会被下次进入捡回来');
   assert.notEqual((await c.enterAsGuest()).id, first.id);
@@ -146,7 +151,7 @@ test('登录账号那一刻游客身份作废，之后拿的是账号的令牌',
   const account = { id: 'acc_' + 'a'.repeat(24), name: 'Alice' };
   const fetcher = async (url, init) => {
     const body = init?.body ? JSON.parse(init.body) : undefined;
-    calls.push({ path: url.pathname, auth: init?.headers?.Authorization ?? null });
+    calls.push({ path: url.pathname, auth: init?.headers?.Authorization ?? null, body });
     if (url.pathname === '/hosted/shared/account/guest') return reply({ ok: true, guestId: guestId(1), token: 'guest-tok', expiresAt: 100_000 });
     if (url.pathname.endsWith('/me')) return reply({ ok: true, account: body === undefined ? null : account, csrfToken: 'csrf' });
     if (url.pathname.endsWith('/login')) return reply({ ok: true, account, csrfToken: 'csrf' });
@@ -169,6 +174,7 @@ test('登录账号那一刻游客身份作废，之后拿的是账号的令牌',
   await c.login('alice', 'pw', false);
   assert.equal(c.guest, null, '登录之后不该还是游客');
   assert.equal(store.has(GUEST_STORAGE_KEY), false, '本机那一份也该清掉');
+  assert.ok(calls.some(x => x.path === '/hosted/shared/account/guest' && x.body?.revoke === true && x.body?.token === 'guest-tok'), '服务端那张也作废(审查 S9)');
   await c.session(projectId);
   assert.equal(calls.filter(x => x.path.endsWith('/session')).at(-1).auth, 'Bearer account-tok', '该用账号的令牌，不是游客的');
 });

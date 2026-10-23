@@ -179,15 +179,63 @@ test('领令牌：不带旧的就给新身份，带着没过期的旧令牌就�
   const renewed = authority.issueGuest(first.token);
   assert.equal(renewed.guestId, first.guestId, '带着旧令牌回来还是同一个人');
   assert.equal(renewed.renewed, true);
-  // 过期的、改过的、别人密钥签的,都只当没带:给新身份,不报错
+  // 过期了不太久(GUEST_LIMITS.renewGraceMs 之内)的照样续成同一个人(claude/guest-fix,审查 B)
   const expired = signGuestToken({ key: guestKey, at: Date.now() - GUEST_LIMITS.tokenTtlMs - 60_000 });
-  assert.notEqual(authority.issueGuest(expired.token).guestId, expired.guestId);
+  assert.equal(authority.issueGuest(expired.token).guestId, expired.guestId, '过期一分钟:还是同一个人');
+  // 过期超过宽限的、改过的、别人密钥签的,都只当没带:给新身份,不报错
+  const stale = signGuestToken({ key: guestKey, at: Date.now() - GUEST_LIMITS.tokenTtlMs - GUEST_LIMITS.renewGraceMs - 60_000 });
+  assert.notEqual(authority.issueGuest(stale.token).guestId, stale.guestId, '过期超过 3 天:换新身份');
   assert.notEqual(authority.issueGuest(signGuestToken({ key: randomBytes(32), at: Date.now() }).token).guestId, first.guestId);
   // 请求体里写什么编号都不收:只有令牌说了算
   assert.notEqual(authority.issueGuest('gst_' + 'f'.repeat(24)).guestId, 'gst_' + 'f'.repeat(24));
 
   const noKey = await open(t, { key: null });
   assert.throws(() => noKey.authority.issueGuest(null), e => e.code === 'guest-unavailable' && e.status === 503);
+});
+
+test('游客隔天回来（令牌过了 24 小时）还是同一个人、进得了自己的项目（审查 B，改前回 403 not-listed）', async t => {
+  const clock = { at: Date.now() };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-guest-nextday-'));
+  const ledger = openAccountLedger({ file: path.join(dir, 'doc.sqlite'), authorityId: 'nextday-doc' });
+  const authority = createAccountAuthority({ ledger, pollMs: 0, guestKey, now: () => clock.at,
+    accountClient: { async verify() { throw Object.assign(new Error('no'), { status: 401, code: 'unauthorized' }); }, async events() { return { events: [], headSeq: 0 }; } },
+    initializeProject: async () => ({ contentId: 'c' }) });
+  await authority.start();
+  t.after(() => { authority.close(); ledger.close(); fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); });
+  const first = authority.issueGuest(null);
+  const made = await authority.createProject({ accessToken: first.token }, { name: '我的游客项目', requestId: 'r1' });
+  clock.at += 25 * 60 * 60 * 1000;
+  // 过期的令牌本身核不过(要先续)
+  assert.equal((await code(authority.authorizePrincipal({ accessToken: first.token }, { projectId: made.projectId }))).status, 401);
+  const back = authority.issueGuest(first.token);
+  assert.deepEqual([back.guestId, back.renewed], [first.guestId, true]);
+  const own = await authority.authorizePrincipal({ accessToken: back.token }, { projectId: made.projectId, action: 'write' });
+  assert.deepEqual([own.access, own.creator], ['rw', true]);
+  // 一直隔天来、每次续:一直是同一个人
+  let token = back.token;
+  for (let day = 0; day < 5; day++) { clock.at += 25 * 60 * 60 * 1000; const r = authority.issueGuest(token); assert.equal(r.guestId, first.guestId); token = r.token; }
+  // 过期超过 3 天才来:换新身份
+  clock.at += GUEST_LIMITS.tokenTtlMs + GUEST_LIMITS.renewGraceMs + 1000;
+  assert.notEqual(authority.issueGuest(token).guestId, first.guestId);
+});
+
+test('作废游客身份（登录账号之后）：那张令牌核不过、续不了期，过期的也能作废（审查 S9）', async t => {
+  const { authority, create } = await open(t);
+  const g = authority.issueGuest(null);
+  const made = await create(g.token);
+  assert.deepEqual(authority.revokeGuest(g.token), { revoked: true });
+  assert.deepEqual(authority.revokeGuest(g.token), { revoked: true }, '幂等');
+  assert.deepEqual(await code(authority.authorizePrincipal({ accessToken: g.token }, { projectId: made.projectId })), { status: 401, code: 'credential-revoked' });
+  const after = authority.issueGuest(g.token);
+  assert.equal(after.renewed, false);
+  assert.notEqual(after.guestId, g.guestId, '作废的续不了期，给新身份');
+  // 过期的令牌也能作废
+  const old = signGuestToken({ key: guestKey, at: Date.now() - GUEST_LIMITS.tokenTtlMs - 60_000 });
+  assert.deepEqual(authority.revokeGuest(old.token), { revoked: true });
+  assert.notEqual(authority.issueGuest(old.token).guestId, old.guestId);
+  // 认不出的令牌：不作废任何东西
+  assert.deepEqual(authority.revokeGuest(signGuestToken({ key: randomBytes(32), at: Date.now() }).token), { revoked: false });
+  assert.deepEqual(authority.revokeGuest(null), { revoked: false });
 });
 
 test('名单上显示的和实际能做的一致：通过申请、创建者改名单，游客都落账成 r', async t => {

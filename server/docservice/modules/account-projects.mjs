@@ -107,15 +107,25 @@ export function mountAccountProjects({ authority, services = [], issueSession, r
         result = authority.legacyGoneStatus({ authorityId: url.searchParams.get('authorityId'), projectId: url.searchParams.get('projectId') });
       } else if (req.method === 'POST' && url.pathname === `${PUBLIC}/guest`) {
         // 领一张游客令牌（`docs/semantics/product/document-service.md`「游客」）。这一条**不要** Bearer：
-        // 他还没有身份，要的就是这一张。带着旧令牌来就续期、编号不变；不带或者过期就随机一个新身份。
-        // 编号只由服务端生成，请求体里写什么都不收（`authority.issueGuest`）。
+        // 他还没有身份，要的就是这一张。带着旧令牌来就续期、编号不变（过期不太久的也续，`authority.issueGuest`）；
+        // 不带或者续不了就随机一个新身份。编号只由服务端生成，请求体里写什么都不收。
+        // 带 `revoke: true` 是作废手里那一张（登录账号之后游客身份作废，`authority.revokeGuest`）。
         if (typeof authority.issueGuest !== 'function') bad(503, 'guest-unavailable');
-        // 按来访 IP 限流（2026-10-23 用户定「先用 IP 拦」）：不要登录的路由，不拦的话谁都能反复领新身份。
-        // 只挡得住随手刷的，换 IP 就绕过去了；真正挡得住的是验证码或账号，这一版不做（`guest-rate.mjs`）
-        const verdict = guestRateLimit.take(clientKeyOf(req));
-        if (!verdict.ok) throw Object.assign(accountError(429, 'guest-rate-limited'), { retryAfterSec: verdict.retryAfterSec });
         const body = await readBody(req);
-        result = authority.issueGuest(typeof body.token === 'string' ? body.token : null);
+        const token = typeof body.token === 'string' ? body.token : null;
+        if (body.revoke === true) {
+          if (typeof authority.revokeGuest !== 'function') bad(503, 'guest-unavailable');
+          result = authority.revokeGuest(token);
+        } else {
+          // 按来访 IP 限流（2026-10-23 用户定「先用 IP 拦」）：不要登录的路由，不拦的话谁都能反复领新身份。
+          // 只数发**新**身份的那几次，续期不数（claude/guest-fix〔裁〕，审查 E：原先续期也数，同一个网络里的几个人、
+          // 或者一个人刷新 20 次就被挡在外面）。只挡得住随手刷的，换 IP 就绕过去了；真正挡得住的是验证码或账号，
+          // 这一版不做（`guest-rate.mjs`）
+          result = authority.issueGuest(token, { admitNew: () => {
+            const verdict = guestRateLimit.take(clientKeyOf(req));
+            if (!verdict.ok) throw Object.assign(accountError(429, 'guest-rate-limited'), { retryAfterSec: verdict.retryAfterSec });
+          } });
+        }
       } else {
         const actor = bearer(req);
         if (req.method === 'POST') {
