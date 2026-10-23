@@ -51,7 +51,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   const canBecomeAudio = !!clip.mediaId && getState().project.media.find((m) => m.id === clip.mediaId)?.kind === "video";
   const embeddedAudio = clipHasEmbeddedAudio(getState().project, clip, getCard);
   const hasAudio = clipHasAudio(getState().project, clip, getCard);
-  const muteReason = clipMuteReason(clip, track);
+  const muteReason = clipMuteReason(clip, track, getState().project);
   const selectedAudioIds = selection.includes(clip.id) ? selection : [clip.id];
   const reportAudio = (result: { ok: boolean; error?: string }) => reportClipAudioResult(result, message => window.alert(message));
 

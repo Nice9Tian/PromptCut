@@ -56,7 +56,7 @@ export function Inspector({ tab }: { tab: "form" | "code" }) {
           <span className="pc-left-faint">{(clip.end - clip.start).toFixed(2)}s</span>
         </div>
         {clip.soundEffect && <SoundEffectForm key={clip.id} clip={clip} />}
-        {media?.kind === "video" && <ClipSpeedForm key={clip.id} clip={clip} />}
+        {(media?.kind === "video" || media?.kind === "audio") && <ClipSpeedForm key={clip.id} clip={clip} />}
         {media && (media.kind === "video" || media.kind === "image") && <ClipFilterForm clip={clip} />}
         {media && (media.kind === "video" || media.kind === "audio") && <ClipAudioFxForm clip={clip} />}
       </div>

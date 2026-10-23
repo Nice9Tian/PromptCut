@@ -72,8 +72,6 @@ export const audio = {
       const src = p.media.find(m => m.id === hit.clip.mediaId);
       if (!src || src.kind !== "video") return { ok: false, code: "NOT_VIDEO_MEDIA", clipId, error: "只能分离普通视频素材的音频。未修改任何片段。" };
       if (hit.clip.audioMuted) return { ok: false, code: "ALREADY_MUTED", clipId, error: "此视频已静音或已分离音频。未修改任何片段。" };
-      // 〔裁〕变速段第一版不出原声(kernel/clipTime.mjs):分出来的声音没法跟着变速,先改回 1×
-      if (isSpeedChanged(hit.clip)) return { ok: false, code: "SPEED_CHANGED", clipId, error: "变速的视频段不出原声，不能分离音轨；先把速度改回 1×。未修改任何片段。" };
       hits.push({ ...hit, src });
     }
     const media = [...p.media], generated = new Map<string, Track[]>();
@@ -85,6 +83,8 @@ export const audio = {
         id: newId("c"), cardId: "", mediaId: asset.id, params: {}, label: asset.name,
         start: hit.clip.start, end: hit.clip.end, mediaOffset: hit.clip.mediaOffset,
         opacity: hit.clip.opacity, fadeIn: hit.clip.fadeIn, fadeOut: hit.clip.fadeOut, audioVolume: hit.clip.audioVolume,
+        // 变速段也能分离(用户 2026-10-23 定「可以分离,失真问题记待办」):分出来的声音段带着同样的速度,随倍率变速变调
+        ...(isSpeedChanged(hit.clip) ? { speed: hit.clip.speed } : null),
         ...(hit.clip.audioFx ? { audioFx: hit.clip.audioFx } : null),
       };
       const track: Track = { id: newId("t"), name: asset.name, muted: hit.track.muted, hidden: hit.track.hidden, clips: [sound] };
@@ -122,7 +122,7 @@ export const audio = {
     if (!hit) return { ok: false, error: `找不到片段 ${clipId}` };
     if (clipHasEmbeddedAudio(state.project, hit.clip, getCard)) return { ok: false, error: "动效卡片的内嵌声音不能分离或转换为声音；可以单独静音该卡片" };
     if (!hit.clip.mediaId) return { ok: false, error: "这段是卡片,不是素材,没有声音可转" };
-    if (isSpeedChanged(hit.clip)) return { ok: false, error: "变速的视频段不出原声，不能转换为声音；先把速度改回 1×" };
+    // 变速段转换为声音:片段带着速度变成声音段,随倍率变速变调(同音画分离,用户 2026-10-23 定)
     const r = audio.audioFromVideo(hit.clip.mediaId);
     if (!r.ok) return r;
     if (r.media.id === hit.clip.mediaId) return { ok: true, mediaId: r.media.id, created: false, already: true };

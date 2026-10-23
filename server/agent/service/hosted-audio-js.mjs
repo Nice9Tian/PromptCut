@@ -374,14 +374,14 @@ export function createAudioJsTools({
         if (track?.hidden || track?.muted || track?.sourceOnly) continue;
         for (const clip of track?.clips ?? []) {
           if (!clip || !clip.mediaId || clip.cardId || clip.muted) continue;
-          // 〔裁〕变速的素材段第一版不出原声(src/kernel/clipTime.mjs 的 speedMutesSource),时间轴混音里没有它
-          if (speedOf(clip) !== 1) continue;
           const vol = clip.volume === undefined ? 1 : Number(clip.volume);
           if (!(vol > 0)) continue;
           const dur = (Number(clip.end) || 0) - (Number(clip.start) || 0);
           if (!(dur > 0)) continue;
           const media = await project.getMedia(context, clip.mediaId);
           if (!media || media.kind === 'image' || media.pending) continue;
+          // 〔裁〕变速的视频段第一版不出原声(src/kernel/clipTime.mjs 的 speedMutesSource);变速的声音段照常出声、随倍率变调
+          if (speedOf(clip) !== 1 && media.kind !== 'audio') continue;
           if (clip.audioFx || clip.fx) withFx.push(clip.id);
           entries.push({
             clipId: clip.id,
@@ -389,6 +389,7 @@ export function createAudioJsTools({
             start: Number(clip.start) || 0,
             dur,
             offset: Number(clip.mediaOffset) || 0,
+            ...(speedOf(clip) !== 1 ? { speed: speedOf(clip) } : null),
             volume: vol,
             fadeIn: Number(clip.fadeIn) || 0,
             fadeOut: Number(clip.fadeOut) || 0,

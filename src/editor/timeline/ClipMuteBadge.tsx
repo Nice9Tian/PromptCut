@@ -3,10 +3,10 @@ import type { Track, TrackClip } from "../../kernel/project";
 import { IconVolumeMute } from "../../ui/icons";
 import { clipSpeed, speedLabel, speedMutesSource } from "../../kernel/clipTime.mjs";
 
-export function clipMuteReason(clip: Pick<TrackClip, "audioMuted" | "audioVolume"> & Partial<Pick<TrackClip, "speed" | "mediaId">>, track: Pick<Track, "muted">): string | null {
+export function clipMuteReason(clip: Pick<TrackClip, "audioMuted" | "audioVolume"> & Partial<Pick<TrackClip, "speed" | "mediaId">>, track: Pick<Track, "muted">, project?: { media?: { id: string; kind?: string }[] }): string | null {
   if (clip.audioMuted) return "片段已静音";
   // 〔裁〕第一版变速段的原声不出(kernel/clipTime.mjs),时间轴上和静音一样醒目标出,并写明原因
-  if (speedMutesSource(clip)) return `已变速 ${speedLabel(clipSpeed(clip))}，变速段不出原声`;
+  if (speedMutesSource(clip, project)) return `已变速 ${speedLabel(clipSpeed(clip))}，变速段不出原声`;
   if (track.muted) return "序列已静音";
   if (clip.audioVolume === 0) return "片段音量为 0，已静音";
   return null;

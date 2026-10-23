@@ -145,7 +145,7 @@ export function ThumbStrip(props: {
           {clips.map((c, i) => {
             const tr = i < clips.length - 1 ? boundaryTransition(project, c, clips[i + 1]) : null;
             // 变速段原声不出(〔裁〕,kernel/clipTime.mjs):和静音一样挂静音图标,时长后面带倍数
-            const muted = !!c.audioMuted || speedMutesSource(c);
+            const muted = !!c.audioMuted || speedMutesSource(c, project);
             return [
               <div
                 key={c.id}

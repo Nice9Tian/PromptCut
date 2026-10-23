@@ -214,7 +214,7 @@ function audioTargetOf(args: { clipId?: string; mediaId?: string; scope?: string
     body: {
       scope: "timeline",
       duration: p.duration,
-      entries: plan.map((e) => ({ clipId: e.clipId, media: mediaOf(e.mediaId), start: e.start, dur: e.dur, offset: e.offset, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut })),
+      entries: plan.map((e) => ({ clipId: e.clipId, media: mediaOf(e.mediaId), start: e.start, dur: e.dur, offset: e.offset, ...(e.speed ? { speed: e.speed } : null), volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut })),
     } as Record<string, unknown>,
   };
 }

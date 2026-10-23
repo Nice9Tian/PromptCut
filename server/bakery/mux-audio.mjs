@@ -12,7 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { audioPlanOf } from "../../src/kernel/audioPlan.mjs";
-import { speedMutesSource } from "../../src/kernel/clipTime.mjs";
+import { ffmpegVarispeed, speedMutesSource } from "../../src/kernel/clipTime.mjs";
 import { audioProjectOf } from "../../src/kernel/cutAudio.mjs";
 import { audioFxOfClip } from "../../src/kernel/audioFx.mjs";
 
@@ -67,6 +67,8 @@ export function buildAudioPlan(source, outDir, exists = fs.existsSync, sourceOf 
       continue;
     }
     out.push({ file, clipId: e.clipId, start: e.start, dur: e.dur, offset: missingMaterial ? 0 : e.offset, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut, fx: e.fx,
+      // 变速的声音段(kernel/clipTime.mjs):读 dur × speed 秒素材、ffmpegVarispeed 变速变调成 dur 秒
+      ...(e.speed && !missingMaterial ? { speed: e.speed } : null),
       ...(e.env ? { env: e.env } : null),
       ...(missingMaterial ? { missingMaterial: true } : null), ...(soundEffect ? { soundEffect: true } : {}) });
   }
@@ -77,7 +79,7 @@ export function buildAudioPlan(source, outDir, exists = fs.existsSync, sourceOf 
     if (track.hidden || track.muted) continue;
     for (const clip of track.clips ?? []) {
       // 变速的素材段不出原声(〔裁〕,和 audioPlanOf 同一条):接在它上面的音频素材效果卡也不出
-      if (clip.audioMuted || clip.cardAudio || speedMutesSource(clip) || !isCardAudioNode(project, clip.nodeId)) continue;
+      if (clip.audioMuted || clip.cardAudio || speedMutesSource(clip, project) || !isCardAudioNode(project, clip.nodeId)) continue;
       // Generated blocks are sample-addressed; do not quantize their timeline placement to
       // the legacy 3 ms audio-plan precision before converting duration to frames.
       const dur = clip.end - clip.start;
@@ -129,11 +131,12 @@ export function buildFfmpegArgs(videoIn, plan, videoOut, durationSec) {
   const args = ["-y", "-i", videoIn];
   const filters = [];
   plan.forEach((p, i) => {
-    args.push("-ss", String(p.offset), "-t", String(p.dur), "-i", p.file);
+    // 变速的声音段:读 dur × speed 秒素材,先变速变调成 dur 秒再摆位(和 Chrome 那条路的裁段同一份 ffmpegVarispeed)
+    args.push("-ss", String(p.offset), "-t", String(p.speed ? p.dur * p.speed : p.dur), "-i", p.file);
     const k = i + 1; // 0 是视频
     const chain = p.soundEffect
       ? ['aresample=48000', `adelay=${Math.round(p.start * 48000)}S:all=1`]
-      : [`adelay=${Math.round(p.start * 1000)}:all=1`];
+      : [...ffmpegVarispeed(p.speed ?? 1), `adelay=${Math.round(p.start * 1000)}:all=1`];
     if (p.fadeIn > 0) chain.push(`afade=t=in:st=${p.soundEffect ? p.start : p.start.toFixed(3)}:d=${p.fadeIn}`);
     if (p.fadeOut > 0) {
       const fadeStart = p.start + p.dur - p.fadeOut;

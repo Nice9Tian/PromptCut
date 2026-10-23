@@ -16,7 +16,9 @@ import { projectHash } from '../../src/render/changedClips.mjs';
 import { projectCardGraph } from '../../src/kernel/cardGraph.mjs';
 import { audioPlanOf } from '../../src/kernel/audioPlan.mjs';
 import { flatPlanProject } from '../../src/kernel/cutFlatten.mjs';
-import { withMediaRates } from '../../src/kernel/clipTime.mjs';
+import { withMediaRates, ffmpegVarispeed } from '../../src/kernel/clipTime.mjs';
+import { buildFfmpegArgs } from '../bakery/mux-audio.mjs';
+import { timelineMixParts } from '../audio-measure.mjs';
 import { buildAudioPlan } from '../bakery/mux-audio.mjs';
 import { mediaLayersAt } from '../vision-compose.mjs';
 import { buildComposeArgs } from '../export-compose.mjs';
@@ -215,12 +217,15 @@ test('store.setClipSpeed:保住入点、按新速度重算终点,改回 1 删字
   const right = actions.splitClip('v', 5);
   assert.equal(right.speed, 0.25);
   assert.equal(right.mediaOffset, 2 + 4 * 0.25);
-  // 变速段不能音画分离(原声已经不出)
+  // 变速段可以音画分离(用户 2026-10-23 定):分出来的声音段带着同样的速度;视频段自己的原声照旧不出(片段静音)
   const sep = actions.separateAudio('v');
-  assert.equal(sep.ok, false);
-  assert.match(sep.error, /变速/);
+  assert.equal(sep.ok, true);
+  const sound = clip(sep.audioClipId);
+  assert.equal(sound.speed, 0.25, '分出来的声音段带着速度');
+  assert.equal(getState().project.media.find((m) => m.id === sound.mediaId).kind, 'audio');
+  assert.equal(clip('v').audioMuted, true, '视频段静音(和分离前一样)');
   // 一次改速度(连带推开的段)= 一步撤销
-  actions.undo(); actions.undo();
+  actions.undo(); actions.undo(); actions.undo();
   assert.equal(clip('v').speed, undefined);
   assert.deepEqual([clip('v').end, clip('img').start, clip('img').end], [5, 10, 12], '推开的段一起退回去');
 });
@@ -269,4 +274,85 @@ test('store.setClipSpeed 推开:变短尾部留空;后面整体顺移(相对关�
   assert.match(r.error, /锁着的序列/);
   assert.equal(getState().project, before, '拒绝时项目原样');
   assert.equal(clip('v').speed, undefined);
+});
+
+test('store.setClipSpeed 手动输入:0.25～4 之外拒绝并提示(不夹),小数取到百分之一', async () => {
+  const { actions, getState } = await import(srcUrl('store/project.ts'));
+  actions.loadProject({ version: 1, id: 'p-range', name: 't', width: 1280, height: 720, fps: 30, duration: 20, themeId: 'midnight',
+    media: [{ id: 'v1', kind: 'video', name: 'v.mp4', url: '/@media/v1.mp4', duration: 60 }],
+    tracks: [{ id: 'ta', name: '序列 1', clips: [{ id: 'v', cardId: '', mediaId: 'v1', start: 0, end: 4, params: {} }] }] });
+  const clip = () => getState().project.tracks[0].clips[0];
+  for (const bad of [0.2, 4.5, -1, 0]) {
+    const r = actions.setClipSpeed('v', bad);
+    assert.equal(r.ok, false, String(bad));
+    assert.match(r.error, /0\.25～4/);
+  }
+  assert.equal(clip().speed, undefined, '拒绝时什么都不改');
+  assert.equal(actions.setClipSpeed('v', 1.333).ok, true);
+  assert.equal(clip().speed, 1.33);
+  assert.equal(actions.setClipSpeed('v', 4).ok, true, '边界值可以');
+});
+
+test('store.setClipSpeed 挂着转场:淡化跟着两端走;交叉溶解前一段变速时后一段跟着挪、重叠不变;装不下转场拒绝', async () => {
+  const { actions, getState } = await import(srcUrl('store/project.ts'));
+  const load = () => actions.loadProject({ version: 1, id: 'p-tr', name: 't', width: 1280, height: 720, fps: 30, duration: 30, themeId: 'midnight',
+    media: [{ id: 'v1', kind: 'video', name: 'v.mp4', url: '/@media/v1.mp4', duration: 60 }],
+    tracks: [
+      { id: 'ta', name: '序列 1', clips: [{ id: 'a', cardId: '', mediaId: 'v1', start: 0, end: 4, fadeIn: 0.5, fadeOut: 1, params: {} }, { id: 'c', cardId: '', mediaId: 'v1', start: 9, end: 12, params: {} }] },
+      { id: 'tb', name: '序列 2', clips: [{ id: 'b', cardId: '', mediaId: 'v1', start: 3, end: 7, fadeIn: 1, params: {} }, { id: 'd', cardId: '', mediaId: 'v1', start: 8, end: 10, params: {} }] },
+    ],
+    transitions: [{ id: 'x', kind: 'crossfade', aId: 'a', bId: 'b', dur: 1 }, { id: 'f', kind: 'fadeIn', aId: 'a', dur: 0.5 }] });
+  const clip = (id) => getState().project.tracks.flatMap((t) => t.clips).find((x) => x.id === id);
+  const span = (id) => [clip(id).start, clip(id).end];
+
+  // 前一段 a 变短(4 → 2 秒):b 跟着前移 2 秒,重叠还是 1 秒;别的不动(尾部留空)
+  load();
+  let r = actions.setClipSpeed('a', 2);
+  assert.deepEqual(r, { ok: true, moved: ['b'] });
+  assert.deepEqual([span('a'), span('b'), span('c'), span('d')], [[0, 2], [1, 5], [9, 12], [8, 10]]);
+  assert.deepEqual([clip('a').fadeIn, clip('a').fadeOut, clip('b').fadeIn], [0.5, 1, 1], '转场时长不变');
+  actions.undo();
+  assert.deepEqual([span('a'), span('b')], [[0, 4], [3, 7]], '一步撤销');
+
+  // 前一段 a 变长(4 → 8 秒):b 后移 4 秒到 7～11,撞上同序列的 d(8 起)→ d 推开;a 自己的序列上 c(9 起)和 a 新终点 8 不重合,不动
+  load();
+  r = actions.setClipSpeed('a', 0.5);
+  assert.equal(r.ok, true);
+  assert.deepEqual([span('a'), span('b'), span('d'), span('c')], [[0, 8], [7, 11], [11, 13], [9, 12]]);
+  actions.undo();
+  assert.deepEqual([span('a'), span('b'), span('d')], [[0, 4], [3, 7], [8, 10]], '一步撤销全退回');
+
+  // 后一段 b 变速:起点不动,a 不动
+  load();
+  r = actions.setClipSpeed('b', 2);
+  assert.deepEqual(r, { ok: true });
+  assert.deepEqual([span('a'), span('b')], [[0, 4], [3, 5]]);
+
+  // 装不下转场:a 改 4 倍只剩 1 秒,不比 1 秒的交叉溶解长 → 拒绝,不缩短转场
+  load();
+  r = actions.setClipSpeed('a', 4);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /装不下/);
+  assert.deepEqual(span('a'), [0, 4]);
+});
+
+test('声音段变速(音画分离出来的):照常出声,两条混音路和测响度都用同一份 ffmpegVarispeed', () => {
+  const p = withClip({ ...fixture(), media: [...fixture().media, { id: 's1', kind: 'audio', url: '/@media/v1.mp4', soundOf: 'v1', duration: 20 }],
+    tracks: [...fixture().tracks, { id: 't5', name: '声音', clips: [{ id: 's', cardId: '', mediaId: 's1', mediaOffset: 1, start: 0, end: 2, speed: 2, params: {} }] }] }, 'v-plain', { speed: 2 });
+  const plan = audioPlanOf(p);
+  const e = plan.find((x) => x.clipId === 's');
+  assert.deepEqual([e.start, e.dur, e.offset, e.speed], [0, 2, 1, 2], '声音段在清单里,带速度');
+  assert.equal(plan.some((x) => x.clipId === 'v-plain'), false, '视频段自己不出原声');
+  assert.equal(plan.filter((x) => x.clipId !== 's').every((x) => !('speed' in x)), true, '别的条目不带 speed');
+  assert.deepEqual(ffmpegVarispeed(2), ['aresample=48000', 'asetrate=96000', 'aresample=48000']);
+  assert.deepEqual(ffmpegVarispeed(1), []);
+  const files = buildAudioPlan(p, 'out', () => true, (m) => `/x/${m.id}`);
+  const f = files.find((x) => x.clipId === 's');
+  const args = buildFfmpegArgs('v.mp4', [f], 'o.mp4', 4);
+  const i = args.indexOf('/x/s1');
+  assert.deepEqual(args.slice(i - 5, i + 1), ['-ss', '1', '-t', '4', '-i', '/x/s1'], 'ffmpeg 那条路读 2 秒 × 2 倍素材');
+  assert.match(args[args.indexOf('-filter_complex') + 1], /\[1:a\]aresample=48000,asetrate=96000,aresample=48000,adelay=0:all=1/);
+  const m = timelineMixParts([{ ...f, file: '/x/s1' }], 4);
+  assert.deepEqual(m.inputs, ['-ss', '1', '-t', '4', '-i', '/x/s1'], '测响度同一份');
+  assert.match(m.filters[0], /aresample=48000,asetrate=96000,aresample=48000,adelay/);
 });

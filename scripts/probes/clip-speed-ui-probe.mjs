@@ -113,7 +113,7 @@ try {
   const note = await A.$eval('[data-pcm="speed-note"]', (e) => e.textContent);
   const presets = await A.$$eval('[data-pcm="speed-preset"]', (bs) => bs.map((b) => [b.dataset.speed, b.getAttribute('aria-pressed')]));
   await shot(A, 'P2-sheet-before');
-  check(/变速后这一段不出原声/.test(note ?? ''), 'P2 面板写明变速段不出原声', note);
+  check(/不出原声/.test(note ?? ''), 'P2 面板写明变速段不出原声', note);
   check(presets.some(([v, on]) => v === '1' && on === 'true'), 'P2 当前 1× 高亮', presets);
   await tap(A, '[data-pcm="speed-preset"][data-speed="2"]');
   const fast = await until('片段变成 2×', async () => { const c = await clipOf(A, placed.id); return c?.speed === 2 ? c : null; });
@@ -121,6 +121,23 @@ try {
   step('P2', { note, presets, after: fast && { start: fast.start, end: fast.end, mediaOffset: fast.mediaOffset ?? 0, speed: fast.speed } });
   check(!!fast && fast.start === placed.start && (fast.mediaOffset ?? 0) === (placed.mediaOffset ?? 0), 'P2 起点与素材起点不动', fast);
   check(!!fast && Math.abs((fast.end - fast.start) - (placed.end - placed.start) / 2) < 1e-6, 'P2 时长减半', fast && [fast.start, fast.end]);
+  // P2b 手动输入倍率:超出 0.25～4 拒绝并提示、不改;1.5 照改(用户 2026-10-23 定可以手动输入)
+  const typeSpeed = async (v) => {
+    await A.evaluate((x) => { const el = document.querySelector('[data-pcm="speed-input"]'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(el, x); el.dispatchEvent(new Event('input', { bubbles: true })); }, String(v));
+    await tap(A, '[data-pcm="speed-apply"]');
+    await sleep(500);
+  };
+  await typeSpeed(5);
+  const toastBad = await A.evaluate(() => document.body.innerText.includes('0.25～4'));
+  const afterBad = await clipOf(A, placed.id);
+  await shot(A, 'P2b-input-rejected');
+  await typeSpeed(1.5);
+  const afterOk = await until('手动输入 1.5', async () => { const c = await clipOf(A, placed.id); return c?.speed === 1.5 ? c : null; }, 5000);
+  step('P2b', { rejectedToast: toastBad, speedAfterBad: afterBad?.speed, speedAfterOk: afterOk?.speed, end: afterOk?.end });
+  check(toastBad && afterBad?.speed === 2, 'P2b 输入 5 倍被拒绝并提示,速度不变', { toastBad, s: afterBad?.speed });
+  check(!!afterOk && Math.abs(afterOk.end - (placed.start + (placed.end - placed.start) / 1.5)) < 1e-6, 'P2b 输入 1.5 照改', afterOk && [afterOk.start, afterOk.end]);
+  await tap(A, '[data-pcm="speed-preset"][data-speed="2"]');
+  await until('回到 2×', async () => ((await clipOf(A, placed.id))?.speed === 2 ? true : null), 5000);
   await closeSheet(A);
 
   /* ---------- P3 完整时间轴的标记 ---------- */
@@ -178,6 +195,13 @@ try {
   const form = await until('编辑分区出现速度一栏', async () => (await B.$('[data-pc="clip-speed"]')) ? true : null, 20_000);
   if (form) {
     const dnote = await B.$eval('[data-pc="clip-speed-note"]', (e) => e.textContent);
+    // 手动输入超出范围:拒绝并提示
+    await B.evaluate(() => { const el = document.querySelector('[data-pc="clip-speed-input"]'); el.focus(); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(el, '9'); el.dispatchEvent(new Event('input', { bubbles: true })); el.blur(); });
+    await sleep(600);
+    const dBadMsg = await B.$eval('[data-pc="clip-speed-msg"]', (e) => e.textContent).catch(() => null);
+    const dBad = await clipOf(B, placed.id);
+    step('D1-input', { msg: dBadMsg, speed: dBad?.speed ?? 1 });
+    check(/0\.25～4/.test(dBadMsg ?? '') && (dBad?.speed ?? 1) === 1, 'D1 桌面手动输入 9 倍被拒绝并提示', { dBadMsg, s: dBad?.speed });
     await B.select('[data-pc="clip-speed-select"]', '0.5');
     const slow = await until('桌面改成 0.5×', async () => { const c = await clipOf(B, placed.id); return c?.speed === 0.5 ? c : null; });
     await sleep(800);
@@ -187,7 +211,7 @@ try {
     await shot(B, 'D2-timeline');
     step('D1', { note: dnote, after: slow && { start: slow.start, end: slow.end, speed: slow.speed } });
     step('D2', { label, badgeTitle });
-    check(/变速后这一段不出原声/.test(dnote ?? ''), 'D1 桌面编辑分区写明变速段不出原声', dnote);
+    check(/不出原声/.test(dnote ?? ''), 'D1 桌面编辑分区写明变速段不出原声', dnote);
     // 0.5× 要 2 倍时长,不截断;同一序列后面的段碰到了就整体往后推(用户 2026-10-23 定),面板说清推了多少
     const nextId = await store(B, 'const t = S.getState().project.tracks.find((tr) => tr.clips.some((c) => c.id === args[0])); const n = t.clips.filter((c) => c.id !== args[0] && c.start >= args[1] - 1e-9).sort((x, y) => x.start - y.start)[0]; return n ? n.id : null;', placed.id, placed.end);
     const nextAfter = nextId ? await clipOf(B, nextId) : null;

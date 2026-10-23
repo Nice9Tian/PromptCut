@@ -7,7 +7,7 @@ import { actions, getState, useStore, withMerge } from "../store/project";
 import { findClip, type MediaAsset, type Project, type TrackClip } from "../kernel/project";
 import { MAX_TRANSITION_DUR, MIN_TRANSITION_DUR, transitionsOf, type Transition, type TransitionKind } from "../kernel/transitions";
 import { getCard } from "../kernel/registry";
-import { CLIP_SPEED_PRESETS, SPEED_MUTE_NOTE, clipSpeed, speedLabel } from "../kernel/clipTime.mjs";
+import { CLIP_SPEED_MAX, CLIP_SPEED_MIN, CLIP_SPEED_PRESETS, SPEED_MUTE_NOTE, clipSpeed, speedLabel } from "../kernel/clipTime.mjs";
 import { listCuts } from "../kernel/cuts";
 import type { CardDef } from "../kernel/types";
 import { importMediaFiles, MEDIA_ACCEPT } from "../editor/left/importAssets";
@@ -327,17 +327,25 @@ export function SpeedSheet(props: { clipId: string; onClose: () => void }) {
   const project = useStore((s) => s.project);
   const toast = useToast();
   const hit = findClip(project, props.clipId);
+  const cur = hit ? clipSpeed(hit.clip) : 1;
+  const [text, setText] = useState(String(cur));
   if (!hit) return <Sheet id="speed" title="速度" light onClose={props.onClose}><div className="hint">这个片段已经不在了。</div></Sheet>;
   const c = hit.clip;
-  const cur = clipSpeed(c);
   const presets = CLIP_SPEED_PRESETS.includes(cur) ? CLIP_SPEED_PRESETS : [...CLIP_SPEED_PRESETS, cur].sort((a, b) => a - b);
   const pick = (v: number) => {
-    if (v === cur) return;
+    if (Math.abs(v - cur) < 1e-9) return;
     const r = actions.setClipSpeed(c.id, v);
     if (!r.ok) { toast(r.error); return; }
-    const head = v === 1 ? "已恢复 1×，原声恢复" : `已改成 ${speedLabel(v)}，这一段不出原声`;
-    // 变长推开了后面的段(用户 2026-10-23 定):说清推了几段、多少秒
-    toast(r.pushed ? `${head}；后面 ${r.pushed.clips} 段往后推了 ${r.pushed.by.toFixed(1)} 秒` : head);
+    setText(String(getState().project.tracks.flatMap((t) => t.clips).find((x) => x.id === c.id)?.speed ?? 1));
+    const head = v === 1 ? "已恢复 1×，原声恢复" : `已改成 ${speedLabel(clipSpeed({ speed: v }))}，这一段不出原声`;
+    // 变长推开了后面的段(用户 2026-10-23 定)、交叉溶解的另一段跟着挪:说清楚
+    const tail = [r.moved?.length ? "交叉溶解的另一段跟着挪了" : "", r.pushed ? `后面 ${r.pushed.clips} 段往后推了 ${r.pushed.by.toFixed(1)} 秒` : ""].filter(Boolean).join("，");
+    toast(tail ? `${head}；${tail}` : head);
+  };
+  const commitText = () => {
+    const v = Number(text.trim().replace(/[×x]$/i, ""));
+    if (!Number.isFinite(v)) { toast("倍率要是数字"); setText(String(cur)); return; }
+    pick(v);
   };
   return (
     <Sheet id="speed" title={clipName(project, c, (id) => getCard(id)?.name)} light onClose={props.onClose} head={<span className="chip">速度</span>}>
@@ -346,8 +354,14 @@ export function SpeedSheet(props: { clipId: string; onClose: () => void }) {
           <button key={v} type="button" className={v === cur ? "on" : undefined} data-pcm="speed-preset" data-speed={v} aria-pressed={v === cur} onClick={() => pick(v)}>{speedLabel(v)}</button>
         ))}
       </div>
+      {/* 手动输入倍率(用户 2026-10-23 定):0.25～4,可带小数;超出范围拒绝并提示,不夹 */}
+      <div className="field" data-pcm="speed-custom">
+        <label>自定义倍率<span><input className="num" data-pcm="speed-input" type="number" inputMode="decimal" min={CLIP_SPEED_MIN} max={CLIP_SPEED_MAX} step={0.01} value={text}
+          onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") commitText(); }} /> ×</span></label>
+        <button type="button" className="btn" data-pcm="speed-apply" onClick={commitText}>应用</button>
+      </div>
       <div className="wrapnote" data-pcm="speed-note"><b>声音：</b>{SPEED_MUTE_NOTE}</div>
-      <div className="hint">起点不动，时长按新速度重算：{fmtDur(c.end - c.start)}（素材 {fmtDur((c.end - c.start) * cur)}）。变长碰到后面的段会把它们一起往后推，变短尾部留空。挂着转场的段要先删掉转场。</div>
+      <div className="hint">起点不动，时长按新速度重算：{fmtDur(c.end - c.start)}（素材 {fmtDur((c.end - c.start) * cur)}）。变长碰到后面的段会把它们一起往后推，变短尾部留空；挂着转场时转场跟着片段两端走，装不下转场会提示。</div>
       <div className="undo-row">
         <button type="button" className="btn" data-pcm="speed-undo" onClick={() => actions.undo()}><Icon name="undo" />撤销</button>
       </div>

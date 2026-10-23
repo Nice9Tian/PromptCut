@@ -29,7 +29,9 @@
 export const CLIP_SPEED_MIN = 0.25;
 export const CLIP_SPEED_MAX = 4;
 /** 界面上写明「变速段不出原声」的那一句(〔裁〕第一版):桌面编辑分区、手机版「速度」面板同一句 */
-export const SPEED_MUTE_NOTE = "变速后这一段不出原声（第一版不做变速声音）；改回 1× 恢复。";
+export const SPEED_MUTE_NOTE = "变速后这一段视频不出原声（第一版不做变速声音）；要听声音可以音画分离，分出来的声音跟着变速、会变调。改回 1× 恢复。";
+/** 声音段(含音画分离出来的)变速时的说明 */
+export const SPEED_AUDIO_NOTE = "声音段变速后跟着变调（第一版不做保调变速）。";
 /** 界面上给的几档 */
 export const CLIP_SPEED_PRESETS = Object.freeze([0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4]);
 
@@ -45,11 +47,43 @@ export function isSpeedChanged(clip) {
 }
 
 /**
- * 这一段的素材原声因为变速而不出(〔裁〕第一版变速段原声静音)。只看素材段:卡片段、剪辑段没有素材速度。
+ * 这一段的**视频原声**因为变速而不出(〔裁〕第一版变速段原声静音)。只看视频素材段:卡片段、剪辑段没有素材速度;
+ * **声音段**(素材是 audio,比如音画分离出来的那一条)变速时照常出声,随倍率变速变调(`ffmpegVarispeed` / `resampleVarispeed`,
+ * 2026-10-23 用户定「可以分离,失真问题记待办」)。
+ * `project` 给了就按素材的种类判;没给(拿不到项目的地方)按视频办。
  * 预览的声音层、导出混音(`audioPlanOf` 与 `mux-audio` 的卡片声音那一路)、测响度都用这一条。
  */
-export function speedMutesSource(clip) {
-  return !!clip?.mediaId && isSpeedChanged(clip);
+export function speedMutesSource(clip, project) {
+  if (!clip?.mediaId || !isSpeedChanged(clip)) return false;
+  const kind = Array.isArray(project?.media) ? project.media.find((m) => m?.id === clip.mediaId)?.kind : undefined;
+  return kind !== "audio";
+}
+
+/**
+ * 声音段变速(变调)在 ffmpeg 里的那一截滤镜:先统一采样率,`asetrate` 把它当成快/慢 speed 倍的采样率,再重采样回来。
+ * 读素材时要读 `时长 × speed` 秒,出来正好是时间轴上的时长。导出的两条混音路(Chrome 离线混音的裁段与 ffmpeg 混音)
+ * 和测响度都用这一份,所以两条路拿到的是同一份重采样结果。速度为 1 时回空数组(滤镜链一个字不变)。
+ */
+export function ffmpegVarispeed(speed, rate = 48000) {
+  if (!(speed > 0) || speed === 1) return [];
+  return [`aresample=${rate}`, `asetrate=${Math.round(rate * speed)}`, `aresample=${rate}`];
+}
+
+/**
+ * 在线浏览器导出(没有 ffmpeg)那一路的变速变调:从 `src[from]` 起按 speed 倍步进线性插值取 n 个采样。
+ * 和 `ffmpegVarispeed` 是同一个语义(时间轴第 i 个采样 = 素材第 from + i × speed 个采样),插值算法不同(ffmpeg 是 swr 的 sinc)。
+ */
+export function resampleVarispeed(src, from, speed, n) {
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = from + i * speed;
+    const k = Math.floor(x);
+    if (k < 0 || k >= src.length) continue;
+    const f = x - k;
+    const a = src[k], b = k + 1 < src.length ? src[k + 1] : a;
+    out[i] = a + (b - a) * f;
+  }
+  return out;
 }
 
 /** 时间轴时刻 t → 素材时刻(秒) */
@@ -84,6 +118,12 @@ export function normalizeSpeed(value) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return null;
   return Math.round(Math.min(CLIP_SPEED_MAX, Math.max(CLIP_SPEED_MIN, n)) * 100) / 100;
+}
+
+/** 这个倍率在不在允许范围里(手动输入的倍率超出范围时拒绝、不夹,让用户知道) */
+export function speedInRange(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= CLIP_SPEED_MIN - 1e-9 && n <= CLIP_SPEED_MAX + 1e-9;
 }
 
 /** 换上新速度的片段(新对象);速度为 1 时**删掉字段**,不留 `speed: 1`(见文件头「缺省 1 时一个字节都不变」) */

@@ -30,6 +30,7 @@ import type { ExportMode } from "./cardLayers";
 import { prepareExportLayers, type ExportLayerDeps, type ExportLayerStats, type FrameLayers } from "./exportLayers";
 import { ONLINE_EXPORT_TEXT } from "./text";
 import { rgbaToI420 } from "./yuv";
+import { resampleVarispeed } from "../kernel/clipTime.mjs";
 
 /** 编码队列上限(契约第 11.1 节) */
 export const MAX_ENCODE_QUEUE = 3;
@@ -135,13 +136,15 @@ export function isoHasSoundTrack(bytes: Uint8Array): boolean | null {
   return false;
 }
 
-async function sliceWav(source: ArrayBuffer, offset: number, dur: number): Promise<ArrayBuffer> {
+async function sliceWav(source: ArrayBuffer, offset: number, dur: number, speed = 1): Promise<ArrayBuffer> {
   const ctx = new OfflineAudioContext(AUDIO_CHANNELS, 1, AUDIO_SAMPLE_RATE);
   const decoded = await ctx.decodeAudioData(source.slice(0));
   const from = Math.max(0, Math.floor(offset * AUDIO_SAMPLE_RATE));
   const n = Math.max(1, Math.ceil(dur * AUDIO_SAMPLE_RATE));
   const chans = Array.from({ length: AUDIO_CHANNELS }, (_, c) => {
     const src = decoded.getChannelData(Math.min(c, decoded.numberOfChannels - 1));
+    // 变速的声音段:素材按 speed 倍步进取样(变速变调,和 ffmpeg 两条路的 ffmpegVarispeed 同一个语义;kernel/clipTime.mjs)
+    if (speed !== 1) return resampleVarispeed(src, from, speed, n);
     const out = new Float32Array(n);
     out.set(src.subarray(from, Math.min(src.length, from + n)));
     return out;
@@ -178,22 +181,22 @@ export async function encodeAudio(deps: BrowserExportDeps, durationSec: number):
     entries.push(e);
   }
   if (!entries.length) return null;
-  const slices = new Map<string, { mediaId: string; offset: number; dur: number }>();
+  const slices = new Map<string, { mediaId: string; offset: number; dur: number; speed?: number }>();
   const plan: MixPlan = {
     sampleRate: AUDIO_SAMPLE_RATE,
     duration: durationSec,
-    clips: entries.map((e: { clipId: string; mediaId: string; start: number; dur: number; offset: number; volume: number; fadeIn: number; fadeOut: number; fx: MixPlan["clips"][number]["fx"]; env?: MixPlan["clips"][number]["env"] }, i: number) => {
+    clips: entries.map((e: { clipId: string; mediaId: string; start: number; dur: number; offset: number; volume: number; fadeIn: number; fadeOut: number; fx: MixPlan["clips"][number]["fx"]; env?: MixPlan["clips"][number]["env"]; speed?: number }, i: number) => {
       const m = byId.get(e.mediaId)!;
       const key = `pc-slice:${i}`;
       const missing = confirmedMissingAudio(m, project);
-      slices.set(key, { mediaId: m.id, offset: missing ? 0 : e.offset, dur: missing ? missingMaterialAudibleDuration({ start: 0, end: e.dur }) : e.dur });
+      slices.set(key, { mediaId: m.id, offset: missing ? 0 : e.offset, dur: missing ? missingMaterialAudibleDuration({ start: 0, end: e.dur }) : e.dur, ...(!missing && e.speed ? { speed: e.speed } : null) });
       return { clipId: e.clipId, url: key, start: e.start, dur: e.dur, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut, fx: e.fx, ...(e.env ? { env: e.env } : null) };
     }),
   };
   const fetchSlice = (async (input: RequestInfo | URL) => {
     const s = slices.get(String(input));
     if (!s) throw new Error(`不认识的声音 ${String(input)}`);
-    return new Response(await sliceWav(sources.get(s.mediaId)!, s.offset, s.dur));
+    return new Response(await sliceWav(sources.get(s.mediaId)!, s.offset, s.dur, s.speed ?? 1));
   }) as typeof fetch;
   const { buffer } = await renderMix(plan, fetchSlice);
   sources.clear();

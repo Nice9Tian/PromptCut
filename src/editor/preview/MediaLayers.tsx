@@ -7,7 +7,7 @@ import { MISSING_MATERIAL_WAV_URL, missingMaterialSourceTime } from "../../audio
 import { CARD_AUDIO_SAMPLE_RATE, acquireCardAudioClipUrl, cardAudioNodeOf, generatedCardAudioClipsAt, getCardAudioEpoch, subscribeCardAudioEpoch, persistentCardAudio } from "../../audio/cardAudio";
 import { audioClipsAt, isImageMedia, nextVideoLayerAfter, videoLayersAt, type MediaAsset, type Project, type TrackClip } from "../../kernel/project";
 import { audioProjectOf } from "../../kernel/cutAudio.mjs";
-import { speedMutesSource } from "../../kernel/clipTime.mjs";
+import { clipSpeed, speedMutesSource } from "../../kernel/clipTime.mjs";
 import { isScrubbing, subscribeScrub } from "../timeline/useScrub";
 import { driveMedia, releaseMedia, targetTimeOf } from "../../render/mediaDrive";
 import { VideoTrack } from "../../render/VideoTrack";
@@ -112,7 +112,10 @@ function AudioLayer({ project, clip, media, volume, t, playing, scrubbing, audio
     // While a 素材效果卡 node is loading or has failed there is deliberately no source URL.
     // driveMedia may attempt play(), but it cannot emit source-media audio as a fallback.
     if (nodeId && !cardUrl) return;
-    driveMedia(ref.current, { target, playing, volume, scrubbing });
+    // 变速的声音段(音画分离出来的那种):按片段速度放、不保调(随倍率变调),和导出两条混音路的 ffmpegVarispeed 同一个语义
+    const rate = nodeId ? 1 : clipSpeed(clip);
+    if (ref.current && rate !== 1 && ref.current.preservesPitch !== false) ref.current.preservesPitch = false;
+    driveMedia(ref.current, { target, playing, volume, scrubbing, ...(rate !== 1 ? { rate } : null) });
     routePreviewAudio(ref.current, audioFx, clip, t, playing);
   }, [nodeId, cardUrl, target, playing, volume, scrubbing, audioFx, clip, t]);
   useLayoutEffect(() => {
@@ -206,7 +209,7 @@ export function MediaLayers({
         />
       ))}
       {/* 变速的视频段不出原声(〔裁〕第一版,kernel/clipTime.mjs;和导出混音 audioPlanOf 同一条) */}
-      {audioOnly && !muted && layers.filter(l => !cardAudioNodeOf(sound, l.clip) && !isImageMedia(l.media) && l.media.kind === "video" && !l.clip.audioMuted && !speedMutesSource(l.clip) && !sound.tracks.find(tr => tr.id === l.trackId)?.muted).map(l => (
+      {audioOnly && !muted && layers.filter(l => !cardAudioNodeOf(sound, l.clip) && !isImageMedia(l.media) && l.media.kind === "video" && !l.clip.audioMuted && !speedMutesSource(l.clip, sound) && !sound.tracks.find(tr => tr.id === l.trackId)?.muted).map(l => (
         <AudioLayer key={l.clip.id} project={sound} clip={l.clip} media={l.media} volume={l.opacity * master * (l.clip.audioVolume ?? 1)} t={t} playing={playing} scrubbing={scrubbing} audioFx={project.audioFx} localHashes={localHashes} />
       ))}
       {audios.filter(a => !cardAudioNodeOf(sound, a.clip)).map((a) => (

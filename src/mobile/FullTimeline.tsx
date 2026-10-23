@@ -248,7 +248,7 @@ export const FullTimeline = forwardRef<FullTimelineHandle, {
                       {clipName(project, c, props.cardName)}
                       {c.audioMuted && <span className="mute"><Icon name="mute" />已静音</span>}
                       {/* 变速段:写明倍数和「无原声」(〔裁〕第一版变速段不出原声,kernel/clipTime.mjs) */}
-                      {!c.audioMuted && speedMutesSource(c) && <span className="mute" data-pcm="clip-speed" title="变速段不出原声"><Icon name="mute" />{speedLabel(clipSpeed(c))} 无原声</span>}
+                      {!c.audioMuted && speedMutesSource(c, project) && <span className="mute" data-pcm="clip-speed" title="变速段不出原声"><Icon name="mute" />{speedLabel(clipSpeed(c))} 无原声</span>}
                       <span className="h r" />
                     </div>
                   );

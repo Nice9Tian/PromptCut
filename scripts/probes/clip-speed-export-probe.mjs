@@ -1,6 +1,6 @@
 /**
  * 片段速度(`TrackClip.speed`,`src/kernel/clipTime.mjs`)的导出端到端探针:**逐帧**核变速段的画面取的是素材的哪一帧,
- * 再核变速段的原声在成片里确实不出(〔裁〕第一版变速段原声静音)。
+ * 再核变速段的原声在成片里确实不出(〔裁〕第一版变速段原声静音),音画分离出来的变速声音段在两条混音路里随倍率变调、两路对得上。
  *
  *   node scripts/probes/clip-speed-export-probe.mjs --port 5920 [--tree <检出根>] [--out <目录>] [--skip-audio]
  *
@@ -110,14 +110,15 @@ export const probeSpeedTint: CardDef<{ amount: number }> = {
 
 const full = { x: 0, y: 0, w: W, h: H, anchor: [0, 0], scale: 1, rotate: 0 };
 const SEGMENTS = [
-  { id: 'A', start: 0, end: 2, mediaOffset: 1, audible: true },
-  { id: 'B', start: 2, end: 4, mediaOffset: 0.5, speed: 2 },
-  { id: 'C', start: 4, end: 6, mediaOffset: 3, speed: 0.5 },
+  { id: 'A', start: 0, end: 2, mediaOffset: 1, audible: true, hz: 440 },
+  // B、C 两段的视频原声不出;下面「声音」序列上各有一段音画分离出来的声音段(同速度),随倍率变调出声
+  { id: 'B', start: 2, end: 4, mediaOffset: 0.5, speed: 2, audible: true, hz: 880 },
+  { id: 'C', start: 4, end: 6, mediaOffset: 3, speed: 0.5, audible: true, hz: 220 },
   { id: 'D', start: 6, end: 8, cut: { cutOffset: 0.5, inner: { mediaOffset: 1, speed: 2, start: 0 } } },
   { id: 'E', start: 8, end: 10, mediaOffset: 2, speed: 4 },
   { id: 'F', start: 10, end: 12, mediaOffset: 5, speed: 0.25 },
   { id: 'G', start: 12, end: 14, mediaOffset: 6, speed: G_SPEED === 1 ? undefined : G_SPEED, tint: true },
-  { id: 'H', start: 14, end: 16, mediaOffset: 9, audible: true },
+  { id: 'H', start: 14, end: 16, mediaOffset: 9, audible: true, hz: 440 },
 ];
 
 function projectOf(media) {
@@ -129,9 +130,11 @@ function projectOf(media) {
   const inner = SEGMENTS.find((s) => s.cut).cut.inner;
   return {
     version: 1, id: 'p-speed-probe', name: 'speed-probe', width: W, height: H, fps: FPS, duration: DURATION, themeId: 'midnight',
-    media: [media], filters: [], audioFx: [],
+    // 音画分离出来的声音素材(和视频共用同一个文件,kind 为 audio,同 store 的 soundAssetFrom)
+    media: [media, { ...media, id: 'm-coded-sound', kind: 'audio', name: 'coded.mp4 的声音', soundOf: media.id }], filters: [], audioFx: [],
     cardNodes: [{ id: 'n-tint', adapter: 'card', cardId: TINT, kind: 'filter', params: { amount: 1 }, inputs: { source: '@clip/G/source' } }],
-    tracks: [{ id: 't-main', name: '序列 1', clips }],
+    tracks: [{ id: 't-main', name: '序列 1', clips: clips.map((c) => (c.id === 'B' || c.id === 'C' ? { ...c, audioMuted: true } : c)) },
+      { id: 't-sound', name: '声音', clips: SEGMENTS.filter((x) => x.id === 'B' || x.id === 'C').map((x) => ({ id: `${x.id}-sound`, cardId: '', mediaId: 'm-coded-sound', mediaOffset: x.mediaOffset, start: x.start, end: x.end, speed: x.speed, params: {} })) }],
     cuts: [{ id: 'outer', name: '剪辑1' }, { id: 'inner', name: '内', duration: 8, transitions: [], tracks: [{ id: 't-in', name: '序列 1', clips: [
       { id: 'b1', cardId: '', mediaId: media.id, mediaOffset: inner.mediaOffset, speed: inner.speed, start: inner.start, end: 8, params: {}, frame: full },
     ] }] }],
@@ -171,15 +174,37 @@ function run(cmd, args, env, logFile) {
   });
 }
 
-/** 成片里 [a, b) 秒的声音响度(dBFS,RMS);用 ffmpeg 解成单声道 float 再算 */
-async function loudness(ffmpeg, file, a, b) {
-  const { stdout } = await execFileAsync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-ss', String(a), '-t', String(b - a), '-i', file, '-vn', '-ac', '1', '-ar', '48000', '-f', 'f32le', '-'],
+/** 成片的声音解成 48 kHz 单声道 float(整条) */
+async function pcmOf(ffmpeg, file) {
+  const { stdout } = await execFileAsync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-i', file, '-vn', '-ac', '1', '-ar', '48000', '-f', 'f32le', '-'],
     { windowsHide: true, encoding: 'buffer', maxBuffer: 1 << 28 });
-  const n = stdout.length / 4;
-  if (!n) return -Infinity;
+  const out = new Float32Array(stdout.length / 4);
+  for (let i = 0; i < out.length; i++) out[i] = stdout.readFloatLE(i * 4);
+  return out;
+}
+const win = (pcm, a, b) => pcm.subarray(Math.round(a * 48000), Math.round(b * 48000));
+/** [a, b) 秒的响度(dBFS,RMS) */
+function loudness(pcm, a, b) {
+  const x = win(pcm, a, b);
+  if (!x.length) return -Infinity;
   let sum = 0;
-  for (let i = 0; i < n; i++) { const v = stdout.readFloatLE(i * 4); sum += v * v; }
-  return 10 * Math.log10(sum / n + 1e-20);
+  for (const v of x) sum += v * v;
+  return 10 * Math.log10(sum / x.length + 1e-20);
+}
+/** [a, b) 秒的主频(过零点数 / 2 / 时长) */
+function pitch(pcm, a, b) {
+  const x = win(pcm, a, b);
+  let n = 0;
+  for (let i = 1; i < x.length; i++) if ((x[i - 1] < 0) !== (x[i] < 0)) n++;
+  return n / 2 / ((b - a) || 1);
+}
+/** 两条路同一窗口的差:差信号的响度减去信号的响度(dB,越低越像) */
+function diffDb(p1, p2, a, b) {
+  const x = win(p1, a, b), y = win(p2, a, b);
+  const n = Math.min(x.length, y.length);
+  let d = 0, e = 0;
+  for (let i = 0; i < n; i++) { d += (x[i] - y[i]) ** 2; e += x[i] * x[i]; }
+  return 10 * Math.log10((d + 1e-20) / (e + 1e-20));
 }
 
 const result = { tree: TREE, out: OUT, ok: false, fails: [] };
@@ -233,25 +258,57 @@ try {
   // 2. 声音:两条混音路各导一次成片
   if (!SKIP_AUDIO) {
     result.audio = {};
+    const pcms = {};
     for (const [name, extra] of [['chrome', []], ['ffmpeg', ['--audio', 'ffmpeg']]]) {
-      const outDir = path.join(OUT, `video-${name}`);
+      // Chrome 离线混音要页面地址是 /@export/<id>/project.json(裁好的 wav 按这个 id 取,server/bakery/audio-mix.mjs);
+      // 用 data: 地址会「Chrome 混音失败,退回 ffmpeg」——两条路就成了同一条。所以按产品导出的摆法放:<导出目录>/export-<id>/
+      const id = `speed-${name}`;
+      const outDir = path.join(WORK, `export-${id}`);
+      await fs.mkdir(outDir, { recursive: true });
+      await fs.writeFile(path.join(outDir, 'project.json'), JSON.stringify(project));
+      const url = `${dev.origin}/?export=1&timeline=${encodeURIComponent(`/@export/${id}/project.json`)}`;
       let c = 1;
       for (let attempt = 1; attempt <= 3 && c !== 0; attempt++) {
         say(`导出成片(${name} 混音)第 ${attempt} 次`);
         c = await run(process.execPath, ['scripts/export-frames.mjs', '--url', url, '--out', outDir, '--fps', String(FPS), '--workers', '1', ...extra], env, path.join(OUT, `export-${name}.log`));
       }
       if (c !== 0) { result.fails.push(`成片(${name} 混音)导出退出码 ${c}`); continue; }
+      // 核实两条路真的各走各的:Chrome 那一次必须真在 Chrome 里混、没有退回 ffmpeg
+      const log = await fs.readFile(path.join(OUT, `export-${name}.log`), 'utf8');
+      const mixedIn = /退回 ffmpeg/.test(log) ? 'ffmpeg(Chrome 失败后退回)' : /in Chrome/.test(log) ? 'chrome' : /Muxing .* with ffmpeg/.test(log) ? 'ffmpeg' : '不明';
+      if (mixedIn !== name) result.fails.push(`${name} 那一次实际在 ${mixedIn} 里混音`);
       const mp4 = (await fs.readdir(outDir)).find((f) => f.endsWith('.mp4'));
       if (!mp4) { result.fails.push(`成片(${name} 混音)没有 mp4`); continue; }
       const file = path.join(outDir, mp4);
+      const pcm = await pcmOf(ffmpeg, file);
+      pcms[name] = pcm;
       const segs = {};
       for (const s of SEGMENTS) {
-        const db = await loudness(ffmpeg, file, s.start + 0.3, s.end - 0.3);
-        const ok = s.audible ? db > -30 : db < -70;
-        segs[s.id] = { dBFS: Number.isFinite(db) ? +db.toFixed(1) : null, expect: s.audible ? '有声' : '无声', ok };
-        if (!ok) result.fails.push(`${name} 混音:${s.id} 段 ${s.start}～${s.end} 秒应${s.audible ? '有声' : '无声'},实测 ${db.toFixed(1)} dBFS`);
+        const db = loudness(pcm, s.start + 0.3, s.end - 0.3);
+        const hz = pitch(pcm, s.start + 0.3, s.end - 0.3);
+        const okDb = s.audible ? db > -30 : db < -70;
+        const okHz = !s.hz || Math.abs(hz - s.hz) <= s.hz * 0.02;
+        segs[s.id] = { dBFS: Number.isFinite(db) ? +db.toFixed(1) : null, hz: s.audible ? +hz.toFixed(1) : null, expect: s.audible ? `有声 ${s.hz} Hz` : '无声', ok: okDb && okHz };
+        if (!okDb) result.fails.push(`${name} 混音:${s.id} 段 ${s.start}～${s.end} 秒应${s.audible ? '有声' : '无声'},实测 ${db.toFixed(1)} dBFS`);
+        if (s.audible && !okHz) result.fails.push(`${name} 混音:${s.id} 段主频应为 ${s.hz} Hz,实测 ${hz.toFixed(1)} Hz`);
       }
-      result.audio[name] = { file, segs };
+      result.audio[name] = { file, mixedIn, segs };
+    }
+    // 两条混音路逐段比:有声的段,差信号比信号本身低多少 dB
+    if (pcms.chrome && pcms.ffmpeg) {
+      result.audio.chromeVsFfmpeg = {};
+      for (const s of SEGMENTS.filter((x) => x.audible)) {
+        const d = diffDb(pcms.chrome, pcms.ffmpeg, s.start + 0.3, s.end - 0.3);
+        result.audio.chromeVsFfmpeg[s.id] = +d.toFixed(1);
+      }
+      // 尺子:两条路本来就不是逐采样相同(Chrome 离线混音 + 编码 与 ffmpeg 混音 + 编码),1 倍段的差就是这把尺子的底;
+      // 变速的声音段(B、C)两条路的差不能比 1 倍段(A、H)里差得最多的那段还大
+      const floor = Math.max(...SEGMENTS.filter((x) => x.audible && !x.speed).map((x) => result.audio.chromeVsFfmpeg[x.id]));
+      result.audio.oneXFloor = floor;
+      for (const s of SEGMENTS.filter((x) => x.audible && x.speed)) {
+        const d = result.audio.chromeVsFfmpeg[s.id];
+        if (!(d <= floor + 1e-9)) result.fails.push(`两条混音路 ${s.id} 段(${s.speed}×)差 ${d} dB,比 1 倍段的 ${floor} dB 还大`);
+      }
     }
   }
   result.ok = result.fails.length === 0;
