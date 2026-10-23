@@ -55,6 +55,8 @@ const MAX_TOKEN_LENGTH = 1024;
 /**
  * 游客的限额（三级机制的数，2026-10-23 用户定）。要改只改这里：
  *   projects    自己能建几个项目
+ *   conversations 在一个项目里能开几条云端 Agent 对话（2026-10-23 用户定「游客每个项目只能开一个会话」，回答安全审查 S8：
+ *               匿名身份能触发模型费用，所以服务端在建对话的那一刻就数、满了拒，不只是界面上藏入口）
  *   videos      能传几条视频（不同的视频源；在线编辑器一条视频传小档和原尺寸两个文件，算一条）；图片、音频不计数
  *               （用户原话「总视频素材不能大于三条」只说视频）。怎么数、怎么认是不是视频见 `server/asset-store/guest-quota.mjs`
  *   assetBytes  **每一条源文件**最大多少字节：视频、图片、音频、小档，传上来的每个文件都查
@@ -64,6 +66,7 @@ const MAX_TOKEN_LENGTH = 1024;
  */
 export const GUEST_LIMITS = Object.freeze({
   projects: 1,
+  conversations: 1,
   videos: 3,
   assetBytes: 100 * 1024 * 1024,
   ttlMs: 3 * 24 * 60 * 60 * 1000,
@@ -158,6 +161,14 @@ export const guestProjectLimitReached = ({ accountId, ownedCount }) =>
   isGuestId(accountId) && (ownedCount ?? 0) >= GUEST_LIMITS.projects;
 
 /**
+ * 游客在这个项目里已经开了多少条对话、还能不能再开一条新的。由 `conversation-authority.mjs` 在建对话的事务里直接问，
+ * 不走任何可配的口子：这一条是游客身份自带的。账号一律回 false，它的数量由 `MAX_CONVERSATIONS_PER_OWNER` 管。
+ * 只管「新建」：已经有的对话（含上限定下来之前留下的、多于一条的历史对话）不删不动，照常能往里发。
+ */
+export const guestChatLimitReached = ({ accountId, ownedCount }) =>
+  isGuestId(accountId) && (ownedCount ?? 0) >= GUEST_LIMITS.conversations;
+
+/**
  * 这个文件收不收：游客传的每一个文件都不超过 `assetBytes`；算数的（视频）最多 `GUEST_LIMITS.videos` 条。
  * 账号不受这两条限制，直接放行。
  *
@@ -183,6 +194,7 @@ export const guestExpired = (createdAt, at, ttlMs = GUEST_LIMITS.ttlMs) =>
 /** 人话的错误文案。页面照 `accountErrorText` 那张表显示，这里给服务端日志和测试对照用 */
 export const GUEST_ERROR_TEXT = Object.freeze({
   'guest-project-limit': `游客只能建 ${GUEST_LIMITS.projects} 个项目。`,
+  'guest-chat-limit': `游客在每个项目里只能开 ${GUEST_LIMITS.conversations} 个 Agent 对话。`,
   'guest-video-limit': `游客最多上传 ${GUEST_LIMITS.videos} 条视频。`,
   'guest-file-too-large': `游客上传的每一条源文件不能超过 ${GUEST_LIMITS.assetBytes / 1024 / 1024} MB。`,
   'guest-read-only': '游客在别人的项目里只能查看。',
