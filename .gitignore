@@ -26,6 +26,11 @@ tsconfig.tsbuildinfo
 .env.*
 !.env.example
 
+# Google Cloud 控制台下载的 OAuth 客户端 JSON:文件名里是客户端 ID,文件里是客户端密钥。
+# 它本来该放在仓库之外(本机位置记在 docs/local.md),这几行是万一有人拖进来时的兜底。
+client_secret_*.json
+client_secret*.json
+
 # wrangler 的本地缓存
 .wrangler/
 
