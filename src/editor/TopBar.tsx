@@ -532,6 +532,44 @@ export function TopBar() {
     window.dispatchEvent(new Event("pc-go-home"));
   };
 
+  /**
+   * 去氛围式那一屏（顶栏工作方式开关的第一格）。
+   *
+   * 走的就是「回开始页」那条路：离开编辑界面，落到开始页，开始页按地址上的 `?ui=` 决定显示哪一屏
+   * （`StartPage.tsx` 的 `wantsVibe` / `wantsClassic`）。所以这里先把 `?ui=vibe` 写进地址再派事件：
+   *   - 在线浏览器：缺省本来就是氛围式，这一步顺带把 `?ui=classic` 这个排障后门盖掉，
+   *     否则带着它回去会落到老的账号表单那一页；
+   *   - 桌面版：缺省是传统开始页，不写这个参数回去就落在那一页，到不了氛围式。
+   *
+   * 有未保存的改动时，这一颗和「回首页」处理得不一样：桌面版**先把本机草稿存了再走**，不只是警告一句。
+   * 氛围式那一屏里动手的是 Agent，用户手边没有「保存项目」这颗键（那一屏自己定时存，
+   * 见 `src/start/DesktopStart.tsx` 的 `AUTOSAVE_MS`），所以切过去之前不能把刚做的东西留在内存里。
+   * 存的只是本机草稿，不是用户另存过的那个 `.proc`，所以**不清脏标记**——顶栏那颗「*」照旧提醒文件还没写。
+   * 在线页面没有本机草稿这回事（要编辑器进程），仍旧先问一句。
+   */
+  const goVibe = () => {
+    const go = () => {
+      try {
+        const url = new URL(location.href);
+        url.searchParams.set("ui", "vibe");
+        history.replaceState(history.state, "", url);
+      } catch {
+        // 地址改不了(少见)也不拦着走,顶多是落到缺省那一屏
+      }
+      window.dispatchEvent(new Event("pc-go-home"));
+    };
+    if (!dirty) { go(); return; }
+    if (ONLINE_BUILD) {
+      if (!confirm("当前项目还有未保存的改动，切到氛围式会丢掉它们。继续？")) return;
+      go();
+      return;
+    }
+    void saveDraft(ensureActiveDraftId()).then(go, (e: unknown) => {
+      const why = e instanceof Error ? e.message : String(e);
+      if (confirm(`这次没能把改动存进本机项目（${why}）。切到氛围式会丢掉它们，继续？`)) go();
+    });
+  };
+
   // 标题栏菜单和顶栏里的按钮共用同一套动作，避免维护两份文件/导出逻辑。
   // WindowTitleBar 只负责呈现菜单，通过这个事件把选择交回编辑器。
   useEffect(() => {
@@ -622,7 +660,7 @@ export function TopBar() {
       */}
       {tier !== "narrow" && (
         <div className="pc-bar-group">
-          <ModeSwitch onOpenSkill={() => setSkillOpen(true)} />
+          <ModeSwitch onOpenSkill={() => setSkillOpen(true)} onEnterVibe={goVibe} />
         </div>
       )}
       {/* 「⋯」任何宽度都在:皮肤只住在这里面,收起来就没入口了 */}
@@ -698,7 +736,7 @@ export function TopBar() {
           {/* 模式开关只在窄档收进来,宽档它还在条上;项目设置已经住进「项目」菜单 */}
           {tier === "narrow" && (
             <div className="pc-more-menu-row">
-              <ModeSwitch onOpenSkill={() => { setMenuOpen(false); setSkillOpen(true); }} />
+              <ModeSwitch onOpenSkill={() => { setMenuOpen(false); setSkillOpen(true); }} onEnterVibe={() => { setMenuOpen(false); goVibe(); }} />
             </div>
           )}
         </div>,

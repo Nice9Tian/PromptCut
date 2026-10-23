@@ -3,6 +3,7 @@
  * 序列不分种类:同一条序列里卡片段和素材段都能放;**上面那条序列画在上层**,和这里看到的一致。
  */
 import { useEffect } from "react";
+import type { TrackClip } from "../../kernel/project";
 import { useStore, actions, getState } from "../../store/project";
 import { TimelineProvider, useTimelineContext } from "./TimelineContext";
 import { TrackHeader } from "./TrackHeader";
@@ -138,9 +139,13 @@ function TimelineInner() {
   );
 }
 
-export function TimelineView() {
+/**
+ * `quoteClip`:右键一段时多给一项「引用到输入框」。只有氛围式的详细编辑传它
+ * (`src/start/DetailEdit.tsx`:右键一张卡,把它引用进下面跟 Agent 说话的输入框);编辑界面不传。
+ */
+export function TimelineView(props: { quoteClip?: (clip: TrackClip, label: string) => void } = {}) {
   return (
-    <TimelineProvider>
+    <TimelineProvider quoteClip={props.quoteClip}>
       <TimelineInner />
     </TimelineProvider>
   );

@@ -3,31 +3,24 @@
  * **输入框留在下面不收** —— 这正是它的用处:在这儿右键一张卡,把它引用进输入框,接着跟 Agent 说
  * 「这一张怎么怎么改」。
  *
- * 形状照软件里的编辑台(用户给的参考图):上面是舞台和一排传输控件,下面是时间轴 —— 一条条序列,
- * 序列上排卡片和素材,左边一列是序列名,右上角是行高(小 / 中 / 大)和缩放。
+ * 形状:上面是舞台和一排传输控件,下面是时间轴。
  *
- * 2026-10-23 接上业务层:舞台是这个项目的真画面(`VibeStage.tsx`),时间轴读 store 里当前项目的当前剪辑
- * (`Project.tracks`)。**只看不改**(用户定):点选、拖播放头、播放暂停都行,片段拖不动、改不了;要自己动手就「进入传统式」。
- * 引用进输入框的写法和编辑器「引用到 AI」同一个(`@卡片 名字(片段 id)`,`src/mobile/agentView.ts` 的 `quoteToken`),Agent 认得。
+ * 舞台是这个项目的真画面(`VibeStage.tsx`);时间轴**就是编辑界面那条真时间轴**(`src/editor/timeline/`),
+ * 不是另画一条只能看的 —— 拖动、裁剪、跨序列、吸附、分割、删除、剪辑标签都在。
+ * 这对应 `user-workflow.md`「工作方式」那一行:氛围式里「主要是 Agent 动手；用户也能自己调——
+ * 从右侧拓展栏的「画面」进详细编辑，那里的时间轴可调」。要整套编辑界面(素材库、特效、AI 栏)才「进入传统式」。
+ *
+ * 2026-10-23 先做的那一版是自己画的只读轨道(拖不动、改不了),和上面那句语义对不上,同日换成了真时间轴。
+ * 真时间轴的右键菜单在这一页多一项「引用到输入框」(`TimelineView` 的 `quoteClip`,只这一页传),
+ * 写法和编辑器「引用到 AI」同一个(`@卡片 名字(片段 id)`,`src/mobile/agentView.ts` 的 `quoteToken`),Agent 认得。
  */
-import { useEffect, useRef, useState } from "react";
 import type { JSX } from "react";
-import type { TrackClip } from "../kernel/project";
-import { getCard } from "../kernel/registry";
-import { listCuts } from "../kernel/cuts";
 import { actions, useStore } from "../store/project";
-import { clipKind, clipName } from "../mobile/mainContent";
+import { TimelineView } from "../editor/timeline";
 import { quoteToken } from "../mobile/agentView";
 import { VibeStage } from "./VibeStage";
 
-/** 行高三档,和软件里「小 / 中 / 大」一致 */
-const ROW_H = { 小: 30, 中: 44, 大: 62 } as const;
-type RowSize = keyof typeof ROW_H;
-
 const secs = (t: number) => `${t.toFixed(2)} s`;
-const cardName = (id: string) => getCard(id)?.name;
-
-const KIND_WORD: Record<ReturnType<typeof clipKind>, string> = { video: "素材", image: "素材", audio: "声音", cut: "剪辑", card: "卡片" };
 
 export function DetailEdit(props: {
   /**
@@ -39,51 +32,20 @@ export function DetailEdit(props: {
   /** 把一张卡引用进输入框 */
   onQuote: (text: string) => void;
 }): JSX.Element {
-  const project = useStore((s) => s.project);
+  const duration = useStore((s) => Math.max(0.1, s.project.duration));
+  const total = useStore((s) => s.project.duration);
   const t = useStore((s) => s.t);
   const playing = useStore((s) => s.playing);
-  const duration = Math.max(0.1, project.duration);
-  const tracks = project.tracks;
-  const cutName = listCuts(project).find((c) => c.active)?.name ?? "剪辑 1";
-
-  const [size, setSize] = useState<RowSize>("中");
-  const [zoom, setZoom] = useState(1);
-  const [picked, setPicked] = useState<string | null>(null);
-  const [menu, setMenu] = useState<{ clip: TrackClip; label: string; kind: string; x: number; y: number } | null>(null);
-  const menuBox = useRef<HTMLDivElement>(null);
-
-  // 菜单开着时:按 Esc、点别处都关掉
-  useEffect(() => {
-    if (!menu) return;
-    const close = () => setMenu(null);
-    // 点在菜单自己里面不算「点别处」:不然按下那一刻菜单就没了,菜单项的点击永远到不了
-    const onDown = (e: PointerEvent) => { if (!menuBox.current?.contains(e.target as Node)) close(); };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        close();
-      }
-    };
-    document.addEventListener("pointerdown", onDown, true);
-    document.addEventListener("keydown", onKey, true);
-    return () => {
-      document.removeEventListener("pointerdown", onDown, true);
-      document.removeEventListener("keydown", onKey, true);
-    };
-  }, [menu]);
-
-  /** 一秒多宽(像素):按片长铺满一屏左右,再乘缩放 */
-  const pxPerSec = Math.max(4, Math.min(120, 690 / duration)) * zoom;
 
   return (
     <div className="ps-detail" data-pc="start-detail">
       <header className="ps-detail-head">
         <span className="ps-detail-title">详细编辑</span>
-        <span className="ps-detail-sub">只看不改；右键一张卡可以引用进下面的输入框</span>
+        <span className="ps-detail-sub">时间轴可调；右键一张卡可以引用进下面的输入框</span>
         <span className="ps-rail-spacer" />
         {/*
-          这一页属于「Vibe 模式」——对着 Agent 说话、在这儿看一眼;
-          点这个切到「传统式」,也就是打开编辑界面自己动手(`user-workflow.md`「工作方式」)。
+          这一页属于氛围式 —— 对着 Agent 说话、在这儿看一眼、顺手调一下;
+          点这个切到「传统式」,也就是打开整套编辑界面(`user-workflow.md`「工作方式」)。
         */}
         <button type="button" className="ps-mode-btn" data-pc="start-enter-traditional" title="打开编辑界面自己动手：左栏 + 预览 + 时间轴 + AI 栏" onClick={props.onPro}>
           进入传统式
@@ -110,86 +72,16 @@ export function DetailEdit(props: {
         </button>
         <input type="range" className="ps-detail-scrub" data-pc="start-detail-scrub" min={0} max={duration} step={0.05}
           value={Math.min(t, duration)} aria-label="进度" onChange={(e) => actions.seek(Number(e.target.value))} />
-        <span className="ps-detail-time">{secs(t)} / {secs(project.duration)}</span>
+        <span className="ps-detail-time">{secs(t)} / {secs(total)}</span>
       </div>
 
-      <div className="ps-detail-tl">
-        <div className="ps-detail-tlbar">
-          <span className="ps-detail-tltitle">{cutName}</span>
-          <div className="ps-ext-seg" role="group" aria-label="行高">
-            {(Object.keys(ROW_H) as RowSize[]).map((s) => (
-              <button key={s} type="button" className="ps-ext-seg-btn" data-pc="start-detail-rowsize" aria-pressed={size === s} onClick={() => setSize(s)}>
-                {s}
-              </button>
-            ))}
-          </div>
-          <span className="ps-muted">行高 {ROW_H[size]}px</span>
-          <span className="ps-rail-spacer" />
-          <label className="ps-detail-zoom">
-            缩放
-            <input type="range" min={0.5} max={2.5} step={0.1} value={zoom} data-pc="start-detail-zoom" aria-label="缩放" onChange={(e) => setZoom(Number(e.target.value))} />
-          </label>
-        </div>
-
-        {tracks.length === 0 ? (
-          <p className="ps-ext-todo" data-pc="start-detail-empty">这个剪辑里还没有序列。跟 Agent 说一句，它会把片子排上来。</p>
-        ) : (
-          <div className="ps-detail-tracks">
-            <div className="ps-detail-names">
-              {tracks.map((tr) => (
-                <div key={tr.id} className="ps-detail-name" style={{ height: ROW_H[size] }} title={tr.name}>{tr.name}</div>
-              ))}
-            </div>
-            <div className="ps-detail-lanes" style={{ width: duration * pxPerSec }}>
-              {/* 播放头 */}
-              <span className="ps-detail-playhead" style={{ left: Math.min(t, duration) * pxPerSec }} aria-hidden="true" />
-              {tracks.map((tr) => (
-                <div key={tr.id} className="ps-detail-lane" style={{ height: ROW_H[size] }} data-hidden={tr.hidden || undefined}>
-                  {tr.clips.map((c) => {
-                    const label = clipName(project, c, cardName);
-                    const kind = KIND_WORD[clipKind(project, c)];
-                    return (
-                      <button
-                        key={c.id}
-                        type="button"
-                        className="ps-detail-clip"
-                        data-pc="start-detail-clip"
-                        data-clip={c.id}
-                        data-picked={picked === c.id || undefined}
-                        data-kind={kind === "卡片" ? "卡片" : "素材"}
-                        style={{ left: c.start * pxPerSec, width: Math.max(14, (c.end - c.start) * pxPerSec) }}
-                        title={`${kind}：${label}（${c.start.toFixed(1)}–${c.end.toFixed(1)} s）`}
-                        aria-label={`${kind} ${label}`}
-                        onClick={() => { setPicked(c.id); actions.seek(c.start); }}
-                        onContextMenu={(e) => {
-                          e.preventDefault();
-                          setPicked(c.id);
-                          setMenu({ clip: c, label, kind, x: e.clientX, y: e.clientY });
-                        }}
-                      >
-                        <span className="ps-detail-clip-name">{label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+      {/*
+       * 真时间轴。它自己是 `h-full`,所以这一框要有确定的高度(CSS 里 `.ps-detail-tl` 定死一截),
+       * 上面的舞台拿剩下的。行高、缩放、剪辑标签都在它自带的那一条工具栏里,这里不再另给一套。
+       */}
+      <div className="ps-detail-tl" data-pc="start-detail-tl">
+        <TimelineView quoteClip={(clip, label) => props.onQuote(quoteToken({ id: clip.id, label }))} />
       </div>
-
-      {menu && (
-        <div ref={menuBox} className="ps-menu" role="menu" aria-label={`${menu.label} 的操作`} data-pc="start-detail-menu" style={{ left: menu.x, top: menu.y }}>
-          <div className="ps-menu-head">{menu.kind}：{menu.label}</div>
-          <button type="button" className="ps-menu-item" data-pc="start-detail-quote"
-            onClick={() => { props.onQuote(quoteToken({ id: menu.clip.id, label: menu.label })); setMenu(null); }}>
-            引用到输入框
-          </button>
-          <button type="button" className="ps-menu-item" onClick={() => { setMenu(null); actions.select([menu.clip.id]); props.onPro(); }}>
-            在传统式里打开
-          </button>
-        </div>
-      )}
     </div>
   );
 }

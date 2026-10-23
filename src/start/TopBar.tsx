@@ -15,12 +15,14 @@ export function TopBar(props: {
   onHome: () => void;
   collapsed: boolean;
   onToggleSide: () => void;
-  accountName: string | null;
-  onSignOut: () => void;
+  /** 账号那一块:在线浏览器才有。桌面版没有账号,两样都不给,这一块整个不出现 */
+  accountName?: string | null;
+  onSignOut?: () => void;
   center?: ReactNode;
   right?: ReactNode;
 }): JSX.Element {
   const seed = props.accountName ?? "guest";
+  const account = !!props.onSignOut;
   return (
     <header className="ps-top" data-pc="start-top">
       {/* 首页:原来聊天页那颗返回键,用户 2026-10-23 换成小房子并挪到收起键左边 */}
@@ -64,8 +66,8 @@ export function TopBar(props: {
 
       <span className="ps-top-spacer" />
 
-      {/* 账号:摆在右边那几颗的左侧(用户 2026-10-23 定,原来在侧栏底下) */}
-      <div className="ps-top-account" data-pc="start-top-account">
+      {/* 账号:摆在右边那几颗的左侧(用户 2026-10-23 定,原来在侧栏底下)。桌面版没有账号,这一块不出现 */}
+      {account && <div className="ps-top-account" data-pc="start-top-account">
         <span
           className="ps-avatar"
           style={{ background: `hsl(${hueOf(seed)} 45% 32%)`, color: `hsl(${hueOf(seed)} 60% 88%)` }}
@@ -77,7 +79,7 @@ export function TopBar(props: {
         <button type="button" className="ps-link" data-pc="start-sign-out" onClick={props.onSignOut}>
           退出
         </button>
-      </div>
+      </div>}
 
       {props.right}
     </header>
