@@ -293,7 +293,10 @@ void main() {
   // 再沿右边缘淡出(uFadeEdge=0 时基本不起作用):配合上面那条做「右侧是背景色」的格局
   if (uFadeEdge > 0.001) a *= 1.0 - smoothstep(1.0 - uFadeEdge, 1.0, uv.x);
 
-  fragColor = vec4(max(col, 0.0), clamp(a, 0.0, 1.0));
+  // 预乘输出:颜色先乘上 alpha(上下文开的是预乘模式)。
+  // 直通 alpha 在 GPU 合成那条路上会被当成不透明画出来(2026-10-24 用户报的那个毛病)
+  float aOut = clamp(a, 0.0, 1.0);
+  fragColor = vec4(max(col, 0.0) * aOut, aOut);
 }`;
 
 /** 十六进制 → 0..1 的 RGB */
@@ -354,9 +357,14 @@ export function BrandCanvas(): JSX.Element {
     if (!canvas) return;
 
     const gl = canvas.getContext("webgl2", {
-      // 要透出页面底色,所以画布必须带 alpha;不要预乘 —— 着色器里输出的是直通的 alpha
+      // 要透出页面底色,所以画布必须带 alpha。
+      // **用预乘 alpha（默认那条路）**:2026-10-24 用户报「登录界面背景的 alpha 显示失败」,
+      // 用系统截图核实 —— 屏幕上这块是**完全不透明**的青橙渐变,而经 CDP 回读截到的却是正常的半透明烟雾。
+      // 两条路不同:回读走 CPU、按直通 alpha 算得对;屏幕走 GPU 合成,`premultipliedAlpha: false`
+      // 在这条路上没被正确处理,RGB 被按满强度画了出来。预乘是浏览器的默认、也是所有合成器都稳的那条路,
+      // 代价只是着色器里自己把颜色乘上 alpha(见片元着色器末尾)。
       alpha: true,
-      premultipliedAlpha: false,
+      premultipliedAlpha: true,
       antialias: false,
       depth: false,
       stencil: false,
