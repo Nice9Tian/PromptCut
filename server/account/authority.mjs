@@ -405,7 +405,13 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
       if (Object.values(state.projects).some(p => p.status !== 'deleted' && p.name === name)) reject(409, 'name-taken');
       let projectId;
       if (reqProjectId) {
-        if (state.projects[reqProjectId] && state.projects[reqProjectId].status !== 'deleted') {
+        // 删掉过的项目号只有原创建者能再用(claude/guest-fix〔裁〕,审查 C / S1):原先谁都能重建已删除的号,游客 A 的项目
+        // 三天清理后,游客 B 带同一个号新建就成了它的创建者,素材服务那边同一处项目库里还留着 A 的字节。原创建者自己重用
+        // 仍然放行:搬到云端「放弃这次搬迁」之后再搬,还是原来的项目号(workflow/project.md「搬上去还是同一个项目」);
+        // 素材服务在那之前已经把旧字节删掉了(`server/asset-store/project-reaper.mjs`)。别人带这个号来回 409 `project-id-taken`,
+        // 页面会改由云端发新号再建(`src/editor/sync/accountMove.ts`)
+        const existing = state.projects[reqProjectId];
+        if (existing && (existing.status !== 'deleted' || existing.creatorAccountId !== actor.accountId)) {
           reject(409, 'project-id-taken');
         }
         projectId = reqProjectId;
@@ -668,8 +674,9 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
    * 游客建的项目三天就清（2026-10-23 用户定，天数在 `guest.mjs` 的 `GUEST_LIMITS.ttlMs`）。
    *
    * 清的办法和创建者自己点「删项目」完全一样（上面 `adminProject` 的 `delete` 分支）：标成已删除、落墓碑、
-   * 记一条访问事件、按 `delete` 围栏停掉在跑的任务。走同一条路，下游（素材服务按项目清字节、连着的页面被断开）
-   * 不用为游客另认一种「项目没了」。账号建的项目一个都不碰。
+   * 记一条访问事件、按 `delete` 围栏停掉在跑的任务。走同一条路，下游不用为游客另认一种「项目没了」：
+   * 素材服务收到这条删除事件就把整个项目的字节删掉（`server/asset-store/project-reaper.mjs`），连着的页面被断开。
+   * 删掉的项目号不再发给别人（`createProject`）。账号建的项目一个都不碰。
    *
    * 由外面定时叫（`server/hosted/main.mjs`）；这里不自己起计时器，测试才好把时间拨过去。
    * @returns {string[]} 这一趟清掉的项目号

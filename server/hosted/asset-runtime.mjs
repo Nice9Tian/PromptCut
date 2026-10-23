@@ -11,6 +11,7 @@ import { createAssetDocClient } from './asset-doc-client.mjs';
 import { createProjectAssetStores } from '../asset-store/project-stores.mjs';
 import { createProjectAssetAccess } from '../asset-store/project-access.mjs';
 import { createAssetRevocationConsumer } from '../asset-store/project-revocations.mjs';
+import { createProjectReaper } from '../asset-store/project-reaper.mjs';
 import { createServiceUsage, serviceCapBytes, diskTotalOf } from '../asset-store/service-usage.mjs';
 import { StreamStore, handleStreamRequest } from '../asset-store/stream-store.mjs';
 import { openAssetLifecycle } from './asset-lifecycle.mjs';
@@ -59,8 +60,12 @@ export async function startHostedAssetService({ dataDir, host = '127.0.0.1', por
     assetInstanceId: instanceId, serviceIdentity,
     verifyLifecycle: async () => !stopped && lifecycle.state.state === 'running' &&
       lifecycle.state.instanceId === instanceId && lifecycle.state.serviceIdentity === serviceIdentity }) : null;
+  // 项目删掉(创建者删、游客项目三天清理)之后把它的素材字节真的删掉(`project-reaper.mjs`,claude/guest-fix〔裁〕)。
+  // `factory` 在下面才建好:这里只在事件到来时用它,那时已经建好了
+  const reaper = createProjectReaper({ projectStores: { removeProject: id => factory.removeProject(id) },
+    file: path.join(root, 'project-reaper.json'), log });
   const consumer = createAssetRevocationConsumer({ authority: docClient, file: path.join(root, 'access-cursor.json'),
-    participants: runConsumer ? [runConsumer] : [] });
+    participants: runConsumer ? [runConsumer, reaper] : [reaper] });
   const sync = () => {
     if (stopped) return Promise.reject(accountError(503, 'asset-unavailable'));
     if (!syncing) { syncing = consumer.sync().then(cursor => { failure = null; return cursor; }, error => { failure = error; throw error; }).finally(() => { syncing = null; }); }
@@ -143,6 +148,7 @@ export async function startHostedAssetService({ dataDir, host = '127.0.0.1', por
     // 起服务时允许权威暂时不可达，但所有数据口和session保持不可用；只重放真实持久head。
     await runConsumer?.start().catch(error => { if (error.status !== 503) throw error;
       log('asset.run-not-ready', { code: error.code ?? 'run-authority-unavailable' }); });
+    await reaper.start();
     await consumer.start().catch(error => { if (error.status !== 503) throw error; failure = error; log('asset.not-ready', { code: error.code ?? 'authority-unavailable' }); });
     const addr = await listen(assetServer, port, host); await listen(internalServer, internalPort, '127.0.0.1');
     effectivePublicUrl ??= `http://127.0.0.1:${addr.port}/api/asset`;
@@ -150,9 +156,9 @@ export async function startHostedAssetService({ dataDir, host = '127.0.0.1', por
       void sync().catch(error => log('asset.not-ready', { code: error.code ?? 'authority-unavailable' }));
       void runConsumer?.sync().catch(error => log('asset.run-not-ready', { code: error.code ?? 'run-authority-unavailable' }));
     }, pollMs); timer.unref();
-    return { port: addr.port, internalPort, instanceId, projectStores: factory, projectAccess, serviceUsage, streamStoreFor, status,
+    return { port: addr.port, internalPort, instanceId, projectStores: factory, projectAccess, serviceUsage, streamStoreFor, status, reaper,
       get ready() { return ready(); }, get runAssetsStatus() { return runAccess?.status() ?? { runAssetsConfigured: false, runAssetsReady: false }; },
-      async close() { if (stopped) return; stopped = true; clearInterval(timer);
+      async close() { if (stopped) return; stopped = true; clearInterval(timer); reaper.close();
         const failed = [];
         observerChannels?.close();
         for (const close of [() => runAccess?.close(), () => consumer.close(), () => runConsumer?.close(), () => runClient?.close()])
@@ -161,7 +167,7 @@ export async function startHostedAssetService({ dataDir, host = '127.0.0.1', por
         if (failed.length) throw failed.length === 1 ? failed[0] : new AggregateError(failed, 'asset-run-close-failed');
         await lifecycle.closeClean();
       } };
-  } catch (error) { stopped = true; clearInterval(timer);
+  } catch (error) { stopped = true; clearInterval(timer); reaper.close();
     observerChannels?.close();
     for (const close of [() => runAccess?.close(), () => consumer.close(), () => runConsumer?.close(), () => runClient?.close()])
       try { await close(); } catch { /* preserve startup failure */ }
