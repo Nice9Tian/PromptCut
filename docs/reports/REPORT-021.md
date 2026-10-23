@@ -142,3 +142,5 @@
 3. **0.7.19、0.7.20 的补丁要不要补传官网**：这两版的补丁只构建、从没上传。
 4. **网盘连接器的四条待用户项**：真机端到端还差用户本人在 Google 弹窗里授权；切「正式」要先填品牌页；测试模式 100 人是终身额度；A2 的客户端密钥在部署配置里怎么放。
 5. ~~探针总审那条分支合不合 main~~：**已合**（`28c7133e`，按 `v21-manifest.mjs` 文件头的须知走，另有〔裁〕V21-30）。
+6. **编辑器里的 Google 登录：线上这一侧已经通了**（2026-10-23 实测）。`https://visuhive.com/api/account/third-party/config` 回 `ok:true` 并给出 Google 客户端 id；登录页上真的挂着 `accounts.google.com` 的 iframe，控制台**没有**「The given origin is not allowed for the given client ID」，所以 `https://visuhive.com` 已经在那个客户端的 JavaScript 来源里，不用再去控制台加。**还要你拍板的只剩两件**：①「测试」模式下只有测试用户（你自己的邮箱）能登进来，要放开得先填品牌页再切「正式」，而测试模式的 100 人是**终身**额度；② 官网那一侧（VisuHive 仓库的 `claude/google-login`）合不合它自己的 main —— 官网每 5 分钟从 main 同步，不合就不会上线；那条线另有一个会话在跑，由它收尾。
+7. **一处小瑕疵**：登录页控制台有 `google.accounts.id.initialize() is called multiple times` 的警告（GIS 被初始化了不止一次，只用最后一次）。不影响登录，已记这里，下一版顺手收。
