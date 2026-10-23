@@ -4,6 +4,7 @@
  */
 import { STAGE_CSP_HEADER_ONLY_DIRECTIVE } from "../stagePolicy.mjs";
 import type { HardenReport } from "./harden.ts";
+import { SCOPE_GUARD_CRITICAL } from "./scopeGuard.ts";
 
 /*
  * 自检的时限用**真实时间**的定时器:舞台把 `setTimeout` 换成跟着舞台时间走的那一份(`render/stageClock.ts`,不播放时不走),
@@ -55,10 +56,28 @@ export interface IsolationCheckDeps {
   timeoutMs?: number;
 }
 
+/** 舞台文档里能活过本文档的存储:这几样没收住,加固就算没装上(`harden.ts` 6b 步记的 `storage:<名字>:…`) */
+const CRITICAL_STORAGE = ["localStorage", "sessionStorage", "indexedDB", "caches"] as const;
+
+/**
+ * 加固报告里的关键项错误:存储(6b 步 `storage:`)与跨文档通道守卫(6c 步 `scope:`,含守卫核对不过的 `integrity`)。
+ * 有一条,就是「开着门失败」(卡片拿到真实存储或原生线程),自检判「加固没装上」(2026-10-23 审查 P3)。纯函数
+ */
+export function criticalHardenErrors(errors: readonly string[] | null | undefined): string[] {
+  const out: string[] = [];
+  if (!Array.isArray(errors)) return out;
+  for (const e of errors) {
+    const s = String(e);
+    if (CRITICAL_STORAGE.some((k) => s.startsWith(`storage:${k}:`)) || SCOPE_GUARD_CRITICAL.some((k) => s.startsWith(`scope:${k}:`))) out.push(s);
+  }
+  return out;
+}
+
 /** 由各项事实下结论。纯函数,单测逐条核 */
 export function judgeIsolation(f: { crossOrigin: boolean; csp: IsolationReport["csp"]; allowlist?: boolean; harden: HardenReport | null }): IsolationReport {
   const reasons: IsolationFailure[] = [];
-  const hardened = !!f.harden?.installed;
+  // 装了,而且关键项都装上了(只看「装了没有」时,某项锁不上照样报通过,卡片拿到的是真实存储)
+  const hardened = !!f.harden?.installed && criticalHardenErrors(f.harden.errors).length === 0;
   const trustedTypes = f.harden?.trustedTypes ?? "unsupported";
   const egress: IsolationReport["egress"] = "none";
   if (!f.crossOrigin) reasons.push("same-origin");

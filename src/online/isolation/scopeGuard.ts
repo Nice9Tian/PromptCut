@@ -51,7 +51,7 @@ export interface ScopeGuardConfig {
 }
 
 /** 关键项:这些没装上,线程不执行、舞台自检判「加固没装上」(`errors` 里以「名字:」开头的项) */
-export const SCOPE_GUARD_CRITICAL = ["integrity", "indexedDB", "caches", "BroadcastChannel", "SharedWorker", "Worker"] as const;
+export const SCOPE_GUARD_CRITICAL = ["integrity", "indexedDB", "caches", "BroadcastChannel", "SharedWorker", "Worker", "locks"] as const;
 
 export interface ScopeGuardResult {
   /** 收走或改掉的入口(诊断) */
@@ -130,7 +130,7 @@ export function guardStageScope(scope: object, config: ScopeGuardConfig): ScopeG
   const source = Str(config.source);
 
   // 与 `SCOPE_GUARD_CRITICAL` 同一份(守卫自足,不能引用外面的名字;单测核两边一致)
-  const CRITICAL = ["integrity", "indexedDB", "caches", "BroadcastChannel", "SharedWorker", "Worker"];
+  const CRITICAL = ["integrity", "indexedDB", "caches", "BroadcastChannel", "SharedWorker", "Worker", "locks"];
   const fail = (what: string, e: unknown) => { errors.push(what + ":" + (e && (e as Error).message)); };
   const message = (what: string) => "PromptCut 舞台:" + what;
   const thrower = (what: string) => function () { throw new TypeErr(message(what)); };
