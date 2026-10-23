@@ -226,10 +226,11 @@ void main() {
    * 路径不是正圆,是一圈套一圈(基频 + 二次谐波):正圆走起来像在原地打转,一眼能看出是循环;
    * 叠一个二次谐波之后轨迹是条卷曲的闭合曲线,走的路更长、更不像在转圈,而周期还是 1。
    * 四项各给不同的相位与转向,免得四层一起动。
-   * 每一项都减去 a = 0 时的值,所以 uLoop = 0 这一帧和改之前那一帧完全一样 —— 调参台上的那组数照旧能用。
+   * 每一项都减去 loopAng = 0 时的值,所以 uLoop = 0 这一帧和改之前那一帧完全一样 —— 调参台上的那组数照旧能用。
+   * (变量叫 loopAng 不叫 a:这段着色器里已经有两个 a 了 —— 166 行噪声的四角之一、323 行的透明度。叫 a 会 ERROR: a : redefinition,整段编不过、当场退回 CSS 那一版。)
    */
-  float a = 6.2831853 * uLoop;
-  #define LOOPV(ph, dir, amp) (uSwirl * (amp) * (       vec2(sin(a * (dir) + (ph)) - sin(ph), cos(a * (dir) + (ph)) - cos(ph))     + vec2(sin(a * 2.0 * (dir) + (ph)) - sin(ph), cos(a * 2.0 * (dir) + (ph)) - cos(ph)) * 0.45))
+  float loopAng = 6.2831853 * uLoop;
+  #define LOOPV(ph, dir, amp) (uSwirl * (amp) * (       vec2(sin(loopAng * (dir) + (ph)) - sin(ph), cos(loopAng * (dir) + (ph)) - cos(ph))     + vec2(sin(loopAng * 2.0 * (dir) + (ph)) - sin(ph), cos(loopAng * 2.0 * (dir) + (ph)) - cos(ph)) * 0.45))
 
   // 域扭曲两道:第一道把坐标推开,第二道拿推开的结果再推一次。
   // 参考图里那种「被搅过」的层次就是这么来的,一层噪声出不来
