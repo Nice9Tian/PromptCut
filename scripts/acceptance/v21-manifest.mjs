@@ -61,4 +61,13 @@ export const V21_ITEMS = [
   PR21('V21-guest-readonly', '游客进别人的项目时编辑界面的只读呈现（R0 读写对照、R1 徽标、R2 时间轴、R3 参数面板、R4 标题栏、手机版说明条）',
     'guest-readonly-ui-probe', ['--port', '5243', '--out', '{item}'],
     { timeoutMin: 25, known: '探针端口段 5240～5249（自己起一台编辑器，舞台占 +1、+2），跑完收掉' }),
+  PR21('V21-clip-speed-export', '片段速度的导出端到端（按「素材时刻 = mediaOffset + (t − start) × 速度」取帧；变速段不出原声；分离出来的变速声音段两条混音路一致）',
+    'clip-speed-export-probe', ['--port', '5920', '--out', '{item}'],
+    { timeoutMin: 40, known: '端口 5920 起；自己起开发服务器并带 PROMPTCUT_NO_PORT_FILE=1，素材与数据目录都建在 --out 下' }),
+  PR21('V21-clip-speed-keys', '片段速度的身份键比对（缺省 1 倍时与改之前逐字相同；改了速度该变的键都变）',
+    'clip-speed-key-compare', ['--base', '5a8f375a'],
+    { timeoutMin: 20, known: '--base 给开工提交；输出 57 项逐字对照' }),
+  PR21('V21-clip-speed-ui', '片段速度的界面（桌面编辑分区一栏与手机速度面板、手动输入倍率、超范围拒绝、挂转场改速度的气泡）',
+    'clip-speed-ui-probe', ['--dist', '{dist}', '--out', '{item}', '--base-port', '5930', '--doc-port', '5936', '--asset-port', '5937'],
+    { needs: ['online-build'], timeoutMin: 30, known: '端口 5930 起，文档服务 5936、素材服务 5937' }),
 ];

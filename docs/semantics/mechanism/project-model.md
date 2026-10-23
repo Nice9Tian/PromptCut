@@ -35,3 +35,13 @@
 
 - 激活剪辑经剪辑段（任意深度）能走到的那些剪辑的内容（序列、总时长、转场），只在有剪辑段时并进三处身份：镜像的项目哈希（`src/render/changedClips.mjs` 的 `projectHash`）、快照签名（`src/render/frameClient.ts`）、帧服务的帧身份（`server/frame-identity.mjs`）。没有剪辑段的项目三处一个字节不变，旧缓存照用（`src/kernel/cutIdentity.mjs`）。
 - 帧服务按轨道前缀拆层、依赖下层的流判「有没有画面素材」、导出前的原尺寸素材拦截，都把被引用剪辑里用到的素材算进去。
+
+## 片段速度
+
+〔裁：clip-speed 2026-10-23，三级；产品功能见 `../product/project-model.md`「视频段的速度」〕
+
+- **换算**：纯函数 `src/kernel/clipTime.mjs`。取帧时刻 `素材时刻 = mediaOffset + (t − start) × speed`；没有字段、不是有限正数时速度按 1。缺省 1 倍的项目**身份键逐字不变**：速度只在不等于 1 时才进键（`withMediaRates` 只给变速段的 `@clip/<id>/source` 节点加 `rate`），所以老项目不会因为这次改动全部判「已过期」重产。
+- **不碰共享快照键的代码指纹**：变速声音的重采样放在 `server/bakery/mux-audio.mjs`，**不放进 `audio-mix.mjs`** —— 后者和 `export.mjs` 等七个模块进 `server/frame-code.mjs` 的 `SNAPSHOT_FILES`，改一个字所有片段的 contentKey / snapshotKey 都要变（实测：改了键比对 45/57，还原后 57/57）。
+- **两条导出混音路怎么对齐**：`playableAudioPlan` 先用 ffmpeg 把变速声音段做成一段时间轴长度的 wav（读 `时长 × 速度` 秒素材，滤镜 `aresample=48000,asetrate=48000×速度,aresample=48000`），**Chrome 离线混音的裁段与 ffmpeg 混音都从这同一份 wav 起**。预览走 `<audio>` 的 `playbackRate` 加 `preservesPitch = false`；在线浏览器导出走 `browserExport.ts` 的 `resampleVarispeed`（同一语义，插值算法与 ffmpeg 的 swr 不同，**这一路还没有实测**）。选变调而不选保调，是因为预览与在线浏览器导出只能做变调，选保调两边会不一致。
+- **让位的实现**：`store.setClipSpeed` 判范围（`clipTime.mjs` 的 `speedInRange`），超出就拒绝并提示，不夹到边界。变长时把同序列后面的段整体后移；变短时尾部留空。转场装不下时缩到「新长度 − 0.01 秒」，不短于 0.1 秒；连 0.1 秒都装不下才拒绝。推不开时整个操作不生效并说明原因。
+- **三支探针**：`clip-speed-export-probe`（导出端到端与声音）、`clip-speed-key-compare`（与开工提交逐项比键）、`clip-speed-ui-probe`（桌面与手机界面）。
