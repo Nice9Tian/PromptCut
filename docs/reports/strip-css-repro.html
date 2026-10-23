@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PromptCut 缩略时间轴 (.strip-scroll) iOS Safari 滚动诊断复现页</title>
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: #07090c;
+      color: #e6eaf2;
+      font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    /* ===== 原样抄自 src/mobile/mobile.css ===== */
+    .pcm {
+      --bg: #12151b; --bg-page: #07090c;
+      --panel: #1a1f28; --panel2: #222834; --line: #2d3442;
+      --text: #e6eaf2; --dim: #8b95a8; --white: #fff;
+      --accent: #26c6e6; --accent-dim: #12404c; --on-accent: #04222a; --accent-soft: #d5f6ff;
+      --plum: #8a5a9e; --plum-dim: #3a2a45; --plum-text: #d3a8e6;
+      --warn: #e8b04a; --warn-text: #d9c08a;
+      --danger: #e5604f; --ok: #4cc38a;
+      --clip-v: #1b5f78; --clip-a: #2b6b4f; --clip-cap: #5b5530;
+      --scrim: #0009; --scrim-light: #0004;
+      --shade-weak: #0006; --shade: #000a; --shade-strong: #000d; --shade-art: #0008;
+      --hair: #ffffff08; --edge: #ffffff22; --haze: #ffffff33; --haze-strong: #ffffff55;
+      --sb-thumb: var(--haze); --sb-thumb-hover: var(--haze-strong);
+      --r-s: 6px; --r-m: 10px; --r-l: 18px; --r-pill: 999px;
+      --fs-xs: 10px; --fs-s: 11px; --fs-m: 12px; --fs-l: 14px; --fs-xl: 16px;
+
+      position: fixed; inset: 0; display: flex; flex-direction: column; overflow: hidden;
+      background: var(--bg); color: var(--text);
+      font: var(--fs-l)/1.4 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      -webkit-text-size-adjust: 100%; overscroll-behavior: none;
+    }
+    /* 默认打开整页上下滚动以便在一屏内看完全部 6 个变体；点顶部开关可切回严格 overflow: hidden */
+    .pcm.allow-page-scroll {
+      overflow-y: auto;
+      overflow-x: hidden;
+      -webkit-overflow-scrolling: touch;
+    }
+    .pcm * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    .pcm button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+
+    /* 原样祖先链规则 */
+    .pcm .editor { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    .pcm.allow-page-scroll .editor { flex: none; }
+    .pcm .pane-default { flex: none; display: flex; flex-direction: column; }
+    .pcm .mainhead { flex: none; display: flex; align-items: baseline; justify-content: space-between; padding: 8px 14px 0; }
+    .pcm .mainhead b { font-size: var(--fs-l); }
+    .pcm .mainhead span { font-size: var(--fs-m); color: var(--text); font-variant-numeric: tabular-nums; }
+    .pcm .mainstrip { flex: none; position: relative; }
+    .pcm .strip-scroll {
+      display: flex; align-items: center; overflow-x: auto; overflow-y: hidden;
+      scrollbar-width: none; padding: 6px 0 10px; min-height: 80px;
+      touch-action: pan-x; overscroll-behavior-x: contain;
+      user-select: none; -webkit-user-select: none;
+    }
+    .pcm .strip-scroll::-webkit-scrollbar { display: none; }
+    .pcm .sp-l { flex: none; width: calc(50% - 46px); }
+    .pcm .sp-r { flex: none; width: 50%; }
+    .pcm .cf-line {
+      position: absolute; left: 50%; top: 2px; bottom: 6px; width: 2px; margin-left: -1px;
+      background: var(--white); border-radius: var(--r-s);
+      box-shadow: 0 0 0 1px var(--shade-weak); z-index: 6; pointer-events: none;
+    }
+    .pcm .madd {
+      flex: none; width: 40px; height: 64px; border-radius: var(--r-m);
+      background: var(--panel2); display: grid; place-items: center;
+      margin-right: 6px; color: var(--text); font-size: 20px; font-weight: 600;
+    }
+    .pcm .mblock {
+      flex: none; width: 80px; height: 64px; border-radius: var(--r-m);
+      position: relative; overflow: hidden; border: 2px solid transparent;
+      user-select: none; cursor: pointer;
+    }
+    .pcm .mblock .no {
+      position: absolute; left: 5px; top: 4px; font-size: var(--fs-xs);
+      background: var(--shade-weak); padding: 0 5px; border-radius: var(--r-s);
+    }
+    .pcm .mblock .du {
+      position: absolute; left: 6px; bottom: 4px; display: inline-flex;
+      align-items: center; gap: 3px; font-size: var(--fs-m); font-weight: 600;
+      text-shadow: 0 1px 3px var(--shade-strong); font-variant-numeric: tabular-nums; color: var(--white);
+    }
+    .pcm .mark {
+      flex: none; width: 24px; height: 24px; margin: 0 3px; border-radius: var(--r-pill);
+      background: var(--panel2); display: grid; place-items: center;
+      font-size: var(--fs-s); color: var(--dim);
+    }
+
+    /* ===== 各变体覆盖样式 ===== */
+    /* (B) 去掉 overflow-y: hidden，只留 overflow-x: auto */
+    .case-b .strip-scroll {
+      overflow-y: visible;
+    }
+
+    /* (C) .sp-l / .sp-r 换成固定 px（由 JS 按视口宽写入或回退 141.5px / 187.5px），并给 1px 高度 */
+    .case-c .sp-l {
+      width: var(--fixed-sp-l, 141.5px);
+      height: 1px;
+    }
+    .case-c .sp-r {
+      width: var(--fixed-sp-r, 187.5px);
+      height: 1px;
+    }
+
+    /* (D) 给祖先链及容器显式加 width: 100%; min-width: 0; max-width: 100%，子项显式 flex-shrink: 0; min-width: 0 */
+    .case-d.pane-default,
+    .case-d .mainstrip,
+    .case-d .strip-scroll {
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+    }
+    .case-d .strip-scroll > * {
+      min-width: 0;
+      flex-shrink: 0;
+    }
+
+    /* (E) 保留 50% 百分比，但把 .sp-l / .sp-r 改为 flex-basis + height: 1px（排除 align-items: center 下 0 高度空盒） */
+    .case-e .sp-l {
+      width: auto;
+      flex: 0 0 calc(50% - 46px);
+      height: 1px;
+    }
+    .case-e .sp-r {
+      width: auto;
+      flex: 0 0 50%;
+      height: 1px;
+    }
+
+    /* (F) 综合修复：width: 100% + min-width: 0 + 去 overflow-y: hidden + position: relative + 50vw 垫片 + height: 1px */
+    .case-f.pane-default,
+    .case-f .mainstrip,
+    .case-f .strip-scroll {
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+    }
+    .case-f .strip-scroll {
+      position: relative;
+      overflow-x: auto;
+      overflow-y: visible;
+      height: 80px;
+    }
+    .case-f .sp-l {
+      flex: 0 0 calc(50vw - 46px);
+      width: calc(50vw - 46px);
+      height: 1px;
+    }
+    .case-f .sp-r {
+      flex: 0 0 50vw;
+      width: 50vw;
+      height: 1px;
+    }
+
+    /* ===== 诊断面板样式（清晰大字号） ===== */
+    .diag-banner {
+      background: #17202a;
+      border-bottom: 2px solid var(--accent);
+      padding: 10px 12px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .diag-banner h1 {
+      margin: 0 0 4px;
+      font-size: 15px;
+      color: var(--accent);
+    }
+    .diag-banner p {
+      margin: 0 0 8px;
+      color: var(--text);
+    }
+    .diag-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+    .diag-btn {
+      background: var(--panel2) !important;
+      border: 1px solid var(--line) !important;
+      color: var(--text) !important;
+      padding: 5px 10px !important;
+      border-radius: var(--r-s) !important;
+      font-size: 12px !important;
+      font-weight: 600 !important;
+    }
+    .diag-btn.on {
+      background: var(--accent-dim) !important;
+      border-color: var(--accent) !important;
+      color: var(--accent) !important;
+    }
+    .diag-btn.act {
+      background: var(--accent) !important;
+      color: var(--on-accent) !important;
+      border-color: var(--accent) !important;
+    }
+    .case-card {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 0 6px;
+      background: var(--bg);
+    }
+    .case-meta {
+      padding: 0 12px 6px;
+    }
+    .case-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--accent-soft);
+      margin-bottom: 3px;
+    }
+    .case-desc {
+      font-size: 12px;
+      color: var(--dim);
+      line-height: 1.45;
+      margin-bottom: 6px;
+    }
+    .metrics-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+      margin-bottom: 6px;
+      font-variant-numeric: tabular-nums;
+    }
+    .m-pill {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--r-s);
+      padding: 3px 7px;
+      font-size: 12px;
+      color: var(--text);
+    }
+    .m-pill b {
+      color: var(--accent);
+      font-size: 13px;
+    }
+    .m-pill.bad {
+      border-color: var(--danger);
+      background: #2c1618;
+    }
+    .m-pill.bad b {
+      color: var(--danger);
+    }
+    .m-pill.good {
+      border-color: var(--ok);
+      background: #132a22;
+    }
+    .m-pill.good b {
+      color: var(--ok);
+    }
+    .action-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    .readback {
+      color: var(--warn-text);
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div class="pcm allow-page-scroll" id="pcm-root">
+    <div class="diag-banner">
+      <h1>iPhone Safari 真机诊断页（.strip-scroll 缩略时间轴）</h1>
+      <p>
+        本页供在 <b>真机 iPhone Safari</b> 上直接打开对比。重点看每条用例的 3 个指标：<br/>
+        ① <b>可滚距离 (scrollWidth - clientWidth)</b> 是否 &gt; 0（若 &le; 0 则几何上不可滚）；<br/>
+        ② <b>sp-l / sp-r 宽高</b>（若变成 0 说明百分比或空盒塌缩）；<br/>
+        ③ 点「<b>程序推 scrollLeft</b>」后<b>实际读回值</b>是否弹回 0，以及手指左右划能否顺畅滑动。
+      </p>
+      <div class="diag-controls">
+        <span>片段数：</span>
+        <button type="button" class="diag-btn on" data-n="1">N=1 (默认 455)</button>
+        <button type="button" class="diag-btn" data-n="2">N=2 (565)</button>
+        <button type="button" class="diag-btn" data-n="5">N=5 (895)</button>
+        <button type="button" class="diag-btn" id="toggle-pcm-ov">切为严格 .pcm overflow:hidden</button>
+        <button type="button" class="diag-btn act" id="push-all-btn">一键测试全部 scrollLeft</button>
+      </div>
+    </div>
+
+    <div class="editor" id="editor-root"></div>
+  </div>
+
+  <script>
+    (function () {
+      var CASES = [
+        {
+          id: "a",
+          cls: "case-a",
+          title: "变体 A：原样代码（基线对照）",
+          desc: "改了什么：未改，完全照搬 mobile.css 原样（overflow-x:auto + overflow-y:hidden，.sp-l 为 calc(50% - 46px)，.sp-r 为 50%，无 height）。想验证什么：在 iPhone Safari 上复现原故障，观察 clientWidth、scrollWidth、sp-l/sp-r 实测尺寸及程序设 scrollLeft 是否弹回 0。"
+        },
+        {
+          id: "b",
+          cls: "case-b",
+          title: "变体 B：去掉 overflow-y: hidden（只留 overflow-x: auto）",
+          desc: "改了什么：把 .strip-scroll 的 overflow-y: hidden 改为 visible（只留 overflow-x: auto）。想验证什么：WebKit 上 overflow-x:auto 配 overflow-y:hidden 的老毛病。如果在 iPhone 上 A 不可滚而 B 能滚，说明是 overflow-y:hidden 锁死了 WebKit 的横向滚动层或触屏手势。"
+        },
+        {
+          id: "c",
+          cls: "case-c",
+          title: "变体 C：.sp-l / .sp-r 百分比换成固定 px（并设 height: 1px）",
+          desc: "改了什么：把 .sp-l 的 calc(50% - 46px) 与 .sp-r 的 50% 换成按视口算好的固定 px，并加 height: 1px。想验证什么：可滚动 flex 容器内百分比宽度解析与空盒塌缩。如果在 iPhone 上 A 的 scrollWidth <= clientWidth 而 C 能正常滚动，说明元凶是 .sp-l/.sp-r 在 WebKit 下百分比解析或 0 高度空盒。"
+        },
+        {
+          id: "d",
+          cls: "case-d",
+          title: "变体 D：祖先链与容器加 width: 100%; min-width: 0，子项加 min-width: 0",
+          desc: "改了什么：给 .pane-default、.mainstrip、.strip-scroll 显式加 width:100%; min-width:0; max-width:100%，子项加 min-width:0; flex-shrink:0。想验证什么：祖先链是否有某一环退化成 max-content 把 clientWidth 撑成 455。如果在 iPhone 上 A 的 clientWidth=455 而 D 回到 375 且能滚，说明是祖先宽度未收口。"
+        },
+        {
+          id: "e",
+          cls: "case-e",
+          title: "变体 E：保留 50% 百分比，但改用 flex-basis 并给 .sp-l / .sp-r 设 height: 1px",
+          desc: "改了什么：保留 50% 百分比，但写为 flex: 0 0 calc(50% - 46px) / flex: 0 0 50% 且加 height: 1px。想验证什么：区分「百分比解析失败」与「align-items:center 下 .sp-l/.sp-r 高度为 0 导致 WebKit 忽略尾随空盒溢出」。若 E 能滚而 A 不能滚，说明是 0 高度空盒或 width:auto/flex-basis 差异所致。"
+        },
+        {
+          id: "f",
+          cls: "case-f",
+          title: "变体 F：综合修复（width:100% + 去 overflow-y:hidden + 50vw 垫片 + height:1px）",
+          desc: "改了什么：祖先显式 width:100%; min-width:0 + .strip-scroll 设 position:relative; height:80px 并去掉 overflow-y:hidden + .sp-l/.sp-r 改用 calc(50vw - 46px)/50vw 与 height:1px。想验证什么：综合修复在真机 iPhone Safari 上是否手势与程序 scrollLeft 均 100% 正常。"
+        }
+      ];
+
+      var COLORS = [
+        "linear-gradient(135deg, hsl(195 42% 34%), #0008)",
+        "linear-gradient(135deg, hsl(265 42% 34%), #0008)",
+        "linear-gradient(135deg, hsl(145 42% 34%), #0008)",
+        "linear-gradient(135deg, hsl(25 42% 34%), #0008)",
+        "linear-gradient(135deg, hsl(330 42% 34%), #0008)"
+      ];
+
+      var currentN = 1;
+      var editorRoot = document.getElementById("editor-root");
+      var pcmRoot = document.getElementById("pcm-root");
+
+      function updateFixedVars() {
+        var vw = document.documentElement.clientWidth || window.innerWidth || 375;
+        var half = vw / 2;
+        pcmRoot.style.setProperty("--fixed-sp-l", (half - 46) + "px");
+        pcmRoot.style.setProperty("--fixed-sp-r", half + "px");
+      }
+
+      function buildClipsHTML(n) {
+        var html = '<div class="sp-l"></div>';
+        html += '<button type="button" class="madd" aria-label="添加素材">＋</button>';
+        for (var i = 0; i < n; i++) {
+          var bg = COLORS[i % COLORS.length];
+          html += '<div class="mblock" style="background:' + bg + '">';
+          html += '<span class="no">' + (i + 1) + '</span>';
+          html += '<span class="du">00:06</span>';
+          html += '</div>';
+          if (i < n - 1) {
+            html += '<button type="button" class="mark">＋</button>';
+          }
+        }
+        html += '<div class="sp-r"></div>';
+        return html;
+      }
+
+      function renderCases() {
+        updateFixedVars();
+        var html = "";
+        for (var i = 0; i < CASES.length; i++) {
+          var c = CASES[i];
+          html += '<div class="pane-default case-card ' + c.cls + '" data-case="' + c.id + '">';
+          html += '  <div class="case-meta">';
+          html += '    <div class="case-title">' + c.title + '</div>';
+          html += '    <div class="case-desc">' + c.desc + '</div>';
+          html += '    <div class="metrics-row" id="metrics-' + c.id + '"></div>';
+          html += '    <div class="action-row">';
+          html += '      <button type="button" class="diag-btn act" data-push="' + c.id + '">程序推 scrollLeft</button>';
+          html += '      <button type="button" class="diag-btn" data-reset="' + c.id + '">归零</button>';
+          html += '      <span class="readback" id="readback-' + c.id + '">未测试程序赋值</span>';
+          html += '    </div>';
+          html += '  </div>';
+          html += '  <div class="mainhead"><b>缩略时间轴 (' + c.id.toUpperCase() + ')</b><span>' + currentN + ' 段 · 共 00:' + String(currentN * 6).padStart(2, "0") + '</span></div>';
+          html += '  <div class="mainstrip">';
+          html += '    <div class="cf-line" title="当前帧"></div>';
+          html += '    <div class="strip-scroll" id="strip-' + c.id + '">';
+          html +=        buildClipsHTML(currentN);
+          html += '    </div>';
+          html += '  </div>';
+          html += '</div>';
+        }
+        editorRoot.innerHTML = html;
+
+        for (var j = 0; j < CASES.length; j++) {
+          (function (cid) {
+            var strip = document.getElementById("strip-" + cid);
+            strip.addEventListener("scroll", function () {
+              updateMetricsFor(cid);
+            }, { passive: true });
+          })(CASES[j].id);
+        }
+        updateAllMetrics();
+      }
+
+      function updateMetricsFor(cid) {
+        var strip = document.getElementById("strip-" + cid);
+        var box = document.getElementById("metrics-" + cid);
+        if (!strip || !box) return;
+        var cw = strip.clientWidth;
+        var sw = strip.scrollWidth;
+        var dist = sw - cw;
+        var sl = Math.round(strip.scrollLeft * 10) / 10;
+        var spl = strip.querySelector(".sp-l");
+        var spr = strip.querySelector(".sp-r");
+        var mb0 = strip.querySelector(".mblock");
+        var splRect = spl ? Math.round(spl.getBoundingClientRect().width * 10) / 10 + "×" + Math.round(spl.getBoundingClientRect().height) : "-";
+        var sprRect = spr ? Math.round(spr.getBoundingClientRect().width * 10) / 10 + "×" + Math.round(spr.getBoundingClientRect().height) : "-";
+        var mb0Left = mb0 ? mb0.offsetLeft : "-";
+
+        var statusCls = dist > 5 ? "good" : "bad";
+        box.innerHTML =
+          '<span class="m-pill">clientWidth: <b>' + cw + '</b></span>' +
+          '<span class="m-pill">scrollWidth: <b>' + sw + '</b></span>' +
+          '<span class="m-pill ' + statusCls + '">可滚距离: <b>' + dist + '</b></span>' +
+          '<span class="m-pill">scrollLeft: <b>' + sl + '</b></span>' +
+          '<span class="m-pill">sp-l(宽×高): <b>' + splRect + '</b></span>' +
+          '<span class="m-pill">sp-r(宽×高): <b>' + sprRect + '</b></span>' +
+          '<span class="m-pill">首卡offsetLeft: <b>' + mb0Left + '</b></span>';
+      }
+
+      function updateAllMetrics() {
+        updateFixedVars();
+        for (var i = 0; i < CASES.length; i++) {
+          updateMetricsFor(CASES[i].id);
+        }
+      }
+
+      function pushScroll(cid) {
+        var strip = document.getElementById("strip-" + cid);
+        var rb = document.getElementById("readback-" + cid);
+        if (!strip || !rb) return;
+        var dist = strip.scrollWidth - strip.clientWidth;
+        var want = dist > 0 ? Math.max(40, Math.round(dist / 2)) : 60;
+        strip.scrollLeft = want;
+        var syncRead = Math.round(strip.scrollLeft * 10) / 10;
+        updateMetricsFor(cid);
+        requestAnimationFrame(function () {
+          var rafRead = Math.round(strip.scrollLeft * 10) / 10;
+          updateMetricsFor(cid);
+          var ok = rafRead > 0;
+          rb.style.color = ok ? "#4cc38a" : "#e5604f";
+          rb.textContent = "设入: " + want + " → 同步读回: " + syncRead + " / 下一帧读回: " + rafRead + (ok ? " (推动成功)" : " (弹回 0，推不动！)");
+        });
+      }
+
+      editorRoot.addEventListener("click", function (e) {
+        var t = e.target;
+        if (!(t instanceof HTMLElement)) return;
+        var pushId = t.getAttribute("data-push");
+        if (pushId) {
+          pushScroll(pushId);
+          return;
+        }
+        var resetId = t.getAttribute("data-reset");
+        if (resetId) {
+          var strip = document.getElementById("strip-" + resetId);
+          var rb = document.getElementById("readback-" + resetId);
+          if (strip) {
+            strip.scrollLeft = 0;
+            updateMetricsFor(resetId);
+          }
+          if (rb) {
+            rb.style.color = "#d9c08a";
+            rb.textContent = "已归零 (scrollLeft = 0)";
+          }
+        }
+      });
+
+      document.querySelector(".diag-controls").addEventListener("click", function (e) {
+        var t = e.target;
+        if (!(t instanceof HTMLElement)) return;
+        var nAttr = t.getAttribute("data-n");
+        if (nAttr) {
+          currentN = Number(nAttr);
+          var btns = document.querySelectorAll("[data-n]");
+          for (var i = 0; i < btns.length; i++) {
+            btns[i].classList.toggle("on", btns[i].getAttribute("data-n") === nAttr);
+          }
+          renderCases();
+          return;
+        }
+        if (t.id === "toggle-pcm-ov") {
+          var allow = pcmRoot.classList.toggle("allow-page-scroll");
+          t.classList.toggle("on", !allow);
+          t.textContent = allow ? "切为严格 .pcm overflow:hidden" : "当前：严格 .pcm overflow:hidden（点此恢复整页竖滚）";
+          updateAllMetrics();
+          return;
+        }
+        if (t.id === "push-all-btn") {
+          for (var j = 0; j < CASES.length; j++) {
+            pushScroll(CASES[j].id);
+          }
+        }
+      });
+
+      window.addEventListener("resize", updateAllMetrics);
+      renderCases();
+    })();
+  </script>
+</body>
+</html>
