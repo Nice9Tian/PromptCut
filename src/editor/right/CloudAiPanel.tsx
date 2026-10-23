@@ -21,6 +21,8 @@ import { ThinkingStrip } from "./chat/ThinkingStrip";
 import { CloudQueueList, QueueList } from "./chat/QueueList";
 import { pushToast, setAccountAgentEnabled, useSync } from "../sync/syncManager";
 import { Composer } from "./chat/Composer";
+import { memberReadOnlyNow } from "../readOnlyCore";
+import { useReadOnly } from "../readOnly";
 import { StartHero, useStartPage } from "./chat/StartHero";
 import { CloudModelBar } from "./CloudModelBar";
 import { AgentActivityPanel, useRoundSelection } from "./chat/ActivityPanel";
@@ -210,6 +212,8 @@ export function CloudAiPanel(props: {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // 开始页(本项目一个会话都没有):消息区换成 StartHero;点预设往输入框放那句话,点发送才把占位页变成第一个会话(云端是新建云端对话)
   const start = useStartPage(tabId, inputText, setInputText, () => { requestAnimationFrame(() => textareaRef.current?.focus()); }, chat.messages.length > 0);
+  // 这个项目只给了只读权限(游客):输入区整个置灰(Composer 的 readOnly),发送路径也在 handleSend 里兜底
+  const ro = useReadOnly();
   /* 附件:选文件 → 逐个上传到云端这个对话的工作目录(显示上传中)→ 发消息时把传好的带上。失败给出原因,可点一下重试、可移除 */
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -313,6 +317,8 @@ export function CloudAiPanel(props: {
   };
 
   const handleSend = async (text: string) => {
+    // 这个项目只给了只读权限(游客):不能给云端 Agent 发消息。输入区已置灰(Composer),这是别的发送路径(排队、重发)的兜底
+    if (memberReadOnlyNow()) return;
     if (creatorReadOnly || view.revoked || (!text.trim() && attachments.length === 0)) return;
     if (off) return;
     // 开始页上点发送:这时才建第一个会话,这条消息在里面发出去
@@ -772,6 +778,8 @@ export function CloudAiPanel(props: {
         uploading={false}
         disabled={Boolean(view.revoked)}
         disabledReason={view.revoked ? "当前账号已无法读取这个对话，请重新选择有权限的对话。" : undefined}
+        readOnly={ro.locked}
+        readOnlyReason={ro.why}
         onPickFiles={() => fileInputRef.current?.click()}
         onRetryAttachment={(id) => retryAttachment(id)}
         onRemoveAttachment={removeAttachment}

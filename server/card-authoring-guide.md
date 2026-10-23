@@ -721,6 +721,7 @@ Lottie 的封装卡和通用的 `lottie` 卡是 remotion 式的(每一帧把时�
 4. **卡片是 1920×1080 舞台上的透明层**，根元素用 `absolute inset-0`，背景保持透明
    （除非这张卡就是要铺满底色）。
 5. 字号、间距用 1920×1080 下的固定像素，不用响应式单位，舞台会整体缩放。（具体数值要不要做成参数，见第 5 节。）
+6. **不要起后台线程、不要用跨页通道和浏览器存储**：`Worker`、`SharedWorker`、`BroadcastChannel`、`navigator.locks`、`localStorage` / `sessionStorage`、IndexedDB、`caches`、`navigator.storage`、`window.name`、`history.pushState` 都不用，也不要把参数（里面有素材地址）存到任何地方。在线浏览器的舞台里这些要么没有、要么只在当前这一次打开期间有效，在桌面上也会让预览和导出对不上。
 
 ### 可以用的依赖
 

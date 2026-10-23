@@ -38,13 +38,19 @@
  *   闭区间，`end` 缺省到末尾；没入库返回 null。
  * @property {(hash: string) => Promise<ChunkStatus>} chunks
  *   从没见过：`size: null`、`received: []`；已入库：全部片号、`complete: true`。
- * @property {(hash: string, n: number, info: { size: number, ext?: string }, source: AsyncIterable<Buffer> | import('node:stream').Readable) => Promise<PutResult>} putChunk
+ * @property {(hash: string, n: number, info: { size: number, ext?: string, tier?: string }, source: AsyncIterable<Buffer> | import('node:stream').Readable) => Promise<PutResult>} putChunk
  *   已入库时把 `source` 读完丢掉、不落盘；`size-mismatch`、`out-of-range` 不碰 `source`，由调用方处理请求体。
+ *   `tier` 是上传方报的档位（见下「档位」），只认 `small`，别的一律按 `original` 记。
  * @property {(hash: string) => Promise<CompleteResult>} complete
  * @property {(hash: string) => Promise<boolean>} remove
  *   删掉已入库的全件和暂存；删到了返回 true。
  * @property {() => Promise<{ blobs: number, bytes: number, staging: number }>} usage
  *   `staging` 是有暂存的哈希个数。
+ * @property {() => Promise<{ stored: InventoryEntry[], staging: InventoryEntry[] }>} inventory
+ *   已入库的全件与暂存，各带扩展名和档位（游客视频条数用，`guest-quota.mjs`）。与 `usage` 数的是同一批东西：
+ *   `stored` 与 `usage().blobs` 同数；`staging` 里还没登记（没有 meta）的那种不列。
+ *
+ * @typedef {{ hash: string, ext: string, tier: 'small' | 'original' }} InventoryEntry
  *
  * 共同规则：
  * - 哈希 64 位十六进制，大小写不敏感，一律按小写存取；格式不对抛 TypeError。
@@ -59,6 +65,10 @@
  *   （claude/push-incomplete〔裁〕）。
  * - 写完补标记时暂存已被收尾入库（另一路先收尾了）：回 `complete`，不回 `discarded`。
  * - 收尾按片号顺序算全件 sha256：不符丢弃全部暂存；相符入库。
+ * - **档位**（2026-10-23，游客的视频条数按「原尺寸几个、小档几个取多的」数）：跟着哈希走，和 `ext` 一起登记在暂存里，收尾时随全件入库，
+ *   `remove` 时一起删。只往「计数」那边退：登记时说 `small`，之后任何一片没说 `small`（缺了、拼错、说 `original`），
+ *   这一条就改记 `original`，不会反过来；收尾时按暂存里最后记的那个落到全件上，原先这个哈希留下的 `small` 标记
+ *   在收尾成 `original` 时清掉。标记丢了、读不出来，一律当 `original`。已入库的全件不因再传而改档位。
  */
 
 /** 分片大小：8 MiB（HTTP 契约写死） */
@@ -83,6 +93,15 @@ export function normalizeExt(ext) {
   if (raw === '') return '';
   if (!/^[a-z0-9]{1,8}$/.test(raw)) throw new TypeError('BlobStore：ext 必须是 1～8 位字母数字');
   return raw;
+}
+
+/**
+ * 档位归一：只有 `small`（不分大小写、去掉两头空白）算小档，缺失、拼错、不认识的一律 `original`。
+ * 失败要闭合：这个值决定游客的视频算不算数，认不出来就当算数（`guest-quota.mjs`）。
+ * @returns {'small' | 'original'}
+ */
+export function normalizeTier(tier) {
+  return typeof tier === 'string' && tier.trim().toLowerCase() === 'small' ? 'small' : 'original';
 }
 
 /** 分片号与全件大小的形状校验；不合法抛 TypeError */

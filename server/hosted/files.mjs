@@ -94,6 +94,8 @@ export const HOSTED_ASSET_DEPLOY_FILES = Object.freeze([
   'server/account/agent-instance-internal.mjs',
   'server/account/agent-read-control.mjs',
   'server/account/client.mjs',
+  // 游客素材限额：`asset-store/guest-quota.mjs` 要它的 GUEST_LIMITS 与判断函数（2026-10-23）
+  'server/account/guest.mjs',
   'server/account/ledger.mjs',
   'server/account/protocol.mjs',
   'server/account/run-asset-protocol.mjs',
@@ -104,10 +106,14 @@ export const HOSTED_ASSET_DEPLOY_FILES = Object.freeze([
   'server/asset-store/blob-store.mjs',
   'server/asset-store/client.mjs',
   'server/asset-store/fs-store.mjs',
+  'server/asset-store/guest-quota.mjs',
   'server/asset-store/index.mjs',
+  // 游客视频按文件头认（`guest-quota.mjs` 引它）、删掉的项目回收字节（`hosted/asset-runtime.mjs` 引它），claude/guest-fix
+  'server/asset-store/media-sniff.mjs',
   'server/asset-store/memory-store.mjs',
   'server/asset-store/project-access.mjs',
   'server/asset-store/project-io.mjs',
+  'server/asset-store/project-reaper.mjs',
   'server/asset-store/project-revocations.mjs',
   'server/asset-store/project-stores.mjs',
   'server/asset-store/px-evict.mjs',

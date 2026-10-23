@@ -4,6 +4,8 @@ import { importVideoFiles, registerMediaFile } from "../io";
 import { applyUploadedMedia, uploadMediaFile } from "../io/mediaUpload";
 import { classifyFileDetailed, EXT_KIND } from "../io/mediaKinds";
 import { holdOnlineQueueOriginals } from "../../online/mediaUploadQueue";
+import { blockedByReadOnly } from "../readOnlyCore";
+import { viewOnlyText } from "../io/viewOnly";
 
 export type AssetKind = MediaAsset["kind"];
 
@@ -110,6 +112,8 @@ export interface ImportResult {
 }
 
 export async function importMediaFiles(files: FileList | File[]): Promise<ImportResult> {
+  // 只读项目(游客):导入素材是写。按钮已置灰,走到这里是拖放之类没盖到的路
+  if (blockedByReadOnly()) throw new Error(viewOnlyText());
   const releaseHold = holdOnlineQueueOriginals();
   try {
     const counts: Record<AssetKind, number> = { video: 0, audio: 0, image: 0 };

@@ -7,6 +7,7 @@ import {
 } from "../../../kernel/transitions";
 import { clearDragPayload, MIME_TRANSITION, setDragPayload } from "../../dnd";
 import { PreviewCard } from "../PreviewCard";
+import { useReadOnly } from "../../readOnly";
 import { usePreviewMediaUrl } from "../../media/previewUrl";
 import { ThumbTile } from "./ThumbTile";
 import type { GroupData, GroupItem } from "./groups";
@@ -125,6 +126,8 @@ const KIND_HINT: Record<TransitionKind, string> = {
 
 /** q 是已经 trim + 小写的搜索词;flash 是分区底部的提示条 */
 export function useTransitionsGroup(q: string, flash: (text: string, ms?: number) => void): GroupData {
+  // 这个项目只给了只读权限(游客):加转场 / 删转场都是写
+  const ro = useReadOnly();
   const project = useStore((s) => s.project);
   const selection = useStore((s) => s.selection);
   const [dur, setDur] = useState(0.5);
@@ -173,6 +176,7 @@ export function useTransitionsGroup(q: string, flash: (text: string, ms?: number
         subtitle={`${dur}s`}
         preview={<TransitionGlyph kind={kind} />}
         draggable
+        edits
         onDragStart={drag(kind)}
         onDragEnd={clearDragPayload}
         onClick={() => clickKind(kind)}
@@ -218,7 +222,8 @@ export function useTransitionsGroup(q: string, flash: (text: string, ms?: number
                 <button
                   type="button"
                   className="pc-left-btn"
-                  title="删掉这处转场,相关片段解锁"
+                  disabled={ro.locked}
+                  title={ro.title("删掉这处转场,相关片段解锁")}
                   onClick={() => {
                     const r = actions.removeTransition(tr.id);
                     flash(r.ok ? `已删掉转场${r.note ? `(${r.note})` : ",相关片段解锁了"}` : r.error);
@@ -265,7 +270,7 @@ export function useTransitionsGroup(q: string, flash: (text: string, ms?: number
                   titleAttr={has ? "这两段已经用交叉溶解绑成一组" : "悬停预览交叉溶解;点下面的按钮加上"}
                   footer={
                     <div className="pc-lib-card-foot">
-                      <button type="button" className="pc-left-btn is-block" disabled={has} onClick={() => apply(pair)}>
+                      <button type="button" className="pc-left-btn is-block" disabled={has || ro.locked} title={ro.title()} onClick={() => apply(pair)}>
                         {has ? "已加转场" : "加交叉溶解"}
                       </button>
                     </div>

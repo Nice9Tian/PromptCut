@@ -74,7 +74,7 @@
 ## 3. 部署
 
 - `scripts/remote/docservice.mjs deploy-hosted` 增加三个参数：
-  - `--editor <dist-online 目录>`：把在线构建拷到 `<部署目录>/editor/`，先放 `.incoming-editor` 再整体换名；旧版的 `assets/` 保留一代，免得正在用的页面刷新前取不到旧资源；
+  - `--editor <dist-online 目录>`：把在线构建拷到 `<部署目录>/editor/`，先放 `.incoming-editor` 再整体换名；旧版的 `assets/` 保留一代，免得正在用的页面刷新前取不到旧资源（2026-10-23 起改为保留前 3 代，见 `docs/semantics/mechanism/platforms.md`「换代保留」）；
   - `--doc-public-url <url>`、`--asset-public-url <url>`：写进 pm2 配置，重新部署时不再被改回 `ws://…:8787`、`http://…:8788`〔裁：HT 契约第 12 节原定随 HT 做，C10a 先要部署就先做，HT 沿用〕。
 - 部署后的核对（主会话在报告里贴原始输出）：
   - `curl -sI https://8-219-80-16.sslip.io/editor` 回 200，带 `no-store`；

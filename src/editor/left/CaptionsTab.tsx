@@ -4,6 +4,8 @@ import type { MediaAsset, Project, TranscriptSegment } from "../../kernel/projec
 import { timelineTimeAt } from "../../kernel/clipTime.mjs";
 import { TranscribePanel } from "./TranscribePanel";
 import { onlinePage, onlineUnsupported } from "../../online/pageFlag";
+import { ReadOnlyFence } from "../ReadOnlyFence";
+import { useReadOnly } from "../readOnly";
 
 /**
  * 字幕分区的主体:一棵两级树。
@@ -215,6 +217,8 @@ function MediaNode({
   onPickSelf: () => void;
 }) {
   const { media, rows, total } = node;
+  // 这个项目只给了只读权限(游客):文字稿照常看、点段落照常跳,但转写、铺字幕轨、重新转写都是写
+  const ro = useReadOnly();
   const transcript = media.transcript;
   // 没转写的素材展开就直接给转写面板,原来那个入口不丢
   const showPanel = !transcript || retranscribing;
@@ -255,7 +259,7 @@ function MediaNode({
       {open &&
         (showPanel ? (
           <div className="p-2 pl-5">
-            <TranscribePanel mediaId={media.id} onClose={onCloseTranscribe} />
+            <ReadOnlyFence><TranscribePanel mediaId={media.id} onClose={onCloseTranscribe} /></ReadOnlyFence>
           </div>
         ) : (
           <div role="group">
@@ -270,11 +274,12 @@ function MediaNode({
                 type="button"
                 className="ml-auto pc-left-btn is-sm"
                 onClick={onBuild}
-                title="把这份文字稿铺成时间轴上的字幕轨"
+                disabled={ro.locked}
+                title={ro.title("把这份文字稿铺成时间轴上的字幕轨")}
               >
                 铺成字幕轨
               </button>
-              <button type="button" className="pc-left-btn is-sm" onClick={onRetranscribe} disabled={onlinePage()} title={onlinePage() ? onlineUnsupported("语音识别") : undefined}>
+              <button type="button" className="pc-left-btn is-sm" onClick={onRetranscribe} disabled={onlinePage() || ro.locked} title={ro.locked ? ro.why : onlinePage() ? onlineUnsupported("语音识别") : undefined}>
                 重新转写
               </button>
             </div>

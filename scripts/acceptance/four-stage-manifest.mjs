@@ -30,6 +30,7 @@ import '../lib/no-user-dirs.mjs'; // 清单里写着会起编辑器与导出的�
 import { V18_ITEMS, G0_2_SKIPS, OLD_ITEM_ROWS, STALE_OLD_ENTRY, V18_EXCLUDED, V, OLD_ITEM_KNOWN } from './v18-manifest.mjs';
 import { V18_ROWS } from './v18-rows.mjs';
 import { V19_ITEMS, V19_REQS, V19_TAGS, V19_EXCLUDED } from './v19-manifest.mjs';
+import { V21_ITEMS, V21_EXCLUDED } from './v21-manifest.mjs';
 import { whereOf } from './acceptance-lib.mjs';
 export { V18_ROWS as ROWS, G0_2_SKIPS, V19_REQS };
 
@@ -45,6 +46,7 @@ const P = (n = 0) => String(V + n); // 渲染附加项的端口:挂在 0.7.18 �
 export const EXCLUDED_PROBE_FILES = {
   ...V18_EXCLUDED,
   ...V19_EXCLUDED,
+  ...V21_EXCLUDED,
   // 公共件与工具,不单独跑
   'asset-lan-discover.mjs': '公共件(局域网发现),单测在 server/test',
   'claim-gate-judge.mjs': '认领闸探针的判定函数,单测直接测',
@@ -917,11 +919,11 @@ const OLD_ITEMS = [
 ];
 
 /**
- * 总清单 = 老清单(0.7.17 以前四段)+ 0.7.18 的项(v18-manifest.mjs)+ 0.7.19 的项(v19-manifest.mjs)。老项补上 38 行的行号(OLD_ITEM_ROWS)和「在哪能跑」;
+ * 总清单 = 老清单(0.7.17 以前四段)+ 0.7.18 的项(v18-manifest.mjs)+ 0.7.19 的项(v19-manifest.mjs)+ 0.7.21 的项(v21-manifest.mjs)。老项补上 38 行的行号(OLD_ITEM_ROWS)和「在哪能跑」;
  * 走老入口(在线页面的房间号加口令)的、在 main 上必然跑不通的老项,按 STALE_OLD_ENTRY 记成「不适用」(留着原命令作记录);
  * 支撑 0.7.19 要求的老项按 V19_TAGS 补上 v19。
  */
-export const ITEMS = [...OLD_ITEMS, ...V18_ITEMS, ...V19_ITEMS].map((it) => {
+export const ITEMS = [...OLD_ITEMS, ...V18_ITEMS, ...V19_ITEMS, ...V21_ITEMS].map((it) => {
   let out = it;
   if (OLD_ITEM_ROWS[it.id]) out = { ...out, rows: [...new Set([...(out.rows || []), ...OLD_ITEM_ROWS[it.id]])] };
   if (V19_TAGS[it.id]) out = { ...out, v19: [...new Set([...(out.v19 || []), ...V19_TAGS[it.id]])] };

@@ -8,7 +8,7 @@ import crypto from 'node:crypto';
 import { Readable } from 'node:stream';
 import {
   BLOB_CHUNK_SIZE, normalizeHash, normalizeExt, checkChunkArgs, chunkCountOf, chunkLengthOf,
-  createKeyedLock, drainSource, countSource, toBuffer, minimalContentType,
+  createKeyedLock, drainSource, countSource, toBuffer, minimalContentType, normalizeTier,
 } from './blob-store.mjs';
 
 /** 单件上限：memory 实现只供测试，size 超过它回 `size-mismatch`（契约第 8 节第 7 条） */
@@ -34,9 +34,9 @@ function streamOf(buf) {
 export function createMemoryStore({ chunkSize = BLOB_CHUNK_SIZE, now = Date.now } = {}) {
   if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) throw new TypeError('createMemoryStore：chunkSize 必须是正整数');
   const withLock = createKeyedLock();
-  /** @type {Map<string, { data: Buffer, ext: string, mtimeMs: number }>} */
+  /** @type {Map<string, { data: Buffer, ext: string, tier: 'small' | 'original', mtimeMs: number }>} */
   const blobs = new Map();
-  /** @type {Map<string, { size: number, ext: string, parts: Map<number, Buffer>, received: Set<number> }>} */
+  /** @type {Map<string, { size: number, ext: string, tier: 'small' | 'original', parts: Map<number, Buffer>, received: Set<number> }>} */
   const staging = new Map();
 
   return {
@@ -69,10 +69,11 @@ export function createMemoryStore({ chunkSize = BLOB_CHUNK_SIZE, now = Date.now 
       return { size: st.size, chunkSize, received: [...st.received].sort((a, b) => a - b), complete: false };
     },
 
-    async putChunk(hash, n, { size, ext } = /** @type {any} */ ({}), source) {
+    async putChunk(hash, n, { size, ext, tier } = /** @type {any} */ ({}), source) {
       const key = normalizeHash(hash);
       checkChunkArgs(n, size);
       const wantExt = normalizeExt(ext);
+      const wantTier = normalizeTier(tier);
       const count = chunkCountOf(size, chunkSize);
       if (n >= count) return { status: 'out-of-range', count };
       const expected = chunkLengthOf(size, n, chunkSize);
@@ -84,10 +85,12 @@ export function createMemoryStore({ chunkSize = BLOB_CHUNK_SIZE, now = Date.now 
         // 只供测试：报一个天文数字的 size 不许把进程拖垮（契约第 8 节第 7 条）
         if (size > MEMORY_MAX_SIZE) return { conflict: st ? st.size : MEMORY_MAX_SIZE };
         if (!st) {
-          st = { size, ext: wantExt, parts: new Map(), received: new Set() };
+          st = { size, ext: wantExt, tier: wantTier, parts: new Map(), received: new Set() };
           staging.set(key, st);
-        } else if (!st.ext && wantExt) {
-          st.ext = wantExt;
+        } else {
+          if (!st.ext && wantExt) st.ext = wantExt;
+          // 档位只往 original 退（见 blob-store.mjs「档位」）
+          if (wantTier !== 'small') st.tier = 'original';
         }
         // 已收到的片再传：不重写、不撤标记（见 blob-store.mjs 文件头）
         if (st.received.has(n)) return { have: st };
@@ -136,7 +139,7 @@ export function createMemoryStore({ chunkSize = BLOB_CHUNK_SIZE, now = Date.now 
         const actual = digest.digest('hex');
         staging.delete(key);
         if (actual !== key) return { status: 'hash-mismatch', actual };
-        blobs.set(key, { data: Buffer.concat(parts, st.size), ext: st.ext, mtimeMs: now() });
+        blobs.set(key, { data: Buffer.concat(parts, st.size), ext: st.ext, tier: st.tier, mtimeMs: now() });
         return { status: 'ok', size: st.size, ext: st.ext };
       });
     },
@@ -154,6 +157,13 @@ export function createMemoryStore({ chunkSize = BLOB_CHUNK_SIZE, now = Date.now 
       let bytes = 0;
       for (const blob of blobs.values()) bytes += blob.data.length;
       return { blobs: blobs.size, bytes, staging: staging.size };
+    },
+
+    async inventory() {
+      return {
+        stored: [...blobs].map(([hash, b]) => ({ hash, ext: b.ext, tier: b.tier === 'small' ? 'small' : 'original' })),
+        staging: [...staging].map(([hash, st]) => ({ hash, ext: st.ext, tier: st.tier === 'small' ? 'small' : 'original' })),
+      };
     },
   };
 }

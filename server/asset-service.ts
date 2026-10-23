@@ -45,6 +45,9 @@
  *   - `X-Media-Ext: <扩展名>` 与 / 或 `X-Media-Type: <MIME>` —— 选填,决定取回时的 Content-Type。
  *     扩展名优先;只给 MIME 时按表反查扩展名;都没给就是无扩展名、`application/octet-stream`。
  *     **哪一片先带上就以哪一片为准**,之后的不再改它。
+ *   - `X-Media-Tier: small | original` —— 选填,这个文件是素材小尺寸还是原尺寸(2026-10-23,游客的视频条数按
+ *     「原件几个、小档几个取多的」数,`asset-store/guest-quota.mjs`)。只认 `small`,缺失、拼错、不认识的一律当 `original`;
+ *     同一个哈希只要有一片没说 `small` 就记成 `original`。只影响游客的视频条数,取回、对账的回包不变。
  *   - 请求体的 `Content-Type` 不看(一般是 `application/octet-stream`)。
  * - 长度:除最后一片外每片必须恰好 `chunkSize` 字节,最后一片是 `size - chunkSize × (count - 1)`。
  *   `Content-Length` 对不上直接回 400;实收字节多了或少了也回 400,这一片不算收到。
@@ -77,7 +80,7 @@
  * - 本模块管的路由(`/api/asset/media/...` 和 `/@media/*`)一律回 `Access-Control-Allow-Origin: *`,
  *   `Access-Control-Expose-Headers: Content-Range, Accept-Ranges, Content-Length, Content-Type`。
  * - 预检 `OPTIONS` 回 204:方法 `GET, HEAD, PUT, POST, OPTIONS`,
- *   头 `Content-Type, Range, X-Media-Size, X-Media-Ext, X-Media-Type, Authorization`(`Authorization` 带票据);
+ *   头 `Content-Type, Range, X-Media-Size, X-Media-Ext, X-Media-Type, X-Media-Tier, Authorization`(`Authorization` 带票据);
  *   请求带 `Access-Control-Request-Private-Network` 时，**只有来源是回环或局域网地址**（`isPrivateOrigin`）
  *   才回 `Access-Control-Allow-Private-Network: true`；公网网页的预检不给这一项，浏览器照样拦下它。
  * - 不带凭据(不用 cookie),所以用 `*`。`/api/**` 的同源守卫只对这一组路径豁免
@@ -98,6 +101,7 @@
  * - 票据由文档服务签发;核对用同一进程里的凭证存储(`server/auth/asset-tickets.mjs`),缺省按
  *   `<root>/out/docservice/auth` 取进程内单例。**集群令牌不再用于素材服务**(C5 的「非本机写入凭集群令牌」退役)。
  * - 带查询串票据的响应加 `Cache-Control: no-store` 与 `Referrer-Policy: no-referrer`。
+ * - 账号云模式(`projectAccess`)下,凭 `Authorization` 头且 URL 不含 `t` 查询参数读已完整入库的 `GET` / `HEAD` `media/<hash>`(含 Range 206)成功时,回 `Cache-Control: private, max-age=31536000, immutable` 与 `Vary: Authorization`;未入库、出错、带 `?t=` 或其它路由照旧 `no-store`。
  * - 票据原文不进日志、不进回包;本模块不记访问日志。
  *
  * ## 磁盘满(SP,`docs/plan/shared-project-contract.md` 第 1 节)
@@ -116,7 +120,7 @@ import { Readable } from "stream";
 import path from "path";
 import { createHash } from "crypto";
 import { apiPath, isAssetServicePath, clientAddressOf, isLocalOrigin } from "./http-guard.mjs";
-import { createBlobStore, candidateFileResolver, projectScopeOfRoot, assetContextOf, setAssetContext, authorizedAssetStore } from "./asset-store/index.mjs";
+import { createBlobStore, candidateFileResolver, projectScopeOfRoot, assetContextOf, setAssetContext, authorizedAssetStore, createGuestAssetQuota, guestIdOfUserId, SNIFF_BYTES } from "./asset-store/index.mjs";
 import {
   mediaDir, isMediaHash, extOfName, contentTypeForExt, resolveHashFile, writeMediaIndex, parseRange,
 } from "./vite-plugin-media";
@@ -126,8 +130,9 @@ export const ASSET_CHUNK_SIZE = 8 * 1024 * 1024;
 export const ASSET_MAX_SIZE = 64 * 1024 * 1024 * 1024;
 
 export const ASSET_ALLOW_METHODS = "GET, HEAD, PUT, POST, OPTIONS";
-export const ASSET_ALLOW_HEADERS = "Content-Type, Range, X-Media-Size, X-Media-Ext, X-Media-Type, Authorization";
+export const ASSET_ALLOW_HEADERS = "Content-Type, Range, X-Media-Size, X-Media-Ext, X-Media-Type, X-Media-Tier, Authorization";
 export const ASSET_EXPOSE_HEADERS = "Content-Range, Accept-Ranges, Content-Length, Content-Type";
+export const ASSET_MEDIA_CACHE_CONTROL = "private, max-age=31536000, immutable";
 
 /** 分片数:小于一片的素材也算 1 片 */
 export function chunkCount(size: number, chunkSize = ASSET_CHUNK_SIZE): number {
@@ -170,6 +175,14 @@ export const ARTIFACT_EXTS: readonly string[] = [
   ...new Set(["html", "mp4", "m4s", ...Object.values(ARTIFACT_MIME_TO_EXT), "htm", "m4v", "jpeg"]),
 ];
 
+/**
+ * 请求头里的档位 `X-Media-Tier`。原样交给数据层,由它归一(`blob-store.mjs` 的 `normalizeTier`:只认 `small`,
+ * 别的一律 `original`)。这是页面说的,所以游客的视频条数不只看它(小档也数,原件几个、小档几个取多的),见 `guest-quota.mjs` 文件头
+ */
+function tierFromHeaders(req: IncomingMessage): string {
+  return String(req.headers["x-media-tier"] || "");
+}
+
 /** 请求头里的扩展名:X-Media-Ext 优先,其次按 X-Media-Type 反查。取不出给空串;`snap` / `px` 只留 `ARTIFACT_EXTS` 里的 */
 function extFromHeaders(req: IncomingMessage, ns: AssetNamespace = "media"): string {
   const raw = String(req.headers["x-media-ext"] || "").trim().toLowerCase().replace(/^\./, "");
@@ -193,7 +206,7 @@ export interface AssetBlobStore {
   stat(hash: string): Promise<{ size: number; ext: string; contentType: string; mtimeMs: number | null } | null>;
   read(hash: string, range?: { start?: number; end?: number }): Promise<Readable | null>;
   chunks(hash: string): Promise<{ size: number | null; chunkSize: number; received: number[]; complete: boolean }>;
-  putChunk(hash: string, n: number, info: { size: number; ext?: string }, source: AsyncIterable<Buffer> | Readable): Promise<
+  putChunk(hash: string, n: number, info: { size: number; ext?: string; tier?: string }, source: AsyncIterable<Buffer> | Readable): Promise<
     | { status: "ok"; bytes: number }
     | { status: "complete" }
     | { status: "size-mismatch"; size: number }
@@ -209,6 +222,8 @@ export interface AssetBlobStore {
   >;
   remove(hash: string): Promise<boolean>;
   usage(): Promise<{ blobs: number; bytes: number; staging: number }>;
+  /** 已入库与暂存,各带扩展名和档位(`blob-store.mjs`);游客视频条数用,fs、memory 两种实现都有 */
+  inventory?(): Promise<{ stored: Array<{ hash: string; ext: string; tier: "small" | "original" }>; staging: Array<{ hash: string; ext: string; tier: "small" | "original" }> }>;
 }
 
 /** 缺省的数据层:fs 实现,目录是本地内容库;找文件、写索引、Content-Type 都用 vite-plugin-media 已有的 */
@@ -316,6 +331,17 @@ async function handlePutChunk(req: IncomingMessage, res: ServerResponse, store: 
     return reject(req, res, 400, { ok: false, error: "chunk-length", expected, got: Number(declared) });
   }
 
+  // 游客往 media 传:先过游客限额(尺寸看 X-Media-Size;视频原尺寸开新暂存时数条数),账号与别的命名空间直接写
+  const guest = writer.guest;
+  if (guest) {
+    return guest.quota.putChunk({ accountId: writer.accountId, ns, size, hash, ext: extFromHeaders(req, ns), tier: tierFromHeaders(req), store, key: guest.key },
+      () => writeChunk(req, res, store, hash, n, size, expected, ns, writer),
+      (denied) => reject(req, res, denied.status, { ok: false, error: denied.error }));
+  }
+  return writeChunk(req, res, store, hash, n, size, expected, ns, writer);
+}
+
+async function writeChunk(req: IncomingMessage, res: ServerResponse, store: AssetBlobStore, hash: string, n: number, size: number, expected: number, ns: AssetNamespace, writer: WriteTrace) {
   // 托管方服务(渲染服务)写新块:先看容量上限,到了只拦它(成员的写入不走这里);块早已入库的没有新字节,不占名额
   const usage = writer.usage;
   const accounted = !!(usage && writer.service && usage.accounts(writer.service));
@@ -329,7 +355,7 @@ async function handlePutChunk(req: IncomingMessage, res: ServerResponse, store: 
 
   let out;
   try {
-    out = await store.putChunk(hash, n, { size, ext: extFromHeaders(req, ns) }, req);
+    out = await store.putChunk(hash, n, { size, ext: extFromHeaders(req, ns), tier: tierFromHeaders(req) }, req);
   } catch (err) {
     if (reservedHere) usage?.release(ns, hash, writer.projectId);
     // 磁盘满:这一片的标记没补(不算收到),已收的分片不动;请求体可能还在路上,回完就掐断
@@ -350,6 +376,17 @@ async function handlePutChunk(req: IncomingMessage, res: ServerResponse, store: 
 }
 
 async function handleComplete(res: ServerResponse, store: AssetBlobStore, hash: string, ns: AssetNamespace = "media", writer: WriteTrace = NO_TRACE) {
+  // 游客往 media 收尾:在队里数已入库的条数,够了回 403、暂存留着;入库后再按文件头认一遍(见 completeBlob)
+  const guest = writer.guest;
+  if (guest) {
+    return guest.quota.complete({ accountId: writer.accountId, ns, hash, store, key: guest.key },
+      (gate) => completeBlob(res, store, hash, ns, writer, gate),
+      (denied) => sendJson(res, denied.status, { ok: false, error: denied.error }));
+  }
+  return completeBlob(res, store, hash, ns, writer);
+}
+
+async function completeBlob(res: ServerResponse, store: AssetBlobStore, hash: string, ns: AssetNamespace, writer: WriteTrace, gate: CompleteGate | null = null) {
   const usage = writer.usage;
   const accounted = !!(usage && writer.service && usage.accounts(writer.service) && writer.projectId);
   // 收尾之前这个块已经入库:不是这次新写的(成员写的不记;渲染服务自己写过的只补项目归属)
@@ -359,6 +396,14 @@ async function handleComplete(res: ServerResponse, store: AssetBlobStore, hash: 
   if (usage && out.status === "ok") {
     if (!writer.service) usage.disown(ns, hash, writer.projectId);
     else if (accounted && (!existed || usage.has(ns, hash, writer.projectId))) usage.record({ ns, hash, size: out.size, projectId: writer.projectId as string });
+  }
+  // 游客:入库之后按这一条自己的文件头再认一遍(页面报的扩展名不算数),超了视频条数就把它删掉、回 403
+  if (gate && out.status === "ok") {
+    const verdict = await gate();
+    if (!verdict.ok) {
+      await store.remove(hash).catch(() => false);
+      return sendJson(res, verdict.status, { ok: false, error: verdict.error });
+    }
   }
   switch (out.status) {
     case "ok": return sendJson(res, 200, { ok: true, hash, size: out.size, complete: true, url: ns === "media" ? `/@media/${hash}` : `/api/asset/${ns}/${hash}` });
@@ -372,7 +417,7 @@ async function handleComplete(res: ServerResponse, store: AssetBlobStore, hash: 
  * 按哈希取回。响应头与 vite-plugin-media 的 serveFile 一样:200 / 206 / 416,
  * Content-Type、Content-Length、Accept-Ranges、Last-Modified(数据层给不出修改时间就不发)、Content-Range。
  */
-async function serveBlob(req: IncomingMessage, res: ServerResponse, store: AssetBlobStore, hash: string) {
+async function serveBlob(req: IncomingMessage, res: ServerResponse, store: AssetBlobStore, hash: string, longCache = false) {
   const stat = await store.stat(hash);
   if (!stat) return sendJson(res, 404, { ok: false, error: "not-found" });
   const range = req.headers.range ? parseRange(req.headers.range, stat.size) : null;
@@ -402,6 +447,10 @@ async function serveBlob(req: IncomingMessage, res: ServerResponse, store: Asset
   if (!head && !stream) return sendJson(res, 404, { ok: false, error: "not-found" });
   await assetContextOf(req)?.lease.assert();
   if (res.destroyed) { stream?.destroy(); return; }
+  if (longCache) {
+    headers["Cache-Control"] = ASSET_MEDIA_CACHE_CONTROL;
+    headers["Vary"] = "Authorization";
+  }
   res.writeHead(range ? 206 : 200, headers);
   if (!stream) return res.end();
   stream.on("error", () => res.destroy());
@@ -422,8 +471,52 @@ export function isLoopbackRequest(req: IncomingMessage): boolean {
   return address !== null && isLocalOrigin(req, address);
 }
 
-/** 这次写入的来历,容量记账用 */
-interface WriteTrace { usage?: ServiceUsageHook | null; service?: string; projectId?: string }
+/** 数据层收尾成功之后、回包之前再判一次(游客按刚入库那一条的文件头认是不是视频);不过就删掉这一条、回它给的错误 */
+type CompleteGate = () => Promise<{ ok: true } | { ok: false; status: number; error: string }>;
+
+/**
+ * 从请求体里先读出开头最多 `n` 个字节,再原样塞回去(`unshift`),后面的处理照常从头读整个请求体。
+ * 游客整件上传按文件头认是不是视频用(`asset-store/guest-quota.mjs`)。请求体比 `n` 短就给全部。
+ * 读到结尾(`ended`)时在同一拍里塞回,赶在 `end` 事件之前:`end` 发出去之后就塞不回去了。
+ */
+function peekBody(req: IncomingMessage, n: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const parts: Buffer[] = [];
+    let got = 0, settled = false;
+    const state = (req as any)._readableState;
+    const finish = (err?: unknown) => {
+      if (settled) return;
+      settled = true;
+      req.off("readable", onReadable);
+      req.off("error", finish);
+      req.off("close", onClose);
+      if (err) return reject(err);
+      const buf = Buffer.concat(parts);
+      if (buf.length) req.unshift(buf);
+      resolve(buf.subarray(0, n));
+    };
+    const onReadable = () => {
+      let chunk: Buffer | null;
+      while (got < n && (chunk = req.read()) !== null) { parts.push(chunk); got += chunk.length; }
+      if (got >= n || state?.ended || req.readableEnded) finish();
+    };
+    // 对面在开头那几十个字节到之前就断了:不留一个永远不落地的等待
+    const onClose = () => finish(Object.assign(new Error("aborted"), { status: 400, code: "request-aborted" }));
+    req.on("readable", onReadable);
+    req.once("error", finish);
+    req.once("close", onClose);
+  });
+}
+
+/** 游客限额(`asset-store/guest-quota.mjs`):中间件一份,`key` 标识同一个数据层(托管下是项目,本机是那个数据层) */
+interface GuestQuotaHook {
+  putChunk(who: { accountId?: string; ns: string; size: number; hash: string; ext?: string; tier?: string; store: AssetBlobStore; key: unknown }, put: () => Promise<unknown>, deny: (d: { status: number; error: string }) => unknown): Promise<unknown>;
+  complete(who: { accountId?: string; ns: string; hash: string; store: AssetBlobStore; key: unknown }, complete: (gate: CompleteGate | null) => Promise<unknown>, deny: (d: { status: number; error: string }) => unknown): Promise<unknown>;
+  whole(who: { accountId?: string; bytes: number | null; ext?: string; peek?: () => Promise<Buffer>; store: AssetBlobStore; key: unknown; needsLength: boolean }): Promise<{ ok: true; release: () => void } | { ok: false; status: number; error: string }>;
+}
+
+/** 这次写入的来历:容量记账用(`usage`、`service`、`projectId`),游客限额用(`accountId`、`guest`) */
+interface WriteTrace { usage?: ServiceUsageHook | null; service?: string; projectId?: string; accountId?: string; guest?: { quota: GuestQuotaHook; key: unknown } | null }
 const NO_TRACE: WriteTrace = {};
 
 /** 核对素材票据(`server/auth/asset-tickets.mjs`) */
@@ -448,8 +541,18 @@ function queryTicketOf(req: IncomingMessage): string | null {
   return t ? t : null;
 }
 
-/** 放行时带上这次写入是谁的票据(服务身份的票据有 `service`,`projectId` 是票据限定的项目;容量记账用) */
-type Access = { ok: true; service?: string; projectId?: string } | { ok: false; status: 401 | 403; error: "unauthorized" | "forbidden" };
+/** URL 查询串里有没有 `t` 参数(含空值 `?t=`) */
+function hasQueryTicketParam(req: IncomingMessage): boolean {
+  const url = String(req.url || "");
+  const i = url.indexOf("?");
+  return i >= 0 && new URLSearchParams(url.slice(i + 1)).has("t");
+}
+
+/**
+ * 放行时带上这次写入是谁的票据(服务身份的票据有 `service`,`projectId` 是票据限定的项目;容量记账用),
+ * 以及是谁在写(`accountId`:票据的 `userId`、托管下文档服务核过的主体的 `accountId`;游客限额用)。本机回环来源不带。
+ */
+type Access = { ok: true; service?: string; projectId?: string; accountId?: string } | { ok: false; status: 401 | 403; error: "unauthorized" | "forbidden" };
 const DENY_401: Access = { ok: false, status: 401, error: "unauthorized" };
 const DENY_403: Access = { ok: false, status: 403, error: "forbidden" };
 
@@ -476,16 +579,16 @@ function accessOf(req: IncomingMessage, write: boolean, tickets: AssetTicketVeri
     // 不许写预渲染产物;它写的块算成员的,不进托管方服务的容量账(回的结果不带 `service`)
     if (v.actsFor === "member") {
       if (write && ns !== "media") return DENY_403;
-      return { ok: true, projectId: v.projectId };
+      return { ok: true, projectId: v.projectId, accountId: guestIdOfUserId(v.userId) ?? v.userId };
     }
     if (write && v.service && ns !== "snap" && ns !== "px") return DENY_403;
-    return { ok: true, service: v.service, projectId: v.projectId };
+    return { ok: true, service: v.service, projectId: v.projectId, accountId: guestIdOfUserId(v.userId) ?? v.userId };
   }
   if (write) return DENY_401; // 写入一律不认查询串
   const q = queryTicketOf(req);
   if (q === null) return DENY_401;
   const v = verify(q);
-  return v.ok && v.access === "r" ? { ok: true, service: v.service, projectId: v.projectId } : DENY_401;
+  return v.ok && v.access === "r" ? { ok: true, service: v.service, projectId: v.projectId, accountId: guestIdOfUserId(v.userId) ?? v.userId } : DENY_401;
 }
 
 /* ------------------------------------------------------------------ *
@@ -653,6 +756,55 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
   };
   const isTrusted = typeof opts.isTrusted === "function" ? opts.isTrusted : isLoopbackRequest;
   /*
+   * 游客素材限额(`asset-store/guest-quota.mjs`):只管游客往 media 写。按数据层排队:托管下每个项目一个数据层,
+   * 用项目编号当键;本机只有一个 media 数据层,用它本身当键。
+   */
+  const guestQuota: GuestQuotaHook = createGuestAssetQuota({ isVideoExt: (ext: string) => contentTypeForExt(ext).startsWith("video/") });
+  const guestTrace = (who: { projectId?: string; accountId?: string }) =>
+    ({ accountId: who.accountId, guest: who.accountId ? { quota: guestQuota, key: opts.projectStores && who.projectId ? `project:${who.projectId}` : media } : null });
+  /**
+   * 托管下媒体中间件的整件上传(`POST /api/media/upload/<名>`)与补算内容键(`POST /api/media/adopt`)也往项目的 media 写,
+   * 不经下面的分片路由。它们由 `vite-plugin-media.ts` 自己核权,这里只先看一眼是不是游客:是就按游客限额拦,
+   * 放行后占着这个项目的游客队直到回完包;不是游客原样 next。
+   * - 核权出错(包括暂时性的 503)照错误回,不往下放(claude/guest-fix〔裁〕,审查 S2):原先 `catch` 了就 next,
+   *   媒体中间件再核一次、碰巧成功,这次游客的整件上传就没经过限额;
+   * - 游客不能补算内容键(审查 S3):那条路给素材收集用,游客用不到;它会把媒体目录里任何文件(包括还没收尾、
+   *   没核哈希的分片暂存 `.chunks/<哈希>/data`)挂进库,绕过收尾时的视频条数;
+   * - 整件上传报的扩展名不是视频时,先从请求体里读出开头几十个字节按文件头认(`peekBody`,审查 A2)。
+   */
+  const isWholeMediaWrite = (req: IncomingMessage) => req.method === "POST" && (String(req.url || "").startsWith("/api/media/upload/") || String(req.url || "").startsWith("/api/media/adopt"));
+  const gateWholeMediaWrite = async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
+    let lease: any;
+    try {
+      lease = await opts.projectAccess.resolve(req, { action: "write", resource: { ns: "media", route: apiPath(req.url) }, close: () => { req.destroy(); res.destroy(); } });
+    } catch (err: any) { return reject(req, res, err?.status ?? 503, { ok: false, error: err?.code ?? "authority-unavailable" }); }
+    let verdict: Awaited<ReturnType<GuestQuotaHook["whole"]>>;
+    try {
+      const accountId = typeof lease.principal?.accountId === "string" ? lease.principal.accountId : undefined;
+      const upload = String(req.url || "").startsWith("/api/media/upload/");
+      if (!upload && guestIdOfUserId(accountId ?? null)) verdict = { ok: false, status: 403, error: "guest-adopt-forbidden" };
+      else {
+      const declared = Number(req.headers["content-length"]);
+      const bytes = upload && req.headers["content-length"] !== undefined && Number.isSafeInteger(declared) && declared >= 0 ? declared : null;
+      // 扩展名:整件上传从 URL 里的文件名拿(和 vite-plugin-media 的 handleMediaUpload 同一取法),补算内容键从 `path` 参数的文件名拿
+      let ext = "";
+      try {
+        const u = new URL(String(req.url || "/"), "http://promptcut.local");
+        ext = extOfName(upload ? decodeURIComponent(u.pathname.split("/").pop() || "") : (u.searchParams.get("path") || ""));
+      } catch { ext = ""; }
+      verdict = await guestQuota.whole({ accountId, bytes, ext, peek: () => peekBody(req, SNIFF_BYTES), store: opts.projectStores.project(lease.projectId).stores.media, key: `project:${lease.projectId}`, needsLength: upload });
+      }
+    } catch (err: any) {
+      // 读开头时对面断了、数据层出错:照错误回,不往下放
+      verdict = { ok: false, status: err?.status ?? 500, error: err?.code ?? "media-failed" };
+    } finally { void lease.release(); }
+    if (!verdict.ok) return reject(req, res, verdict.status as 403, { ok: false, error: verdict.error });
+    const release = verdict.release;
+    res.once("close", release);
+    res.once("finish", release);
+    return next();
+  };
+  /*
    * px 的容量淘汰:在本进程内部做,不对外开删除接口。只拿 px 这一个数据层,media / snap 碰不到。
    * 惰性 import(好几个单测把本文件单独转译,静态 import 兄弟模块会解析失败)。
    */
@@ -698,7 +850,7 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
         setAssetContext(req, { ...scope, lease });
         res.once("close", () => lease.release());
         res.once("finish", () => lease.release());
-        return { ok: true, projectId: lease.projectId, service: p.actsFor === "member" ? undefined : p.service };
+        return { ok: true, projectId: lease.projectId, service: p.actsFor === "member" ? undefined : p.service, accountId: typeof p.accountId === "string" ? p.accountId : undefined };
       } catch (err: any) { reject(req, res, err?.status ?? 503, { ok: false, error: err?.code ?? "authority-unavailable" }); return null; }
     }
     let trusted = false;
@@ -710,6 +862,7 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
   };
   const handler = async function assetService(req: Connect.IncomingMessage, res: ServerResponse, next: () => void) {
     if (isAssetMergePath(req.url)) return answerMerge(req, res);
+    if (opts.projectAccess && isWholeMediaWrite(req)) return gateWholeMediaWrite(req, res, next);
     if (!isAssetCorsPath(req.url)) return next();
     applyCors(req, res);
     if (req.method === "OPTIONS") { res.statusCode = 204; return res.end(); }
@@ -743,7 +896,8 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
         // 带 x-promptcut-pull 的是别的素材服务替它的页面来拉的:不再往下拉,防两台互指成环
         if (!opts.projectStores && ns === "px" && pullArtifact && !req.headers["x-promptcut-pull"] && !(await store.stat(hash))) await pullArtifactInto(store, hash, pullArtifact);
         if (ns === "px") touchPx(hash);
-        return await serveBlob(req, res, store, hash);
+        const longCache = Boolean(opts.projectAccess && ns === "media" && bearerOf(req) !== null && !hasQueryTicketParam(req));
+        return await serveBlob(req, res, store, hash, longCache);
       }
       if (tail === "chunks") {
         if (method !== "GET") return sendJson(res, 405, { ok: false, error: "method" });
@@ -757,14 +911,14 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
         if (method !== "POST") return sendJson(res, 405, { ok: false, error: "method" });
         const who = await admit(req, res, true, ns);
         if (!who) return;
-        await handleComplete(res, scopedStore(), hash, ns, { usage: opts.serviceUsage, service: who.service, projectId: who.projectId });
+        await handleComplete(res, scopedStore(), hash, ns, { usage: opts.serviceUsage, service: who.service, projectId: who.projectId, ...guestTrace(who) });
         if (ns === "px" && pxEvictor) { touchPx(hash); void pxEvictor.then((ev) => ev?.onStored()); }
         return;
       }
       if (method !== "PUT") return reject(req, res, 405, { ok: false, error: "method" });
       const who = await admit(req, res, true, ns);
       if (!who) return;
-      return await handlePutChunk(req, res, scopedStore(), hash, tail, ns, { usage: opts.serviceUsage, service: who.service, projectId: who.projectId });
+      return await handlePutChunk(req, res, scopedStore(), hash, tail, ns, { usage: opts.serviceUsage, service: who.service, projectId: who.projectId, ...guestTrace(who) });
     } catch (err) {
       // 收尾时磁盘满:数据层没有入库、暂存保留(fs 实现的收尾只在成功改名后才删暂存)
       if (isStorageFull(err)) return sendJson(res, 507, { ok: false, error: "insufficient-storage" });

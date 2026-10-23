@@ -4,6 +4,8 @@ import { useBackdropClose } from "../ui/backdropClose";
 import { actions, useStore } from "../store/project";
 import "./ProjectSettingsDialog.css";
 import { CollabSection, type CollabHandle } from "./sync/CollabSection";
+import { ReadOnlyFence } from "./ReadOnlyFence";
+import { useReadOnly } from "./readOnly";
 import { CREATIVITY_HINT, CREATIVITY_LABEL, CREATIVITY_LEVELS, CREATIVITY_SHORT, DEFAULT_CREATIVITY, normalizeCreativity, projectCreativity, type CreativityLevel } from "../kernel/creativity.mjs";
 
 export interface ProjectSettingsDialogProps {
@@ -74,10 +76,13 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
   const [creativity, setCreativity] = useState<CreativityLevel>(DEFAULT_CREATIVITY);
   const durationInputRef = useRef<HTMLInputElement>(null);
   const collabRef = useRef<CollabHandle>(null);
+  // 这个项目只给了只读权限(游客):设置项照常显示,但改不了,「确定」置灰,只剩「关闭」
+  const ro = useReadOnly();
 
   const currentRes = RESOLUTION_MAP[ratio][orientation];
 
   const handleConfirm = async () => {
+    if (ro.locked) { onClose(); return; }
     if (!durationInputRef.current?.reportValidity()) return;
     const requestedDuration = Number(duration);
     if (!Number.isFinite(requestedDuration) || requestedDuration < 1) return;
@@ -160,6 +165,8 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
           项目设置
         </div>
         <div className="pc-dialog-body">
+          {ro.locked && <div className="pc-dialog-row" data-pc="settings-readonly-note">{ro.why}</div>}
+          <ReadOnlyFence>
           <div className="pc-dialog-row">
             <label className="pc-dialog-label" htmlFor="pc-proj-name">项目名称</label>
             <input
@@ -273,15 +280,18 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
               {currentRes.width} × {currentRes.height}
             </span>
           </div>
+          </ReadOnlyFence>
           <CollabSection ref={collabRef} open={open} />
         </div>
         <div className="pc-dialog-foot">
           <button type="button" className="pc-btn" onClick={handleCancel}>
-            取消
+            {ro.locked ? "关闭" : "取消"}
           </button>
           <button
             type="button"
             className="pc-btn pc-btn--primary"
+            disabled={ro.locked}
+            title={ro.title()}
             onClick={() => void handleConfirm()}
           >
             确定

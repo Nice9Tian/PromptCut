@@ -4,8 +4,13 @@ import { validateAccountEvent, validateEventBatch, requireRequestId } from './pr
 import { accountError } from './client.mjs';
 import { canonicalJson, digestOf, appendAccessEvent } from './ledger.mjs';
 import { rollbackEventOf } from './logout-rollback.mjs';
+import { GUEST_LIMITS, guestExpired, guestPrincipal, guestProjectLimitReached, isGuestId, looksLikeGuestToken, readGuestToken, signGuestToken } from './guest.mjs';
 
-const accountIdOK = value => typeof value === 'string' && /^acc_[a-f0-9]{24}$/.test(value);
+/**
+ * 主体编号：账号是 `acc_` + 24 位十六进制，游客是 `gst_` + 24 位（`guest.mjs`）。两种在成员名单、禁入表、
+ * 权限判断里当同一类键用，只有「谁签发、谁核对」和限额不同，所以这里一并收。
+ */
+const accountIdOK = value => typeof value === 'string' && (/^acc_[a-f0-9]{24}$/.test(value) || isGuestId(value));
 const projectIdOK = value => typeof value === 'string' && /^(?:sp_[a-z2-7]{26}|[A-Za-z0-9_-]{8,64})$/.test(value);
 const services = ['asset', 'agent', 'render'];
 /** 托管方服务下面有哪些子选项(与口令项目那条路 `auth/service-identity.mjs` 的 `HOSTED_OPTIONS` 同一份登记;这里不引它,账号这条路不依赖旧凭证存储的模块) */
@@ -36,8 +41,14 @@ const active = project => {
 const permission = (project, accountId, action) => {
   active(project);
   if (Object.hasOwn(project.bans, accountId)) reject(403, 'banned');
-  const access = accountId === project.creatorAccountId ? 'rw' : project.members[accountId]?.access;
-  if (!access || (action === 'write' && access !== 'rw')) reject(403, 'not-listed');
+  const creator = accountId === project.creatorAccountId;
+  // 游客在别人的项目里只能查看(2026-10-23 用户定)。判在这一个口子上:名单里哪怕写着读写也按只读算,
+  // 不指望每个调用方各记一遍。自己建的项目里他是创建者,照常读写
+  const guestReadOnly = isGuestId(accountId) && !creator;
+  const stored = creator ? 'rw' : project.members[accountId]?.access;
+  const access = stored && guestReadOnly ? 'r' : stored;
+  if (!access) reject(403, 'not-listed');
+  if (action === 'write' && access !== 'rw') reject(403, guestReadOnly ? 'guest-read-only' : 'not-listed');
   return access;
 };
 
@@ -145,6 +156,9 @@ export function joinRequestView(p, accountId, limits = JOIN_REQUEST_LIMITS, at =
  * 「要登录」不在这里：没有登录的账号过不了 `verify`，到不了这一步。
  */
 export function checkCreateProject(policy, { accountId, accountName, ownedCount, requestId }) {
+  // 游客自己建的项目有自己的上限(`guest.mjs` 的 `GUEST_LIMITS.projects`),不走下面那个可配的口子:
+  // 这一条是游客身份自带的,不该因为某次部署忘了配就没了
+  if (guestProjectLimitReached({ accountId, ownedCount })) reject(403, 'guest-project-limit');
   const max = policy?.maxProjectsPerAccount ?? null;
   if (typeof policy?.canCreate === 'function') {
     const verdict = policy.canCreate({ accountId, accountName, ownedCount, requestId });
@@ -163,7 +177,7 @@ const validCreatePolicy = policy => policy !== null && typeof policy === 'object
  */
 export function createAccountAuthority({ ledger, accountClient, initializeProject, authorityUrl,
   signingKey, keyId, now = Date.now, pollMs = 0, onDiagnostic = () => {}, getDocBarrier, verifyDocBarrier,
-  runHooks = null, createPolicy = {}, joinRequestLimits = JOIN_REQUEST_LIMITS }) {
+  runHooks = null, createPolicy = {}, joinRequestLimits = JOIN_REQUEST_LIMITS, guestKey = null }) {
   if (!validCreatePolicy(createPolicy)) reject(503, 'create-policy-configuration');
   if (!validJoinRequestLimits(joinRequestLimits)) reject(503, 'join-request-configuration');
   const limits = Object.freeze({ ...joinRequestLimits });
@@ -275,6 +289,23 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
       const state = ledger.read();
       if (state.revokedLogins[`login:${ref.principal.loginId}`]) reject(401, 'credential-revoked');
     }
+    // 游客:令牌是本服务自己签的,自己核对,不问账号服务,也不跟着它的事件流同步 ——
+    // 账号服务挂了不该把游客一起挡在外面(`guest.mjs` 的开头说明)。往下的关卡(撤销表、角色、授权号)照样过。
+    //
+    // 「是不是游客令牌」由**签名**说了算:验得过就一定是本服务发的,验不过就往下交给账号服务。
+    // 这台没配密钥时验不了,只能看形状说一句人话,免得回一个像是账号出了问题的错
+    const read = guestKey ? readGuestToken(token, { key: guestKey, at: now() }) : null;
+    if (!read && !guestKey && looksLikeGuestToken(token)) reject(503, 'guest-unavailable');
+    if (read) {
+      if (read.expired) reject(401, 'credential-revoked');
+      const guest = guestPrincipal(read);
+      if (ledger.read().revokedLogins[`login:${guest.loginId}`]) reject(401, 'credential-revoked');
+      if (ref && ['accountId', 'loginId', 'loginGeneration'].some(k => guest[k] !== ref.principal[k])) reject(401, 'principal-mismatch');
+      if (!['page', 'agent', 'render'].includes(trustedRole)) reject(403, 'invalid-role');
+      let id = input.authorizationId;
+      if (!id) { id = randomUUID(); refs.set(id, { token, principal: guest, role: trustedRole }); }
+      return { ...guest, authorizationId: id, role: trustedRole };
+    }
     const principal = await accountClient.verify(token);
     await synchronize();
     const state = ledger.read();
@@ -374,7 +405,13 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
       if (Object.values(state.projects).some(p => p.status !== 'deleted' && p.name === name)) reject(409, 'name-taken');
       let projectId;
       if (reqProjectId) {
-        if (state.projects[reqProjectId] && state.projects[reqProjectId].status !== 'deleted') {
+        // 删掉过的项目号只有原创建者能再用(claude/guest-fix〔裁〕,审查 C / S1):原先谁都能重建已删除的号,游客 A 的项目
+        // 三天清理后,游客 B 带同一个号新建就成了它的创建者,素材服务那边同一处项目库里还留着 A 的字节。原创建者自己重用
+        // 仍然放行:搬到云端「放弃这次搬迁」之后再搬,还是原来的项目号(workflow/project.md「搬上去还是同一个项目」);
+        // 素材服务在那之前已经把旧字节删掉了(`server/asset-store/project-reaper.mjs`)。别人带这个号来回 409 `project-id-taken`,
+        // 页面会改由云端发新号再建(`src/editor/sync/accountMove.ts`)
+        const existing = state.projects[reqProjectId];
+        if (existing && (existing.status !== 'deleted' || existing.creatorAccountId !== actor.accountId)) {
           reject(409, 'project-id-taken');
         }
         projectId = reqProjectId;
@@ -382,7 +419,7 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
         do { projectId = newProjectId(); } while (state.projects[projectId]);
       }
       state.projects[projectId] = { v: 2, identityRealm: 'account', projectId, authorityId: ledger.authorityId,
-        name, status: 'pending', creatorAccountId: actor.accountId, allowLinkJoin: payload.allowLinkJoin,
+        name, status: 'pending', creatorAccountId: actor.accountId, allowLinkJoin: payload.allowLinkJoin, createdAt: now(),
         members: { [actor.accountId]: { access: 'rw', joinedAt: now(), accountNameAtJoin: actor.accountName } }, bans: {}, accessRevision: 0,
         // 托管方的两个服务（渲染节点、云端 Agent）缺省开（product/document-service.md、product/agent.md），创建者可以关；
         // 「生成轨道流」等子选项不在这里，没有记就是关（hostedOptions）
@@ -460,7 +497,10 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
 
       const previous = replay(state, key, digest); if (previous) return { result: previous.result, event: null };
       if (!p.members[actor.accountId]?.joinedAt) {
-        p.members[actor.accountId] = { access: p.members[actor.accountId]?.access ?? 'rw', joinedAt: now(), accountNameAtJoin: actor.accountName };
+        // 游客进别人的项目一律只读(2026-10-23 用户定),落账时就记成 'r',名单上看到的和实际能做的一致;
+        // 真正拦写的是 `permission`,这里只是让记录说实话
+        const access = isGuestId(actor.accountId) && !isCreator ? 'r' : (p.members[actor.accountId]?.access ?? 'rw');
+        p.members[actor.accountId] = { access, joinedAt: now(), accountNameAtJoin: actor.accountName };
         p.accessRevision = ++state.revision;
       }
       if (p.secondaryPassword) {
@@ -524,7 +564,8 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
           for (const member of body.members) {
             if (!accountIdOK(member?.accountId) || !['r', 'rw'].includes(member.access) || next[member.accountId]) reject(400, 'invalid-members');
             if (p.bans[member.accountId]) reject(403, 'banned');
-            next[member.accountId] = { access: member.access, joinedAt: p.members[member.accountId]?.joinedAt ?? null };
+            // 游客一律只读:名单里写了读写也归一成 r,免得名单上显示的和实际能做的两样
+            next[member.accountId] = { access: isGuestId(member.accountId) ? 'r' : member.access, joinedAt: p.members[member.accountId]?.joinedAt ?? null };
           }
           for (const [id, old] of Object.entries(p.members)) if (!next[id] || (old.access === 'rw' && next[id].access === 'r')) affected.push(id);
           p.members = next;
@@ -586,6 +627,84 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     notifyProjectChanged(body.projectId, body.op);
     return committed.result;
   }
+  /**
+   * 发一张游客令牌（公开路由 `/hosted/shared/account/guest`，不要登录 —— 他还没有身份）。
+   *
+   * 带着旧令牌来就续期，编号不变（同一台浏览器回来还是同一个人，product/document-service.md「游客」）。
+   * **过期了也续**（2026-10-23 claude/guest-fix〔裁〕，审查 B：原先过期就换新编号，游客隔天回来就成了另一个人、
+   * 进不了自己的项目）：签名对得上、过期不超过 `GUEST_LIMITS.renewGraceMs`（3 天，和游客项目的寿命一样长）、
+   * 这个身份没被作废（`revokeGuest`），就续成同一个编号。超过 3 天没来，他建的项目也早清掉了，这时才换新身份。
+   * 不带、改过（签名对不上）、作废过的，随机一个新身份。
+   * 编号只由这里生成，不收请求体里写的：收了的话谁都能自称是别人（`guest.mjs` 开头说明）。
+   *
+   * @param {string | null} previous 页面手里那一张，没有就给 null
+   * @param {{ admitNew?: () => void }} [options] `admitNew`：要发**新**身份之前调（领令牌的 IP 限流只数这一种，
+   *   续期不数，审查 E）；不许发就在里面抛错
+   */
+  function issueGuest(previous, { admitNew } = {}) {
+    if (!guestKey) reject(503, 'guest-unavailable');
+    const at = now();
+    const read = typeof previous === 'string' ? readGuestToken(previous, { key: guestKey, at }) : null;
+    const old = read && at <= read.expiresAt + GUEST_LIMITS.renewGraceMs && !ledger.read().revokedLogins[`login:guest:${read.guestId}`] ? read : null;
+    if (!old) admitNew?.();
+    const issued = signGuestToken({ key: guestKey, at, ...(old ? { guestId: old.guestId } : {}) });
+    return { token: issued.token, guestId: issued.guestId, expiresAt: issued.expiresAt, renewed: !!old };
+  }
+
+  /**
+   * 作废一个游客身份（同一条公开路由带 `revoke: true`；页面登录账号、或者点「我有账号，去登录」时发，
+   * product「登录账号之后游客身份作废」，审查 S9：原先只在页面那一侧清掉，服务端那张令牌照样能用、能续期）。
+   * 交来的令牌签名对得上就作废它的编号（过期的也收，过期的还能续期）：记进撤销表（`revokedLogins`，
+   * 和账号退出登录同一张），之后这个编号的令牌核不过（`verify` 本来就查这张表）、也续不了期。
+   * 认不出的令牌回 `{ revoked: false }`，不说为什么。作废是幂等的。
+   *
+   * @param {string | null} token
+   */
+  function revokeGuest(token) {
+    if (!guestKey) reject(503, 'guest-unavailable');
+    const at = now();
+    const read = typeof token === 'string' ? readGuestToken(token, { key: guestKey, at }) : null;
+    if (!read) return { revoked: false };
+    const key = `login:guest:${read.guestId}`;
+    ledger.transaction(state => { if (!state.revokedLogins[key]) state.revokedLogins[key] = { guest: true, revokedAt: at }; });
+    return { revoked: true };
+  }
+
+  /**
+   * 游客建的项目三天就清（2026-10-23 用户定，天数在 `guest.mjs` 的 `GUEST_LIMITS.ttlMs`）。
+   *
+   * 清的办法和创建者自己点「删项目」完全一样（上面 `adminProject` 的 `delete` 分支）：标成已删除、落墓碑、
+   * 记一条访问事件、按 `delete` 围栏停掉在跑的任务。走同一条路，下游不用为游客另认一种「项目没了」：
+   * 素材服务收到这条删除事件就把整个项目的字节删掉（`server/asset-store/project-reaper.mjs`），连着的页面被断开。
+   * 删掉的项目号不再发给别人（`createProject`）。账号建的项目一个都不碰。
+   *
+   * 由外面定时叫（`server/hosted/main.mjs`）；这里不自己起计时器，测试才好把时间拨过去。
+   * @returns {string[]} 这一趟清掉的项目号
+   */
+  function sweepExpiredGuestProjects(at = now()) {
+    // 没有 createdAt 的是这条规矩之前建的项目:那时还没有游客,一律当没到期(不猜生日、不误删)
+    const bornAt = p => (Number.isSafeInteger(p?.createdAt) ? p.createdAt : null);
+    const committed = ledger.transaction(state => {
+      const done = [];
+      for (const p of Object.values(state.projects)) {
+        if (p.status === 'deleted' || !isGuestId(p.creatorAccountId)) continue;
+        const born = bornAt(p);
+        if (born === null || !guestExpired(born, at)) continue;
+        const affected = Object.keys(p.members);
+        p.status = 'deleted'; delete p.joinRequests;
+        p.accessRevision = ++state.revision;
+        const event = appendAccessEvent(state, { type: 'project-access-changed', reason: 'delete', projectId: p.projectId,
+          accountIds: affected, accessRevision: p.accessRevision, createdAt: at });
+        const control = fenceRuns(state, { requestId: `access:${event.eventId}`, projectId: p.projectId, accessSeq: event.seq, kind: 'delete' });
+        p.tombstone = { revision: p.accessRevision, deletedAt: at };
+        done.push({ projectId: p.projectId, event, control });
+      }
+      return done;
+    });
+    for (const { projectId, event, control } of committed) { notify(event, control); notifyProjectChanged(projectId, 'delete'); }
+    return committed.map(c => c.projectId);
+  }
+
   /**
    * 申请加入,申请人这一侧(公开路由 `/hosted/shared/account/join` 带 `joinRequest` 字段,不另开路由:桌面外壳的账号桥只放行
    * create / join / session / admin / members 五条,`desktop/src-tauri/src/account_vault.rs`)。
@@ -665,7 +784,8 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
         if (p.members[body.accountId]) reject(409, 'already-member');
         if (decision === 'approved') {
           p.joinRequests = withoutJoinRequest(p.joinRequests, body.accountId);
-          p.members[body.accountId] = { access: 'rw', joinedAt: now(),
+          // 游客通过申请进来也是只读(`permission` 那一条),落账就记 r,名单上看到的和实际能做的一致
+          p.members[body.accountId] = { access: isGuestId(body.accountId) ? 'r' : 'rw', joinedAt: now(),
             ...(record.accountName ? { accountNameAtJoin: record.accountName } : {}), joinRequestId: record.id };
           p.accessRevision = ++state.revision;
           approved = true;
@@ -844,6 +964,7 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     return agentReadClosureComplete(state, eventId, state.accessAcks[`ack:${eventId}:agent`]);
   }
   return { authorityId: ledger.authorityId, synchronize, applyRevocation, applyRevocationNotification, authorizePrincipal, checkAccess,
+    issueGuest, revokeGuest, sweepExpiredGuestProjects,
     createProject, joinProject, joinRequest, decideJoinRequest, entryState, adminProject, listProjects, status, statusForPrincipal, legacyGoneStatus, eventsSince, ackAccessEvent, hasAgentReadClosure, revocationStatus, completeLogoutBarrier, recordLogoutTimeout, flushAccountAcknowledgements,
     subscribeProjectChanges(callback) {
       if (typeof callback !== 'function') reject(400, 'invalid-subscription');

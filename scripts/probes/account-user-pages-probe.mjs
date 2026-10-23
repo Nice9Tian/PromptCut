@@ -279,7 +279,7 @@ async function copyState(page) {
       buttonDisabled:Boolean(button?.disabled), buttonFocused:document.activeElement === button, documentFocused:document.hasFocus(),
       clipboardApi:typeof navigator.clipboard?.writeText === 'function', permission,
       enteredToast:toast.includes('已进入云端项目'), copiedToast:toast.includes('项目链接已复制。'),
-      fallbackToast:toast.includes('项目链接：https://127.0.0.1:6388/editor?project=') };
+      fallbackToast:/项目链接：https:\/\/127\.0\.0\.1:6388\/editor(?:\?project=|\/[ps]\/)/.test(toast) };
   }).catch(() => ({ state:'copy-diagnostic-unavailable' }));
 }
 async function websiteList(account, kind, projectId, name, label) {
@@ -462,7 +462,8 @@ try {
   result.copy = { before:await copyState(a) };
   try {
     await a.click('[data-pc="cloud-project-copy"]');
-    await a.waitForFunction(() => document.querySelector('[data-pc="sync-toasts"]')?.textContent?.includes('项目链接：https://127.0.0.1:6388/editor?project='));
+    // 2026-10-23 起生成的链接是 `/editor/p/…`、`/editor/s/…`,旧形式 `?project=` 也认
+    await a.waitForFunction(() => /项目链接：https:\/\/127\.0\.0\.1:6388\/editor(?:\?project=|\/[ps]\/)/.test(document.querySelector('[data-pc="sync-toasts"]')?.textContent ?? ''));
   } finally { result.copy.after = await copyState(a); }
   const link = await a.$eval('[data-pc="sync-toasts"]', el => el.textContent.match(/https:\/\/127\.0\.0\.1:6388\/editor\?project=sp_[a-z2-7]{26}/)?.[0]);
   assert(Boolean(link), 'visible-project-link-after-start-page-unmount');

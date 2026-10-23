@@ -17,7 +17,7 @@ export function isLoopbackAddress(address) {
 }
 
 /** 转发头里的一跳 → 地址:去引号、去 IPv6 的方括号与端口、去 IPv4 的端口;空的回 null */
-function hopAddress(raw) {
+export function hopAddress(raw) {
   let v = String(raw ?? "").trim();
   if (v.startsWith('"') && v.endsWith('"') && v.length >= 2) v = v.slice(1, -1).trim();
   if (v === "") return null;

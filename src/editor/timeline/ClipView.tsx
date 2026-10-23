@@ -24,9 +24,13 @@ import { captionsOf, isCaptionClip } from "../../kernel/captions";
 import { cutDuration } from "../../kernel/cutSegments";
 import { clipSpeed, isSpeedChanged, speedLabel } from "../../kernel/clipTime.mjs";
 import { openCutInTimeline } from "./CutTabs";
+import { useReadOnly } from "../readOnly";
 
 export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   const [volumeOpen, setVolumeOpen] = useState(false);
+  // 这个项目只给了只读权限(游客):拖、改时长、右键里改项目的项都不给,和锁定的序列一个待遇(但还能选中、看参数、打开剪辑)
+  const ro = useReadOnly();
+  const frozen = track.locked || ro.locked;
   const { pxPerSec, trackAreaRef, setDraggingClipId, setDraggingTrackId, rowSize } = useTimelineContext();
   const media = useStore((s) => s.project.media.find((m) => m.id === clip.mediaId));
   const selection = useStore((s) => s.selection);
@@ -89,6 +93,15 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
 
   const dragRef = useDrag(
     (e) => {
+      // 只读:点一下照样能选中(要看参数),但不开始拖
+      if (ro.locked && !track.locked) {
+        if (!e.shiftKey) {
+          if (!selection.includes(clip.id)) actions.select([clip.id]);
+        } else {
+          actions.select([...selection, clip.id]);
+        }
+        return;
+      }
       if (track.locked) return;
       if (!e.shiftKey) {
         if (!selection.includes(clip.id)) actions.select([clip.id]);
@@ -99,7 +112,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
       setDraggingTrackId(track.id);
     },
     (e, delta, rawEvent) => {
-      if (track.locked) return;
+      if (frozen) return;
       const state = getState();
       const tDelta = delta.x / pxPerSec;
       const originalDur = clip.end - clip.start;
@@ -144,7 +157,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
       setDragState({ start: newStart, end: newEnd, trackId: newTrackId, forbidden });
     },
     (e) => {
-      if (track.locked) return;
+      if (frozen) return;
       setDraggingClipId(null);
       setDraggingTrackId(null);
       setDragState((prev) => {
@@ -160,11 +173,11 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
 
   const resizeLeftRef = useDrag(
     (e) => {
-      if (track.locked) return;
+      if (frozen) return;
       e.stopPropagation();
     },
     (e, delta, rawEvent) => {
-      if (track.locked) return;
+      if (frozen) return;
       const state = getState();
       const tDelta = delta.x / pxPerSec;
       const newStartRaw = clip.start + tDelta;
@@ -176,7 +189,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
       setDragState({ start: newStart, end: clip.end, trackId: track.id, forbidden: false });
     },
     () => {
-      if (track.locked) return;
+      if (frozen) return;
       setDragState((prev) => {
         if (prev) actions.moveClip(clip.id, { start: prev.start, end: prev.end });
         return null;
@@ -186,11 +199,11 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
 
   const resizeRightRef = useDrag(
     (e) => {
-      if (track.locked) return;
+      if (frozen) return;
       e.stopPropagation();
     },
     (e, delta, rawEvent) => {
-      if (track.locked) return;
+      if (frozen) return;
       const state = getState();
       const tDelta = delta.x / pxPerSec;
       const newEndRaw = clip.end + tDelta;
@@ -202,7 +215,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
       setDragState({ start: clip.start, end: newEnd, trackId: track.id, forbidden: false });
     },
     () => {
-      if (track.locked) return;
+      if (frozen) return;
       setDragState((prev) => {
         if (prev) actions.moveClip(clip.id, { start: prev.start, end: prev.end });
         return null;
@@ -211,18 +224,30 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   );
 
   const handleContextMenu = (e: React.MouseEvent) => {
-    if (track.locked) return;
+    if (track.locked && !ro.locked) return;
     e.preventDefault();
     e.stopPropagation();
     if (!selection.includes(clip.id)) actions.select([clip.id]);
     setContextMenu({ x: e.clientX, y: e.clientY });
   };
 
+  // 只读项目里右键只给不改项目的项:已有字幕的素材段能查看字幕;最后一行灰着,说明为什么别的都没有
+  const readOnlyItems = (() => {
+    const m = clip.mediaId ? getState().project.media.find((x) => x.id === clip.mediaId) : null;
+    return [
+      ...(m && m.kind !== "image" && m.transcript
+        ? [{ label: `查看字幕(${m.transcript.segments.length} 段)`, action: () => requestCaptions(m.id) }]
+        : []),
+      { label: ro.why, disabled: true, action: () => {} },
+    ];
+  })();
+
   const isCrossTrackDrag = dragState && dragState.trackId !== track.id;
 
   const clipClasses = [
+    ro.locked ? "is-readonly" : "",
     "pc-clip absolute top-1 bottom-1 rounded flex items-center px-2 text-xs overflow-hidden select-none border",
-    track.locked ? "" : "cursor-pointer",
+    frozen ? "" : "cursor-pointer",
     isSelected ? "is-selected z-20" : "z-10",
     muteReason ? "is-audio-muted" : "",
     dragState?.forbidden ? "is-forbidden bg-red-500/50 border-red-500 border-dashed" : "",
@@ -261,7 +286,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
       >
         <div
           ref={resizeLeftRef}
-          className={`absolute left-0 top-0 bottom-0 w-2 z-30 ${track.locked ? "" : "cursor-col-resize pc-clip-trim"}`}
+          className={`absolute left-0 top-0 bottom-0 w-2 z-30 ${frozen ? "" : "cursor-col-resize pc-clip-trim"}`}
         />
         
         {isCaption && capCount > 0 ? (
@@ -306,7 +331,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
 
         <div
           ref={resizeRightRef}
-          className={`absolute right-0 top-0 bottom-0 w-2 z-30 ${track.locked ? "" : "cursor-col-resize pc-clip-trim"}`}
+          className={`absolute right-0 top-0 bottom-0 w-2 z-30 ${frozen ? "" : "cursor-col-resize pc-clip-trim"}`}
         />
       </div>
 
@@ -319,7 +344,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
           x={contextMenu.x}
           y={contextMenu.y}
           onClose={() => setContextMenu(null)}
-          items={[
+          items={ro.locked ? readOnlyItems : [
             // 转场在最上面:被绑住的时候用户第一件想做的事就是解开它
             ...myTransitions.map((tr) => ({
               label: `删除转场:${describeTransition(getState().project, tr)}`,

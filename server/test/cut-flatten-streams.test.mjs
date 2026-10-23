@@ -3,8 +3,7 @@
  *
  * 钉死:
  *   - 卡片计划(`CardFrameCache.plan`)里剪辑段里的卡各有自己的控件,id 是 `<段 id>~<卡的片段 id>`,不走整帧 PNG 那一支;
- *   - 流的划分:独立卡各一条 `solo: 'flat'` 的单卡流(不并组流),从嵌套场景最早挂上的那一帧回放;依赖下层的卡带着同一个嵌套场景里的
- *     下层出依赖下层的流(〔裁〕R01,2026-10-22 用户定;细节在 `cut-below-streams.test.mjs`);
+ *   - 流的划分:独立卡各一条 `solo: 'flat'` 的单卡流(不并组流),从嵌套场景最早挂上的那一帧回放;依赖下层的卡不出流;
  *   - 键:改被引用剪辑里一张卡只改那张卡的流键;同一剪辑引用两次各自一条;成本键随实例不变(同一张卡只测一次);
  *   - 隔离工程带着剪辑段链;
  *   - 没有剪辑段的项目:图、控件、流与改动前逐字相同。
@@ -64,7 +63,7 @@ test('卡片计划:剪辑段里的卡各有控件,不走整帧 PNG', () => {
   assert.equal(H.count, 120);
 });
 
-test('流:独立卡各一条 solo flat 的单卡流,从嵌套场景挂上那一帧回放;依赖下层的卡带着下层出流', () => {
+test('流:独立卡各一条 solo flat 的单卡流,从嵌套场景挂上那一帧回放;依赖下层的卡不出流', () => {
   const p = project();
   const { controls } = planOf(p);
   const specs = streamsOf(p, controls);
@@ -76,11 +75,7 @@ test('流:独立卡各一条 solo flat 的单卡流,从嵌套场景挂上那一�
   assert.deepEqual(H.clipIds, [`S${FLAT_SEP}H`]);
   assert.equal(H.firstFrame, 60);
   assert.equal(H.mountFrame, mountFrameOf({ start: 1 }, 30), '嵌套场景最早从 max(0, 段起点 − 偏移) 挂上');
-  // 〔裁〕R01:依赖下层的卡(blur-text)带着同一个嵌套场景里的下层出依赖下层的流(原来 v1 不出流)
-  const G = specs.find(s => s.clipIds.includes(`S${FLAT_SEP}G`));
-  assert.equal(G?.kind, 'below', '依赖下层的卡(blur-text)出依赖下层的流');
-  assert.equal(G.within, `S${FLAT_SEP}`);
-  assert.deepEqual(G.belowClipIds, [`S${FLAT_SEP}L`], '下层只有段里排在它下面的 L');
+  assert.ok(!specs.some(s => s.clipIds.includes(`S${FLAT_SEP}G`)), '依赖下层的卡(blur-text)不出流');
   assert.ok(!specs.some(s => s.kind === 'group' && s.clipIds.some(id => id.includes(FLAT_SEP))), '不并组流');
   // 隔离工程:顶层只剩段 S(去掉框),剪辑 B 里只剩 H(框摆到截图位置)
   const iso = isolatedStreamProject(p, H);

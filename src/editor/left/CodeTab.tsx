@@ -3,6 +3,7 @@ import { actions, getState, useStore } from "../../store/project";
 import { getCard } from "../../kernel/registry";
 import type { TrackClip } from "../../kernel/project";
 import { applyEnvelope, describeLifecycle, envelopeOf, type ClipEnvelope } from "../../kernel/envelope";
+import { useReadOnly } from "../readOnly";
 
 /**
  * 编辑 → 代码:显示并编辑这张卡的**约定封装**(kernel/envelope.ts),不是原始代码。
@@ -27,6 +28,8 @@ export function CodeTab({ clip }: { clip: TrackClip }) {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [applied, setApplied] = useState<string | null>(null);
+  // 这个项目只给了只读权限(游客):代码照常看、能选中复制,但不能改、不能应用、不能重置
+  const ro = useReadOnly();
 
   const missing = envelope.missingParams ?? [];
   /** 刚应用过:下一份 current(带重新算出的 world 等只读段)到了就直接采用,别把用户改过的草稿留成「未应用」 */
@@ -46,6 +49,7 @@ export function CodeTab({ clip }: { clip: TrackClip }) {
   const dirty = draft !== current;
 
   const apply = () => {
+    if (ro.locked) return;
     let parsed: unknown;
     try {
       parsed = JSON.parse(draft);
@@ -81,6 +85,7 @@ export function CodeTab({ clip }: { clip: TrackClip }) {
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (ro.locked) return; // 只读:Tab 照常移焦点,不往草稿里插空格
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
       e.preventDefault();
       apply();
@@ -108,6 +113,7 @@ export function CodeTab({ clip }: { clip: TrackClip }) {
   };
 
   const handleReset = () => {
+    if (ro.locked) return;
     // 写回整套默认值,而不是清空成 {} —— 清空会让 clip 退回「靠兜底渲染」的隐式状态,
     // 正是这次要消灭的东西。
     const defaults = { ...(card?.defaults ?? {}) };
@@ -124,14 +130,15 @@ export function CodeTab({ clip }: { clip: TrackClip }) {
         <button type="button" onClick={handleCopy} className="pc-left-btn">
           {copied ? "✓ 已复制" : "复制"}
         </button>
-        <button type="button" onClick={handleReset} className="pc-left-btn">
+        <button type="button" onClick={handleReset} className="pc-left-btn" disabled={ro.locked} title={ro.title()}>
           参数重置为默认
         </button>
         {missing.length > 0 && (
           <button
             type="button"
             onClick={handleReset}
-            title={`这张卡后来新增了参数,当前 clip 里没有:${missing.join(", ")}。点「参数重置为默认」把它们补齐(会一并丢掉已有的改动)`}
+            disabled={ro.locked}
+            title={ro.locked ? ro.why : `这张卡后来新增了参数,当前 clip 里没有:${missing.join(", ")}。点「参数重置为默认」把它们补齐(会一并丢掉已有的改动)`}
             className="text-[11px] px-2 py-1 bg-amber-950 hover:bg-amber-900 text-amber-400 rounded border border-amber-800"
           >
             缺 {missing.length} 项参数
@@ -159,6 +166,8 @@ export function CodeTab({ clip }: { clip: TrackClip }) {
       <textarea
         data-pc="code-editor"
         value={draft}
+        readOnly={ro.locked}
+        title={ro.title()}
         onChange={e => setDraft(e.target.value)}
         onBlur={apply}
         onKeyDown={onKeyDown}

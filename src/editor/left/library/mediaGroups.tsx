@@ -12,6 +12,7 @@ import { mediaTierPolicy, originalMediaUrl, previewMediaUrl } from "../../../ren
 import { ThumbTile } from "./ThumbTile";
 import type { GroupData, GroupItem } from "./groups";
 import { onlinePage, onlineUnsupported } from "../../../online/pageFlag";
+import { useReadOnly } from "../../readOnly";
 
 /**
  * 素材库的视频 / 图片 / 音频三个组:导入进来的素材。
@@ -172,6 +173,7 @@ function MediaTile({ m, onContextMenu }: { m: MediaAsset; onContextMenu: (e: Rea
       progress={m.kind === "video" && hot ? (progress ?? 0) : null}
       onHover={setHot}
       draggable
+      edits
       onDragStart={(e) => startMediaDrag(e, m)}
       onDragEnd={clearDragPayload}
       onContextMenu={onContextMenu}
@@ -253,6 +255,7 @@ function AudioRow({ m, onContextMenu }: { m: MediaAsset; onContextMenu: (e: Reac
       sub={audioSub(m)}
       url={url}
       draggable
+      edits
       onDragStart={(e) => startMediaDrag(e, m)}
       onDragEnd={clearDragPayload}
       onContextMenu={onContextMenu}
@@ -288,12 +291,17 @@ function EmptyMedia({ noun }: { noun: string }) {
 export function useMediaMenu(flash: (text: string, ms?: number) => void) {
   const [ctx, setCtx] = useState<{ x: number; y: number; media: MediaAsset } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ mediaId: string; name: string } | null>(null);
+  // 这个项目只给了只读权限(游客):右键里只留「查看字幕」,别的(转写、创建为声音、改项目比例、删除)都是写,置灰并说明
+  const ro = useReadOnly();
 
   const openMenu = useCallback((e: React.MouseEvent, m: MediaAsset) => {
     e.preventDefault();
     setCtx({ x: e.clientX, y: e.clientY, media: m });
   }, []);
   const closeMenu = useCallback(() => setCtx(null), []);
+
+  const guardMenu = (items: ContextMenuItem[]): ContextMenuItem[] =>
+    ro.locked ? items.map((it) => (it.label === "查看字幕" ? it : { ...it, disabled: true, title: ro.why })) : items;
 
   const handleApplyAspectRatio = async (m: MediaAsset) => {
     try {
@@ -321,7 +329,7 @@ export function useMediaMenu(flash: (text: string, ms?: number) => void) {
     }
   };
 
-  const menuItems = (m: MediaAsset): ContextMenuItem[] => [
+  const menuItems = (m: MediaAsset): ContextMenuItem[] => guardMenu([
     ...(m.kind === "image"
       ? []
       : [
@@ -368,7 +376,7 @@ export function useMediaMenu(flash: (text: string, ms?: number) => void) {
       danger: true,
       onClick: () => setConfirmDelete({ mediaId: m.id, name: m.name }),
     },
-  ];
+  ]);
 
   const overlay = (
     <>

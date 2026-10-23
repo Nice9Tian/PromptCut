@@ -68,8 +68,8 @@ export function graphCardWithInputs(project, clip) {
  *     外面那几层(段的框、不透明度、淡入淡出)照常加。产流的隔离工程要带着这条剪辑段链(`isolatedFlatProject`),
  *     所以不并进组流(组流按舞台坐标画,嵌套场景里的卡摆不进去)。浏览器也产外框平面的那些(〔裁〕R02:在线浏览器也替剪辑段里的重卡产流;
  *     外框三维的和顶层的 `'spatial'` 一样只由桌面应用和渲染主机产,见 `render-node/split.mjs` 的 `browserStreamInputOf`)。
- *     只收独立卡:剪辑段里依赖下层、没审阅过的卡走依赖下层的流(`belowStreamEligible`,〔裁〕R01:带着下层一起产流);
- *     源依赖卡和挂着素材效果卡节点的片段(摊平视图里没有它们)不产流,照旧在嵌套场景里活渲。
+ *     只收独立卡:剪辑段里依赖下层、源依赖、没审阅过的卡不产流,照旧在嵌套场景里活渲(〔裁〕R01 2026-10-23 用户推翻「带着下层一起产流」,
+ *     按做不通处理:嵌套场景里的毛玻璃会透过剪辑段采样段外面的层,只带段里下层的流和活渲对不上)。
  *
  * 两类同时成立时算 `'source'`(框的三维照样不在流里)。别的卡回 null:平面的独立卡走 `streamEligible`,
  * 依赖下层的、没审阅过又没接输入的走 `belowStreamEligible`(外框带不带三维都走那条路:带三维时三维摆放画进流里)。
@@ -85,8 +85,7 @@ export function soloStreamKind(control, clip, track, project) {
   if (!clip.cardId) return null;
   if (!(Number.isInteger(control.count) && control.count > 0)) return null;
   const compositing = control.capabilities?.compositing ?? control.compositing;
-  // 剪辑段里摊出来的卡(`kernel/cutFlatten.mjs`,片段带 `flat`):独立卡单独成流(见上 `'flat'`);依赖下层、没审阅过的走依赖下层的流,
-  // 源依赖的不产流 —— 这里都回 null
+  // 剪辑段里摊出来的卡(`kernel/cutFlatten.mjs`,片段带 `flat`):独立卡单独成流(见上 `'flat'`),别的不产流
   if (clip.flat) return compositing === 'independent' ? 'flat' : null;
   if (compositing === 'sourceDependent') return 'source';
   if (compositing === 'independent') return frame3d(clip.frame) ? 'spatial' : null;
@@ -112,23 +111,12 @@ export const BELOW_STREAM_RULES = Object.freeze({ sourceDependent: false, frame3
 
 /**
  * 回放从哪一刻挂载算:剪辑段里摊出来的片段(带 `flat`)从嵌套场景最早挂上的那一刻起(`flat.mount`,预卷不会比它更早),
- * 别的片段就是它自己(原样回同一个对象)。原来在 `server/frame-stream.mjs`,挪过来给 `belowTargets` 共用,一字不改。
+ * 别的片段就是它自己(原样回同一个对象)。与 `server/frame-stream.mjs` 里同名的那一份一字不差;在线页面算预算时用它
+ * (`src/online/pageStreamPlan.ts`,剪辑段里单独成流的卡的解码器窗口和切分方一样从这一帧算)。
  */
 export function mountClipOf(clip) {
   const mount = clip?.flat?.mount;
   return Number.isFinite(mount) ? { ...clip, start: Math.min(clip.start, mount) } : clip;
-}
-
-/**
- * 剪辑段里这张卡有没有流、是哪一种(页面一侧判「抑制它、贴它的流」用,`src/editor/snapshotFeed.ts`、`stageSwap.ts`;
- * 与 `soloStreamKind` / `belowStreamEligible` 对剪辑段里的卡的判法相同):独立卡 `'flat'`;依赖下层、没审阅过(`unknown`、旧的
- * `context`、没写)的卡 `'below'`(外框带三维时看 `rules.frame3d`);源依赖的 null。
- */
-export function flatClipStreamKind(compositing, frame, rules = BELOW_STREAM_RULES) {
-  if (compositing === 'independent') return 'flat';
-  if (compositing === 'sourceDependent' && rules?.sourceDependent !== true) return null;
-  if (frame3d(frame) && rules?.frame3d !== true) return null;
-  return 'below';
 }
 
 /**
@@ -141,8 +129,8 @@ export function belowStreamEligible(control, clip, track, rules = BELOW_STREAM_R
   if (!control?.clipId || !clip || !track) return false;
   if (track.hidden || track.sourceOnly) return false;
   if (!clip.cardId) return false;
-  // 剪辑段里摊出来的卡(带 `flat`)同样出(〔裁〕R01:带着下层一起产流):下层只算同一个嵌套场景里的(`streamInputSig.mjs` 的 `belowLayersOf`),
-  // 按嵌套场景的坐标产、贴在嵌套舞台里(`server/frame-stream.mjs` 的 `belowStreamSpecs`)
+  // 剪辑段里摊出来的卡不出依赖下层的流(嵌套场景里的毛玻璃照旧活渲;〔裁〕R01 2026-10-23 被推翻,按做不通处理)
+  if (clip.flat) return false;
   const spatial = frame3d(clip.frame);
   if (spatial && rules?.frame3d !== true) return false;
   const compositing = control.capabilities?.compositing ?? control.compositing;
@@ -166,8 +154,7 @@ export function belowTargets(plan, { picked, where, fps, total, orderOf, taken =
     const lastFrame = Math.min(total - 1, firstFrame + control.count - 1);
     if (lastFrame < firstFrame) continue;
     seen.add(control.clipId);
-    // 剪辑段里摊出来的卡从嵌套场景最早挂上的那一帧算(`mountClipOf`);顶层的卡就是它自己,和原来逐字相同
-    out.push({ control, clip: at.clip, order: orderOf.get(control.clipId) ?? 0, firstFrame, from: Math.min(mountFrameOf(mountClipOf(at.clip), fps), firstFrame), to: lastFrame });
+    out.push({ control, clip: at.clip, order: orderOf.get(control.clipId) ?? 0, firstFrame, from: Math.min(mountFrameOf(at.clip, fps), firstFrame), to: lastFrame });
   }
   return out.sort((a, b) => a.order - b.order);
 }

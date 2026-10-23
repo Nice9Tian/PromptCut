@@ -35,16 +35,6 @@ const EPS = 1e-9;
 /** 这个片段 id 是不是摊平出来的虚拟片段 */
 export const isFlatClipId = (id) => typeof id === 'string' && id.includes(FLAT_SEP);
 
-/**
- * 虚拟片段所在的那个嵌套场景的前缀:去掉最后一段(卡自己的片段 id),留下一路剪辑段的 id 与分隔符(`<段 id>~`、`<段 id>~<段 id>~`)。
- * 同一个嵌套场景里的片段、以及更深一层剪辑段里的片段都以它打头;顶层片段回 null。
- * 剪辑段里依赖下层的卡的流只算这个场景里的下层(`render/streamInputSig.mjs` 的 `belowLayersOf`;〔裁〕R01)。
- */
-export function flatScenePrefix(id) {
-  if (!isFlatClipId(id)) return null;
-  return id.slice(0, id.lastIndexOf(FLAT_SEP) + 1);
-}
-
 const isSegment = (c) => !!c && typeof c.cutId === 'string' && c.cutId.length > 0;
 
 function activeIdOf(p) {
@@ -223,62 +213,6 @@ export function isolatedFlatProject(project, clipId, localize = (c) => structure
     if (!entry || !Array.isArray(entry.tracks)) return null;
     const last = i === f.chain.length - 1;
     entry.tracks = isolateTracks(entry.tracks, last ? innerId : f.chain[i + 1].id, last ? localize : bareSegment);
-  }
-  return { ...root, _cardRender: { mode: 'final', frames: {}, missing: {} } };
-}
-
-/**
- * 一组序列里「只留 `keepId` 和画家顺序排在它下面的层」(同 `server/frame-stream.mjs` 的 `isolatedBelowProject`,用在嵌套场景里):
- * 它上面的序列整条藏成 `sourceOnly`;它所在的序列里它前面的片段和它自己留着,后面的挪进一条藏起来的序列;它下面的序列原样。
- * 找不到 `keepId` 回 null。
- */
-function belowTracks(tracks, keepId) {
-  const source = tracks ?? [];
-  let ti = -1, ci = -1;
-  source.forEach((track, i) => (track?.clips ?? []).forEach((clip, j) => { if (ti < 0 && clip?.id === keepId) { ti = i; ci = j; } }));
-  if (ti < 0) return null;
-  const ids = new Set(source.map((t) => t.id));
-  const out = [];
-  source.forEach((track, i) => {
-    if (i < ti) { out.push({ ...structuredClone(track), hidden: true, sourceOnly: true }); return; }
-    if (i > ti) { out.push(structuredClone(track)); return; }
-    const clips = track.clips ?? [];
-    out.push({ ...structuredClone(track), hidden: false, sourceOnly: false, clips: structuredClone(clips.filter((_, j) => j <= ci)) });
-    const above = clips.filter((_, j) => j > ci);
-    if (above.length) {
-      let id = `__pc_source_${track.id}`, n = 1;
-      while (ids.has(id)) id = `__pc_source_${track.id}_${n++}`;
-      ids.add(id);
-      out.push({ ...structuredClone(track), id, hidden: true, sourceOnly: true, clips: structuredClone(above) });
-    }
-  });
-  return out;
-}
-
-/**
- * 剪辑段里依赖下层的卡(毛玻璃、没审阅过的卡)那条**依赖下层的流**的隔离工程(〔裁〕R01:带着下层一起产流)。
- *
- * 剪辑段的画面是被引用剪辑的整帧合成,嵌套场景是毛玻璃的采样边界(`render/CutSegmentScene.tsx` 的 `clip-path`),
- * 所以这张卡滤到的只有同一个嵌套场景里排在它下面的层。隔离工程照 `isolatedFlatProject` 一路只留这条链上的剪辑段
- * (去掉段的外观,嵌套场景 1:1 铺满画面,所以截图的坐标就是嵌套场景的坐标);最里面那条被引用剪辑里留目标卡和它下面的层,
- * 上面的藏起来;目标卡和下层的外观都原样(这种流按场景坐标产,外观画进流里)。时间不平移。找不到这个片段回 null。
- */
-export function isolatedFlatBelowProject(project, clipId) {
-  const hit = flatClipOf(project, clipId);
-  const f = flatInfoOf(hit?.clip);
-  if (!f || !f.chain.length) return null;
-  const prefix = f.chain.map((s) => s.id).join(FLAT_SEP) + FLAT_SEP;
-  if (!clipId.startsWith(prefix)) return null;
-  const innerId = clipId.slice(prefix.length);
-  const root = structuredClone(project);
-  root.tracks = isolateTracks(root.tracks, f.chain[0].id, bareSegment);
-  for (let i = 0; i < f.chain.length; i++) {
-    const entry = (root.cuts ?? []).find((c) => c?.id === f.chain[i].cutId);
-    if (!entry || !Array.isArray(entry.tracks)) return null;
-    if (i < f.chain.length - 1) { entry.tracks = isolateTracks(entry.tracks, f.chain[i + 1].id, bareSegment); continue; }
-    const tracks = belowTracks(entry.tracks, innerId);
-    if (!tracks) return null;
-    entry.tracks = tracks;
   }
   return { ...root, _cardRender: { mode: 'final', frames: {}, missing: {} } };
 }

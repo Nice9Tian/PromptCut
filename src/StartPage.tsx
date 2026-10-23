@@ -24,6 +24,7 @@ import { getVoiceConfig } from "./ai/voice";
 import { JoinForm } from "./editor/sync/JoinForm";
 import { STORAGE_EVENT, takeStorageRequest } from "./ui/WindowTitleBar";
 import { AccountProjects } from "./account/AccountProjects";
+import { OnlineStart } from "./start/OnlineStart";
 
 /** 字节数写成人看的样子。导出产物、预渲染缓存动辄几十 GB,所以到 G 为止 */
 function humanSize(bytes: number): string {
@@ -81,16 +82,40 @@ function JoinSection(props: { onEnterEditor: () => void }): JSX.Element {
   );
 }
 
+/** 地址里有没有点名要 Vibe 模式那一套新界面。`home` / `login` 是它自己的预览入口,一并认 */
+function wantsVibe(): boolean {
+  try {
+    const ui = new URLSearchParams(location.search).get("ui");
+    return ui === "vibe" || ui === "home" || ui === "login";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 在线浏览器(电脑身份)的首屏。
+ *
+ * **缺省仍是原来那一页**:一块账号表单(`AccountProjects`)—— 真的账号登录、真的云端项目列表、
+ * 凭链接加入。Vibe 模式(`user-workflow.md`「工作方式」)那一套新界面(`src/start/`)**还在跑界面、
+ * 用的是假数据**,所以只有地址里点名要(`?ui=vibe`)时才进。这样它能进 main、随时打开看,
+ * 线上的真开始页不受影响。
+ *
+ * 〔裁:发版会话 V21-12,2026-10-23 —— 0.7.21 要部署到生产,不能把线上的开始页默认换成原型〕
+ * 等 `src/start/` 接上业务层(真实项目列表、真实对话)之后,把这道门去掉、缺省换成新界面。
+ */
 function OnlineStartPage(props: { onEnterEditor: () => void }): JSX.Element {
-  return (
-    <div className="sp">
-      <header className="sp-bar">
-        <Logo size={22} />
-        <span className="sp-bar-spacer" />
-      </header>
-      <main className="sp-main"><AccountProjects online onEnterEditor={props.onEnterEditor} /></main>
-    </div>
-  );
+  if (!wantsVibe()) {
+    return (
+      <div className="sp">
+        <header className="sp-bar">
+          <Logo size={22} />
+          <span className="sp-bar-spacer" />
+        </header>
+        <main className="sp-main"><AccountProjects online onEnterEditor={props.onEnterEditor} /></main>
+      </div>
+    );
+  }
+  return <OnlineStart onEnterEditor={props.onEnterEditor} />;
 }
 
 export const StartPage: (props: { onEnterEditor: () => void }) => JSX.Element = ONLINE_BUILD ? OnlineStartPage : DesktopStartPage;

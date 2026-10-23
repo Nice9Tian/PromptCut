@@ -7,6 +7,7 @@ import { LiveMarkdown } from "../ai/Markdown";
 import type { ChatMessage } from "../ai/types";
 import { OUTBOX_RESEND_EVENT, OUTBOX_TEXT } from "../ai/cloud/outbox";
 import { START_PRESET } from "../editor/right/chat/StartHero";
+import { useReadOnly } from "../editor/readOnly";
 import { activityText, outcomeText, partsOf, runningTool } from "../editor/right/chat/AgentBubble";
 import { Icon } from "./icons";
 import { roundView, splitQuotes, type OpItem, type QuoteRef, type ReportRow } from "./agentView";
@@ -120,7 +121,19 @@ export const AgentRound = memo(function AgentRound(props: { m: ChatMessage; ordi
 
 /** 开始页(没有会话时):一句话说明 + 预设按钮;刚进项目、没被手动清空过时带引导动画(光点、指向输入框的箭头) */
 export function StartHero(props: { animated: boolean; onPickPreset: () => void }) {
-  const { animated, onPickPreset } = props;
+  // 这个项目只给了只读权限(游客):不能给 Agent 发话,不放引导动画和预设,只说明为什么
+  const ro = useReadOnly();
+  const { onPickPreset } = props;
+  const animated = props.animated && !ro.locked;
+  if (ro.locked) {
+    return (
+      <div className="start" data-pcm="agent-start" data-animated="0" data-readonly="1">
+        <div className="start-title">只能查看</div>
+        <div className="start-hint">{ro.why}</div>
+        <button type="button" className="preset" data-pcm="agent-start-preset" disabled title={ro.why}>{START_PRESET}</button>
+      </div>
+    );
+  }
   return (
     <div className={`start${animated ? " is-animated" : ""}`} data-pcm="agent-start" data-animated={animated ? "1" : "0"}>
       {animated && (

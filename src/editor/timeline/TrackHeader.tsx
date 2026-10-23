@@ -5,6 +5,7 @@ import { ContextMenu } from "./ContextMenu";
 import { useTimelineContext } from "./TimelineContext";
 import { useReorderDrag, useRowOffset } from "./useReorder";
 import { IconVolume, IconVolumeMute, IconDrag, IconEye, IconEyeOff, IconLock, IconUnlock } from "../../ui/icons";
+import { useReadOnly } from "../readOnly";
 
 /**
  * 序列行头(配色诊断与修正 v2 整屏)。
@@ -14,6 +15,8 @@ import { IconVolume, IconVolumeMute, IconDrag, IconEye, IconEyeOff, IconLock, Ic
 export function TrackHeader({ track, index }: { track: Track; index: number }) {
   const { trackH } = useTimelineContext();
   const { start: startReorder } = useReorderDrag();
+  // 这个项目只给了只读权限(游客):换序、改名、静音 / 隐藏 / 锁定、删序列都不给
+  const ro = useReadOnly();
   const offset = useRowOffset(index, track.id);
   const [isEditing, setIsEditing] = useState(false);
   const [name, setName] = useState(track.name);
@@ -37,6 +40,8 @@ export function TrackHeader({ track, index }: { track: Track; index: number }) {
     e.preventDefault();
     setContextMenu({ x: e.clientX, y: e.clientY });
   };
+  /** 双击行名改名:只读项目里不给 */
+  const startEditing = () => { if (!ro.locked) setIsEditing(true); };
 
   return (
     <>
@@ -48,12 +53,12 @@ export function TrackHeader({ track, index }: { track: Track; index: number }) {
           transform: offset.y ? `translateY(${offset.y}px)` : undefined,
           transition: offset.animated ? "transform 150ms cubic-bezier(0.2, 0, 0, 1)" : "none",
         }}
-        title="按住上下拖 = 调整序列顺序"
+        title={ro.title("按住上下拖 = 调整序列顺序")}
         onContextMenu={handleContextMenu}
-        onPointerDown={(e) => startReorder(e, index, track.id)}
+        onPointerDown={(e) => { if (!ro.locked) startReorder(e, index, track.id); }}
       >
         <IconDrag size={12} />
-        <div className={`pc-tl-row-name${track.hidden ? " is-muted" : ""}`} onDoubleClick={() => setIsEditing(true)}>
+        <div className={`pc-tl-row-name${track.hidden ? " is-muted" : ""}`} onDoubleClick={startEditing}>
           {isEditing ? (
             <input
               autoFocus
@@ -71,16 +76,17 @@ export function TrackHeader({ track, index }: { track: Track; index: number }) {
           {track.muted ? "已静音" : `${mutedClips} 静音`}
         </span>}
         <div className="pc-tl-row-acts" onPointerDown={(e) => e.stopPropagation()}>
-          <button type="button" className={track.muted ? "is-active" : ""}
+          <button type="button" className={track.muted ? "is-active" : ""} disabled={ro.locked}
             onClick={() => actions.updateTrack(track.id, { muted: !track.muted })}
-            title={track.muted ? "打开序列声音" : "静音序列"} aria-label={track.muted ? "打开序列声音" : "静音序列"} aria-pressed={!!track.muted}>
+            title={ro.title(track.muted ? "打开序列声音" : "静音序列")} aria-label={track.muted ? "打开序列声音" : "静音序列"} aria-pressed={!!track.muted}>
             {track.muted ? <IconVolumeMute size={12} /> : <IconVolume size={12} />}
           </button>
           <button
             type="button"
             className={track.hidden ? "is-active" : ""}
+            disabled={ro.locked}
             onClick={() => actions.updateTrack(track.id, { hidden: !track.hidden })}
-            title={track.hidden ? "已隐藏,点击显示" : "隐藏这条序列"}
+            title={ro.title(track.hidden ? "已隐藏,点击显示" : "隐藏这条序列")}
             aria-pressed={!!track.hidden}
           >
             {track.hidden ? <IconEyeOff size={12} /> : <IconEye size={12} />}
@@ -88,8 +94,9 @@ export function TrackHeader({ track, index }: { track: Track; index: number }) {
           <button
             type="button"
             className={track.locked ? "is-active" : ""}
+            disabled={ro.locked}
             onClick={() => actions.updateTrack(track.id, { locked: !track.locked })}
-            title={track.locked ? "已锁定,点击解锁" : "锁定这条序列"}
+            title={ro.title(track.locked ? "已锁定,点击解锁" : "锁定这条序列")}
             aria-pressed={!!track.locked}
           >
             {track.locked ? <IconLock size={12} /> : <IconUnlock size={12} />}
@@ -102,7 +109,7 @@ export function TrackHeader({ track, index }: { track: Track; index: number }) {
           x={contextMenu.x}
           y={contextMenu.y}
           onClose={() => setContextMenu(null)}
-          items={[{ label: "删除序列", action: () => actions.removeTrack(track.id) }]}
+          items={[{ label: ro.locked ? ro.why : "删除序列", disabled: ro.locked, action: () => actions.removeTrack(track.id) }]}
         />
       )}
     </>

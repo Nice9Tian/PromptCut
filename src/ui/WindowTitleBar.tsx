@@ -141,6 +141,16 @@ export function WindowTitleBar(): JSX.Element | null {
   return ONLINE_BUILD ? null : <DesktopTitleBar />;
 }
 
+/**
+ * 这个项目只给了只读权限(游客)时,菜单里会改项目的命令置灰。编辑器顶栏(`src/editor/ReadOnlyFence.tsx` 的 ReadOnlyMarker)
+ * 给 `<html>` 打 `data-pc-readonly="member"`、并把置灰说明(`viewOnlyText()` 那一句)放在 `data-pc-readonly-why`,
+ * 这里只认这两个标记,不去引用编辑器(标题栏在 `src/ui`,在编辑器之下),说明也不在这里另编一句。
+ * 菜单展开时才渲染,读一下标记就够,不用订阅。
+ */
+const READONLY_COMMANDS = new Set(["undo", "redo", "save-project"]);
+const readOnlyNow = (): boolean => typeof document !== "undefined" && document.documentElement.dataset.pcReadonly === "member";
+const readOnlyWhy = (): string => (typeof document !== "undefined" && document.documentElement.dataset.pcReadonlyWhy) || "";
+
 function DesktopTitleBar(): JSX.Element {
   const [open, setOpen] = useState<MenuId | null>(null);
   const [maximized, setMaximized] = useState(false);
@@ -230,8 +240,9 @@ function DesktopTitleBar(): JSX.Element {
                       className="pc-titlebar-menu-item"
                       data-pc={item.command ? `titlebar-${item.command}` : undefined}
                       disabled={ONLINE_BUILD && !!item.desktopOnly}
-                      title={ONLINE_BUILD && item.desktopOnly ? onlineUnsupported(item.desktopOnly) : undefined}
-                      onClick={() => { if (!(ONLINE_BUILD && item.desktopOnly)) choose(item.command); }}
+                      aria-disabled={item.command && READONLY_COMMANDS.has(item.command) && readOnlyNow() ? true : undefined}
+                      title={ONLINE_BUILD && item.desktopOnly ? onlineUnsupported(item.desktopOnly) : item.command && READONLY_COMMANDS.has(item.command) && readOnlyNow() ? readOnlyWhy() : undefined}
+                      onClick={() => { if (!(ONLINE_BUILD && item.desktopOnly) && !(item.command && READONLY_COMMANDS.has(item.command) && readOnlyNow())) choose(item.command); }}
                     >
                       <span>{item.label}</span>
                       {item.shortcut && <kbd>{item.shortcut}</kbd>}
