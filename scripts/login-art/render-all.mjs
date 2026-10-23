@@ -74,14 +74,14 @@ for (const p of palettes()) {
   const t0 = Date.now();
   const log = execFileSync(process.execPath, [
     'scripts/export-e2e.mjs', '--project', projPath, '--id', `art-${p.id}`, '--video',
-  ], { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 26 });
+  ], { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 26, windowsHide: true });
   const mp4 = /成片:(.+preview\.mp4)/.exec(log)?.[1]?.trim();
   if (!mp4 || !fs.existsSync(mp4)) throw new Error(`${p.id}: 没拿到 preview.mp4\n${log.slice(-600)}`);
 
   const dest = path.join(ART, `login-art-${p.id}.mp4`);
   execFileSync(FF, ['-hide_banner', '-loglevel', 'error', '-y', '-i', mp4, '-an',
     '-vf', `scale=${OUT_W}:-2`, '-c:v', 'libx264', '-crf', String(CRF), '-preset', 'slow',
-    '-pix_fmt', 'yuv420p', '-movflags', '+faststart', dest], { stdio: 'inherit' });
+    '-pix_fmt', 'yuv420p', '-movflags', '+faststart', dest], { stdio: 'inherit', windowsHide: true });
   const bytes = fs.statSync(dest).size;
   made.push({ id: p.id, name: p.name, accent: p.accent, bytes });
   console.log(`   → ${path.relative(ROOT, dest)}  ${(bytes / 1024).toFixed(0)} KB  （${((Date.now() - t0) / 1000).toFixed(0)} 秒）`);

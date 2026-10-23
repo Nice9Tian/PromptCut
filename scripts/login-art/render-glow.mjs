@@ -142,14 +142,14 @@ for (const t of plan) {
   const t0 = Date.now();
   const log = execFileSync(process.execPath, [
     'scripts/export-e2e.mjs', '--project', projPath, '--id', `glow-${t.key}`, '--video',
-  ], { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 26 });
+  ], { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 26, windowsHide: true });
   const mp4 = /成片:(.+preview\.mp4)/.exec(log)?.[1]?.trim();
   if (!mp4 || !fs.existsSync(mp4)) throw new Error(`${t.key}: 没拿到 preview.mp4\n${log.slice(-600)}`);
 
   const dest = path.join(t.dir, t.out);
   execFileSync(FF, ['-hide_banner', '-loglevel', 'error', '-y', '-i', mp4, '-an',
     '-vf', `scale=${t.outW}:-2`, '-c:v', 'libx264', '-crf', String(CRF), '-preset', 'slow',
-    '-pix_fmt', 'yuv420p', '-movflags', '+faststart', dest], { stdio: 'inherit' });
+    '-pix_fmt', 'yuv420p', '-movflags', '+faststart', dest], { stdio: 'inherit', windowsHide: true });
   const bytes = fs.statSync(dest).size;
   made.push({ ...t, bytes });
   console.log(`   → ${t.where}/${t.out}  ${(bytes / 1024).toFixed(0)} KB  （${((Date.now() - t0) / 1000).toFixed(0)} 秒）`);
