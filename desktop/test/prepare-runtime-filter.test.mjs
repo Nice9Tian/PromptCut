@@ -48,6 +48,16 @@ test('shouldCopyApp:.git 作为文件和作为目录都被挡,正常名字放行
   assert.equal(shouldCopyApp('.github', '/src/.github', true), true);
 });
 
+test('shouldCopyApp:.worktrees 整个不进安装包(2026-10-24 出 0.7.25 时撞上)', () => {
+  // 少这一条就是把每一条分支的整份源码发给用户:那次 runtime/app 从 378 MB 涨到 11 GB
+  // (光 .worktrees/_export-baseline 那份像素基线就 7.9 GB),makensis 直接挂
+  assert.equal(shouldCopyApp('.worktrees', '/src/.worktrees', true), false);
+  // 按名字挡,所以在哪一层都挡得住
+  assert.equal(shouldCopyApp('.worktrees', '/src/a/b/.worktrees', true), false);
+  // 同名的普通文件不受影响(和别的 SKIP_DIRS 口径一致:只对目录生效)
+  assert.equal(shouldCopyApp('.worktrees', '/src/docs/.worktrees', false), true);
+});
+
 test('copyRecursive + shouldCopyApp:根上的 .git 指针文件不进目标,正常文件都在', () => {
   withTmp((tmp) => {
     const src = path.join(tmp, 'src');
