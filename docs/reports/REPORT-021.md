@@ -75,6 +75,11 @@
 
 （出包、`release` 前进、换官网链接、部署节点、生产只读验收之后补；耗时另记 `release-timings.md` 的 0.7.21 一节。）
 
+### 这一版要顺手纠正的两处旧记录（2026-10-23 实测）
+
+1. **版本号读数写清是哪个口**。0.7.20 的记录写「节点健康检查 `version` 与 `codeVersion` 均为 0.7.20」，没写是哪个服务：文档服务 8787 的 `/healthz` **没有**这两个字段（只有 service、uptimeMs、modules 等），账号服务 8790 的 `releaseId`、`backendSha` 都是 `null`。**有这两个字段的是 Agent 服务 8791 的 `/healthz`**，实测 `{"ok":true,"version":"0.7.20","codeVersion":"0.7.20",…}`。从这一版起，版本证据记两处：8791 的 healthz，加两棵部署树里 `package.json` 的版本（`/opt/promptcut-v2/releases/35f7b2ab/pc`、`/opt/promptcut-render/releases/35f7b2abb9db`，实测都是 0.7.20）。
+2. **兼容补丁从来没上过官网**。0.7.19、0.7.20 的补丁都构建了（哈希与记录逐字相同），但 `https://visuhive.com/download/PromptCut-patch-0.7.*.exe` 都是 404，下载页里也没有补丁链接 —— 而报告里写着「老用户走更新补丁，不必重下约 450 MB 的完整安装包」，按现状用户做不到。**0.7.21 起把补丁也传上官网**，报告里写明真实地址。
+
 ## 没做的与待用户的
 
 （定稿时汇总。）
