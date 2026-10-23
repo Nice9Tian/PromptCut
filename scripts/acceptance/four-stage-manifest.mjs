@@ -62,7 +62,6 @@ export const EXCLUDED_PROBE_FILES = {
   'pixelmap-gl-harness.html': '探针的页面夹具',
   'placeholder-harness.html': '探针的页面夹具',
   'render-queue-proxy.mjs': '队列探针用的 TCP 代理,被 render-queue-e2e 与 card-sync-probe 用',
-  'lowmem-online-probe.mjs': '整支按低内存档写;0.7.19 撤销低内存档,claude/online-browser 在文件头标〔已退役〕(断言不改);接替的是 stage-gate-probe(V19-ob-*)与 page-stream-probe 的 lowest、mobile 两场。原先还要带在线模式编译期常量另起 dev server、再配远程素材服务',
   'c65-editor-probe.mjs': 'C6.5 页面一侧同步 / 撤销 / 离线 / 共享项目的点一遍探针(历史),要先手工起托管端并分阶段(local、shared、lan);C 段 2026-10-22 已随冲突合并窗口改成逐项(1d07f323),冲突合并的主流程由 V19-cm-probe、V19-mobile-ui 覆盖',
   'm8-e-probe.mjs': 'M8 跨机编排探针,要第二台机器(笔记本),不在本机整套里',
   'm8-migrate-probe.mjs': 'M8 换机迁移演练,由主会话照迁移步骤做',

@@ -38,9 +38,9 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import puppeteer from 'puppeteer';
-import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
-import { devOrigin, flagArg } from './probe-connect.mjs';
-import { findFfmpeg } from '../../server/bakery/ffmpeg.mjs';
+import { PROBE_CHROME_ARGS } from '../../probes/probe-chrome.mjs';
+import { devOrigin, flagArg } from '../../probes/probe-connect.mjs';
+import { findFfmpeg } from '../../../server/bakery/ffmpeg.mjs';
 
 const args = process.argv.slice(2);
 const origin = devOrigin(args);
