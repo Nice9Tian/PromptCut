@@ -10,8 +10,8 @@
  *   - **严格按序与退避**：轮到的那一档在退避时，后面的都等着（小尺寸在退避，任何原尺寸都不传）。
  *   - **分片与对账**：每一档向远程素材服务 `media` 命名空间对账（`GET media/<hash>/chunks`），
  *     只补缺的片（`PUT media/<hash>/<n>`，每片 8 MiB，带 `X-Media-Size` 与 `X-Media-Ext`），最后 `POST media/<hash>/complete`。
- *     云端账号项目另带 `X-Media-Tier: small | original`（这一档是小尺寸还是原尺寸）：游客只数视频的原尺寸
- *     （`server/asset-store/guest-quota.mjs`），服务端认不出这个头就当原尺寸。只在云端带，是因为游客只在云端有，
+ *     云端账号项目另带 `X-Media-Tier: small | original`（这一档是小尺寸还是原尺寸）：游客的视频条数按「原尺寸几个、
+ *     小档几个取多的」数（`server/asset-store/guest-quota.mjs`），服务端认不出这个头就当原尺寸。只在云端带，是因为游客只在云端有，
  *     而本地项目经托管中继（`server/hosting/service.mjs`）走的那条路，预检放行的头里没有它，带上浏览器就把整个 PUT 拦了。
  *   - **所有档位 complete 才出队**：两档都向素材服务确认 `complete: true` 后才出队。
  *   - **被限额拒掉的不再重试**（claude/guest-fix〔裁〕，二级：用户看得见；审查 D）：素材服务回 403 且错误是
