@@ -22,7 +22,7 @@ import { BrandAurora } from "./BrandAurora";
 import "./brandCanvas.css";
 
 /** 画面参数。每一条都对应着色器里的一个 uniform,改数就换花样,不用动 GLSL */
-const LOOK = {
+export const LOOK = {
   /**
    * 循环一圈多少秒。预渲染出来的视频就是这么长,越长越不容易看出在循环,代价是文件大一点。
    * 实时那一版也按同一个周期走,所以屏幕上和预渲染的是同一段动作
@@ -124,14 +124,19 @@ const LOOK = {
   fadeEdge: 0.6,
 };
 
-const VERT = `#version 300 es
+/**
+ * 顶点与片元着色器、以及那组画面参数,都**导出**:预渲染登录页左栏那段循环动画时,
+ * 生成用户卡源码的脚本要原样拿走它们(`scripts/login-art/make-card.mjs`),
+ * 这样屏幕上这一版和预渲染出来的那一版画的是同一段 GLSL,不会各自漂。
+ */
+export const VERT = `#version 300 es
 void main() {
   // 一个盖住整屏的三角形:不用顶点缓冲,靠顶点号算坐标
   vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
   gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
-const FRAG = `#version 300 es
+export const FRAG = `#version 300 es
 precision highp float;
 out vec4 fragColor;
 
