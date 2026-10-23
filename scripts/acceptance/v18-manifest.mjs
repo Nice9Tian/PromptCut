@@ -327,8 +327,8 @@ export const V18_EXCLUDED = {
   'hosted-render-remotion-probe.mjs': RENDER_REFACTOR, 'hosted-render-wipe-demo.mjs': RENDER_REFACTOR, 'hosted-stream-entry-probe.mjs': RENDER_REFACTOR,
   'online-remotion-card-probe.mjs': RENDER_REFACTOR, 'online-runtime-harness.html': RENDER_REFACTOR + '(页面夹具)',
   'preview-3d-stream-probe.mjs': RENDER_REFACTOR,
-  'preview-stop-lib.mjs': 'seek-back-exact-probe 与 scrub-hold-snapshot-probe 共用的搭法,不单独运行', 'remotion-style-harness.html': RENDER_REFACTOR + '(页面夹具)', 'remotion-style-probe.mjs': RENDER_REFACTOR,
-  'scrub-hold-snapshot-probe.mjs': RENDER_REFACTOR, 'seek-back-exact-probe.mjs': RENDER_REFACTOR, 'stage-push-before-after-probe.mjs': RENDER_REFACTOR, 'stateful-seq-vs-jump-probe.mjs': RENDER_REFACTOR,
+  'preview-stop-lib.mjs': 'seek-back-exact-probe、framework-card-pipeline-probe、lottie-* 共用的搭法,不单独运行', 'remotion-style-harness.html': RENDER_REFACTOR + '(页面夹具)', 'remotion-style-probe.mjs': RENDER_REFACTOR,
+  'seek-back-exact-probe.mjs': RENDER_REFACTOR, 'stage-push-before-after-probe.mjs': RENDER_REFACTOR, 'stateful-seq-vs-jump-probe.mjs': RENDER_REFACTOR,
   'lottie-baseline-probe.mjs': RENDER_REFACTOR, 'lottie-pipeline-probe.mjs': RENDER_REFACTOR, 'lottie-seed-extra-probe.mjs': RENDER_REFACTOR, 'lottie-seed-probe.mjs': RENDER_REFACTOR,
   'stream-below-probe.mjs': RENDER_REFACTOR, 'stream-canvas-direct-probe.mjs': RENDER_REFACTOR, 'stream-noreplay-probe.mjs': RENDER_REFACTOR,
 };

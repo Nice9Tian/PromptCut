@@ -61,3 +61,10 @@
 | `stream-editor-e2e.mjs` | R8 轨道流在真编辑台里的端到端探针 | 文件头自己写明「只对打过 `r8-glue.patch` 的 dev server 有意义」，那个补丁在仓库和任何分支上都不存在，没打补丁时它会卡在「等流生产完」超时；R8 已合入 main，现在这条链由 `scrub-stream-probe.mjs` 等守门 |
 
 指向它们的散文指针已改到归档路径：`src/render/snapshotRename.ts`、`scripts/probes/preview-fallback-probe.mjs`、`scripts/probes/probe-connect.mjs`。
+
+## snapshot-size-probe.mjs
+
+量「单卡 HTML 快照」的体积分布，判据是当年快照投递的体积上限。每张卡的快照 2026-10-16（己二）撤掉后，
+它量的入口（整场景 HTML 采样）还在，所以跑得完、退出码 0，但**判据已经没有对应的产品行为**，不再是通过与不通过的凭据。
+同批被删掉的是另外 5 支（`scrub-hold-snapshot-probe`、`snapshot-hash-probe`、`snapshot-diff-apply-probe`、`swap-cost-probe`、`png-adopt-probe`）：
+它们跑起来必然失败或在测空桩，见 `docs/reports/AGENT-claude-probe-audit.md`。
