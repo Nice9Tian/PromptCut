@@ -300,6 +300,57 @@ Google 验签过了、账号认出来了、网站会话建起来了，**四次�
 其它验证：类型检查零错误；影响范围的测试 **132 条零失败**（`src/start/` 七支、`src/account/` 三支、
 `four-stage-acceptance.test.mjs`、`c10-ui-gates.test.mjs`）；验收台账守门 `--check-coverage` 通过。
 
+## 0.7.25（Google 登录那条的发版，2026-10-24）
+
+用户 2026-10-24 授权「把所有分支都检查好，能合的都合并好」。四条没合进 main 的分支逐条看过：
+
+| 分支 | 怎么处理 |
+|---|---|
+| `claude/google-login-wire` | **合了** —— 上一节那条修复，带探针与台账登记 |
+| `claude/drive-connector` | **合了** —— 净差三个文件，其中 `storageImport.ts` 是真修复 |
+| `claude/mobile-ui-ref` | **合了** —— 只有 `prototypes/` 下的参考图与 README，不含代码 |
+| `dryrun` | **没合，记待用户项** —— 它删掉 421 行开发规则（`guide_files/` 里 `multi_agent.md`、`solution_table.md` 整份，`suggested_agent_behavior.md` 大半），把指挥 Agent 的内容搬进本机技能。分支名就叫 `dryrun`，看着是摆给用户审的；而且「删文件或功能先确认」正是这些规则自己写的。由用户定 |
+
+### 合完之后守门红了三条，是我自己留的坑
+
+`C10-RA-01/02/03` 红。原因：0.7.24 合网盘连接器时，`/api/media/storage/{connect,disconnect,import}` 三条字面量进了在线产物，
+我当时的处理是**在棘轮里单开一桶登记这三条**——那是治标。`claude/drive-connector` 给的是治本：这些口由本机编辑器进程发，
+在线页面没有对端，`storageImport.ts` 三个函数开头内联 `if (!storageImportSupported) throw …`（**必须内联**：它在在线构建里是
+编译期常量 `false`，打包器据此把后面的代码连同字面量一并剪掉；抽成辅助函数就静态判不出不可达），剪掉之后清单里那三条也删。
+两边一对就不上了。
+
+改法：把 `STORAGE_PATHS` 与基线的 `storagePaths` 一并**清空**。空桶不是「不管」，反而更严——`assertRatchet` 的 `added` 判定
+把任何 `/api/media/storage/` 开头的路径都算成未许可，哪天它们又漏进在线产物，这道门立刻红。
+
+### 发版与部署
+
+- 发版前全量：**8053 条、8038 过、0 失败、15 跳过**，经验收运行器跑 `G0-2`（连 15 条跳过是否都在名单上一起判），206 秒。
+- 发版提交 `6d15988d`。应用 0.7.24 → **0.7.25**，外壳保持 **0.2.8**（仍只动 Node 那一半，用户走更新补丁）。
+- **快照指纹没动**：从 `server/frame-code.mjs` 里抽出被哈希的 24 个文件路径，对线上 0.7.24（`a5302553`）逐一 diff 是空的；
+  `server/cardGraph.mjs` 与 `src/cards/` 也是空的。所以这次部署不会让已有快照键作废、不会整站重渲，已生成的卡片声音也不会被判过期。
+- 节点部署一次过：前端入口 `index-DWAa5Pw7.js`，`src` 改 6 个文件；五服务 active；8791 健康检查 `version` 与 `codeVersion`
+  都是 **0.7.25**；`render.code-version match: true`；素材服务静置后 not-ready **0** 次；`nginx-whitelist-already` → `nginx-whitelist-ok`
+  （这一版没有新路由，核对后原样）；备份 `/root/v0725-backup-20261023T180534Z`。
+
+### 线上复验：不是只看部署日志
+
+| 核什么 | 读数 |
+|---|---|
+| 线上编辑器入口 | `index-DWAa5Pw7.js`，与本地包逐字一致 |
+| Google 那条专用出口在不在线上产物里 | 在（`third-party` 出现 3 处） |
+| 网盘那三条还在不在在线产物里 | `connect` / `disconnect` / `import` **各 0 处**（部署前各 1 处） |
+| **用户本人实测 Google 登录** | **「Google 登录试了，进去了。」**（2026-10-24） |
+
+main 与 release 都推到 `6d15988d`，四个 ref 一致。
+
+### Google 控制台三处登记当天补齐
+
+用户原话：「可能都补好了，你确认下，不行就到chrome里填好等我点保存。」核下来**没补好**，只有 `localhost:5321`
+（当初给可行性探针随手挑的端口）和生产那条。会话在表单里填、用户点的保存，补完刷新页面重新读过：
+JavaScript 来源 8 条、重定向 URI 4 条、API 密钥网站限制 6 条，开发 5190 与桌面 5210 的 `localhost` 与 `127.0.0.1` 两种写法都在
+（OAuth 里这是两个不同的来源，不会互相顶替）。细表见 `docs/plan/drive-connector-task.md` 第 9.1 节。
+**仍差节点那一侧的三个环境变量**，没配之前素材页点开显示「未配置」。
+
 ## 没做的与待用户的
 
 ### 没做的（都写明了原因）
@@ -311,7 +362,7 @@ Google 验签过了、账号认出来了、网站会话建起来了，**四次�
 5. **在线浏览器导出的变速声音没有探针**：仓库里没有这条路带声音的端到端探针，只核了插值函数的单测。已记待办。
 6. **一级语义 `workflow/editing.md` 关于「速度」入口那几句还没写**：一级不由会话改，由 clip-speed 那条线把「修改前／修改后」给用户过目后落笔。
 
-### 待用户的（截至 0.7.24 发完）
+### 待用户的（截至 0.7.25 发完）
 
 下面几条是**只有用户能定**的，不是漏做：
 
@@ -321,8 +372,9 @@ Google 验签过了、账号认出来了、网站会话建起来了，**四次�
 4. **`docs/plan/guest-identity-semantics-dryrun.md` 删不删**：那份文件自己写着「用户点头之后删掉它」，用户还没点过这个头，所以留着。
 5. **0.7.19、0.7.20 的补丁**：已补传官网（本来是待用户项，2026-10-23 做掉了）。
 6. **网盘导入在生产上还没开**（0.7.24 新增）：代码已上线，但节点上没配那三个环境变量，所以素材页点「从网盘导入」会显示「未配置」并列出要配什么。要开它得先做两件只有用户能做的事：① 在 Google 控制台把 `https://<主站域名>/oauth2callback` 登记成已授权的重定向 URI（A2 那条路要用）；② 决定 `PROMPTCUT_GOOGLE_CLIENT_SECRET_FILE` 这个密钥文件放在节点的哪个路径下、由谁拥有（现在的规矩是 0600、属主为服务用户，和 `PROMPTCUT_AGENT_CLIENT_KEY_FILE` 同待遇）。只配 A3（一次性令牌）那条路的话不需要密钥文件。
-   **2026-10-24 补（`claude/drive-connector` 那个会话查出来并自测过，我复核了端口与清单）**：要开的不止那两样。OAuth 客户端的 JavaScript 来源、重定向 URI，以及 API 密钥 `PromptCut Picker (localhost 5321)` 的网站限制，**三处登记的全是 `localhost:5321`** —— 那是当初给可行性探针随手挑的端口。而开发服务器是 **5190**（`.claude/launch.json`）、桌面版是 **5210**（`desktop/src-tauri/src/lib.rs` 的 `EDITOR_PORT`，我都核过）。在这两个端口上点「从网盘导入」会三样各撞一堵墙：Picker 被 API 密钥的网站限制挡、A3 的令牌弹窗被 JavaScript 来源挡、A2 换令牌被重定向 URI 挡。补登记要用户本人在 Google 控制台点保存。
-8. **在线产物里那三条网盘路径本来就不该在**（0.7.24 的 `storagePaths` 是治标）：0.7.24 合进来时 `C10A-API-03` 报「在线产物里多了 `/api/media/storage/connect|disconnect|import`」，我当时的做法是在棘轮里**单开一桶登记**这三条（照样只许精确三条）。`claude/drive-connector` 后来给了治本的改法：`src/editor/io/storageImport.ts` 三个函数开头内联一句 `if (!storageImportSupported) throw …`，`storageImportSupported` 在在线构建里是编译期常量 `false`，打包器据此把后面的代码连同字面量一并剪掉（**必须内联写**，抽成辅助函数就静态判不出不可达，字面量照旧留着）；剪掉之后 `c10a-online-api-paths.json` 里那三条也要删（这道门两个方向都判）。我在本分支的在线产物里复核过：**这三条字面量现在各出现 1 处，确实在包里**。那条分支还没合，三个文件的净差是 `storageImport.ts`、`c10a-online-api-paths.json` 与任务书。
+   **2026-10-24 补（`claude/drive-connector` 那个会话查出来并自测过，我复核了端口与清单）**：要开的不止那两样。OAuth 客户端的 JavaScript 来源、重定向 URI，以及 API 密钥 `PromptCut Picker (localhost 5321)` 的网站限制，**三处登记的全是 `localhost:5321`** —— 那是当初给可行性探针随手挑的端口。而开发服务器是 **5190**（`.claude/launch.json`）、桌面版是 **5210**（`desktop/src-tauri/src/lib.rs` 的 `EDITOR_PORT`，我都核过）。在这两个端口上点「从网盘导入」会三样各撞一堵墙：Picker 被 API 密钥的网站限制挡、A3 的令牌弹窗被 JavaScript 来源挡、A2 换令牌被重定向 URI 挡。补登记要用户本人在 Google 控制台点保存。**2026-10-24 当天补齐了**（会话填表单、用户点保存，刷新后重读确认：来源 8 条、重定向 4 条、API 密钥网站限制 6 条）。这一条现在只剩**节点那一侧的三个环境变量**没配。
+8. **在线产物里那三条网盘路径本来就不该在**（0.7.24 的 `storagePaths` 是治标）：0.7.24 合进来时 `C10A-API-03` 报「在线产物里多了 `/api/media/storage/connect|disconnect|import`」，我当时的做法是在棘轮里**单开一桶登记**这三条（照样只许精确三条）。`claude/drive-connector` 后来给了治本的改法：`src/editor/io/storageImport.ts` 三个函数开头内联一句 `if (!storageImportSupported) throw …`，`storageImportSupported` 在在线构建里是编译期常量 `false`，打包器据此把后面的代码连同字面量一并剪掉（**必须内联写**，抽成辅助函数就静态判不出不可达，字面量照旧留着）；剪掉之后 `c10a-online-api-paths.json` 里那三条也要删（这道门两个方向都判）。我在本分支的在线产物里复核过：**这三条字面量现在各出现 1 处，确实在包里**。那条分支还没合，三个文件的净差是 `storageImport.ts`、`c10a-online-api-paths.json` 与任务书。**2026-10-25 更新：已随 0.7.25 合入并上线**，线上产物里这三条各 0 处；棘轮那一桶清空（比登记三条更严）。这一条了结。
+9. **`dryrun` 分支合不合**（0.7.25 新增）：它删掉 421 行开发规则（`guide_files/` 里 `multi_agent.md`、`solution_table.md` 整份，`suggested_agent_behavior.md` 大半），把指挥 Agent 的内容搬进本机技能 `promptcut-dev`。分支名就叫 `dryrun`，看着是摆给你审的；而且「删文件或功能先确认」正是这些规则自己写的，所以 0.7.25 把能合的三条都合了、**单独把它留下**。要合说一声。
 7. **发版前全量「红的那条单独复跑算不算绿」**（0.7.24 新增）：0.7.24 发版前有两轮全量各随机红一条、两条不是同一条、单独跑都绿（已记 `TODO.md`）。把通过条件放宽成「复跑绿了也算」是改基线门槛，按原则 3「基线始终全绿」要你定，所以**没有自行改 `verification.md`**，那里仍写「零失败」。（0.7.24 最后那一轮全量本身是干净的，8053 条零失败，没有用到这条放宽。）
 
 ### 之前那一版的待用户项（已了结的）
