@@ -34,6 +34,7 @@ import {
   conflictBarText, useConflicts, type AssetTab, type CardTab, type ParamsTarget, type TransitionTarget,
 } from "./sheets";
 import { useMembers } from "./useMembers";
+import { useUploadRejectedNotice } from "../editor/left/uploadRejectedNotice";
 
 // 探针与测试读写 store 的口子(桌面的时间轴模块装同一个;手机版不挂时间轴模块,这里自己装)
 (window as unknown as { __pcStore?: unknown }).__pcStore = { getState, actions };
@@ -65,6 +66,8 @@ export function MobileEditor() {
   const playing = useStore((s) => s.playing);
   const selection = useStore((s) => s.selection);
   const toast = useToast();
+  // 在线上传被限额拒掉的(游客第 4 条视频之类):弹一句说清楚(`uploadRejectedNotice.ts`)
+  useUploadRejectedNotice(toast);
   // 这个项目只给了只读权限(游客):改项目的操作(换顺序、分割、复制、删除、静音、拖动、对齐、撤销重做、加素材 / 卡片、参数)
   // 一律不给,子导航栏整排置灰、悬停是 viewOnlyText();播放、预览、点选看缩略时间轴、读 Agent 对话、导出照常
   const ro = useReadOnly();
