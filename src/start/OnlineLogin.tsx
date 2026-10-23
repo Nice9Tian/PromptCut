@@ -24,7 +24,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { JSX } from "react";
 import { Logo } from "../ui/Logo";
-import { BrandCanvas } from "./BrandCanvas";
+import { BrandLoop } from "./BrandLoop";
 import { createAccountClient, type CloudAccountClient } from "../account/client";
 import { ensureDevice } from "../editor/sync/syncManager";
 
@@ -188,7 +188,7 @@ export function OnlineLogin(props: { onDone: () => void; onThirdPartyDone?: () =
   return (
     <div className="ps-login" data-pc="start-login">
       <section className="ps-login-art">
-        <BrandCanvas />
+        <BrandLoop />
         <div>
           <Logo size={26} />
           <h1 className="ps-login-art-title">打开浏览器就能剪片子</h1>
