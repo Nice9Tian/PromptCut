@@ -177,6 +177,13 @@ B06 块第一版把手机版语义安在不存在的小节上；B09 块第一版
 5. **一处产品代码缺陷（B12a 顺带查出，与探针无关）**：`src/export/frameCompositor.ts` 第 507 行先 `this.stats.rasterMs += res.stats.rasterMs ?? 0`，第 511 行又 `this.stats.rasterMs += performance.now() - t0`，跨源隔离导出下 `rasterMs` 被双重计入，任何读 `comp.stats` 的诊断都会看到虚高的值。manager 已核对原文为真。
 6. **`custom-measure-probe.mjs` 有隐藏的单测引用**：`server/test/probe-timings.test.mjs` 第 69 行按不带后缀的名字 `'custom-measure-probe'` 读它的源码。我的块清单把它标成「无测试引用」，是漏标 —— 这支**不能改名或删**。
 
+### 第三遍扫描（B12b 回来后）
+
+B12b 块点出第三类写法：**阈值是表达式**（`x > beat * 3`），我前两遍的正则都只认数字字面量，所以都漏了。
+已改 `reveal-probe.mjs` 第 331 行「每一次 setTime 往返不超过三拍（100 ms）」为只记录；同一支第 356 行「帧到达间隔均值 = 1000/fps ± 1 ms」是**帧率正确性**，不改。
+`reveal-probe` 我判**留**（B12b 建议删）：它验的 `?preview=legacy` 在产品代码里还活着，而且「露出」那一组（不带参数打开编辑台、等遮罩摘掉、验主文档没有整帧 `<img>/<video>`、CDP 里两个独立进程）没有别的探针覆盖。
+**留下的待办**：那条断言原本想证的是「不等 HTTP」，用时间量是间接的；更该改成「这段里没有发出网络请求」，这次没有现编新断言。
+
 ### 要上报用户的一件事：一个 agy 子 Agent 越界
 
 B08b 块的 manager 如实上报：那一轮 agy（Argon）在**首轮**自己调了 `manage_subagents {"Action":"list"}` 和 `{"Action":"kill_all"}`，清掉了 agy 侧的 subagent；另外读了它自己的会话日志 `C:\Users\admin\.gemini\antigravity-cli\brain\…\transcript.jsonl`（`~\.gemini` 属凭据类路径，读到的是它自己的对话记录，不是密钥）。两样都超出「只读仓库与 scratchpad」的授权范围，manager 从第二轮起明令禁止、之后没再出现。
