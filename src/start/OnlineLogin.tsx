@@ -309,12 +309,6 @@ export function OnlineLogin(props: { onDone: () => void }): JSX.Element {
             </button>
           )}
 
-          <p className="ps-login-note">
-            界面预览阶段：登录不会真的发请求，填上账号名和密码点「登录账号」就进开始页。
-            <button type="button" className="ps-link" data-pc="start-login-skip" onClick={props.onDone}>
-              或者直接跳过
-            </button>
-          </p>
         </form>
       </section>
     </div>

@@ -1494,9 +1494,8 @@
  * 一律用已有的主题变量,长相跟着旁边已有的那一档(小字跟 `.ps-chat-note`、卡片跟 `.ps-menu`)。
  */
 
-/* 登录页外壳:错误与「正在连接」浮在页面顶上;原型里那行「界面预览阶段……不会真的发请求」已经不是真的,藏起来(正式删除在 OnlineLogin.tsx,见报告) */
+/* 登录页外壳:错误与「正在连接」浮在页面顶上 */
 .ps-vibe-login { position: relative; height: 100%; min-height: 0; }
-.ps-vibe-login .ps-login-note { display: none; }
 .ps-vibe-login[data-busy] .ps-login-form { opacity: 0.6; pointer-events: none; }
 .ps-vibe-login-error,
 .ps-vibe-login-busy {
