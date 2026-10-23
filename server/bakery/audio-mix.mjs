@@ -10,7 +10,6 @@ import fs from 'fs/promises';
 import fsSync from 'node:fs';
 import { spawn } from 'child_process';
 import { MISSING_MATERIAL_WAV } from './mux-audio.mjs';
-import { ffmpegVarispeed } from '../../src/kernel/clipTime.mjs';
 
 /** Confirmed missing audio always reads the fixed software resource, never project media/path data. */
 export function audioClipInput(entry) {
@@ -55,10 +54,8 @@ export async function mixAudioInChrome({ ffmpegCmd, outDir, plan, project, pageU
       }
       const wav = path.join(audioDir, 'clip-' + i + '.wav');
       const input = audioClipInput(e);
-      // 变速的声音段(kernel/clipTime.mjs):读 dur × speed 秒素材,ffmpegVarispeed 变速变调成 dur 秒;和 ffmpeg 混音那条路同一份滤镜
-      const varispeed = e.speed && !e.missingMaterial ? ffmpegVarispeed(e.speed) : [];
-      await run(['-y', '-hide_banner', '-loglevel', 'error', '-ss', String(input.offset), '-t', String(varispeed.length ? e.dur * e.speed : e.dur), '-i', input.file,
-        '-vn', '-sn', '-dn', ...(varispeed.length ? ['-af', varispeed.join(',')] : []), '-ac', '2', '-ar', '48000', '-c:a', 'pcm_f32le', wav]);
+      await run(['-y', '-hide_banner', '-loglevel', 'error', '-ss', String(input.offset), '-t', String(e.dur), '-i', input.file,
+        '-vn', '-sn', '-dn', '-ac', '2', '-ar', '48000', '-c:a', 'pcm_f32le', wav]);
       clips[i] = { clipId: e.clipId, url: '/@export/' + id + '/audio/clip-' + i + '.wav', start: e.start, dur: e.dur, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut, fx: e.fx,
         ...(e.env ? { env: e.env } : null) };
     }

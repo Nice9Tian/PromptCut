@@ -68,7 +68,7 @@ export function buildAudioPlan(source, outDir, exists = fs.existsSync, sourceOf 
     }
     out.push({ file, clipId: e.clipId, start: e.start, dur: e.dur, offset: missingMaterial ? 0 : e.offset, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut, fx: e.fx,
       // 变速的声音段(kernel/clipTime.mjs):读 dur × speed 秒素材、ffmpegVarispeed 变速变调成 dur 秒
-      ...(e.speed && !missingMaterial ? { speed: e.speed } : null),
+      ...(e.speed && !missingMaterial ? { speed: e.speed, renderDir: outDir } : null),
       ...(e.env ? { env: e.env } : null),
       ...(missingMaterial ? { missingMaterial: true } : null), ...(soundEffect ? { soundEffect: true } : {}) });
   }
@@ -115,13 +115,36 @@ export function hasAudioStream(file, ffprobeCmd) {
   }
 }
 
-/** 普通静音视频可以略过；已有合成音效却读不到音轨时必须失败，不能报告无声成片成功。 */
-export function playableAudioPlan(plan, ffprobeCmd, probe = hasAudioStream) {
+/** ffprobe 的路径换回同一个目录里的 ffmpeg(`ffmpeg.mjs` 的 ffprobeOf 反过来) */
+const ffmpegOf = (ffprobeCmd) => String(ffprobeCmd).replace(/ffprobe(\.exe)?$/i, (m) => (m.toLowerCase() === 'ffprobe.exe' ? 'ffmpeg.exe' : 'ffmpeg'));
+
+/**
+ * 变速的声音段(音画分离出来的那种,kernel/clipTime.mjs)先用 ffmpeg 做成一段时间轴长度的 wav:读 dur × speed 秒素材、
+ * `ffmpegVarispeed` 变速变调。导出的两条混音路(Chrome 离线混音的裁段、ffmpeg 混音)都从这一份 wav 起,所以两条路拿到的
+ * 是同一份重采样结果。放在这里(不放进 `audio-mix.mjs`)是因为 `server/bakery/` 的那七个模块进共享快照键的代码指纹
+ * (`server/frame-code.mjs` 的 SNAPSHOT_FILES),改它们会让所有已有快照的键都变。
+ * @returns {string} 做好的 wav 路径
+ */
+export function renderVarispeedWav(entry, ffmpegCmd, index) {
+  const dir = path.join(entry.renderDir || ".", "audio-speed");
+  fs.mkdirSync(dir, { recursive: true });
+  const out = path.join(dir, `speed-${index}-${String(entry.clipId).replace(/[^\w.-]+/g, "_").slice(0, 60)}.wav`);
+  execFileSync(ffmpegCmd, ["-y", "-hide_banner", "-loglevel", "error", "-ss", String(entry.offset), "-t", String(entry.dur * entry.speed), "-i", entry.file,
+    "-vn", "-sn", "-dn", "-af", ffmpegVarispeed(entry.speed).join(","), "-ac", "2", "-ar", "48000", "-c:a", "pcm_f32le", out], { timeout: 600000, windowsHide: true });
+  return out;
+}
+
+/** 普通静音视频可以略过；已有合成音效却读不到音轨时必须失败，不能报告无声成片成功。变速的声音段换成做好的 wav(见上)。 */
+export function playableAudioPlan(plan, ffprobeCmd, probe = hasAudioStream, render = renderVarispeedWav) {
   return plan.filter((entry) => {
     if (entry.cardAudio) return true;
     const playable = probe(entry.file, ffprobeCmd);
     if (!playable && entry.soundEffect) throw new Error(`${entry.clipId} 的合成音效无法读取音轨，请恢复素材或重新生成`);
     return playable;
+  }).map((entry, i) => {
+    if (!entry.speed || entry.cardAudio) return entry;
+    const { speed: _speed, renderDir: _dir, ...rest } = entry;
+    return { ...rest, file: render(entry, ffmpegOf(ffprobeCmd), i), offset: 0 };
   });
 }
 

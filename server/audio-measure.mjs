@@ -11,7 +11,6 @@
  * @param {number} [opts.duration] - 截取时长(秒)
  * @returns {string[]}
  */
-import { ffmpegVarispeed } from "../src/kernel/clipTime.mjs";
 
 export function measureArgs({ file, offset, duration }) {
   // -nostats:进度行(size= time= …)是 \r 分隔、和 ebur128 的逐帧行挤在一起,解析时会吞掉整秒的点
@@ -20,6 +19,15 @@ export function measureArgs({ file, offset, duration }) {
   if (duration !== undefined) args.push("-t", String(duration));
   args.push("-i", file, "-map", "0:a", "-af", "ebur128=peak=true", "-f", "null", "-");
   return args;
+}
+
+/**
+ * 声音段变速(变调)的 ffmpeg 滤镜,和 `src/kernel/clipTime.mjs` 的 ffmpegVarispeed 逐字同一份(Agent 服务进程会载这个文件,
+ * 这一侧不许 import src/,守门测试 SEAM-2 / SEAM-3,所以照抄)。速度为 1 时回空数组。
+ */
+function ffmpegVarispeed(speed, rate = 48000) {
+  if (!(speed > 0) || speed === 1) return [];
+  return [`aresample=${rate}`, `asetrate=${Math.round(rate * speed)}`, `aresample=${rate}`];
 }
 
 /**

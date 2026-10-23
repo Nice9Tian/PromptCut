@@ -17,7 +17,7 @@ import { projectCardGraph } from '../../src/kernel/cardGraph.mjs';
 import { audioPlanOf } from '../../src/kernel/audioPlan.mjs';
 import { flatPlanProject } from '../../src/kernel/cutFlatten.mjs';
 import { withMediaRates, ffmpegVarispeed } from '../../src/kernel/clipTime.mjs';
-import { buildFfmpegArgs } from '../bakery/mux-audio.mjs';
+import { buildFfmpegArgs, playableAudioPlan } from '../bakery/mux-audio.mjs';
 import { timelineMixParts } from '../audio-measure.mjs';
 import { buildAudioPlan } from '../bakery/mux-audio.mjs';
 import { mediaLayersAt } from '../vision-compose.mjs';
@@ -368,6 +368,13 @@ test('声音段变速(音画分离出来的):照常出声,两条混音路和测�
   const i = args.indexOf('/x/s1');
   assert.deepEqual(args.slice(i - 5, i + 1), ['-ss', '1', '-t', '4', '-i', '/x/s1'], 'ffmpeg 那条路读 2 秒 × 2 倍素材');
   assert.match(args[args.indexOf('-filter_complex') + 1], /\[1:a\]aresample=48000,asetrate=96000,aresample=48000,adelay=0:all=1/);
+  // 导出时两条混音路都从 playableAudioPlan 做好的那一份 wav 起(Chrome 那一路的裁段在 audio-mix.mjs,它进快照键的代码指纹,不改它)
+  const rendered = [];
+  const ready = playableAudioPlan(files, 'C:/ff/ffprobe.exe', () => true, (entry, ffmpegCmd) => { rendered.push([entry.clipId, entry.offset, entry.dur, entry.speed, ffmpegCmd]); return `/tmp/${entry.clipId}.wav`; });
+  assert.deepEqual(rendered, [['s', 1, 2, 2, 'C:/ff/ffmpeg.exe']], '只有变速的声音段先做成 wav');
+  const r2 = ready.find((x) => x.clipId === 's');
+  assert.deepEqual([r2.file, r2.offset, r2.dur, 'speed' in r2, 'renderDir' in r2], ['/tmp/s.wav', 0, 2, false, false], '换成做好的 wav,从 0 读 dur 秒,不再带 speed');
+  assert.deepEqual(ready.filter((x) => x.clipId !== 's'), files.filter((x) => x.clipId !== 's'), '别的条目原样');
   const m = timelineMixParts([{ ...f, file: '/x/s1' }], 4);
   assert.deepEqual(m.inputs, ['-ss', '1', '-t', '4', '-i', '/x/s1'], '测响度同一份');
   assert.match(m.filters[0], /aresample=48000,asetrate=96000,aresample=48000,adelay/);
