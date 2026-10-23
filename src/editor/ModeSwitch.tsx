@@ -19,7 +19,8 @@ import "./ModeSwitch.css";
  *     退出就点这里的「传统式」,手边最近的就是这个控件。
  *
  * 原来只有传统式与 SKILL 两格(更早还有一格「对话式」布局,已去掉)。氛围式这一格是 2026-10-23 加的:
- * 在那之前语义里没有这种工作方式,加完名词表里就有三种了。
+ * 在那之前语义里没有这种工作方式,加完名词表里就有三种了。刚加时那一屏只有在线浏览器有,桌面版这一格置灰;
+ * 同日桌面版的氛围式也做出来了(`src/start/DesktopStart.tsx`),两边都能点。
  */
 
 type Mode = "vibe" | "classic" | "skill";
@@ -70,14 +71,14 @@ export function ModeSwitch(props: { onOpenSkill: () => void; onEnterVibe?: () =>
 
   const index = ITEMS.findIndex((i) => i.id === active);
 
-  // 氛围式那一屏现在只有在线浏览器有(`src/start/`,桌面版的开始页仍是 DesktopStartPage),
-  // 桌面版这一格置灰并说明原因,和「在线页面进不了 SKILL」那一格是同一种处理
-  const vibeOff = !onlinePage() || !props.onEnterVibe;
+  // 两边都有氛围式那一屏了(在线 `src/start/OnlineStart.tsx`、桌面 `src/start/DesktopStart.tsx`,
+  // 桌面版 2026-10-23 补上)。只有调用方没给去处时才置灰 —— 那是还没接上这颗键的地方
+  const vibeOff = !props.onEnterVibe;
 
   /** 每一格的悬停说明。三格之后嵌套三目读不动了,拆出来 */
   const titleOf = (item: (typeof ITEMS)[number], on: boolean): string => {
     if (item.id === "vibe") {
-      return vibeOff ? "氛围式目前只有在线浏览器里有，桌面版还在做" : item.hint;
+      return vibeOff ? "这里还接不到氛围式那一屏" : item.hint;
     }
     if (item.id === "skill") {
       if (!on && onlinePage()) return onlineUnsupported("SKILL 模式");
@@ -105,8 +106,7 @@ export function ModeSwitch(props: { onOpenSkill: () => void; onEnterVibe?: () =>
             data-pc={`mode-${item.id}`}
             className={`pc-modeswitch-item${on ? " is-on" : ""}`}
             aria-pressed={on}
-            // 在线浏览器模式:SKILL 要本机的桌面 APP 与编辑器进程(C10 契约第 10 节),置灰。
-            // 反过来,氛围式那一屏桌面版还没有,桌面版置灰
+            // 在线浏览器模式:SKILL 要本机的桌面 APP 与编辑器进程(C10 契约第 10 节),置灰
             disabled={busy || (item.id === "skill" && !on && onlinePage()) || (item.id === "vibe" && vibeOff)}
             title={titleOf(item, on)}
             onClick={() => void pick(item.id)}

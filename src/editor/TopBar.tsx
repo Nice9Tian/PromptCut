@@ -535,18 +535,20 @@ export function TopBar() {
   /**
    * 去氛围式那一屏（顶栏工作方式开关的第一格）。
    *
-   * 走的就是「回开始页」那条路：在线浏览器的开始页缺省就是氛围式（`StartPage.tsx` 的 `OnlineStartPage`），
-   * 所以离开编辑界面就到了。只多做一件事——把 `?ui=classic` 这个排障后门从地址里清掉，
-   * 否则带着它回去会落到老的账号表单那一页，而不是氛围式。
+   * 走的就是「回开始页」那条路：离开编辑界面，落到开始页，开始页按地址上的 `?ui=` 决定显示哪一屏
+   * （`StartPage.tsx` 的 `wantsVibe` / `wantsClassic`）。所以这里先把 `?ui=vibe` 写进地址再派事件：
+   *   - 在线浏览器：缺省本来就是氛围式，这一步顺带把 `?ui=classic` 这个排障后门盖掉，
+   *     否则带着它回去会落到老的账号表单那一页；
+   *   - 桌面版：缺省是传统开始页，不写这个参数回去就落在那一页，到不了氛围式。
    */
   const goVibe = () => {
     if (dirty && !confirm("当前项目还有未保存的改动，切到氛围式会丢掉它们。继续？")) return;
     try {
       const url = new URL(location.href);
-      url.searchParams.delete("ui");
-      history.replaceState(null, "", url);
+      url.searchParams.set("ui", "vibe");
+      history.replaceState(history.state, "", url);
     } catch {
-      // 地址改不了(少见)也不拦着走,顶多是落到老那一页
+      // 地址改不了(少见)也不拦着走,顶多是落到缺省那一屏
     }
     window.dispatchEvent(new Event("pc-go-home"));
   };

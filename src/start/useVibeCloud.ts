@@ -20,34 +20,22 @@ import { useSync } from "../editor/sync/syncManager";
 import { useReadOnly } from "../editor/readOnly";
 import { setCloudVisualScope } from "../editor/right/ToolVisual";
 import { viewableChats } from "./vibeOrg";
+import type { VibeAgent } from "./vibeAgent";
 import type { VibeChat } from "./types";
 
 /** 这一套占的对话页签号(`useCloudChat` 的本地存储键按它分):和编辑器右栏、手机版的页签互不相干 */
 export const VIBE_TAB = "vibe";
 
-export interface VibeCloud {
+/** 云端 Agent 的那一份。聊天页只认 `VibeAgent`(桌面版那一份见 `useVibeLocal.ts`),这里多出来的是云端才有的东西 */
+export interface VibeCloud extends VibeAgent {
   cloud: CloudAgentState;
   chat: CloudChat;
   /** 侧栏里这个项目底下列的对话(已按权限复核);当前那条还没发过消息的新对话也在里面(`fresh`) */
   chats: VibeChat[];
   /** 正在看的那条对话 */
   current: VibeChat | null;
-  /** 能不能发、为什么不能 */
-  canSend: boolean;
-  whyNot: string | null;
-  streaming: boolean;
-  canStop: boolean;
-  /** 排在后面等着的消息条数 */
-  queued: number;
-  /** 告知框 */
-  consent: { open: boolean; pending: boolean; error: string | null; accept: () => void; reject: () => void };
-  send: (text: string) => Promise<boolean>;
-  stop: () => Promise<void>;
   canSwitchVisibility: boolean;
   toggleVisibility: () => Promise<void>;
-  /** 顶上那一条要给人看的话(连接断了、开关关着、发送失败的原因) */
-  banner: string | null;
-  clearBanner: () => void;
 }
 
 export function useVibeCloud(o: { connected: boolean; shown: boolean }): VibeCloud {
@@ -201,6 +189,8 @@ export function useVibeCloud(o: { connected: boolean; shown: boolean }): VibeClo
 
   return {
     cloud, chat, chats, current,
+    me: cloud.accountId, projectId: cloud.projectId,
+    hint: "在云端运行，关闭后继续；重新打开可接着看。",
     canSend: !whyNot, whyNot,
     streaming: policy.streaming, canStop: policy.canStop,
     queued: view.queue?.items.filter((i) => i.state === "queued").length ?? 0,

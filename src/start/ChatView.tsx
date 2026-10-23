@@ -5,7 +5,8 @@
  * 面板色气泡,前面放一个星芒头像 —— 和编辑器右栏那套一致(`src/editor/right/chat/MessageList.tsx`)。
  *
  * 2026-10-23 接上业务层(`docs/reports/AGENT-claude-vibe-wire.md`):消息、发送、停止都是真的,数据和动作由
- * `useVibeCloud.ts` 给(底下是 `src/ai/cloud/useCloud.ts` 的 `useCloudChat`,和编辑器右栏、手机版同一套)。
+ * 调用方按 `vibeAgent.ts` 的 `VibeAgent` 给 —— 在线浏览器是云端 Agent(`useVibeCloud.ts`),桌面版是本机的
+ * CLI / API Agent(`useVibeLocal.ts`,和编辑界面 AI 栏同一套)。这一页对两种一视同仁,不认具体是哪一种。
  *   - 一轮回复按 `product/agent.md`「汇报」拆:气泡里只放 Agent 说的「在做什么」,做过的操作列在「Agent 操作」那一块
  *     (拆法与手机版共用 `src/mobile/agentView.ts` 的 `roundView`);
  *   - 自己的消息云端还没收下之前写明发送状态,没发出去写原因;共有对话里别人发的标上是谁;
@@ -23,7 +24,7 @@ import { CloudAgentConsentDialog } from "../editor/right/CloudAgentConsentDialog
 import { isUserBubble, ordinals, partsOf, roundView, splitQuotes } from "../mobile/agentView";
 import { ChatSidePanel } from "./ChatSidePanel";
 import { DetailEdit } from "./DetailEdit";
-import type { VibeCloud } from "./useVibeCloud";
+import type { VibeAgent } from "./vibeAgent";
 
 /** 和 `.ps-chat-input` 的 max-height 对齐 */
 const MAX_H = 200;
@@ -108,7 +109,7 @@ function AgentMessage(props: { m: ChatMessage; ordinal: number }): JSX.Element {
 }
 
 export function ChatView(props: {
-  vibe: VibeCloud;
+  vibe: VibeAgent;
   /** 对话标题(顶栏上那一行);这里输入框的占位文字要用 */
   title: string;
   /** 开始页上说的那句话:进了聊天页自动发出去一次(发过就由上层清掉) */
@@ -175,14 +176,14 @@ export function ChatView(props: {
 
   const stopMode = vibe.streaming && text.trim().length === 0;
   const order = ordinals(messages);
-  const meId = vibe.cloud.accountId;
+  const meId = vibe.me;
   const senders = vibe.chat.view.senders ?? {};
   const shown = messages.filter((m) => m.role === "assistant" || isUserBubble(m));
 
   const footNote = note
-    || (vibe.whyNot && vibe.cloud.projectId ? vibe.whyNot : "")
+    || (vibe.whyNot && vibe.projectId ? vibe.whyNot : "")
     || (vibe.queued > 0 ? `前面还有 ${vibe.queued} 条在排队，一轮一轮跑。` : "")
-    || "在云端运行，关闭后继续；重新打开可接着看。";
+    || vibe.hint;
 
   return (
     <main className="ps-main ps-chat" data-pc="start-chat" data-chat={convId}>
