@@ -32,10 +32,16 @@ function PR23(id, name, script, args, o = {}) {
 /** 不进整套的探针文件与原因（`--check-coverage` 对照；并进 `four-stage-manifest.mjs` 的 EXCLUDED_PROBE_FILES） */
 export const V23_EXCLUDED = {
   'av-card-speed-1x-compare.mjs': '声画一体卡出声那次改动的**一次性前后对账件**（`claude/av-card-speed-sound`）：拿改动前的提交当基准，逐项比 1 倍时的卡图、舞台清单、卡片时钟、身份、播放偏移和两条混音路，证明「不变速的项目一个字都没变」。对账做完即无用，照 `gl-migrate-compare` 的先例不进整套。2026-10-23 的读数是 14/14 逐项相同（另有既有的 `clip-speed-key-compare` 57/57），证据在 docs/archive/agent-reports/AGENT-claude-av-card-speed-sound.md',
-  'vibe-groups-cloud-probe.mjs': '云端分组的真服务端双设备探针（`claude/groups-local-cloud`）：要一台**在线模式**的开发服务（`VITE_PC_ONLINE=1 npx vite --port …`）才跑得起来，而整套验收起的那台共享开发服务不是在线模式（`scripts/lib/dev-server.mjs` 的 `startDevServer` 不设这个环境变量），所以暂时不进整套；跑法写在探针文件头。2026-10-23 主会话自己跑过一遍：`ok: true`、11 步、`fails: []`，七张截图在 docs/archive/agent-reports/AGENT-claude-groups-local-cloud-shots/（设备乙全新浏览器上下文登录后看见设备甲建的分组；两台各改一处后收敛到同一份；老服务端下页面不报错）。把它改成整套能跑的，记在 docs/plan/TODO.md',
 };
 
 export const V23_ITEMS = [
+  // 这一支要一台**在线浏览器模式**的 dev server(`VITE_PC_ONLINE=1`),共享的那台 `dev` 不是,所以点名要 `dev-online`
+  // (`four-stage-acceptance.mjs` 的服务表,缺省 5970～5972)。探针再占一个端口当服务端(5973)。
+  // 2026-10-23 之前因为起不到这样一台而进不了整套,现在能跑了。
+  PR23('V23-groups-cloud', '云端分组走真服务端:两台设备(两个隔离的浏览器上下文)登同一个账号,甲建的分组乙直接看得见;两台各改一处后收敛到同一份;老服务端 404 时界面不报错、改口成「暂时只记在这台浏览器里」;云端 503 时出「云端分组没同步上」、恢复后自动补上',
+    'vibe-groups-cloud-probe', ['--url', '{dev-online.origin}', '--api-port', '5973', '--out', '{item}'],
+    { needs: ['dev-online'], timeoutMin: 30,
+      known: '要在线模式的 dev server(服务名 dev-online,缺省 5970～5972);探针自己再起一个服务端占 5973' }),
   PR23('V23-av-card-sound', '声画一体卡挂在变速素材段上照常出声（导出后测主频：1× 440、2× 880、0.5× 220 Hz；切开 2× 段后两半共用同一份 WAV、不用重新生成；切点前后卡的画面不跳）',
     'av-card-speed-sound-probe', ['--port', '5940'],
     { timeoutMin: 30, known: '自己起开发服务器与导出，端口 5940 起；带 PROMPTCUT_NO_PORT_FILE=1 跑' }),

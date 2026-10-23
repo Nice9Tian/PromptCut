@@ -96,12 +96,17 @@ export function killTree(pid) {
  *
  * @param {object} o
  * @param {Record<string,string>} [o.env]  追加的环境变量(导出目录、数据目录之类)
+ * @param {boolean} [o.online]             起成**在线浏览器模式**那一台(等于 `VITE_PC_ONLINE=1`):
+ *   页面走在线那一支(`src/online/mode.ts` 的 `ONLINE`、`StartPage.tsx` 的 `OnlineStartPage`)。
+ *   给成开关而不是让调用方自己写那个环境变量:名字只认一处,写错了不会悄悄起成桌面版那台。
+ *   `env` 里显式写的同名变量仍然压过它。
  * @param {string} o.logFile               vite 的输出写到这里
  * @param {number} [o.port]                指定编辑器端口;不给就随机挑,舞台端口没起全会换一段重来
  * @param {(msg: string) => void} [o.log]
  * @returns {Promise<{ port: number, origin: string, stagePorts: number[], pid: number, restarts: () => number, exited: () => boolean, stop: () => void }>}
  */
-export async function startDevServer({ env = {}, logFile, port, log = () => {} }) {
+export async function startDevServer({ env = {}, online = false, logFile, port, log = () => {} }) {
+  const startEnv = online ? { VITE_PC_ONLINE: '1', ...env } : env;
   if (port) {
     const clash = portTriple(port).filter((p) => RESERVED.has(p));
     if (clash.length) throw new Error(`端口 ${clash.join('、')} 是用户常驻 dev server 的,换一个`);
@@ -112,7 +117,7 @@ export async function startDevServer({ env = {}, logFile, port, log = () => {} }
     const p = port || (await pickPort());
     if (port && !(await tripleFree(p))) throw new Error(`端口 ${portTriple(p).join(' / ')} 没有全空着`);
     try {
-      return await startOnce(p, env, logFile, log);
+      return await startOnce(p, startEnv, logFile, log);
     } catch (e) {
       lastError = e;
       log(`端口 ${p} 没起成:${e.message}`);
