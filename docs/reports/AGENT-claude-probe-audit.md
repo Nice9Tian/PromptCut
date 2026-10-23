@@ -313,3 +313,37 @@ B08a 建议改的 3 支：`claim-gate-probe` 的 15 秒硬失败**已改**（第
 **仍未验的一条（不影响任何留/删/改判定）**：`browser-stream-e2e-probe`、`browser-stream-node-probe` 的帧数与分段数门槛是撤快照之前的读数，
 2026-10-14 起的稀疏趟可能让它们翻倍。要实跑一次看 `diag.streams.frames` 是 48 还是 96 才能定，两支的文件头里都写了这一点。
 实跑要占验证用的 dev-test 端口段与 Chrome，而发版主会话正在跑 GR 系列，所以没跑。
+
+## 十二、主 Agent 自己扫完全部探针之后的总结论：最大的一块残留
+
+第十一节只覆盖 B05a 那 18 支。为了不让任何一支的「相符性」只停在子 Agent 的报告上，我把同一套可复算的口径**跑遍了 `scripts/probes` 下全部 301 个 `.mjs`/`.js`/`.cjs`**
+（脚本 `scratchpad/all_selfcheck.py`、`classify_dead.py`，统计口径：断言条数、已撤销机制的标记词命中、`server/test`/`src`/`tools` 下谁引用它、台账状态）。结果：
+
+| 这一遍自己数出来的 | 数 |
+|---|---|
+| 扫过的探针（`.mjs`/`.js`/`.cjs`） | 301 |
+| 在基线范围内被引用（`server/test`、`src`、`tools` 下出现过它的文件名） | 80 |
+| 零断言（只打印数字或现象） | 74 |
+| 命中「已撤销机制」的标记词 | 70 |
+| 既不在清单项、也不在排除表 | 24（全是 `lib/`、`fixtures/`、`m8/` 子目录下的件；守门只扫顶层，所以不报 —— 这正是第八节第 4 条那个盲区） |
+
+**最大的一块残留**：70 支里有 **36 支真的触碰已撤销的「每张卡的 HTML 快照」**。我按它们的**动作**分了三类，因为「触碰」不等于「依赖」：
+
+- **只看平面在不在（11 支）** —— 读 `[data-pc-snapshot-plane]` 只为断言它**不该在**或已藏起。快照撤掉后这类断言照旧成立，**不用动**。
+  `below-paste-editor`、`c10-catalog`、`c10-cost`、`cloud-agent-ui-lib`、`framework-card-pipeline`、`lottie-online`、`lottie-pipeline`、`scrub-stream`、`seek-back-exact`、`stage-content`、`stream-play`。
+- **自造夹具喂进去（8 支）** —— 自己 `content.put` 一份 `snapshot-manifest` 或 `fakeAssets.set('snap/…')`，再看页面怎么处理。它们**跑得起来**（数据是自己造的），但验的是**产品今天已经不走的那条路**，属「测了也白测」：
+  `online-stale-layer`（P-online-stale-layer）、`online-user-cards`（P-online-user-cards）、`online-card-exec`（S2-2）、`c10-ui`（P-c10-ui）、`m8-scale`（X-m8-scale-k1/i1）、`shared-project-probe`、`m8/lib.mjs`、`sound-ab`（S1-5）。
+- **真从产品取（22 支）** —— `content.get`／`content.list` 去取 `snapshot-manifest`，或按 `asset/snap/<hash>` 取字节。产品不再产这些，**这些断言拿不到东西**：
+  `cloud-agent-ux`（S4-5，10 处）、`m7-browser`（P-m7-browser）、`desktop-auto-node`（P-desktop-auto-node）、`c10-browser`（三个必跑项）、`hosted-render-probe`（S3-1）、`m7-node`（P-m7-node）、`online-card-node`（S2-5）、`asset-account-isolation`（V18-asset-isolation）、`c10a-demo`（X-c10a-demo-local）、`online-export-modes`、`online-stream-play`、`below-online-e2e`、`browser-stream-e2e`、`cloud-agent-ux-ui`（S4-6）、`cut-online-browser`、`cut-online-e2e`、`hosted-render-isolation`、`hosted-render-remotion`、`hosted-render-streams`、`m8-e`、`m8-migrate`、`page-stream`。
+
+**为什么这一块我没有在本次动手**（这是本报告最该让用户看见的一条）：
+
+1. 它们**绝大多数是注册在案的必跑验收项**（上面每条后面的括号就是清单项号），删不掉 —— 删了那些验收项立刻没有证据来源。
+2. 要做的是**把断言从「每卡快照」迁到「轨道流」**，这是改验收口径、逐支重写断言，属于独立的工程任务，不是「探针存废」这次任务的范围。
+3. 其中几支（`c10-browser`、`m7-browser`、`m7-node`）还被 `server/test/probe-timings.test.mjs` 的 PT-05 读源码，改名或大改要同步改单测。
+
+**所以本次审查对这 36 支的结论是**：相符性判「语义已改」、处置判「**改，但不在这次做**」，并且逐支列在上面，附了动作分类与清单项号 ——
+下一步做这件事的人不用再重新扫一遍，直接按三类分工：第一类不动、第二类连同清单项一起决定还要不要测这条路、第三类必须迁。
+
+**我的扫描口径有两处已知误报，写在这里免得后人踩**：`clusterToken` 命中的是托管组合夹具的管理口令（现行机制），不是已撤的口令式云端项目；
+`:not([data-pc-snapshot-plane])` 出现在选择器里是「排除它」，与依赖它相反。上面的三类分法已经把这两类剔掉了。
