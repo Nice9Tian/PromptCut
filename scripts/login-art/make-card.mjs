@@ -165,6 +165,21 @@ function build(key, cfg) {
   const Comp = cfg.exportName[0].toUpperCase() + cfg.exportName.slice(1);
 
   /*
+   * `defaults.loopSeconds` 写**字面量**，不写 `LOOK.loopSeconds`。
+   *
+   * 卡片有一条「只读源码也要能认出这张卡」的路（`src/kernel/cardSourceParse.ts`，在线页面和
+   * 同步表都走它）：它认同文件常量的**引用**，但认不出 `常量.属性` 这种取值，
+   * 于是 defaults 里会少掉 loopSeconds 这一项，和模块真正导出的 CardDef 对不上，
+   * `cardSourceParse.test.mjs` 那条「仓库里每一个 src/cards/user/*.tsx 解析结果与注册表逐个相同」就红。
+   * 这里生成时就知道这个数，直接写死最省事，而且文件是生成的 —— 改了 LOOK 重跑一次就同步。
+   */
+  const loopSeconds = (() => {
+    const m = /^ {2}loopSeconds:\s*(\d+(?:\.\d+)?)/m.exec(lookBody[1]);
+    if (!m) throw new Error(`${key}: LOOK.loopSeconds 不是个数字字面量，没法写进 defaults`);
+    return m[1];
+  })();
+
+  /*
    * 画幅：跟着项目走的那张用 `stage`（舞台画幅），没传就用下面这组兜底；
    * 不跟的那张直接用常量，省得生成出来的文件无谓地多两行。
    */
@@ -262,7 +277,7 @@ export const ${cfg.exportName}: CardDef<Params> = {
   useWhen: ${JSON.stringify(cfg.useWhen)},
   tags: [${cfg.tags.map((t) => JSON.stringify(t)).join(", ")}],
   frameMode: "direct",
-  defaults: { ${params.map((p) => `${p.key}: ${JSON.stringify(p.hex)}`).join(', ')}, loopSeconds: LOOK.loopSeconds },
+  defaults: { ${params.map((p) => `${p.key}: ${JSON.stringify(p.hex)}`).join(', ')}, loopSeconds: ${loopSeconds} },
   controls: [
 ${params.map((p) => `    { key: ${JSON.stringify(p.key)}, label: ${JSON.stringify(p.label)}, type: "color" },`).join('\n')}
     { key: "loopSeconds", label: "循环秒数", type: "number", min: 4, max: 600, step: 1 },

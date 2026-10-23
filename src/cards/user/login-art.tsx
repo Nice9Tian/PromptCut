@@ -428,7 +428,7 @@ export const loginArt: CardDef<Params> = {
   useWhen: "只给「把登录页左栏渲成循环视频」这一件事用；别的场合要流动背景请另写一张。",
   tags: ["背景", "极光", "着色器", "登录页"],
   frameMode: "direct",
-  defaults: { cool: "#26c6e6", warm: "#e2731f", bg: "#111016", loopSeconds: LOOK.loopSeconds },
+  defaults: { cool: "#26c6e6", warm: "#e2731f", bg: "#111016", loopSeconds: 48 },
   controls: [
     { key: "cool", label: "冷色", type: "color" },
     { key: "warm", label: "暖色", type: "color" },

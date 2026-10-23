@@ -243,7 +243,7 @@ export const brandGlow: CardDef<Params> = {
   useWhen: "只给「把首页／手机登录的背景光渲成循环视频」这一件事用；别的场合要背景光请另写一张。",
   tags: ["背景", "光", "着色器", "首页"],
   frameMode: "direct",
-  defaults: { bg: "#111016", colA: "#00dbdb", colB: "#FF7B00", loopSeconds: LOOK.loopSeconds },
+  defaults: { bg: "#111016", colA: "#00dbdb", colB: "#FF7B00", loopSeconds: 28 },
   controls: [
     { key: "bg", label: "底色", type: "color" },
     { key: "colA", label: "冷光", type: "color" },
