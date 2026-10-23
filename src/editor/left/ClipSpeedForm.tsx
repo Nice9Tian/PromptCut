@@ -13,7 +13,8 @@ export function ClipSpeedForm({ clip }: { clip: TrackClip }) {
   const presets = CLIP_SPEED_PRESETS.includes(cur) ? CLIP_SPEED_PRESETS : [...CLIP_SPEED_PRESETS, cur].sort((a, b) => a - b);
   const apply = (v: number) => {
     const r = actions.setClipSpeed(clip.id, v);
-    setMsg(r.ok ? (r.capped ? "后面放不下，已截到下一段的起点" : null) : r.error);
+    // 变长推开了后面的段(用户 2026-10-23 定):说清推了几段、多少秒(整条序列跟着变长)
+    setMsg(r.ok ? (r.pushed ? `后面 ${r.pushed.clips} 段整体往后推了 ${r.pushed.by.toFixed(2)} 秒` : null) : r.error);
   };
   return (
     <div className="mt-2 pt-2 pc-left-divider" data-pc="clip-speed">

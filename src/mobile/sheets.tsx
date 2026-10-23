@@ -335,7 +335,9 @@ export function SpeedSheet(props: { clipId: string; onClose: () => void }) {
     if (v === cur) return;
     const r = actions.setClipSpeed(c.id, v);
     if (!r.ok) { toast(r.error); return; }
-    toast(r.capped ? `已改成 ${speedLabel(v)}；后面放不下，截到了下一段的起点` : v === 1 ? "已恢复 1×，原声恢复" : `已改成 ${speedLabel(v)}，这一段不出原声`);
+    const head = v === 1 ? "已恢复 1×，原声恢复" : `已改成 ${speedLabel(v)}，这一段不出原声`;
+    // 变长推开了后面的段(用户 2026-10-23 定):说清推了几段、多少秒
+    toast(r.pushed ? `${head}；后面 ${r.pushed.clips} 段往后推了 ${r.pushed.by.toFixed(1)} 秒` : head);
   };
   return (
     <Sheet id="speed" title={clipName(project, c, (id) => getCard(id)?.name)} light onClose={props.onClose} head={<span className="chip">速度</span>}>
@@ -345,7 +347,7 @@ export function SpeedSheet(props: { clipId: string; onClose: () => void }) {
         ))}
       </div>
       <div className="wrapnote" data-pcm="speed-note"><b>声音：</b>{SPEED_MUTE_NOTE}</div>
-      <div className="hint">起点不动，时长按新速度重算：{fmtDur(c.end - c.start)}（素材 {fmtDur((c.end - c.start) * cur)}）。挂着转场的段要先删掉转场。</div>
+      <div className="hint">起点不动，时长按新速度重算：{fmtDur(c.end - c.start)}（素材 {fmtDur((c.end - c.start) * cur)}）。变长碰到后面的段会把它们一起往后推，变短尾部留空。挂着转场的段要先删掉转场。</div>
       <div className="undo-row">
         <button type="button" className="btn" data-pcm="speed-undo" onClick={() => actions.undo()}><Icon name="undo" />撤销</button>
       </div>

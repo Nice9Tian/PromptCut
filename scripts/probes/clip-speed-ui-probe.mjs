@@ -12,7 +12,8 @@
  *  P4 预览的声音层:变速前主文档里有这一段的 <audio>,变速后没有(变速段原声不出);
  *  P5 播放中舞台里放这一段的 <video> 的 playbackRate ≈ 2(纠偏 ±10% 以内);
  *  P6 撤销一步回到 1×,speed 字段删掉(不是 speed: 1);
- *  D1 桌面版(在线页面的桌面布局):选中视频段,编辑分区有「速度」一栏和同一句说明;选 0.5× → speed = 0.5;
+ *  D1 桌面版(在线页面的桌面布局):选中视频段,编辑分区有「速度」一栏和同一句说明;选 0.5× → speed = 0.5、时长翻倍不截断,
+ *     后面的段被推开并有说明;撤销一步速度和被推开的段一起退回;
  *  D2 时间轴片段名后带「· 0.5×」,静音标记的说明写明「变速段不出原声」。
  * 最后一行是一行 JSON。
  */
@@ -187,13 +188,24 @@ try {
     step('D1', { note: dnote, after: slow && { start: slow.start, end: slow.end, speed: slow.speed } });
     step('D2', { label, badgeTitle });
     check(/变速后这一段不出原声/.test(dnote ?? ''), 'D1 桌面编辑分区写明变速段不出原声', dnote);
-    // 0.5× 要 2 倍时长;同一序列后面紧挨着别的片段时截到它的起点(store.setClipSpeed 的规则),面板提示截断
-    const blocker = await store(B, 'const t = S.getState().project.tracks.find((tr) => tr.clips.some((c) => c.id === args[0])); return Math.min(Infinity, ...t.clips.filter((c) => c.id !== args[0] && c.start >= args[1] - 1e-9).map((c) => c.start));', placed.id, placed.end);
-    const wantEnd = Math.min(placed.start + (placed.end - placed.start) * 2, blocker ?? Infinity);
-    const capMsg = await B.$eval('[data-pc="clip-speed-msg"]', (e) => e.textContent).catch(() => null);
-    step('D1-cap', { blocker, wantEnd, capMsg });
-    check(!!slow && Math.abs(slow.end - wantEnd) < 1e-6, 'D1 0.5× 终点 = min(时长翻倍, 下一段起点)', slow && [slow.start, slow.end, wantEnd]);
-    if (wantEnd < placed.start + (placed.end - placed.start) * 2) check(/放不下/.test(capMsg ?? ''), 'D1 截断时面板提示', capMsg);
+    // 0.5× 要 2 倍时长,不截断;同一序列后面的段碰到了就整体往后推(用户 2026-10-23 定),面板说清推了多少
+    const nextId = await store(B, 'const t = S.getState().project.tracks.find((tr) => tr.clips.some((c) => c.id === args[0])); const n = t.clips.filter((c) => c.id !== args[0] && c.start >= args[1] - 1e-9).sort((x, y) => x.start - y.start)[0]; return n ? n.id : null;', placed.id, placed.end);
+    const nextAfter = nextId ? await clipOf(B, nextId) : null;
+    const pushMsg = await B.$eval('[data-pc="clip-speed-msg"]', (e) => e.textContent).catch(() => null);
+    step('D1-push', { nextId, nextAfter: nextAfter && [nextAfter.start, nextAfter.end], pushMsg });
+    check(!!slow && Math.abs((slow.end - slow.start) - (placed.end - placed.start) * 2) < 1e-6, 'D1 0.5× 时长翻倍(不截断)', slow && [slow.start, slow.end]);
+    if (nextAfter) {
+      check(nextAfter.start >= slow.end - 1e-6, 'D1 后面的段被推开、不重叠', [slow.end, nextAfter.start]);
+      check(/往后推了/.test(pushMsg ?? ''), 'D1 推开时面板说明', pushMsg);
+    }
+    // 一步撤销:速度和推开的段一起退回
+    await store(B, 'S.actions.undo(); return true;');
+    const backV = await clipOf(B, placed.id), backN = nextId ? await clipOf(B, nextId) : null;
+    step('D1-undo', { v: backV && [backV.start, backV.end, backV.speed ?? null], next: backN && [backN.start, backN.end] });
+    check(!!backV && backV.speed === undefined && backV.end === placed.end, 'D1 撤销一步回到原速', backV);
+    if (nextAfter) check(!!backN && backN.start < nextAfter.start, 'D1 撤销一步,推开的段也退回', backN && [backN.start, nextAfter.start]);
+    await store(B, 'S.actions.redo(); return true;');
+    await sleep(800);
     check(/0\.5×/.test(label ?? ''), 'D2 时间轴片段名带「0.5×」', label);
     check(/变速段不出原声/.test(badgeTitle ?? ''), 'D2 静音标记写明原因', badgeTitle);
     // 手机页同步到同一个速度

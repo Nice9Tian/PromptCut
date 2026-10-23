@@ -218,15 +218,19 @@ export const clips = {
     return { ok: true, ...(blocked.length ? { blocked } : {}) };
   },
   /**
-   * 改视频段的播放速度(`TrackClip.speed`,kernel/clipTime.mjs)。一次调用一步撤销。
+   * 改视频段的播放速度(`TrackClip.speed`,kernel/clipTime.mjs)。一次调用一步撤销(连带推开的段一起)。
    *
    * - 保住入点(起点、`mediaOffset` 不动),用到的那截素材不变,终点按新速度重算:素材 4 秒、2 倍速 → 2 秒;
-   * - 后面紧挨着别的片段、拉长放不下时,截到下一段的起点(`capped`);
+   * - **变长会和下一段重合时把后面的段推开**(用户 2026-10-23 定:「变长以后如果会重合就推着后移,但是变短的时候尾部留空。」):
+   *   同一条序列里排在它后面的所有段整体后移「新终点 − 下一段起点」这么多(各段之间的相对关系不变,前面原有的空档先被吃掉、
+   *   不多推);被推的段挂着转场时整组一起推(组员在别的序列上也一起推),各段的声音伴随段跟着走。别的序列上的段不动。
+   *   推不动(组员在锁着的序列上、推过去和别的段重叠)就整个拒绝并说明原因,**不截断**;
+   * - 变短时尾部留空,后面的段不动;
    * - 改回 1 删掉 `speed` 字段,不留 `speed: 1`(身份键才逐字回到原样);
-   * - 只给视频素材段;挂着转场的拒绝(转场把相邻段的时长锁住,同 moveClip);序列锁着的拒绝。
+   * - 只给视频素材段;它自己挂着转场的拒绝(转场把相邻段的时长锁住,同 moveClip);序列锁着的拒绝。
    * 〔裁〕第一版变速段的原声不出,界面写明(手机版「速度」面板、桌面编辑分区、时间轴的静音标记)。
    */
-  setClipSpeed(clipId: string, speed: number): { ok: true; capped?: boolean } | { ok: false; error: string } {
+  setClipSpeed(clipId: string, speed: number): { ok: true; pushed?: { clips: number; by: number } } | { ok: false; error: string } {
     const p = state.project;
     const hit = findClip(p, clipId);
     if (!hit) return { ok: false, error: "找不到这个片段" };
@@ -239,20 +243,46 @@ export const clips = {
     if (next === clipSpeed(hit.clip)) return { ok: true };
     if (timingLock(p, clipId)) return { ok: false, error: "这一段挂着转场，改速度会改时长；先删掉转场" };
     const start = hit.clip.start;
-    let end = start + mediaSpanOf(hit.clip) / next;
-    // 同一条序列里排在它后面的第一段(它自己的声音伴随段跟着它走,不算挡路)
-    const blocker = hit.track.clips
-      .filter((c) => c.id !== clipId && c.soundEffect?.sourceClipId !== clipId && c.start >= hit.clip.end - 1e-9)
-      .reduce((min, c) => Math.min(min, c.start), Infinity);
-    let capped = false;
-    if (end > blocker + 1e-9) { end = blocker; capped = true; }
-    if (end - start < 0.1) return { ok: false, error: "后面没有空位，放不下这个速度" };
+    const end = start + mediaSpanOf(hit.clip) / next;
+    if (end - start < 0.1) return { ok: false, error: "这一段太短，改成这个速度后不到 0.1 秒" };
     const placed: TrackClip = { ...withSpeed(hit.clip, next), end };
-    const updated = updateTrack(p, hit.track.id, (t) => ({ ...t, clips: sortClips(t.clips.map((c) => (c.id === clipId ? placed : c))) }));
-    const linked = moveSoundCompanions(updated, hit.clip, placed);
+    // 同一条序列里排在它后面的段(它自己的声音伴随段跟着它走,不算挡路)
+    const followers = hit.track.clips.filter((c) => c.id !== clipId && c.soundEffect?.sourceClipId !== clipId && c.start >= hit.clip.end - 1e-9);
+    const blocker = followers.reduce((min, c) => Math.min(min, c.start), Infinity);
+    let base: import("../../kernel/project").Project = updateTrack(p, hit.track.id, (t) => ({ ...t, clips: t.clips.map((c) => (c.id === clipId ? placed : c)) }));
+    let pushed: { clips: number; by: number } | undefined;
+    if (end > blocker + 1e-9) {
+      const dt = end - blocker;
+      // 后面的段整体顺移;挂着转场的整组一起(组员可能在别的序列上)
+      const ids = new Set<string>();
+      for (const c of followers) for (const m of groupOf(p, c.id).members) ids.add(m);
+      if (ids.has(clipId)) return { ok: false, error: "后面的段和这一段绑在同一组转场里，推不开；先删掉转场" };
+      const lockedMember = p.tracks.find((t) => t.locked && t.clips.some((c) => ids.has(c.id)));
+      if (lockedMember) return { ok: false, error: `后面的段和锁着的序列「${lockedMember.name}」上的段绑在转场里，推不开；先解锁那条序列` };
+      // 被推的段的声音伴随段:先拿出来,推完再按各自的源片段平移回去(同 moveClip 整组平移的做法)
+      const companions = new Map(base.tracks.map((t) => [t.id, t.clips.filter((c) => c.soundEffect?.sourceClipId && ids.has(c.soundEffect.sourceClipId))]));
+      const lockedCompanion = base.tracks.find((t) => t.locked && companions.get(t.id)!.length);
+      if (lockedCompanion) return { ok: false, error: `后面的段的声音在锁着的序列「${lockedCompanion.name}」上，推不开；先解锁那条序列` };
+      const without = { ...base, tracks: base.tracks.map((t) => ({ ...t, clips: t.clips.filter((c) => !companions.get(t.id)!.includes(c)) })) };
+      let shifted = shiftClipsBy(without, [...ids], dt);
+      if (!shifted) return { ok: false, error: "后面的段推过去会和别的片段重叠（转场组在别的序列上的段挡住了），没有改速度" };
+      shifted = { ...shifted, tracks: shifted.tracks.map((t) => ({ ...t, clips: sortClips([...t.clips, ...companions.get(t.id)!]) })) };
+      for (const id of ids) {
+        const before = findClip(base, id)?.clip, after = findClip(shifted, id)?.clip;
+        if (before && after && shifted) shifted = moveSoundCompanions(shifted, before, after, false);
+        if (!shifted) return { ok: false, error: "后面的段的声音伴随段推不开，没有改速度" };
+      }
+      if (shifted.tracks.some((t) => { const s2 = sortClips(t.clips); return s2.some((c, i) => c.start < 0 || (i > 0 && c.start < s2[i - 1].end - 1e-9)); })) {
+        return { ok: false, error: "后面的段推过去会和别的片段重叠，没有改速度" };
+      }
+      base = shifted;
+      pushed = { clips: ids.size, by: dt };
+    }
+    base = updateTrack(base, hit.track.id, (t) => ({ ...t, clips: sortClips(t.clips) }));
+    const linked = moveSoundCompanions(base, hit.clip, placed);
     if (!linked) return { ok: false, error: "这一段的声音伴随段放不下，没有改速度" };
     setProject(linked);
-    return { ok: true, ...(capped ? { capped: true } : {}) };
+    return { ok: true, ...(pushed ? { pushed } : {}) };
   },
   removeClip(clipId: string) {
     const p = state.project;

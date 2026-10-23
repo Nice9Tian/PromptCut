@@ -204,9 +204,11 @@ test('store.setClipSpeed:保住入点、按新速度重算终点,改回 1 删字
   assert.equal(r.ok, true);
   assert.equal('speed' in clip('v'), false, '改回 1 不留 speed 字段(身份键逐字回到原样)');
   assert.deepEqual([clip('v').start, clip('v').end], [1, 5]);
-  // 后面挤不下:截到下一段的起点
-  actions.setClipSpeed('v', 0.25);
-  assert.equal(clip('v').end, 10, '0.25 倍要 16 秒,后面 10 秒处有图片,截到 10');
+  // 变长碰到下一段:把后面的段推开(用户 2026-10-23 定),不截断
+  r = actions.setClipSpeed('v', 0.25);
+  assert.deepEqual(r, { ok: true, pushed: { clips: 1, by: 7 } });
+  assert.equal(clip('v').end, 17, '0.25 倍要 16 秒,不截');
+  assert.deepEqual([clip('img').start, clip('img').end], [17, 19], '后面的图片被推到 17');
   // 图片段不能变速
   assert.equal(actions.setClipSpeed('img', 2).ok, false);
   // 切分:后半段素材起点 = 2 + (5 − 1) × 0.25,带着速度
@@ -217,7 +219,54 @@ test('store.setClipSpeed:保住入点、按新速度重算终点,改回 1 删字
   const sep = actions.separateAudio('v');
   assert.equal(sep.ok, false);
   assert.match(sep.error, /变速/);
-  // 一次改速度 = 一步撤销
+  // 一次改速度(连带推开的段)= 一步撤销
   actions.undo(); actions.undo();
+  assert.equal(clip('v').speed, undefined);
+  assert.deepEqual([clip('v').end, clip('img').start, clip('img').end], [5, 10, 12], '推开的段一起退回去');
+});
+
+test('store.setClipSpeed 推开:变短尾部留空;后面整体顺移(相对关系不变,先吃掉空档);转场组整组推;推不动整个拒绝、不截断', async () => {
+  const { actions, getState } = await import(srcUrl('store/project.ts'));
+  const load = (extra = {}) => actions.loadProject({ version: 1, id: 'p-push', name: 't', width: 1280, height: 720, fps: 30, duration: 40, themeId: 'midnight',
+    media: [{ id: 'v1', kind: 'video', name: 'v.mp4', url: '/@media/v1.mp4', duration: 60 }],
+    tracks: [
+      { id: 'ta', name: '序列 1', clips: [
+        { id: 'v', cardId: '', mediaId: 'v1', start: 0, end: 4, params: {} },
+        { id: 'a', cardId: '', mediaId: 'v1', start: 5, end: 8, params: {} },
+        { id: 'b', cardId: '', mediaId: 'v1', start: 10, end: 13, params: {} },
+      ] },
+      { id: 'tb', name: '序列 2', clips: [{ id: 'other', cardId: '', mediaId: 'v1', start: 6, end: 9, params: {} }], ...(extra.lockB ? { locked: true } : {}) },
+    ], ...(extra.transitions ? { transitions: extra.transitions } : {}) });
+  const clip = (id) => getState().project.tracks.flatMap((t) => t.clips).find((x) => x.id === id);
+  const span = (id) => [clip(id).start, clip(id).end];
+
+  load();
+  let r = actions.setClipSpeed('v', 2);
+  assert.deepEqual(r, { ok: true }, '变短不推');
+  assert.deepEqual([span('v'), span('a'), span('b'), span('other')], [[0, 2], [5, 8], [10, 13], [6, 9]], '尾部留空,别的不动');
+
+  load();
+  r = actions.setClipSpeed('v', 0.5); // 4 → 8 秒,和 a(5 起)重合 3 秒
+  assert.deepEqual(r, { ok: true, pushed: { clips: 2, by: 3 } });
+  assert.deepEqual([span('v'), span('a'), span('b')], [[0, 8], [8, 11], [13, 16]], 'a、b 整体后移 3 秒,a 与 b 之间 2 秒的空档还在');
+  assert.deepEqual(span('other'), [6, 9], '别的序列上的段不动');
+  actions.undo();
+  assert.deepEqual([span('v'), span('a'), span('b')], [[0, 4], [5, 8], [10, 13]], '一步撤销全退回');
+
+  // 后面的 a 和别的序列上的 other 绑在交叉溶解里:整组一起推
+  load({ transitions: [{ id: 'x', kind: 'crossfade', aId: 'other', bId: 'a', dur: 1 }] });
+  r = actions.setClipSpeed('v', 0.5);
+  assert.equal(r.ok, true);
+  assert.deepEqual([span('a'), span('b'), span('other')], [[8, 11], [13, 16], [9, 12]], '转场组整组推,组内相对关系不变');
+  actions.undo();
+  assert.deepEqual([span('a'), span('other')], [[5, 8], [6, 9]]);
+
+  // 组员在锁着的序列上:推不开,整个拒绝,什么都不改(不截断)
+  load({ lockB: true, transitions: [{ id: 'x', kind: 'crossfade', aId: 'other', bId: 'a', dur: 1 }] });
+  const before = getState().project;
+  r = actions.setClipSpeed('v', 0.5);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /锁着的序列/);
+  assert.equal(getState().project, before, '拒绝时项目原样');
   assert.equal(clip('v').speed, undefined);
 });
