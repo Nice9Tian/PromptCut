@@ -5,7 +5,7 @@
  *   - 导出混音(server/bakery/mux-audio.mjs 的 buildAudioPlan → ffmpeg;server/bakery/audio-mix.mjs 的 Chrome 离线渲染)
  *   - 测响度(measure_audio 的 timeline 档,浏览器把这份清单发给服务端)
  *   - 预览不用它(预览按时刻查 audioClipsAt / videoLayersAt),但规则一致:隐藏 / 静音的序列不出声,
- *     片段 audioMuted 不出声,变速的视频段不出原声(`speedMutesSource`;变速的声音段照常出声、变调),图片没声音,音量 = opacity × audioVolume,淡入淡出线性。
+ *     片段 audioMuted 不出声,变速的视频段不出原声(`speedMutesSource`;变速的声音段照常出声、变调;挂在变速段上的声画一体卡照常出声),图片没声音,音量 = opacity × audioVolume,淡入淡出线性。
  */
 
 import { audioFxOfClip } from "./audioFx.mjs";
@@ -30,10 +30,12 @@ export function audioPlanOf(source) {
     for (const c of tr.clips || []) {
       if (c.audioMuted) continue;
       // 〔裁〕第一版变速段的原声不出(kernel/clipTime.mjs 文件头):浏览器离线混音与 ffmpeg 做不出一样的变速声音,
-      // 只有「不出」两边一致。挂在它上面的音频效果、声画一体卡的声音同样不出(声音来源就是这段原声)。
+      // 只有「不出」两边一致。挂在它上面的音频效果同样不出(声音来源就是这段原声)。
+      // 声画一体卡照常出声(2026-10-23 用户定「出声。」):它的声音是已生成的 WAV,本来就按时间轴长度生成
+      // (读这段素材时已随倍率变速变调,卡片时钟见 clipTime.mjs 的 cardClockOffset),这里照 1 倍摆位,不再带 speed。
       // 音频素材效果卡不走这份清单(mux-audio 的 buildAudioPlan 另收),变速段当它的输入时随倍率变速变调(2026-10-23 用户定「放开。」)。
-      if (speedMutesSource(c, project)) continue;
       const embedded = clipHasEmbeddedAudio(project, c);
+      if (!embedded && speedMutesSource(c, project)) continue;
       const rendition = embedded ? resolveCardAudioRendition(project, c) : null;
       const m = rendition?.media ?? (project.media || []).find((x) => x.id === c.mediaId);
       // 合成声音是已入库的项目内容；丢了引用不能悄悄导出无声片段。

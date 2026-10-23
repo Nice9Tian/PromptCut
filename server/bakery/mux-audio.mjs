@@ -80,7 +80,7 @@ export function buildAudioPlan(source, outDir, exists = fs.existsSync, sourceOf 
     for (const clip of track.clips ?? []) {
       // 变速的视频段不出原声,但挂在它上面的音频素材效果卡照常出:卡读这段素材当输入,随倍率变速变调
       // (src/render/cards/audioSources.ts 的 varispeedBlock;2026-10-23 用户定「放开。」)。这里只收音频素材效果卡节点,
-      // 声画一体卡走上面 audioPlanOf 那一路,仍按变速段不出原声办
+      // 声画一体卡走上面 audioPlanOf 那一路(已生成的 WAV;变速段上同样照常出声,2026-10-23 用户定「出声。」)
       if (clip.audioMuted || clip.cardAudio || !isCardAudioNode(project, clip.nodeId)) continue;
       // Generated blocks are sample-addressed; do not quantize their timeline placement to
       // the legacy 3 ms audio-plan precision before converting duration to frames.

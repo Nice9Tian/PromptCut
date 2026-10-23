@@ -1,5 +1,5 @@
 import { cardJson } from './cardGraph.mjs';
-import { clipSpeed } from './clipTime.mjs';
+import { cardClockOffset, clipSpeed } from './clipTime.mjs';
 
 /** 声画一体卡的声音属于原片段，不能当普通素材分离。纯音频素材效果卡不是声画卡。 */
 export const isAudiovisualCard = def => !!def && typeof def.audio === 'function' &&
@@ -19,9 +19,13 @@ export function clipHasAudio(project, clip, getCard = () => undefined) {
   return clipHasEmbeddedAudio(project, clip, getCard) || node?.adapter === 'card' && node.kind === 'audio' ||
     typeof getCard(clip.cardId || node?.cardId)?.audio === 'function' || media?.kind === 'video' || media?.kind === 'audio';
 }
-/** 两路共用的源时钟。切分已同时写 mediaOffset/node.timeOffset，绝不能相加。 */
+/**
+ * 两路共用的源时钟。切分已同时写 mediaOffset/node.timeOffset，绝不能相加。
+ * 变速的素材段上按卡片时钟(mediaOffset ÷ speed,`clipTime.mjs` 的 `cardClockOffset`;1 倍逐位就是 mediaOffset):
+ * 切分、裁剪只把它推进时间轴上的那几秒,已生成的声音照旧按「当前源时钟 − 区间起点」对位(2026-10-23 用户定「出声。」)。
+ */
 export function cardAudioSourceOffset(project, clip) {
-  return clip.mediaOffset ?? nodeOf(project, clip)?.timeOffset ?? 0;
+  return cardClockOffset(clip) ?? nodeOf(project, clip)?.timeOffset ?? 0;
 }
 export class CardAudioRenditionError extends Error {
   constructor(code, message) { super(message); this.code = code; }

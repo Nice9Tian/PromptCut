@@ -51,8 +51,9 @@ export function isSpeedChanged(clip) {
  * **声音段**(素材是 audio,比如音画分离出来的那一条)变速时照常出声,随倍率变速变调(`ffmpegVarispeed` / `resampleVarispeed`,
  * 2026-10-23 用户定「可以分离,失真问题记待办」)。
  * `project` 给了就按素材的种类判;没给(拿不到项目的地方)按视频办。
- * 预览的声音层、导出混音(`audioPlanOf`)、测响度都用这一条。挂在变速视频段上的**音频素材效果卡**不受它管:卡读这段素材当输入,
- * 随倍率变速变调(`render/cards/audioSources.ts` 的 `varispeedBlock`,2026-10-23 用户定「放开。」);声画一体卡的声音仍不出。
+ * 预览的声音层、导出混音(`audioPlanOf`)、测响度都用这一条。挂在变速视频段上的卡片声音不受它管:**音频素材效果卡**读这段素材当输入,
+ * 随倍率变速变调(`render/cards/audioSources.ts` 的 `varispeedBlock`,2026-10-23 用户定「放开。」);**声画一体卡**也照常出声
+ * (2026-10-23 用户定「出声。」),它读这段素材时同样变速变调,自己合成的那部分跟着卡的时钟走(`cardClockOffset`)。
  */
 export function speedMutesSource(clip, project) {
   if (!clip?.mediaId || !isSpeedChanged(clip)) return false;
@@ -85,6 +86,26 @@ export function resampleVarispeed(src, from, speed, n) {
     out[i] = a + (b - a) * f;
   }
   return out;
+}
+
+/**
+ * 声画一体卡的**卡片时钟**起点(秒):挂在素材段上的声画一体卡,画面(`t`)与声音(`audio()` 的 `range.start`)都按
+ * 「片段内时间(时间轴秒)+ 这个起点」走,已生成的卡片声音也按它对位(`cardAudioRendition.mjs` 的 `cardAudioSourceOffset`)。
+ *
+ *   卡片时钟起点 = mediaOffset ÷ speed
+ *
+ * 1 倍时就是 `mediaOffset`(逐位相同,`x / 1` 不做:直接回原值)。为什么变速时要除以倍率:切分、裁剪按倍率推进素材起点
+ * (`mediaOffsetAfter`:往后走 dt 秒时间轴,mediaOffset 加 dt × speed),而卡片自己的画面和声音是按时间轴秒走的。
+ * 起点若直接用 mediaOffset,2 倍段在第 d 秒切开,后半段的卡片时钟会凭空往前跳 d 秒(画面跳一截,已生成的声音对不上位、
+ * 或判「未覆盖」要重新生成);除以倍率之后切分、裁剪只把它推进 dt,和没切之前那一刻的时钟接得上。
+ * 卡读这段素材的那一路不受影响:读素材的位置仍是 mediaOffset +(片段内时间 + 边的偏移)× speed(`withMediaRates` 补偿边)。
+ * `mediaOffset` 没写时回 undefined,由调用方照旧退到节点的 `timeOffset`。
+ */
+export function cardClockOffset(clip) {
+  const m = clip?.mediaOffset;
+  if (m === undefined || m === null) return undefined;
+  const s = clipSpeed(clip);
+  return s === 1 ? m : m / s;
 }
 
 /** 时间轴时刻 t → 素材时刻(秒) */
@@ -149,18 +170,34 @@ export function speedKeyPart(clip) {
  * 第 9.2 节)。所以由出画面、出键的几处在拿到图之后调这一个函数:导出页(画面与 `__pcCardPlan`)、舞台、剪辑段的嵌套场景、
  * 在线页面的卡片计划(`editor/browserNodeHost.ts`)。
  *
+ * 同一处还给挂在变速素材段上的**声画一体卡节点**换卡片时钟(2026-10-23 用户定「出声。」):`projectCardGraph` 把它的
+ * `timeOffset` 写成 `mediaOffset`(素材秒),这里改成 `cardClockOffset`(mediaOffset ÷ speed),并把它读自己这段素材的那条边的
+ * `offset` 补上同样的差,读素材的位置一个采样不变(见 `cardClockOffset`)。画面(`GraphCard.tsx`)、声音
+ * (`audio/cardAudio.ts`、在线声音线程)拿的是同一份图,所以两边同一个时钟。
+ *
  * 没有变速段时回**同一个对象**(图、键一个字节不变)。
  */
 export function withMediaRates(project, graph) {
   if (!graph || !Array.isArray(graph.nodes)) return graph;
-  const rates = new Map();
+  const rates = new Map(), clocks = new Map();
   for (const track of Array.isArray(project?.tracks) ? project.tracks : []) {
     for (const clip of Array.isArray(track?.clips) ? track.clips : []) {
-      if (clip?.mediaId && isSpeedChanged(clip)) rates.set(`@clip/${clip.id}/source`, clipSpeed(clip));
+      if (!clip?.mediaId || !isSpeedChanged(clip)) continue;
+      rates.set(`@clip/${clip.id}/source`, clipSpeed(clip));
+      if (typeof clip.nodeId === "string" && typeof clip.mediaOffset === "number") clocks.set(clip.nodeId, clip);
     }
   }
   if (!rates.size) return graph;
-  return { ...graph, nodes: graph.nodes.map((node) => (node?.adapter === "media" && rates.has(node.id) ? { ...node, rate: rates.get(node.id) } : node)) };
+  return { ...graph, nodes: graph.nodes.map((node) => {
+    if (node?.adapter === "media" && rates.has(node.id)) return { ...node, rate: rates.get(node.id) };
+    const clip = node?.adapter === "card" && node.embeddedAudio === true ? clocks.get(node.id) : undefined;
+    // projectCardGraph 只在 mediaOffset 有值时把 timeOffset 写成它(cardGraph.mjs 的实例参数那一段),这里只接那一种
+    if (!clip || node.timeOffset !== clip.mediaOffset) return node;
+    const clock = cardClockOffset(clip), shift = clip.mediaOffset - clock, own = `@clip/${clip.id}/source`;
+    const inputs = Object.fromEntries(Object.entries(node.inputs ?? {}).map(([name, ref]) =>
+      [name, ref && typeof ref === "object" && ref.nodeId === own ? { ...ref, offset: (ref.offset ?? 0) + shift } : ref]));
+    return { ...node, timeOffset: clock, inputs };
+  }) };
 }
 
 const TRANSITION_NAME = { crossfade: "交叉溶解", fadeIn: "淡入", fadeOut: "淡出" };
