@@ -14,17 +14,24 @@
  * 自己同级里生效**:分组里的项目 A 置顶,只在那个分组里顶上去(规则与纯函数在 `treeState.ts`)。
  * 右边那条缝能拖,改侧栏宽度,记在本机(`sideWidth.ts`)。
  *
- * 点分组把右边那排筛成这个分组里的项目;点项目、点 Agent 现在只给一行「待办」。
+ * 点分组把右边那排筛成这个分组里的项目;点项目进这个项目(连上云端文档服务,`OnlineStart.tsx` 的 `openProject`),
+ * 进了之后它底下列出当前账号看得到的项目 Agent(云端 Agent 对话)和一行「新对话」;点 Agent 进聊天页。
+ * 只有此刻连着的那个项目列得出对话(对话要凭这个项目的身份向云端 Agent 服务要),别的项目点进去才列。
  * 搜索只筛这一栏(右边那排跟着当前分组走,不跟搜索走),免得一边打字一边整页都在跳。
+ *
+ * 2026-10-23 接业务层:项目来自云端项目列表,对话来自云端 Agent 服务;分组、置顶、归档、顺序只记在这台浏览器里
+ * (`vibeOrg.ts`,分组语义里还没有,见那个文件头)。「分组 Agent」语义里没有,这一版不做。
+ * 归档的东西收在最下面「已归档」那张卡里,右键能取消归档。
  */
 import { useRef, useState } from "react";
 import type { JSX } from "react";
-import { RowMenu, type MenuAt } from "./RowMenu";
+import type { ReactNode } from "react";
+import { RowMenu, type MenuAt, type MenuBlock } from "./RowMenu";
 import { SIDE_WIDTH } from "./sideWidth";
 import { WidthGrip } from "./WidthGrip";
 import type { TreeKind } from "./treeKind";
 import { ordered, visible, type Place } from "./treeState";
-import type { MockAgentChat, MockGroup, MockProject } from "./mockProjects";
+import type { VibeChat, VibeGroup, VibeProject } from "./types";
 
 /**
  * 整块筛选用的那两行(「全部项目」和「没放进分组」)先归档,默认不显示 —— **用户 2026-10-23 要求的**:
@@ -45,9 +52,14 @@ export const scopeKeyOf = (s: Scope): string => (s.kind === "group" ? `group:${s
 export interface TreeOps {
   rename: (kind: TreeKind, id: string, name: string) => void;
   pin: (kind: TreeKind, id: string) => void;
+  /** 归档 / 取消归档(按它现在的状态切) */
   archive: (kind: TreeKind, id: string) => void;
   remove: (kind: TreeKind, id: string) => void;
   reorder: (kind: TreeKind, dragId: string, overId: string, place: Place) => void;
+  /** 项目移到某个分组(null 是移出分组) */
+  move: (projectId: string, groupId: string | null) => void;
+  /** 这一行哪几项做不了、为什么 */
+  blocked: (kind: TreeKind, id: string) => { rename?: MenuBlock; remove?: MenuBlock };
 }
 
 /** 分组:两片叠起来的方块 */
@@ -121,14 +133,23 @@ interface RowSpec {
 }
 
 export function ProjectSidebar(props: {
-  groups: MockGroup[];
-  projects: MockProject[];
-  chats: MockAgentChat[];
+  groups: VibeGroup[];
+  projects: VibeProject[];
+  /** 此刻连着的那个项目里看得到的对话(别的项目没连上,列不出) */
+  chats: VibeChat[];
+  /** 此刻连着的项目;它那一行展开、底下列对话 */
+  connectedId: string | null;
   scope: Scope;
   onScope: (s: Scope) => void;
   onCreate: () => void;
+  /** 新建项目做不了(没登录、游客已经建过)时的说明 */
+  createBlocked?: string | null;
   onOpen: (id: string) => void;
-  onOpenChat: (chat: MockAgentChat) => void;
+  onOpenChat: (chat: VibeChat) => void;
+  onNewChat: (projectId: string) => void;
+  onNewGroup: () => void;
+  /** 「项目」那张卡顶上的一行状态(正在取列表、取不到、重试);没有就不显示 */
+  notice?: ReactNode;
   /** 聊天页正开着的那条对话:它那一行标成当前项 */
   openChatId: string | null;
   /** 收起来了没有。收起时整条滑出去、宽度收到 0,收起键在顶栏上 */
@@ -143,7 +164,7 @@ export function ProjectSidebar(props: {
    */
   onWidthNudge: (delta: number) => void;
 }): JSX.Element {
-  const [open, setOpen] = useState<Record<string, boolean>>({ "g-brand": true });
+  const [open, setOpen] = useState<Record<string, boolean>>({});
   /** 每张卡收起来没有(用户 2026-10-23:每一个块都可以收起,和右边那条拓展栏一样)。缺省都是开的 */
   const [cards, setCards] = useState<Record<string, boolean>>({});
   const cardOpen = (k: string) => cards[k] !== false;
@@ -163,18 +184,19 @@ export function ProjectSidebar(props: {
   const allProjects = visible(props.projects);
   const allChats = visible(props.chats);
 
-  const chatsOfProject = (id: string) =>
-    ordered(allChats.filter((c) => c.on === "project" && c.projectId === id));
-  const chatsOfGroup = (id: string) =>
-    ordered(allChats.filter((c) => c.on === "group" && c.groupId === id));
+  const chatsOfProject = (id: string) => ordered(allChats.filter((c) => c.projectId === id));
   /** 项目自己名字命中,或它底下哪条对话命中,都算要显示 */
-  const projectShows = (p: MockProject) => hit(p.name) || chatsOfProject(p.id).some((c) => hit(c.name));
+  const projectShows = (p: VibeProject) => hit(p.name) || chatsOfProject(p.id).some((c) => hit(c.name));
   const projectsOf = (groupId: string | null) =>
     ordered(allProjects.filter((p) => p.groupId === groupId && projectShows(p)));
 
   /** 同级的键:分组一级,同一分组里的项目一级,挂在同一个项目(或分组)上的对话各一级 */
-  const chatSib = (c: MockAgentChat) => (c.on === "project" ? `chat:p:${c.projectId}` : `chat:g:${c.groupId}`);
-  const projectSib = (p: MockProject) => `project:${p.groupId ?? "loose"}`;
+  const chatSib = (c: VibeChat) => `chat:p:${c.projectId}`;
+  const projectSib = (p: VibeProject) => `project:${p.groupId ?? "loose"}`;
+  const archivedGroups = props.groups.filter((g) => g.archived);
+  const archivedProjects = props.projects.filter((p) => p.archived);
+  const archivedChats = props.chats.filter((c) => c.archived);
+  const archivedCount = archivedGroups.length + archivedProjects.length + archivedChats.length;
 
   const current = props.scope;
   const isAt = (s: Scope) =>
@@ -298,26 +320,35 @@ export function ProjectSidebar(props: {
     );
   };
 
-  const chatRow = (chat: MockAgentChat) =>
+  const chatRow = (chat: VibeChat) =>
     row({
       kind: "chat",
       id: chat.id,
-      name: chat.name,
+      name: chat.state === "running" ? `${chat.name} · 进行中` : chat.visibility === "private" ? `${chat.name} · 私有${chat.readOnly ? "（只读）" : ""}` : chat.name,
       pinned: !!chat.pinned,
       sib: chatSib(chat),
       icon: <AgentIcon />,
       className: "is-agent",
       current: props.openChatId === chat.id,
       pc: "start-side-agent",
-      label: `Agent 对话 ${chat.name}${chat.pinned ? "（已置顶）" : ""}`,
+      label: `Agent 对话 ${chat.name}${chat.visibility === "private" ? "，私有" : ""}${chat.pinned ? "（已置顶）" : ""}`,
       onClick: () => props.onOpenChat(chat),
     });
 
   /** 一个项目,连同它底下的项目 Agent */
-  const projectBlock = (p: MockProject) => {
+  const newChatRow = (projectId: string) => (
+    <button key="new-chat" type="button" className="ps-row is-agent" data-pc="start-side-new-chat" aria-label="新对话" onClick={() => props.onNewChat(projectId)}>
+      <span className="ps-row-caret" data-empty aria-hidden="true">›</span>
+      <span className="ps-row-icon is-agent" aria-hidden="true">＋</span>
+      <span className="ps-row-name ps-muted">新对话</span>
+    </button>
+  );
+
+  const projectBlock = (p: VibeProject) => {
     const chats = chatsOfProject(p.id);
-    // 搜索时自动展开命中的那一支:不然搜到了却看不见在哪
-    const expanded = q ? chats.some((c) => hit(c.name)) : !!open[p.id];
+    const connected = props.connectedId === p.id;
+    // 搜索时自动展开命中的那一支:不然搜到了却看不见在哪。连着的那个项目缺省展开(收起要自己点)
+    const expanded = q ? chats.some((c) => hit(c.name)) : connected && open[p.id] !== false;
     return (
       <div key={p.id}>
         {row({
@@ -327,18 +358,31 @@ export function ProjectSidebar(props: {
           pinned: !!p.pinned,
           sib: projectSib(p),
           icon: <ProjectIcon />,
-          expanded: chats.length ? expanded : undefined,
+          expanded: connected ? expanded : undefined,
+          current: connected && !props.openChatId,
           pc: "start-side-project",
           label: `项目 ${p.name}${chats.length ? `，${chats.length} 个 Agent 对话` : ""}${p.pinned ? "，已置顶" : ""}`,
           onClick: () => {
+            if (connected) setOpen((o) => ({ ...o, [p.id]: o[p.id] === false }));
             props.onOpen(p.id);
-            if (chats.length) setOpen((o) => ({ ...o, [p.id]: !o[p.id] }));
           },
         })}
-        {expanded && chats.length > 0 && <div className="ps-sub">{chats.map(chatRow)}</div>}
+        {expanded && <div className="ps-sub">{chats.map(chatRow)}{newChatRow(p.id)}</div>}
       </div>
     );
   };
+
+  /** 「已归档」那张卡里的一行:点了、右键都出菜单(取消归档、删除),不进去 */
+  const archivedRow = (kind: TreeKind, id: string, name: string, icon: JSX.Element) => (
+    <button key={`${kind}:${id}`} type="button" className={`ps-row is-archived${kind === "chat" ? " is-agent" : ""}`} data-pc="start-side-archived-row"
+      data-kind={kind} data-id={id} aria-label={`已归档的${kind === "group" ? "分组" : kind === "project" ? "项目" : "对话"} ${name}`} title={`${name}（右键取消归档）`}
+      onClick={(e) => setMenu({ id, kind, name, pinned: false, x: e.clientX, y: e.clientY })}
+      onContextMenu={(e) => { e.preventDefault(); setMenu({ id, kind, name, pinned: false, x: e.clientX, y: e.clientY }); }}>
+      <span className="ps-row-caret" data-empty aria-hidden="true">›</span>
+      <span className={`ps-row-icon${kind === "chat" ? " is-agent" : ""}`}>{icon}</span>
+      <span className="ps-row-name ps-muted">{name}</span>
+    </button>
+  );
 
   return (
     <aside
@@ -350,7 +394,7 @@ export function ProjectSidebar(props: {
     >
       {/* 里面这一层钉住原来的宽度:收的时候内容整块滑出去,不会先被挤成一条再消失 */}
       <div className="ps-side-inner" style={{ width: `${props.width}px` }}>
-      <button type="button" className="ps-side-new" data-pc="start-side-new" onClick={props.onCreate}>
+      <button type="button" className="ps-side-new" data-pc="start-side-new" disabled={!!props.createBlocked} title={props.createBlocked ?? undefined} onClick={props.onCreate}>
         <span aria-hidden="true">＋</span>新建项目
       </button>
 
@@ -393,8 +437,7 @@ export function ProjectSidebar(props: {
           {cardOpen("groups") && <div className="ps-side-body">
           {groups.map((g) => {
             const rows = projectsOf(g.id);
-            const groupChats = chatsOfGroup(g.id).filter((c) => hit(c.name));
-            const expanded = q ? rows.length > 0 || groupChats.length > 0 : !!open[g.id];
+            const expanded = q ? rows.length > 0 : !!open[g.id];
             return (
               <div key={g.id}>
                 {row({
@@ -417,13 +460,13 @@ export function ProjectSidebar(props: {
                 {expanded && (
                   <div className="ps-sub">
                     {rows.map(projectBlock)}
-                    {groupChats.map(chatRow)}
+                    {rows.length === 0 && <p className="ps-side-hint">分组是空的：在项目上右键「移到分组」。</p>}
                   </div>
                 )}
               </div>
             );
           })}
-          <button type="button" className="ps-row" data-pc="start-new-group" aria-label="新建分组" title="待办：分组还没有业务层">
+          <button type="button" className="ps-row" data-pc="start-new-group" aria-label="新建分组" title="分组只记在这台浏览器里，不会同步到别的设备" onClick={props.onNewGroup}>
             <span className="ps-row-caret" data-empty aria-hidden="true">›</span>
             <span className="ps-row-icon" aria-hidden="true">＋</span>
             <span className="ps-row-name ps-muted">新建分组</span>
@@ -449,10 +492,31 @@ export function ProjectSidebar(props: {
             <span className="ps-row-count">{projectsOf(null).length}</span>
           </button>
           )}
+          {props.notice && <div className="ps-side-hint" role="status" data-pc="start-side-notice">{props.notice}</div>}
           {/* 没放进分组的项目直接一条条列,不再套在「没放进分组」那一行底下(用户 2026-10-23) */}
           {projectsOf(null).map(projectBlock)}
           </div>}
         </div>
+
+        {archivedCount > 0 && (
+          <div className="ps-side-group" data-open={cards.archived === true} data-pc="start-side-archived">
+            {/* 已归档缺省收着:平时不占地方,要找回来才点开 */}
+            <div className="ps-card-head">
+              <button type="button" className="ps-card-toggle" data-pc="start-side-card" data-card="archived" aria-expanded={cards.archived === true}
+                onClick={() => setCards((c) => ({ ...c, archived: c.archived !== true }))}>
+                <span className="ps-card-caret" data-open={cards.archived === true} aria-hidden="true">›</span>
+                已归档
+              </button>
+              <span className="ps-card-count">{archivedCount}</span>
+            </div>
+            {cards.archived === true && <div className="ps-side-body">
+              {archivedGroups.map((g) => archivedRow("group", g.id, g.name, <GroupIcon />))}
+              {archivedProjects.map((p) => archivedRow("project", p.id, p.name, <ProjectIcon />))}
+              {archivedChats.map((c) => archivedRow("chat", c.id, c.name, <AgentIcon />))}
+              <p className="ps-side-hint">右键「取消归档」放回原处。</p>
+            </div>}
+          </div>
+        )}
       </div>
 
       </div>
@@ -471,16 +535,31 @@ export function ProjectSidebar(props: {
         />
       )}
 
-      {menu && (
-        <RowMenu
-          at={menu}
-          onClose={() => setMenu(null)}
-          onRename={() => setRenaming({ kind: menu.kind, id: menu.id, name: menu.name })}
-          onPin={() => props.ops.pin(menu.kind, menu.id)}
-          onArchive={() => props.ops.archive(menu.kind, menu.id)}
-          onDelete={() => props.ops.remove(menu.kind, menu.id)}
-        />
-      )}
+      {menu && (() => {
+        const blocked = props.ops.blocked(menu.kind, menu.id);
+        const project = menu.kind === "project" ? props.projects.find((p) => p.id === menu.id) : undefined;
+        const archived = menu.kind === "group" ? !!props.groups.find((g) => g.id === menu.id)?.archived
+          : menu.kind === "project" ? !!project?.archived : !!props.chats.find((c) => c.id === menu.id)?.archived;
+        const moveTargets = project && !archived
+          ? [...visible(props.groups).filter((g) => g.id !== project.groupId).map((g) => ({ id: g.id as string | null, name: g.name })),
+             ...(project.groupId ? [{ id: null, name: "" }] : [])]
+          : undefined;
+        return (
+          <RowMenu
+            at={menu}
+            archived={archived}
+            renameBlocked={blocked.rename}
+            deleteBlocked={blocked.remove}
+            moveTargets={moveTargets}
+            onMove={(gid) => props.ops.move(menu.id, gid)}
+            onClose={() => setMenu(null)}
+            onRename={() => setRenaming({ kind: menu.kind, id: menu.id, name: menu.name })}
+            onPin={() => props.ops.pin(menu.kind, menu.id)}
+            onArchive={() => props.ops.archive(menu.kind, menu.id)}
+            onDelete={() => props.ops.remove(menu.kind, menu.id)}
+          />
+        );
+      })()}
     </aside>
   );
 }

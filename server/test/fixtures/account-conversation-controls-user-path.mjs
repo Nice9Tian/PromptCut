@@ -129,8 +129,9 @@ export async function runAccountConversationControlsUserPath({ ports = [6620, 66
   publicHandler = null,
   diagnostic = () => {} } = {}) {
   assert.equal(ports.length, 7);
-  // 6620～6639 是这个夹具原来的探针端口段；5320～5329 是 agent-panel-smooth 探针的端口段；28180～29199 是 0.7.18 的探针端口段(块五的探针缺省 28180～28189，验收运行器按 --v18-port-base 换)
-  assert.ok(Number.isInteger(agentPort) && ((agentPort >= 6620 && agentPort <= 6639) || (agentPort >= 28180 && agentPort <= 29199) || (agentPort >= 5320 && agentPort <= 5329)) &&
+  // 6620～6639 是这个夹具原来的探针端口段；5320～5329 是 agent-panel-smooth 探针的端口段；28180～29199 是 0.7.18 的探针端口段(块五的探针缺省 28180～28189，验收运行器按 --v18-port-base 换)；
+  // 6500～6519 是 Vibe 开始页探针(`scripts/probes/vibe-start-probe.mjs`)的端口段
+  assert.ok(Number.isInteger(agentPort) && ((agentPort >= 6620 && agentPort <= 6639) || (agentPort >= 28180 && agentPort <= 29199) || (agentPort >= 5320 && agentPort <= 5329) || (agentPort >= 6500 && agentPort <= 6519)) &&
     !ports.includes(agentPort), 'agentPort must be a free probe-owned port');
   assert.ok(path.isAbsolute(providerRoot ?? '') && fs.existsSync(path.join(providerRoot, 'account/internal.mjs')),
     'real v2 account provider root is required');

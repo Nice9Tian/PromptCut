@@ -8,7 +8,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { JSX } from "react";
 import { CreateTile, ProjectThumb } from "./ProjectThumb";
-import type { MockProject } from "./mockProjects";
+import type { VibeProject } from "./types";
 
 /** 一格的宽度和间距,与 `start.css` 里 `.ps-tile` 的 flex-basis、`.ps-strip` 的 gap 对齐 */
 const TILE_W = 196;
@@ -16,11 +16,15 @@ const GAP = 12;
 
 export function ProjectRail(props: {
   title: string;
-  projects: MockProject[];
+  projects: VibeProject[];
   /** 换文件夹时翻回第一页用:值变了就重头看 */
   resetKey: string;
   onCreate: () => void;
+  /** 新建不可用(游客已经建过一个)时置灰,悬停说为什么 */
+  createDisabled?: string | null;
   onOpen: (id: string) => void;
+  /** 列表还在取、取不到时这一排说什么(不显示假数据、不白屏) */
+  empty?: string;
 }): JSX.Element {
   const strip = useRef<HTMLDivElement>(null);
   const [slots, setSlots] = useState(5);
@@ -74,13 +78,13 @@ export function ProjectRail(props: {
         </button>
       </div>
       <div className="ps-strip" ref={strip}>
-        <CreateTile onCreate={props.onCreate} />
+        <CreateTile onCreate={props.onCreate} disabled={!!props.createDisabled} title={props.createDisabled ?? undefined} />
         {shown.map((p) => (
           <ProjectThumb key={p.id} project={p} onOpen={props.onOpen} />
         ))}
       </div>
       {props.projects.length === 0 && (
-        <p className="ps-empty" data-pc="start-rail-empty">这个文件夹里还没有项目。点第一格的「Create A New」建一个。</p>
+        <p className="ps-empty" data-pc="start-rail-empty">{props.empty ?? "这里还没有项目。点第一格的「Create A New」建一个。"}</p>
       )}
     </section>
   );

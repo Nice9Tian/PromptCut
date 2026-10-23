@@ -1,44 +1,34 @@
 /**
  * 聊天页右边的拓展栏(用户 2026-10-23 定):标题栏右上角那颗按钮开关它。
  *
- * 三段,都能折叠 —— 形式参考用户给的那张 IDE 面板图(分段标题 + 段里一行行),内容按软件里已有的说法来:
- *   1. **画面**:播放这一版看一遍。传输控件(播放/暂停、拖动、时间)是真的,画面本身是占位色块;
- *   2. **这次改动**:一行一次操作,写「类别 · 工具名 · 耗时」加结果里的那句话 —— 和编辑器里操作详情的
- *      头一行同一个写法(`src/editor/right/chat/iconRuns.ts` 的 `KIND_LABEL`);每行一个「撤销这步」,
- *      文案和 `src/editor/sync/AgentUndoButton.tsx` 一致(撤完变「已撤销」);
- *   3. **修改前 / 修改后**:选中上面那一行带前后画面的改动,这里切着看。两个标签的叫法照
- *      `src/editor/right/chat/OpDetailPreview.tsx` 里的「修改前」「修改后」。
+ * 段落都能折叠 —— 形式参考用户给的那张 IDE 面板图(分段标题 + 段里一行行),内容按软件里已有的说法来:
+ *   1. **画面**:这个项目的真画面(`VibeStage.tsx`,即编辑界面的预览),播放条叠在画面里;段头右上角是「详细编辑」;
+ *   2. **这次改动**:用户要求先归档(见下面的 `SHOW_CHANGES`);
+ *   3. **修改前 / 修改后**:这条对话里带前后画面的改动(Agent 每次建卡、改卡、删卡留下的画面记录,
+ *      `src/editor/right/ToolVisual.tsx` 的 `useVisualRecord`,经云端 Agent 服务按当前对话的权限取),选一条切着看。
+ *      两个标签的叫法照 `src/editor/right/chat/OpDetailPreview.tsx` 的「修改前」「修改后」。
  *
- * **这一版只跑界面**:画面是按 id 哈希出来的色块,改动是 `mockChat.ts` 里写死的,「撤销这步」只改这一页上的
- * 样子。真画面要由预渲染或即时渲染给(`product/rendering.md`),改动清单和撤销要接云端文档服务。
+ * 2026-10-23 接上业务层(`docs/reports/AGENT-claude-vibe-wire.md`)。取不到画面记录时如实写原因,不放占位图。
  */
-import { useEffect, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import type { JSX } from "react";
-import { hueOf } from "./hue";
-import { changesOf, type MockChange } from "./mockChat";
+import type { ChatMessage } from "../ai/types";
+import { actions, useStore } from "../store/project";
+import { useVisualRecord, visualIdOf } from "../editor/right/ToolVisual";
+import { KIND_LABEL, bareToolName, toolKind } from "../editor/right/chat/iconRuns";
+import { partsOf } from "../mobile/agentView";
 import { EXT_WIDTH } from "./sideWidth";
+import { VibeStage, mmss } from "./VibeStage";
 import { WidthGrip } from "./WidthGrip";
-
-/** 假的片长(秒):传输控件按它走 */
-const DURATION = 15;
 
 /**
  * 「这次改动」那一段先归档,默认不显示 —— **这是用户 2026-10-23 要求的**,
  * 用户给的理由:改动已经显示在每次聊天的气泡里了(Agent 消息下面那一块「Agent 操作」),右边再列一遍是重复。
- *
- * 段落本身、假数据、「撤销这步」都原样留着,把这一行改回 true 就回来。
- * 记录另见 `docs/plan/user-decisions-2026-10-23.md`。
+ * 记录另见 `docs/plan/user-decisions-2026-10-23.md`。接业务层时这一段没有接(它本来就不显示),要加回来先问用户。
  */
 const SHOW_CHANGES = false;
 
-function section(
-  key: string,
-  title: string,
-  open: boolean,
-  toggle: () => void,
-  body: JSX.Element,
-  right?: JSX.Element,
-): JSX.Element {
+function section(key: string, title: string, open: boolean, toggle: () => void, body: JSX.Element, right?: JSX.Element): JSX.Element {
   return (
     // 钩子名带 `sec-`:不带的话「画面」这一段会和里面那颗播放键(`start-ext-play`)撞同一个名字
     <section className="ps-ext-sec" data-pc={`start-ext-sec-${key}`} data-open={open}>
@@ -54,26 +44,65 @@ function section(
   );
 }
 
-/** 占位画面:和缩略图同一路子,色相由种子哈希出来,不配图片 */
-function Frame(props: { seed: string; label?: string; children?: JSX.Element }): JSX.Element {
-  const hue = hueOf(props.seed);
+/** 这条对话里留了画面记录的改动(新增 / 删除 / 修改三类),从新到旧 */
+interface DiffEntry {
+  key: string;
+  visualId: string;
+  kind: string;
+  tool: string;
+}
+function diffEntries(messages: readonly ChatMessage[]): DiffEntry[] {
+  const out: DiffEntry[] = [];
+  for (const m of messages) {
+    if (m.role !== "assistant") continue;
+    partsOf(m).forEach((p, i) => {
+      if (p.kind !== "tool" || p.ok !== true) return;
+      const k = toolKind(p.name);
+      if (k !== "add" && k !== "remove" && k !== "edit") return;
+      const vid = visualIdOf(p.summary);
+      if (vid) out.push({ key: `${m.id}:${i}`, visualId: vid, kind: KIND_LABEL[k], tool: bareToolName(p.name) });
+    });
+  }
+  return out.reverse();
+}
+
+function DiffView(props: { entry: DiffEntry }): JSX.Element {
+  const { rec, err } = useVisualRecord(props.entry.visualId);
+  const [side, setSide] = useState<"before" | "after">("after");
+  if (err) return <p className="ps-ext-todo" title={err}>取不到这一步的画面：{err}</p>;
+  if (!rec) return <p className="ps-ext-todo">正在取这一步的画面…</p>;
+  const before = rec.before?.gif ?? null;
+  const after = rec.after?.gif ?? null;
+  if (!before && !after) return <p className="ps-ext-todo">这一步只改了参数，没有前后画面。</p>;
+  const src = side === "before" ? before : after;
   return (
-    <div
-      className="ps-ext-frame"
-      style={{ background: `linear-gradient(145deg, hsl(${hue} 52% 40%), hsl(${(hue + 38) % 360} 48% 24%))` }}
-    >
-      {props.label && <span className="ps-ext-frame-tag">{props.label}</span>}
-      {props.children}
-    </div>
+    <>
+      <div className="ps-ext-seg" role="group" aria-label="看改前还是改后">
+        {(["before", "after"] as const).map((s) => (
+          <button key={s} type="button" className="ps-ext-seg-btn" data-pc={`start-ext-${s}`} aria-pressed={side === s}
+            disabled={!(s === "before" ? before : after)} onClick={() => setSide(s)}>
+            {s === "before" ? "修改前" : "修改后"}
+          </button>
+        ))}
+      </div>
+      <div className="ps-ext-frame ps-ext-frame-img">
+        {src ? <img src={src} alt={side === "before" ? "修改前" : "修改后"} /> : <span className="ps-muted">{side === "before" ? "新加的，没有修改前" : "删掉了，没有修改后"}</span>}
+        <span className="ps-ext-frame-tag">{side === "before" ? "修改前" : "修改后"}</span>
+      </div>
+      {rec.diff && rec.diff.length > 0 && (
+        <p className="ps-ext-note" title={rec.diff.map((d) => `${d.key}: ${d.from} → ${d.to}`).join("\n")}>
+          {rec.diff.slice(0, 3).map((d) => `${d.key}：${d.from} → ${d.to}`).join("；")}
+        </p>
+      )}
+    </>
   );
 }
 
-const mmss = (sec: number) =>
-  `${String(Math.floor(sec / 60)).padStart(2, "0")}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
-
 export function ChatSidePanel(props: {
-  chatId: string;
-  projectSeed: string;
+  /** 这条对话的消息:修改前 / 修改后从这里找带画面记录的改动 */
+  messages: readonly ChatMessage[];
+  /** 「详细编辑」展开着:舞台在那边,这里不再挂第二份 */
+  detailOpen: boolean;
   onNote: (text: string) => void;
   /** 「画面」段头那颗「详细编辑」:展开占满聊天区的编辑视图(`DetailEdit.tsx`) */
   onDetail: () => void;
@@ -83,113 +112,31 @@ export function ChatSidePanel(props: {
   onWidthCommit: (px: number) => void;
   onWidthNudge: (delta: number) => void;
 }): JSX.Element {
-  const changes = changesOf(props.chatId);
-  const diffs = changes.filter((c) => c.hasDiff);
-
   const [open, setOpen] = useState({ play: true, changes: true, diff: true });
-  const [playing, setPlaying] = useState(false);
-  const [at, setAt] = useState(0);
-  const [undone, setUndone] = useState<Record<string, boolean>>({});
-  const [picked, setPicked] = useState<string | null>(diffs[0]?.id ?? null);
-  const [side, setSide] = useState<"before" | "after">("after");
-  const timer = useRef<number | null>(null);
-
-  // 换一条对话:播放、选中、撤销状态都重来
-  useEffect(() => {
-    setPlaying(false);
-    setAt(0);
-    setUndone({});
-    setPicked(changesOf(props.chatId).find((c) => c.hasDiff)?.id ?? null);
-    setSide("after");
-  }, [props.chatId]);
-
-  // 走时间。到头就停,不循环
-  useEffect(() => {
-    if (!playing) return;
-    timer.current = window.setInterval(() => {
-      setAt((t) => {
-        const next = t + 0.1;
-        if (next >= DURATION) {
-          setPlaying(false);
-          return DURATION;
-        }
-        return next;
-      });
-    }, 100);
-    return () => {
-      if (timer.current !== null) window.clearInterval(timer.current);
-      timer.current = null;
-    };
-  }, [playing]);
-
-  const changeRow = (c: MockChange) => (
-    <div key={c.id} className="ps-ext-row" data-pc="start-ext-change" data-change={c.id} data-picked={picked === c.id || undefined}>
-      <button
-        type="button"
-        className="ps-ext-row-main"
-        aria-label={`${c.kind} ${c.tool}${c.note ? `，${c.note}` : ""}`}
-        onClick={() => {
-          if (c.hasDiff) {
-            setPicked(c.id);
-            setOpen((o) => ({ ...o, diff: true }));
-          } else {
-            props.onNote(`这一步没有前后画面可比（${c.kind} · ${c.tool}）。`);
-          }
-        }}
-      >
-        <span className="ps-ext-row-top">
-          <span className="ps-ext-kind">{c.kind}</span>
-          <span className="ps-ext-tool">{c.tool}</span>
-          <span className="ps-ext-ms">{c.ms} ms</span>
-        </span>
-        {c.note && <span className="ps-ext-note">{c.note}</span>}
-      </button>
-      <button
-        type="button"
-        className="ps-ext-undo"
-        data-pc="start-ext-undo"
-        disabled={!!undone[c.id]}
-        onClick={() => {
-          setUndone((u) => ({ ...u, [c.id]: true }));
-          props.onNote("待办：撤销要以页面身份提交逆操作、进用户自己的撤销栈（见 src/editor/sync/AgentUndoButton.tsx）。");
-        }}
-      >
-        {undone[c.id] ? "已撤销" : "撤销这步"}
-      </button>
-    </div>
-  );
-
-  const pickedChange = diffs.find((c) => c.id === picked) ?? null;
+  const t = useStore((s) => s.t);
+  const playing = useStore((s) => s.playing);
+  const duration = useStore((s) => s.project.duration);
+  const diffs = useMemo(() => diffEntries(props.messages), [props.messages]);
+  const [picked, setPicked] = useState<string | null>(null);
+  const pickedEntry = diffs.find((d) => d.key === picked) ?? diffs[0] ?? null;
 
   return (
     <aside className="ps-ext" data-pc="start-ext" style={{ flexBasis: `${props.width}px` }}>
       {/* 左边那条缝:平时不画线,鼠标压上来才亮 */}
-      <WidthGrip
-        spec={EXT_WIDTH}
-        side="left"
-        width={props.width}
-        label="拓展栏宽度"
-        pc="start-ext-grip"
-        onWidth={props.onWidth}
-        onWidthCommit={props.onWidthCommit}
-        onWidthNudge={props.onWidthNudge}
-      />
+      <WidthGrip spec={EXT_WIDTH} side="left" width={props.width} label="拓展栏宽度" pc="start-ext-grip"
+        onWidth={props.onWidth} onWidthCommit={props.onWidthCommit} onWidthNudge={props.onWidthNudge} />
       {section(
         "play",
         "画面",
         open.play,
         () => setOpen((o) => ({ ...o, play: !o.play })),
-        <>
-          {/* 播放条叠在画面里(用户 2026-10-23 定):省掉画框下面那一条的高度 */}
-          <Frame seed={props.projectSeed}>
-            <>
-              <button
-                type="button"
-                className="ps-ext-play"
-                data-pc="start-ext-play"
-                aria-label={playing ? "暂停" : "播放"}
-                onClick={() => setPlaying((p) => !p)}
-              >
+        props.detailOpen ? (
+          <p className="ps-ext-todo">画面正在「详细编辑」里显示。</p>
+        ) : (
+          // 播放条叠在画面里(用户 2026-10-23 定):省掉画框下面那一条的高度
+          <VibeStage className="ps-ext-frame" pc="start-ext-stage">
+            <div className="ps-stage-over">
+              <button type="button" className="ps-ext-play" data-pc="start-ext-play" aria-label={playing ? "暂停" : "播放"} onClick={() => actions.togglePlay()}>
                 {playing ? (
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6.5" y="5" width="4" height="14" rx="1" /><rect x="13.5" y="5" width="4" height="14" rx="1" /></svg>
                 ) : (
@@ -197,74 +144,41 @@ export function ChatSidePanel(props: {
                 )}
               </button>
               <div className="ps-ext-transport">
-                <input
-                  type="range"
-                  className="ps-ext-scrub"
-                  data-pc="start-ext-scrub"
-                  min={0}
-                  max={DURATION}
-                  step={0.1}
-                  value={at}
-                  aria-label="进度"
-                  onChange={(e) => setAt(Number(e.target.value))}
-                />
-                <span className="ps-ext-time">{mmss(at)} / {mmss(DURATION)}</span>
+                <input type="range" className="ps-ext-scrub" data-pc="start-ext-scrub" min={0} max={Math.max(0.1, duration)} step={0.05}
+                  value={Math.min(t, duration)} aria-label="进度" onChange={(e) => actions.seek(Number(e.target.value))} />
+                <span className="ps-ext-time">{mmss(t)} / {mmss(duration)}</span>
               </div>
-            </>
-          </Frame>
-          <p className="ps-ext-todo" title="待办：真画面由预渲染或即时渲染给（product/rendering.md），这里现在是占位色块。">
-            待办：真画面由预渲染给，现在是占位
-          </p>
-        </>,
+            </div>
+          </VibeStage>
+        ),
         // 段头右上角那颗:原来这儿是画框里的全屏键,用户 2026-10-23 换成这个
-        <button type="button" className="ps-ext-action" data-pc="start-ext-detail" onClick={props.onDetail}>
-          详细编辑
-        </button>,
+        <button type="button" className="ps-ext-action" data-pc="start-ext-detail" onClick={props.onDetail}>详细编辑</button>,
       )}
 
-      {SHOW_CHANGES &&
-        section(
-          "changes",
-          "这次改动",
-          open.changes,
-          () => setOpen((o) => ({ ...o, changes: !o.changes })),
-          changes.length > 0 ? (
-            <div className="ps-ext-rows">{changes.map(changeRow)}</div>
-          ) : (
-            <p className="ps-ext-todo">这条对话还没有改动。</p>
-          ),
-          <span className="ps-card-count">{changes.length}</span>,
-        )}
+      {SHOW_CHANGES && section("changes", "这次改动", open.changes, () => setOpen((o) => ({ ...o, changes: !o.changes })),
+        <p className="ps-ext-todo">（这一段归档了，见文件头）</p>)}
 
       {section(
         "diff",
         "修改前 / 修改后",
         open.diff,
         () => setOpen((o) => ({ ...o, diff: !o.diff })),
-        pickedChange ? (
+        pickedEntry ? (
           <>
-            <div className="ps-ext-seg" role="group" aria-label="看改前还是改后">
-              {(["before", "after"] as const).map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  className="ps-ext-seg-btn"
-                  data-pc={`start-ext-${s}`}
-                  aria-pressed={side === s}
-                  onClick={() => setSide(s)}
-                >
-                  {s === "before" ? "修改前" : "修改后"}
-                </button>
-              ))}
-            </div>
-            <Frame
-              seed={`${pickedChange.id}-${side}`}
-              label={side === "before" ? "修改前" : "修改后"}
-            />
-            <p className="ps-ext-note">{pickedChange.note}</p>
+            {diffs.length > 1 && (
+              <div className="ps-ext-rows" role="listbox" aria-label="带前后画面的改动">
+                {diffs.slice(0, 12).map((d) => (
+                  <button key={d.key} type="button" className="ps-ext-row-main" data-pc="start-ext-change" data-picked={d.key === pickedEntry.key || undefined}
+                    aria-selected={d.key === pickedEntry.key} onClick={() => setPicked(d.key)}>
+                    <span className="ps-ext-row-top"><span className="ps-ext-kind">{d.kind}</span><span className="ps-ext-tool">{d.tool}</span></span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <DiffView key={pickedEntry.key} entry={pickedEntry} />
           </>
         ) : (
-          <p className="ps-ext-todo">这条对话还没有带前后画面的改动。</p>
+          <p className="ps-ext-todo" data-pc="start-ext-diff-empty">这条对话还没有带前后画面的改动。</p>
         ),
       )}
     </aside>
