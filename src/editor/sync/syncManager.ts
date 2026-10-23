@@ -684,7 +684,7 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
   patch({ offlineStore: account || !ONLINE ? "saved" : "page" });
   // 云端 Agent 的身份跟着共享项目的连接走:接上就绪,回本机空间撤掉(界面据此重取一次 info 与对话列表)
   setCloudIdentity(kind === "shared" && !account ? cloudIdentityOf(link) : null);
-  setCloudConsentSource(kind === "shared" && accountClient ? { client: accountClient, accountId: accountClient.account?.id ?? "" } : null);
+  setCloudConsentSource(kind === "shared" && accountClient ? { client: accountClient, accountId: accountClient.principal?.id ?? "" } : null);
   if (kind !== "shared") clearHostedAgent();
   if (kind === "shared" && !ONLINE_BUILD && !ONLINE) {
     const descriptor = currentAssociation();
@@ -722,12 +722,12 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
  */
 function bindAccountEditorSide(link: SyncLink, docProjectId: string, url: string, client: CloudAccountClient) {
   releaseAgentSide();
-  const accountId = client.account?.id;
+  const accountId = client.principal?.id;
   bindCardSync({ kind: "shared", projectId: docProjectId, url, account: true }, getState().project, {
     ...cardSyncHooks,
     ticket: accountCardTicket({
       session: (projectId) => client.session(projectId),
-      isCurrent: () => cur?.link === link && !!accountId && client.account?.id === accountId,
+      isCurrent: () => cur?.link === link && !!accountId && client.principal?.id === accountId,
       stop: detachCardSync,
     }),
   });
@@ -1450,8 +1450,8 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
   const origin = new URL(options.origin).origin, base = `${origin}/hosted/`, url = hostedWsUrlOf(base);
   let current = options.firstSession ?? await options.client.session(options.projectId);
   let first = true, stopped = false, renewing: Promise<ProjectSession> | null = null;
-  const projectAccountId = options.client.account?.id;
-  const isCurrent = () => !stopped && cur?.link === link && options.client.account?.id === projectAccountId;
+  const projectAccountId = options.client.principal?.id;
+  const isCurrent = () => !stopped && cur?.link === link && options.client.principal?.id === projectAccountId;
   /** 本页自己正在改托管方服务的开关(改完续会话读到新状态时不给自己弹「创建者关闭了…」) */
   let ownHostedChange = 0;
   const projectSession = (value: ProjectSession) => {
@@ -1522,7 +1522,9 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
       if (ready) { if (!stopped && cur?.link === link) { resyncPresenceLink(); link.send({ type: 'events.list', projectId: options.projectId }); refreshStatus(); } return; }
       await sharedStateReady(link);
       if (stopped) return;
-      const account = options.client.account;
+      // 以谁的身份进:账号或游客(`client.principal`)。原先看 `client.account`,游客那里必是 null,
+      // 游客点自己的项目必报「请先登录账号。」(claude/guest-enter,0.7.21 线上实测)
+      const account = options.client.principal;
       if (!account) throw new AccountFailure(401, 'login-required');
       options.guard?.(link.ds.project);
       recoveryCoordinator.cancel(); releaseHolding(); setAssociation(null); clearSharedResume();

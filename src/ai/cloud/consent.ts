@@ -26,7 +26,7 @@ export function setCloudConsentSource(next: Source | null) {
       if (source !== bound) return;
       generation++;
       requestSeq++;
-      publish({ accountId: bound.client.account?.id === bound.accountId ? bound.accountId : null,
+      publish({ accountId: bound.client.principal?.id === bound.accountId ? bound.accountId : null,
         bindingVersion: generation, accepted: null, pending: false, error: null });
     });
   }
@@ -34,11 +34,11 @@ export function setCloudConsentSource(next: Source | null) {
 
 function boundSource() {
   const bound = source;
-  if (!bound || bound.client.account?.id !== bound.accountId) throw new AccountFailure(401, "login-required");
+  if (!bound || bound.client.principal?.id !== bound.accountId) throw new AccountFailure(401, "login-required");
   return { bound, generation };
 }
 function stillBound(bound: Source, revision: number) {
-  if (source !== bound || generation !== revision || bound.client.account?.id !== bound.accountId) throw new AccountFailure(401, "credential-revoked");
+  if (source !== bound || generation !== revision || bound.client.principal?.id !== bound.accountId) throw new AccountFailure(401, "credential-revoked");
 }
 function assertBinding(expected?: CloudConsentBinding) {
   if (expected && (state.accountId !== expected.accountId || state.bindingVersion !== expected.bindingVersion))
@@ -112,7 +112,7 @@ export async function grantCloudConsent(expected: CloudConsentBinding): Promise<
   const accepted = fresh || (state.accepted === true && state.accountId === expected.accountId);
   if (!fresh || state.accepted !== true || state.pending) return { accepted, permit: null };
   const bound = source;
-  if (!bound || bound.client.account?.id !== bound.accountId || bound.accountId !== expected.accountId || generation !== expected.bindingVersion)
+  if (!bound || bound.client.principal?.id !== bound.accountId || bound.accountId !== expected.accountId || generation !== expected.bindingVersion)
     return { accepted, permit: null };
   const permit: CloudConsentPermit = Object.freeze({ binding: Object.freeze({ ...expected }) });
   permits.set(permit, { bound, generation, request: requestSeq, issuedAt: clock(), used: false });
@@ -137,7 +137,7 @@ function spendPermit(expected: CloudConsentBinding, permit: CloudConsentPermit):
   const age = clock() - record.issuedAt;
   return permit.binding.accountId === expected.accountId && permit.binding.bindingVersion === expected.bindingVersion &&
     source === record.bound && generation === record.generation && generation === expected.bindingVersion &&
-    record.bound.accountId === expected.accountId && record.bound.client.account?.id === expected.accountId &&
+    record.bound.accountId === expected.accountId && record.bound.client.principal?.id === expected.accountId &&
     requestSeq === record.request &&
     state.accountId === expected.accountId && state.bindingVersion === expected.bindingVersion && state.accepted === true && !state.pending &&
     age >= 0 && age <= CLOUD_CONSENT_PERMIT_TTL_MS;
