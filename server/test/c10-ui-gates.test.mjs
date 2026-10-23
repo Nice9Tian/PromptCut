@@ -184,14 +184,18 @@ const ratchet = ratchetGate();
 // account-binding-task.md / account-binding-contract.md：独立固定官网同源账号入口，
 // editor/ 是动态拼接的产物字面量，不能使其它 editor 子路径获得许可。
 /*
- * 2026-10-24 网盘导入（`claude/drive-connector`）：在线产物里新出现的三条。
- * **单开一桶，不塞进旧本机那一份**——旧基线的规矩是「只许删、不许扩」，往里加会把这条规矩废掉。
- * 照账号入口的先例：逐条精确登记、不按前缀放行。源码里另有 `storage/config`、`storage/connections`，
- * 在线产物里扫不到字面量，故意不登记；哪天扫到了这道门会红，再有意登记。
+ * 网盘导入（`/api/media/storage/*`）在在线产物里**一条都不许有**，所以这一桶是空的。
+ *
+ * 经过：2026-10-24 合网盘连接器时，connect / disconnect / import 三条字面量进了在线产物，
+ * 我当时在这里登记了三条把门弄绿——那是治标。这些口由**本机编辑器进程**发，在线页面没有对端，
+ * 本来就不该打进在线产物。同日 `claude/drive-connector` 给了治本的改法（`src/editor/io/storageImport.ts`
+ * 三个函数开头内联 `if (!storageImportSupported) throw …`，在线构建里那是编译期常量 false，
+ * 打包器据此把代码连同字面量一并剪掉），于是这一桶清空。
+ *
+ * 空桶不是「不管」：下面的 `added` 判定把任何 `/api/media/storage/` 开头的路径都算成未许可，
+ * 所以哪天它们又漏进在线产物，这道门立刻红——比登记三条更严。
  */
-const STORAGE_PATHS = [
-  '/api/media/storage/connect', '/api/media/storage/disconnect', '/api/media/storage/import',
-];
+const STORAGE_PATHS = [];
 
 const ACCOUNT_PATHS = [
   '/api/account/cloud-agent-consent',
@@ -213,7 +217,7 @@ test('C10-RA-03 project members has one separate exact hosted path without enlar
 function assertRatchet(paths, baseline) {
   assert.ok(Array.isArray(paths), `${RATCHET_FILE} 应有 paths 数组`);
   assert.deepEqual(baseline.accountPaths, ACCOUNT_PATHS, '账号许可必须是固定8条，不能扩为前缀');
-  assert.deepEqual(baseline.storagePaths, STORAGE_PATHS, '网盘导入许可必须逐条精确，不能扩为前缀');
+  assert.deepEqual(baseline.storagePaths, STORAGE_PATHS, '网盘路径一条都不许进在线产物');
   assert.equal(new Set(paths).size, paths.length, '清单里有重复');
   const legacy = new Set(baseline.paths);
   assert.ok(baseline.paths.every((p) => !p.startsWith('/api/account/')), '旧基线不能夹带账号许可');
@@ -223,7 +227,7 @@ function assertRatchet(paths, baseline) {
     : !legacy.has(p));
   assert.deepEqual(added, [], `棘轮清单多出了未许可的路径：${added.join(', ')}`);
   assert.deepEqual(paths.filter((p) => p.startsWith('/api/account/')), ACCOUNT_PATHS, '账号产物清单逐条精确登记');
-  assert.deepEqual(paths.filter((p) => p.startsWith('/api/media/storage/')), STORAGE_PATHS, '网盘产物清单逐条精确登记');
+  assert.deepEqual(paths.filter((p) => p.startsWith('/api/media/storage/')), STORAGE_PATHS, '在线产物里不许出现网盘路径');
 }
 test('C10-RA-01 旧本机 /api 只减不增、账号入口固定11条、不重复', { skip: ratchet.ok ? false : ratchet.reason }, () => {
   const list = JSON.parse(fs.readFileSync(repoPath(RATCHET_FILE), 'utf8'));
