@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createAccountClient, projectIdFromLink, projectLink } from './client.ts';
+import { createAccountClient, linkTokenFromLink, projectIdFromLink, projectLink } from './client.ts';
 
 const account = { id: 'acc_' + 'a'.repeat(24), name: 'Alice' };
 const projectId = 'sp_' + 'a'.repeat(26);
@@ -129,6 +129,23 @@ test('project links are bound to one trusted origin, never carry credential mate
   assert.throws(() => projectIdFromLink(`https://attacker.example/editor?project=${projectId}`, 'https://visuhive.com'));
   assert.throws(() => projectIdFromLink('https://user:pass@visuhive.com/editor?project=' + projectId, 'https://visuhive.com'));
   assert.throws(() => projectIdFromLink('missing', 'https://visuhive.com'));
+});
+
+test('generated links carry no software version: direct address without a token, share link with one; old links still parse', () => {
+  const token = 'AbCdEfGhIjKlMnOpQrStUv';
+  assert.equal(projectLink('https://visuhive.com/whatever', projectId), `https://visuhive.com/editor/p/${projectId}`);
+  assert.equal(projectLink('https://visuhive.com', projectId, token), `https://visuhive.com/editor/s/${projectId}/${token}`);
+  assert.equal(projectIdFromLink(projectLink('https://visuhive.com', projectId, token), 'https://visuhive.com'), projectId);
+  assert.equal(linkTokenFromLink(projectLink('https://visuhive.com', projectId, token)), token);
+  assert.equal(linkTokenFromLink(projectLink('https://visuhive.com', projectId)), undefined);
+  // 旧链接照常能用
+  assert.equal(projectIdFromLink(`https://visuhive.com/editor?project=${projectId}&token=${token}`, 'https://visuhive.com'), projectId);
+  assert.equal(linkTokenFromLink(`https://visuhive.com/editor?project=${projectId}&token=${token}`), token);
+  assert.equal(linkTokenFromLink(`https://visuhive.com/editor?project=${projectId}&linkToken=${token}`), token);
+  assert.equal(linkTokenFromLink(projectId), undefined);
+  // 新形式同样只认当前云端服务的源
+  assert.throws(() => projectIdFromLink(`https://attacker.example/editor/p/${projectId}`, 'https://visuhive.com'));
+  assert.throws(() => projectIdFromLink(`https://visuhive.com/editor/p/${projectId}/extra`, 'https://visuhive.com'));
 });
 
 test('logout failures preserve the visible authenticated state; only confirmed exit or native401 clears it', async () => {

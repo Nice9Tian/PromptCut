@@ -15,11 +15,15 @@
  * 探针与测试读它断言「一条都没有」或「都被拦下了」。
  *
  * 判定只看路径：同源、路径以 `/api/` 开头，或以构建的 `base`（在线构建是 `/editor/`）加 `api/` 开头
- * （相对地址 `api/x` 在 `/editor/` 页面上会解析到 `/editor/api/x`）。别的源（素材服务、托管端）不管。
+ * （相对地址 `api/x` 在 `/editor/` 页面上会解析到 `/editor/api/x`；在项目直达地址、分享链接的页面上解析到
+ * `/editor/p/api/x`、`/editor/s/<项目号>/api/x`，同样拦）。别的源（素材服务、托管端）不管。
  *
  * 本文件不引 `mode.ts`：由 `main.tsx` 在 `ONLINE` 时调 `installApiGuard()`；判定函数在 Node 单测里也能直接用。
  * 0.7.18官网账号Cookie接口是精确fetch例外，仅顶层编辑器页可用；舞台、未知账号路径及其它通道仍拒。
+ * 编辑器页指 `/editor/`（及 `/editor`、`/editor/index.html`），2026-10-23 起也包括同一个编辑器页的
+ * 项目直达地址与分享链接（`projectAddress.ts`；`docs/semantics/mechanism/platforms.md`「项目地址」）。
  */
+import { readProjectAddress } from "./projectAddress.ts";
 
 export interface ApiGuardOptions {
   /** 页面地址（相对地址按它解析）；缺省 `location.href` */
@@ -47,6 +51,9 @@ export function apiPathOf(input: unknown, { href, base = "/" }: ApiGuardOptions 
   if (u.origin !== pageOrigin) return null;
   const b = base.endsWith("/") ? base : `${base}/`;
   if (u.pathname.startsWith("/api/") || u.pathname === "/api" || (b !== "/" && u.pathname.startsWith(`${b}api/`))) return u.pathname;
+  // 项目直达地址、分享链接的页面上，相对地址 `api/x` 落在 `<base>p/api/x`、`<base>s/<号>/api/x`
+  // （页面地址末尾带斜杠时再深一层：`<base>p/<号>/api/x`、`<base>s/<号>/<令牌>/api/x`）
+  if (b !== "/" && u.pathname.startsWith(b) && /^(?:p(?:\/[^/]+)?|s\/[^/]+(?:\/[^/]+)?)\/api\//.test(u.pathname.slice(b.length))) return u.pathname;
   return null;
 }
 
@@ -63,7 +70,9 @@ function accountFetchAllowed(path: string, input: RequestInfo | URL, init: Reque
   if (requested.origin !== page.origin) return false;
   const base = options.base ?? '/';
   const root = base.endsWith('/') ? base : `${base}/`;
-  if (![root, root.slice(0, -1) || '/', `${root}index.html`].includes(page.pathname) || page.searchParams.has('stage')) return false;
+  // 编辑器页：`/editor/`（及 `/editor`、`/editor/index.html`），或同一个编辑器页的项目直达地址、分享链接
+  const editorPage = [root, root.slice(0, -1) || '/', `${root}index.html`].includes(page.pathname) || readProjectAddress(page, root) !== null;
+  if (!editorPage || page.searchParams.has('stage')) return false;
   const members = path === '/hosted/shared/account/members';
   const expected = members ? 'POST' : path === '/api/account/me' || path === '/api/account/projects' ? 'GET' :
     ['/api/account/login', '/api/account/logout', '/api/account/editor/session', '/api/account/editor/renew'].includes(path) ? 'POST' : null;

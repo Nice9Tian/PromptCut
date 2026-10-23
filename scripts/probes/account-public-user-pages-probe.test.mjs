@@ -131,6 +131,8 @@ test('resource diagnostics discard query/header secrets and visible link has a s
   assert.equal(resourceMetadata('https://evil/editor/x', 'script', 200, 'text/javascript'), null);
   assert.equal(resourceMetadata('https://visuhive.com/api/account/me?secret=x', 'fetch', 200, 'application/json'), null);
   assert.equal(projectFromVisibleLink(`项目链接：https://visuhive.com/editor?project=sp_${'a'.repeat(26)}`).projectId, `sp_${'a'.repeat(26)}`);
+  assert.equal(projectFromVisibleLink(`项目链接：https://visuhive.com/editor/p/sp_${'a'.repeat(26)}`).projectId, `sp_${'a'.repeat(26)}`);
+  assert.equal(projectFromVisibleLink(`项目链接：https://visuhive.com/editor/s/sp_${'a'.repeat(26)}/tok-en_1`).projectId, `sp_${'a'.repeat(26)}`);
   assert.throws(() => projectFromVisibleLink(`https://evil/editor?project=sp_${'a'.repeat(26)}`));
   const identities = testIdentities(); assert.ok(identities.accounts.every(a => a.name.startsWith(identities.marker) && a.password.length >= 32));
   assert.notEqual(identities.accounts[0].password, identities.accounts[1].password);
