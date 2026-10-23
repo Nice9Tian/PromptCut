@@ -78,6 +78,8 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
    * 不进编辑器,在这一页打开这个项目的聊天页。用 ref 转一道,免得进行到一半的异步流程拿着旧的回调
    */
   const entered = useRef<() => void>(() => {});
+  /** 这一次点的是缩略图卡片(要进传统式)时记下项目号;侧栏点进来的是 null */
+  const toClassic = useRef<string | null>(null);
   const ap = useAccountProjects({ online: true, onEnterEditor: () => entered.current() });
   const shared = useSync((s) => s.shared);
   const blocked = useSync((s) => s.blocked);
@@ -120,6 +122,8 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
     setChatPage(true);
     setJoin(null);
     setNotice("");
+    // 缩略图卡片点进来的:连上了就直接切传统式(聊天页的状态留在底下,和点「进入传统式」时一样)
+    if (toClassic.current === id) { toClassic.current = null; props.onEnterEditor(); }
   };
 
   const signedIn = !!(ap.account || ap.guest);
@@ -161,10 +165,18 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
   /* ---------------- 动作 ---------------- */
   const failText = (e: unknown, fallback: string) => (e instanceof Error && e.message ? e.message : fallback);
 
-  /** 点进一个项目。已经连着就直接回它的聊天页;设了二级密码而还没输过:打开「用链接加入」要密码 */
-  const openProject = (id: string) => {
+  /**
+   * 点进一个项目。已经连着就直接回它的聊天页;设了二级密码而还没输过:打开「用链接加入」要密码。
+   *
+   * `intoClassic` 为真时进去之后直接切**传统式**(打开编辑界面)——「最近项目」那一排的缩略图卡片走这条
+   * (2026-10-23 用户定,原话:「红色区域是项目卡片，点击这个位置的卡片会进入传统式」)。
+   * 侧栏的项目条目不带这个开关,仍然停在聊天页:那边是氛围式里管项目、接着上次对话的地方。
+   * 真正切过去在 `entered.current` 里做——要等项目连上(`enterAccountProject` 走完)才算数。
+   */
+  const openProject = (id: string, intoClassic = false) => {
     if (!signedIn) { setNotice("先登录账号或以游客身份进入。"); return; }
-    if (openId === id && connectedId === id) { setChatPage(true); return; }
+    toClassic.current = intoClassic ? id : null;
+    if (openId === id && connectedId === id) { if (intoClassic) props.onEnterEditor(); else setChatPage(true); return; }
     const p = projects.find((x) => x.id === id);
     setNotice("");
     void ap.perform(async () => {
@@ -528,7 +540,7 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
                 resetKey={scopeKeyOf(scope)}
                 onCreate={createBlank}
                 createDisabled={createBlocked}
-                onOpen={openProject}
+                onOpen={(id) => openProject(id, true)}
                 empty={railEmpty}
               />
             </div>
