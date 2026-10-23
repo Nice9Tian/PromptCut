@@ -398,10 +398,14 @@ PROMPTCUT_GOOGLE_REDIRECT_URI=https://<主站域名>/oauth2callback
 | 环境 | 值 | 状态 |
 |---|---|---|
 | 开发机 | `http://localhost:5321/oauth2callback` | 已登记 |
-| 生产（主站） | `https://<主站域名>/oauth2callback` | **待登记** |
+| 生产（主站） | `https://visuhive.com/oauth2callback` | 2026-10-24 已填进控制台，待用户点保存 |
 | 桌面版 | 不需要（不走 A2） | — |
 
 控制台改完「可能需要 5 分钟到几小时才生效」，**要赶在部署之前加**，别等部署当天。
+
+**为什么是 `visuhive.com` 而不是 `hosted.visuhive.com`**：在线编辑器是静态产物，由 nginx 从 `/opt/promptcut-hosted` 发在 `https://visuhive.com/editor`；`hosted.visuhive.com/editor` 会 301 到前者。重定向地址必须和页面自己的来源同源，所以取 `visuhive.com`。JavaScript 来源 `https://visuhive.com` 登录那条线已经登记过了，不用再加。
+
+**部署待办：生产上还没有人发 `/oauth2callback`。** `nginx-site-promptcut.conf` 里只有 `/hosted`、`/media`、`/editor`、`/catalog` 这几处。好在**落地页是纯静态 HTML**（只读 `location.search` 再 `postMessage`，没有任何服务端逻辑），所以不需要把请求代理给节点——加一个 location、发一个静态文件就够。真要部署 A2 时一并做。
 
 ### 10.5 轮换
 
