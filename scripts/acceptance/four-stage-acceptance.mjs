@@ -27,9 +27,14 @@
  *   services/      dev server、在线构建的日志
  *   dist-online/   在线构建产物(多项探针共用,带 .built-from 标记)
  *
- * 服务与端口(都在分给本脚本的 5690～5699 里):共享 dev server 占 --dev-port 起 3 个(缺省 5690～5692),
+ * 服务与端口(主要那几台在分给本脚本的 5690～5699 里):共享 dev server 占 --dev-port 起 3 个(缺省 5690～5692),
  * main 基准树的 dev server 占 --dev-main-port 起 3 个(缺省 5693～5695)。不需要 dev 的项开始前,上一台 dev 先停掉,
  * 把 5690～5699 让给探针自己起的东西。5190～5192、5210～5212 是用户在跑的,脚本不碰。
+ *
+ * 另有一台**在线浏览器模式**的 dev server(服务名 `dev-online`,`VITE_PC_ONLINE=1`),只给点名要它的项,
+ * 占 --dev-online-port 起 3 个(缺省 5970～5972)。它和 `dev` 是两台:`dev` 不是在线模式,现有项用的
+ * `{dev.origin}` 一个字不变,免得整套里别的项跟着改走在线那一支。要在线的项写 `needs: ['dev-online']`、
+ * 用 `{dev-online.origin}`。5690～5699 已经排满(5696 远端口、5697 调试口、5698 Agent 口),所以落在 5970 这一段。
  *
  * main 基准树(像素比对用):`git worktree add --detach <主工作区>/.worktrees/acceptance-main-baseline <main-ref>`,
  * 依赖往上解析到主工作区的 node_modules,不建 junction、不 npm ci。结束时按 `verification.md`「会造成真实损失的操作」删除:
@@ -193,6 +198,9 @@ function runCommand({ cmd, cwd, env, logFile, timeoutMin, idleKillMin, label }) 
 
 /* ------------------------------------------------------------------ 服务 */
 
+/** 按需起停的那几台 dev server:谁都占 3 个端口,一项不要就停掉 */
+const DEV_SERVICES = ['dev', 'dev-main', 'dev-online'];
+
 class Services {
   constructor(ctx) { this.ctx = ctx; this.live = new Map(); }
 
@@ -212,6 +220,14 @@ class Services {
       const s = await startDevServer({ port: ctx.opts.devPort, logFile: path.join(svcDir, 'dev.log'), log });
       activePids.add(s.pid);
       return { vars: { 'dev.origin': s.origin, 'dev.port': s.port }, stop: () => { activePids.delete(s.pid); s.stop(); } };
+    }
+    if (name === 'dev-online') {
+      // 在线浏览器模式那一台(`VITE_PC_ONLINE=1`)。和 `dev` 分开起:`dev` 是桌面那一支,两者不能互相顶替
+      const port = ctx.opts.devOnlinePort;
+      log(`起在线模式 dev server(${port}～${port + 2})`);
+      const s = await startDevServer({ port, online: true, logFile: path.join(svcDir, 'dev-online.log'), log });
+      activePids.add(s.pid);
+      return { vars: { 'dev-online.origin': s.origin, 'dev-online.port': s.port }, stop: () => { activePids.delete(s.pid); s.stop(); } };
     }
     if (name === 'main-worktree') return this.startMainWorktree();
     if (name === 'dev-main') {
@@ -289,11 +305,17 @@ class Services {
     return { vars: { main: dir }, stop };
   }
 
+  /** 停一台 dev server（没起就不做事）。停这件事只走这一条路，好让日志上看得见是谁被停了 */
+  stopDev(name) {
+    const svc = this.live.get(name);
+    if (!svc) return;
+    log(`停 ${name} dev server`);
+    try { svc.stop(); } catch { /* 已退出 */ }
+    this.live.delete(name);
+  }
+
   stopDevs() {
-    for (const name of ['dev', 'dev-main']) {
-      const svc = this.live.get(name);
-      if (svc) { log(`停 ${name} dev server`); try { svc.stop(); } catch { /* 已退出 */ } this.live.delete(name); }
-    }
+    for (const name of DEV_SERVICES) this.stopDev(name);
   }
 
   stopAll() {
@@ -550,11 +572,9 @@ async function main() {
       if (pr && !DONE_VERDICTS.has(pr.verdict)) return { ...rec, verdict: 'blocked', reasons: [`前置 ${p} 没过(${pr.verdict})`], logs: [] };
     }
     const needs = new Set(item.needs || []);
-    if (!needs.has('dev') && !needs.has('dev-main')) services.stopDevs();
-    else {
-      if (!needs.has('dev') && services.live.has('dev')) { services.live.get('dev').stop(); services.live.delete('dev'); }
-      if (!needs.has('dev-main') && services.live.has('dev-main')) { services.live.get('dev-main').stop(); services.live.delete('dev-main'); }
-    }
+    // 这一项不要的那几台 dev server 先停掉:它们各占 3 个端口,留着会把后面自己起服务的探针挤掉。
+    // 一台都不要时等于全停,所以不用再分两种写法
+    for (const d of DEV_SERVICES) if (!needs.has(d)) services.stopDev(d);
     const startedMs = Date.now();
     try {
       for (const n of needs) Object.assign(vars, await services.ensure(n));
