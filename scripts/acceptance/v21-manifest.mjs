@@ -13,6 +13,9 @@
  * `cut-online-browser-probe`、`account-direct-address-probe`、`update-notice-probe` 三支写进了
  * `v19-manifest.mjs` 的 `V19_EXCLUDED`（排除、不跑）。本文件把它们登记成**会跑的验收项**，更严。
  * 两边合并时**以本文件为准**：把那三行从 `V19_EXCLUDED` 里去掉，保留这里的 V21 项。
+ * 那条分支还给 `coverageReport()` 加了一条新检查——同一支探针**既被清单项 `covers` 点名、又写在排除表里**就判红
+ * （原先静默通过）。所以上面那三行不去掉，合完守门必红；去掉即通过。它基准（`2249179a`）之后合进来的探针
+ * （`media-cache-probe`、`guest-readonly-ui-probe`、`drive-range-probe.html` 等）它那边没有，合完按它报出来的未登记项补即可。
  *
  * 端口：这三支探针各自限定了自己的端口段（`update-notice-probe` 只认 6410～6419，
  * `account-direct-address-probe` 的夹具缺省 6430 起，`cut-online-browser-probe` 缺省 5910 起），
