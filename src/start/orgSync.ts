@@ -1,5 +1,5 @@
 /**
- * 云端分组的同步引擎(裁定 V22-05～09,设计见 `docs/reports/AGENT-claude-groups-local-cloud.md`「方案」)。
+ * 云端分组的同步引擎(裁定 V22-05～09,设计见 `docs/archive/agent-reports/AGENT-claude-groups-local-cloud.md`「方案」)。
  *
  * 云端存的是整份 `OrgState`(`realm: "cloud"`),按账号一份,接口是 `POST /hosted/shared/account/start-org` 的 `get` / `put`。
  * 本文件只管同步的逻辑,**不碰 React、不碰网络、不碰存储、不碰计时器**:这四样都由调用方注入,所以可以不起服务就单测
