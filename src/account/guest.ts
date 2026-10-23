@@ -22,12 +22,20 @@ export const GUEST_ID_RE = /^gst_[0-9a-f]{24}$/;
  * `videos` 只数视频（小档预览不算），图片、音频不计数；`assetMB` 是每一条源文件（不管什么类型）的上限。
  * 这里只是为了在界面上先讲清楚，省得人传到一半被拒。两边的数必须一致，`guest.test.mjs` 有一条守着。
  */
-export const GUEST_LIMITS = Object.freeze({ projects: 1, videos: 3, assetMB: 100, ttlDays: 3 });
+export const GUEST_LIMITS = Object.freeze({ projects: 1, conversations: 1, videos: 3, assetMB: 100, ttlDays: 3 });
 
 /** 进来之前先说清楚游客能干到哪一步，免得做了一半才发现存不住 */
 export const GUEST_LIMITS_TEXT =
-  `游客可以建 ${GUEST_LIMITS.projects} 个项目、传 ${GUEST_LIMITS.videos} 条视频（每条源文件不超过 ${GUEST_LIMITS.assetMB} MB），` +
+  `游客可以建 ${GUEST_LIMITS.projects} 个项目、每个项目里开 ${GUEST_LIMITS.conversations} 个 Agent 对话、传 ${GUEST_LIMITS.videos} 条视频（每条源文件不超过 ${GUEST_LIMITS.assetMB} MB），` +
   `${GUEST_LIMITS.ttlDays} 天后自动清理；进别人的项目只能查看。要长期保存，注册一个账号。`;
+
+/**
+ * 游客想在项目里再开一个 Agent 对话时界面给的那一句（2026-10-23 用户定「游客每个项目只能开一个会话」）。
+ * 服务端拒新建时回 `guest-chat-limit`，`cloudErrorText` 译成这一句；界面上的「新对话」入口置灰时的说明也是这一句。
+ * 数从 `GUEST_LIMITS` 拼；和服务端 `GUEST_ERROR_TEXT['guest-chat-limit']` 说的是同一件事，两边的数由 `guest.test.mjs` 守着一致。
+ */
+export const GUEST_CHAT_LIMIT_TEXT =
+  `游客在每个项目里只能开 ${GUEST_LIMITS.conversations} 个 Agent 对话，你已经开过了：在「对话历史」里点它就能接着聊。要多开，请注册一个账号。`;
 
 /** 身份在本机存哪儿。带版本号：以后字段改了，老的直接当没有、重新随机，不去写迁移 */
 export const GUEST_STORAGE_KEY = 'pc.guest.v1';

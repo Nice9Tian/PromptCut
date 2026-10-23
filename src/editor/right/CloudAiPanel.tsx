@@ -214,6 +214,11 @@ export function CloudAiPanel(props: {
   const start = useStartPage(tabId, inputText, setInputText, () => { requestAnimationFrame(() => textareaRef.current?.focus()); }, chat.messages.length > 0);
   // 这个项目只给了只读权限(游客):输入区整个置灰(Composer 的 readOnly),发送路径也在 handleSend 里兜底
   const ro = useReadOnly();
+  // 游客每个项目只能开一个对话（2026-10-23 用户定）：他已经有一个了，「新对话」入口置灰、说明写在悬停和提示条里；
+  // 此刻看的还是一段没发过的新对话（回来时记不得上次的那个、列表里没有它），输入区也置灰、指到「对话历史」去接着聊那一个。
+  // 真正拦的是服务端（`guest-chat-limit`），这里只是不让他白写一段话
+  const guestChatFull = cloud.accountMode && chat.history.guest && chat.history.atLimit;
+  const guestNoNewChat = guestChatFull && !chat.history.items.some((x) => x.id === chat.conversationId);
   /* 附件:选文件 → 逐个上传到云端这个对话的工作目录(显示上传中)→ 发消息时把传好的带上。失败给出原因,可点一下重试、可移除 */
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -760,7 +765,9 @@ export function CloudAiPanel(props: {
       )}
 
       {cloud.accountMode && chat.history.atLimit && !chat.history.items.some((x) => x.id === chat.conversationId) && (
-        <div className="ai-banner" data-pc="cloud-limit-note" role="status">{CLOUD_CHAT_TEXT.limitComposer}</div>
+        <div className="ai-banner" data-pc={chat.history.guest ? "cloud-guest-chat-limit" : "cloud-limit-note"} role="status">
+          {chat.history.guest ? CLOUD_CHAT_TEXT.guestLimit : CLOUD_CHAT_TEXT.limitComposer}
+        </div>
       )}
       {chat.notice && (
         <div className="ai-toast" data-pc="cloud-notice" role="alert" onClick={chat.clearNotice} title="点一下关掉">{chat.notice}</div>
@@ -776,8 +783,8 @@ export function CloudAiPanel(props: {
         textareaRef={textareaRef}
         attachments={attachments}
         uploading={false}
-        disabled={Boolean(view.revoked)}
-        disabledReason={view.revoked ? "当前账号已无法读取这个对话，请重新选择有权限的对话。" : undefined}
+        disabled={Boolean(view.revoked) || guestNoNewChat}
+        disabledReason={view.revoked ? "当前账号已无法读取这个对话，请重新选择有权限的对话。" : guestNoNewChat ? CLOUD_CHAT_TEXT.guestLimit : undefined}
         readOnly={ro.locked}
         readOnlyReason={ro.why}
         onPickFiles={() => fileInputRef.current?.click()}
@@ -802,6 +809,7 @@ export function CloudAiPanel(props: {
           canDiagnose: chat.messages.length > 0,
           onOpenDiagnostics: openDiagnostics,
           onNewChat: () => chat.newChat(),
+          ...(guestChatFull ? { newChatDisabledReason: CLOUD_CHAT_TEXT.guestLimit } : {}),
         }}
         cloud={{
           show: true,
@@ -834,9 +842,11 @@ export function CloudAiPanel(props: {
         onPick={() => {}}
         onDelete={() => {}}
         onNewChat={() => { chat.newChat(); setHistoryOpen(false); }}
+        {...(guestChatFull ? { newChatDisabledReason: CLOUD_CHAT_TEXT.guestLimit } : {})}
         hideLocal
         cloud={{ items: historyItems, loading: chat.history.loading, currentId: chat.conversationId, onPick: (id) => { chat.openChat(id); setHistoryOpen(false); },
-          ...(cloud.accountMode ? { canDelete: canDeleteChat, onDelete: askDelete, limitReached: chat.history.atLimit, ownedCount: chat.history.ownedCount } : {}) }}
+          ...(cloud.accountMode ? { canDelete: canDeleteChat, onDelete: askDelete, limitReached: chat.history.atLimit, ownedCount: chat.history.ownedCount, limit: chat.history.limit,
+            ...(chat.history.guest ? { limitText: CLOUD_CHAT_TEXT.guestLimit } : {}) } : {}) }}
       />
     </aside>
   );

@@ -27,7 +27,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { JSX } from "react";
 import { useAccountProjects } from "../account/useAccountProjects";
-import { GUEST_LIMITS, GUEST_LIMITS_TEXT } from "../account/guest";
+import { GUEST_CHAT_LIMIT_TEXT, GUEST_LIMITS, GUEST_LIMITS_TEXT } from "../account/guest";
 import { currentDocProjectId, forgetSharedResume, useSync } from "../editor/sync/syncManager";
 import { importMediaFiles, MEDIA_ACCEPT } from "../editor/left/importAssets";
 import { SyncOverlays } from "../editor/sync/SyncOverlays";
@@ -453,8 +453,11 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
             if (chat.id !== vibe.chat.conversationId) vibe.chat.openChat(chat.id);
             setChatPage(true);
           }}
+          newChatBlocked={(projectId) => (projectId === openId && vibe.chat.history.guest && vibe.chat.history.atLimit ? GUEST_CHAT_LIMIT_TEXT : null)}
           onNewChat={(projectId) => {
             if (projectId !== openId) { openProject(projectId); return; }
+            // 游客每个项目只能开一个对话（2026-10-23 用户定）：说为什么、怎么才能多开；服务端另有 `guest-chat-limit` 兜底
+            if (vibe.chat.history.guest && vibe.chat.history.atLimit) { setNotice(GUEST_CHAT_LIMIT_TEXT); return; }
             if (vibe.chat.history.atLimit) { setNotice(`这个项目里你已经有 ${vibe.chat.history.ownedCount} 个云端对话，满了不能再新建。删掉几个再试。`); return; }
             vibe.chat.newChat();
             setChatPage(true);
