@@ -550,3 +550,41 @@ node scripts/acceptance/four-stage-acceptance.mjs --check-coverage   # 应为「
 ```
 
 本分支落后 main 159 个提交，但没有冲突；写 main 仍须用户授权（`suggested_agent_behavior.md` 原则 4）。
+
+## 十七、按当前 main 重验（main 在第十六节之后又前进了）
+
+第十六节造合并树时的 main 已经不是现在的 main。重验一遍，结论有变化，照新的来。
+
+### main 自己现在是红的，而且不是我开审时那三支
+
+把 main 原样抽到临时目录跑守门（没有碰 main 检出）：**不过，退出码 1**。① 类未登记 2 支：
+
+| 探针 | 哪个提交带进来的 | 时间 | 台账 |
+|---|---|---|---|
+| `speed-audio-input-probe.mjs` | `9356362f` 变速素材段接音频素材效果卡导出后测主频 | 2026-10-23 18:25 | 任何清单里 0 处 |
+| `vibe-start-probe.mjs` | `65bce3ec` Vibe 开始页连着项目时挂同步浮层 | 2026-10-23 19:37 | 任何清单里 0 处 |
+
+**这两支与本分支无关**（本分支没有它们，基点在它们之前），是 main 自己的台账欠账。按原则 3「进入 main 的代码任何时候都必须通过基线验证」，
+它现在就是 0.7.21 的一处拦路石，加两行登记（清单项或排除原因）即消。
+
+第 30、31 行写的「开审时未登记 3 支」说的是 2026-10-23 开审那一刻；那三支后来由 main 的
+`v21-manifest.mjs` 登记成了会跑的验收项，不再是未登记，别把两件事混成一件。
+
+### 本分支对当前 main 还是无冲突，而且两边都改过的 4 支探针合得干净
+
+`git merge-tree --write-tree HEAD main`（main 在 `4a779fae`）：退出码 0，**无冲突**。两边都改过的 7 个文件自动合并：
+`docs/plan/TODO.md`、`scripts/acceptance/acceptance-lib.mjs`、`four-stage-manifest.mjs`，以及 4 支探针
+`account-card-sync-probe`、`account-join-request-probe`、`agent-panel-smooth-probe`、`old-shell-account-probe`。
+
+自动合并成功不等于语义正确，所以这 4 支我逐支比了合并结果：**改的是不同的行，互不干扰**——
+我这边放宽的耗时门槛与改正的报告路径都在，main 那边新加的 `&ui=classic`（在线桌面身份的缺省换成 Vibe 新界面之后，
+认老开始页的探针要显式带这个参数）也都在。
+
+### 合并后的守门
+
+| 步骤 | 结果 |
+|---|---|
+| 合并结果原样 | 不过：① 类 2 支未登记（main 自己那两支）＋ 3 支「既被清单项点名又写在排除表里」（本分支与 v21 清单的重叠） |
+| 照 v21 须知去掉 `V19_EXCLUDED` 那三行 | 只剩 main 自己那 2 支未登记。**本分支这一侧已经全清** |
+
+所以合并这条分支要做的仍然只有去掉那三行；剩下的红是 main 自己的欠账，由加那两支探针的人补台账。
