@@ -203,6 +203,24 @@ B08b 块的 manager 如实上报：那一轮 agy（Argon）在**首轮**自己�
 **合并代价（我用 `git merge-tree` 只读试算过，没动工作区）**：退出码 0、**没有冲突**，自动合并的只有三个双方都改过的文件 —— `docs/plan/TODO.md`、`scripts/acceptance/acceptance-lib.mjs`、`scripts/acceptance/four-stage-manifest.mjs`。
 **合完必须重跑一次 `--check-coverage`**：双方都动过台账，而且 main 新增的 3 支探针归 `v21-manifest.mjs` 登记，我这边改了 `coverageReport()` 的判据（新增「既被点名又被排除」判红），两边叠加的结果要实跑才算数。
 
+### B05a 这一块的 Argon 报告不可用，由主 Agent 自己兜底
+
+B05a 块的 agy 第二轮把**仓库里根本不存在的探针名**写进了报告（`sparse-first-probe.mjs`、`gl-arena-stress-probe.mjs`、`heavy-card-playback-probe.mjs` 等九个），
+它的 manager 判报告作废、重开一轮整份重写；第三轮跑了 31 分钟一个字都没产出，我把它停了（`REVIEW-B05a.md` 现存的那份就是作废的那版，**不要引用**）。
+
+这 18 支的取舍不依赖它，走的是另外两条证据：
+
+- 快照家族 6 支（`scrub-hold-snapshot`、`snapshot-diff-apply`、`snapshot-hash`、`snapshot-size`，加 `browser-stream-e2e`、`browser-stream-node`）：由我派的 **Opus 专项交叉核对**逐支给出证据链（见第三节第 6 条），已执行。
+- `below-*` 5 支：manager 独立核过「这 5 个文件里 `cuts` / `@cut` 出现 0 次」，即它们搭的都是**顶层**场景、不是剪辑段嵌套场景，所以 R01 退回不影响它们 —— 判留。
+- `snapshot-diff-compare` 判留：它比的是**整场景** HTML 采样经 `captureSnapshot` 栅格化后的 PNG，而整场景采样在语义里明确保留。
+- `page-stream-probe` 的两处毫秒闸门（第 1525、1853 行）由 manager 核出，我已改为只记录（第四遍扫描，见下）。
+
+### 第四遍扫描：小数阈值那一类
+
+第 1525、1853 行的阈值是 `16.7`、`33`（小数与两位数），前三遍的正则又漏了。处置：**毫秒阈值降为只记录，计数保留** ——
+`over35 <= 2` / `<= 4`（超过 35 毫秒的拍数）是计数，`verification.md` 明写「不看时间的断言照旧是通过条件」，所以留；`p95 < 16.7` / `< 33` 去掉。
+第 1853 行去掉 p95 之后只剩「量到了足够的拍」，判据确实变弱了，这一点如实记在这里。
+
 ### B07a 的结论：已核的与仍开着的
 
 - **已采纳**：`c66-t9-probe` 第 1402、1405 行那两处 5 秒门槛 —— 我在第一遍耗时扫描里就改了。
