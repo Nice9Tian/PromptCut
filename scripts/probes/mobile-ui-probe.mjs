@@ -222,6 +222,12 @@ try {
     const slBefore = await A.$eval('.strip-scroll', (el) => el.scrollLeft);
     await touch(A, lerp({ x: ra.x + ra.w / 2, y: ra.y + ra.h / 2 }, { x: ra.x - 60, y: ra.y + ra.h / 2 }, 8), { holdMs: 450 });
     const slAfter = await A.$eval('.strip-scroll', (el) => el.scrollLeft);
+    /*
+     * 本来还想判「松手之后还带惯性继续滑」—— 那正是这次改动的要害(原生横滑有惯性,
+     * 手动推 scrollLeft 那条老路没有)。实测判不了:CDP 的 `Input.dispatchTouchEvent` 是合成触点,
+     * 不触发合成器的抛掷动画,改之后量出来 rest 仍然等于 after。所以这里只判「真的滚动了」,
+     * 惯性那一条**在这套无头环境里证不了**,要真机才算数。
+     */
     out.T.touchScroll = { before: Math.round(slBefore), after: Math.round(slAfter) };
     check(slAfter - slBefore > 20, 'T 手指往左划,缩略时间轴跟着滚动', out.T.touchScroll);
     check(JSON.stringify(await mainIds()) === JSON.stringify(ids1b), 'T 没选中时按住拖动只是滚动,不换序');
