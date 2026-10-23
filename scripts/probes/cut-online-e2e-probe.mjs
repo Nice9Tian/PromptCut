@@ -8,7 +8,9 @@
  *
  * 骨架照 `below-online-e2e-probe.mjs`(角色都在本机,页面用**在线构建**,隔离的跨源舞台也在链路里):
  *   - 文档服务 + 素材服务:进程内的托管组合,经本机托管代理开三个同站跨源的源;
- *   - 切分方:真的桌面预渲染进程(队列模式、测试指纹、流开着、认领细任务 —— 剪辑段里的卡的流(`solo: 'flat'`)只能由它产,浏览器节点不产);
+ *   - 切分方:真的桌面预渲染进程(队列模式、测试指纹、流开着、认领细任务)。剪辑段里外框平面的卡的流(`solo: 'flat'`)切分方成对出两份
+ *     (〔裁〕R02 起浏览器那一份也出,`render-node/split.mjs` 的 `browserStreamInputOf`),谁先认领谁得 —— 层表里两个候选,在线来源取实际产出来的那一个;
+ *     只由浏览器产的那一路在 `cut-online-browser-probe.mjs`(切分方只切分);
  *   - 甲:在线页面,建场景、播放、改被引用剪辑。
  *
  * 场景(1280×720、30 fps、10 秒):剪辑「里」上一张 `punch-pill`(文字 v1);剪辑「中」上一个剪辑段引用「里」;激活剪辑上一个剪辑段 S
@@ -19,7 +21,7 @@
  * 断言(任一不成立退出码 1):
  *   A 层表   层表里 V 一行:`kind: card`、`plane: local`、成员只有 V、带输入签名(`s1-`)、**没有 `streamKind`**;第一帧是 S 的第一帧;
  *            流清单每段齐、满密度;层表里没有以 S 本身为顶的行
- *   B 就绪   在线来源认出这条流(切分方那一份、没有过期的);父页就绪索引里 V 有流层;V 判重、父页发它的流平面;S 本身不判重
+ *   B 就绪   在线来源认出这条流(层表候选里实际产出来的那一份:切分方的或页面的,没有过期的);父页就绪索引里 V 有流层;V 判重、父页发它的流平面;S 本身不判重
  *   C 播放   播放中嵌套包裹层 `[data-pc-flat-clip="V"]` 被抑制、舞台上画的是这条流(父页推的字节、跟着播放头、不报错)
  *   D 改动   在页面里改「里」那张卡的文字(两层深):父页当场(≤ 1 秒)不再发旧流的流平面;随后 V 不再判重(照旧活渲;要等分派表按新身份重算,毫秒只记录);在线来源撤掉旧流
  *            (签名对不上,列进 `staleStreams`);舞台上没有旧键的轨道;随后播放,旧流没有再贴上来
@@ -444,7 +446,9 @@ try {
   const ready1 = await readyOf(vId, key1, 'B:甲认出这条流、整段就绪、父页判重并发它的流平面', LAST_SEGMENT + 1);
   const layer1 = ready1?.p.ready.find((r) => r.clipId === vId)?.kinds.find((k) => k.kind === 'stream') ?? null;
   out.ready = ready1 && { ready: ready1.s.ready, envFingerprint: ready1.s.envFingerprint, staleStreams: ready1.d.staleStreams, layer: layer1, heavy: ready1.p.heavy, plane: planeOf(ready1.p, vId) };
-  check(!!ready1 && ready1.s.envFingerprint === deskFp && ready1.d.staleStreams.length === 0, 'B:在线来源选中切分方那一份,没有过期的', out.ready);
+  // 〔裁〕R02 起切分方给剪辑段里的卡也成对出两份(自己的、浏览器的),谁先认领谁得:在线来源选的是层表候选里实际产出来的那一个
+  check(!!ready1 && (row1.candidates ?? []).some((c) => c.envFingerprint === ready1.s.envFingerprint && c.resultKey === key1) && ready1.s.resultKey === key1 && ready1.d.staleStreams.length === 0,
+    'B:在线来源选中层表候选里实际产出来的那一份(切分方的或页面的),没有过期的', { ...out.ready, deskFp, candidates: briefRow(row1).candidates });
   check(!!layer1 && layer1.key === short(key1), 'B:父页就绪索引里虚拟片段有这条流的流层', ready1?.p.ready);
   check(!!ready1 && !ready1.p.heavy.includes(sId) && planeOf(ready1.p, vId)?.plane !== 'stage', 'B:判重的是虚拟片段、不是 S 本身;流平面挂在包裹层里(不是舞台根)', out.ready);
 

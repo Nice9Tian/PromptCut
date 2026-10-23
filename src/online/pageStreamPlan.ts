@@ -18,7 +18,9 @@
  * # 页面只算哪些流
  *
  * 只算单卡流,而且只算切分方会给浏览器出一份的那些(`browser-stream-task.md` 第一处):共享档(有状态的卡)、独立卡、
- * 不是画布卡、框不带三维、序列没有隐藏。清单里的卡超过解码器预算时照切分方同一个办法合并(`groupStreams`;切分方另出、页面不产的
+ * 不是画布卡、框不带三维、序列没有隐藏。剪辑段里摊出来的独立卡(切分方单独成流的 `'flat'`)里外框平面的那些也算(〔裁〕R02:
+ * 在线浏览器也替剪辑段里的重卡产流;切分方给浏览器出这一份,见 `render-node/split.mjs` 的 `browserStreamInputOf`):它们不并组流,
+ * 照切分方的算法只算进预算、各出一条单卡流。清单里的卡超过解码器预算时照切分方同一个办法合并(`groupStreams`;切分方另出、页面不产的
  * 两种流——单独成流的两类卡、依赖下层的流——照同一份判据 `render/streamPlanRules.mjs` 算进预算),
  * 并进组流的卡页面不产(组流浏览器画不了)。另有两条比切分方更紧的(〔裁〕,见 `browser-stream-task.md`「本页产流」):
  * 只算页面自带的内置卡片(源码版本以 `builtin:` 开头;同步来的用户卡的源码版本页面一侧算不准,算错了改卡以后键不变),
@@ -32,7 +34,7 @@ import { resolveFrameSize } from "../kernel/frameSize.mjs";
 import { mountFrameOf } from "../render/frameWindow.mjs";
 import { streamInputSig, streamSigStale } from "../render/streamInputSig.mjs";
 import { isStreamOrigin, streamSegmentFrameCount, streamSegmentSpan, STREAM_SEGMENT_FRAMES } from "../render/streamSegments.mjs";
-import { belowTargets, frame3d, soloStreamKind, streamEligible } from "../render/streamPlanRules.mjs";
+import { belowTargets, frame3d, mountClipOf, soloStreamKind, streamEligible } from "../render/streamPlanRules.mjs";
 import { groupStreams, localStreamPixels, stageStreamPixels, streamCost, STREAM_COUNT_BUDGET, type StreamBudget, type StreamGroupItem } from "../render/streamBudget.mjs";
 import { reviewedCard } from "../kernel/frameMode.mjs";
 import { flatPlanProject } from "../kernel/cutFlatten.mjs";
@@ -420,17 +422,23 @@ export async function planPageStreams(o: {
   // 单独成流的两类卡(`soloStreamKind`,按它的单卡流矩形算开销)、依赖下层的流(`belowTargets`,按整幅画面算开销)
   const fixed: { from: number; to: number; cost: number }[] = [];
   const soloSeen = new Set<string>();
+  // 剪辑段里外框平面的独立卡(切分方的 `'flat'`,〔裁〕R02):不并组流,照切分方只算进预算;页面也给它们各出一条单卡流
+  const flats: { control: PageControl; clip: AnyClip; to: number }[] = [];
   const controls = pageControls(project, value);
   for (const control of controls) {
     if (!listed.has(control.clipId)) continue;
     const at = where.get(control.clipId);
     if (!at || !streamEligible(control, at.clip, at.track)) {
-      skipped[control.clipId] = pageStreamBlock(control, at, value.sourceVersions ?? {}) ?? "not-eligible";
-      if (at && !soloSeen.has(control.clipId) && soloStreamKind(control, at.clip, at.track, project)) {
+      const block = pageStreamBlock(control, at, value.sourceVersions ?? {}) ?? "not-eligible";
+      const solo = at && !soloSeen.has(control.clipId) ? soloStreamKind(control, at.clip, at.track, project) : null;
+      if (at && solo) {
         const first = control.sampling.firstFrame;
         const last = Math.min(total - 1, first + control.count - 1);
-        if (last >= first) { soloSeen.add(control.clipId); fixed.push({ from: Math.min(mountFrameOf(at.clip, fps), first), to: last, cost: streamCost(localStreamPixels(at.clip.frame, stage), fps) }); }
+        // 回放起点同切分方:剪辑段里的卡从嵌套场景最早挂上的那一帧算(`mountClipOf`;别的卡就是它自己)
+        if (last >= first) { soloSeen.add(control.clipId); fixed.push({ from: Math.min(mountFrameOf(mountClipOf(at.clip), fps), first), to: last, cost: streamCost(localStreamPixels(at.clip.frame, stage), fps) }); }
+        if (last >= first && solo === "flat" && block === "not-eligible") { flats.push({ control, clip: at.clip, to: last }); continue; }
       }
+      skipped[control.clipId] = block;
       continue;
     }
     const firstFrame = control.sampling.firstFrame;
@@ -449,12 +457,8 @@ export async function planPageStreams(o: {
   const codeVersion = streamCodeVersion(codes);
   const environment = (value.environment ?? {}) as Record<string, unknown>;
   const specs: PageStreamSpec[] = [];
-  for (const g of grouped) {
-    if (g.clipIds.length !== 1) { for (const id of g.clipIds) skipped[id] = "grouped"; continue; }
-    const m = byClip.get(g.clipIds[0])!;
-    const { control, clip } = m;
-    const block = pageStreamBlock(control, where.get(control.clipId), value.sourceVersions ?? {});
-    if (block) { skipped[control.clipId] = block; continue; }
+  /** 一张卡的单卡流(包裹层自己的坐标系;外观不在流里),与切分方 `planStreams` 的 `cardSpec` 同一个式子 */
+  const emit = async (control: PageControl, clip: AnyClip, to: number) => {
     const memberKey = await streamMemberKey({
       node: control.node, definition: control.definition, style: project.style || {}, environment, sourceVersions: value.sourceVersions ?? {},
       fps, sampling: control.sampling, duration: control.end - control.start,
@@ -468,14 +472,23 @@ export async function planPageStreams(o: {
     const isMotion = isMotionCard(control);
     specs.push({
       kind: "card", plane: "local", clipIds: [control.clipId], topClipId: control.clipId, cardId: control.cardId, contentKey, streamKey, envFingerprint,
-      fps, stage, total, firstFrame: firstVisible, lastFrame: m.to,
-      ...streamSegmentSpan(firstVisible, m.to),
+      fps, stage, total, firstFrame: firstVisible, lastFrame: to,
+      ...streamSegmentSpan(firstVisible, to),
       offset: placement.offset, bound: placement.bound, compositing: control.compositing,
       bake: { start: control.start, end: control.end, count: control.count, sampling: structuredClone(control.sampling) },
       writing: isMotion ? "motion" : "remotion",
       frameMode: (control.capabilities?.frameMode as any) || (isMotion ? "stateful" : "direct"),
     });
+  };
+  for (const g of grouped) {
+    if (g.clipIds.length !== 1) { for (const id of g.clipIds) skipped[id] = "grouped"; continue; }
+    const m = byClip.get(g.clipIds[0])!;
+    const block = pageStreamBlock(m.control, where.get(m.control.clipId), value.sourceVersions ?? {});
+    if (block) { skipped[m.control.clipId] = block; continue; }
+    await emit(m.control, m.clip, m.to);
   }
+  // 剪辑段里外框平面的独立卡(上面已按 `pageStreamBlock` 筛过:它只因为「不进组流」才没过)
+  for (const f of flats) await emit(f.control, f.clip, f.to);
   return { specs, skipped };
 }
 

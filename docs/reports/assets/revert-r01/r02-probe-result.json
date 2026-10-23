@@ -1,0 +1,267 @@
+{
+  "ok": true,
+  "run": "mvk651zed656",
+  "site": "http://pc.localhost:5910",
+  "out": "C:\\Users\\admin\\Documents\\PromptCut\\.worktrees\\revert-r01\\out\\probe-b",
+  "desk": {
+    "envFingerprint": "27cc3278a22fdff6",
+    "upMs": 8988
+  },
+  "costs": {
+    "before": 0,
+    "after": 1,
+    "fresh": [
+      {
+        "key": "1c5aa7939dc2",
+        "stepMs": 0.5
+      }
+    ]
+  },
+  "scene": {
+    "sId": "k-mvk65ebj-c",
+    "vId": "k-mvk65ebj-c~k-mvk65b68-a~c-mvk65b67-4",
+    "A": "cut-1",
+    "inner": "cut-mvk65b65-1",
+    "mid": "cut-mvk65b68-6",
+    "innerClip": "c-mvk65b67-4",
+    "midSeg": "k-mvk65b68-a"
+  },
+  "jia": {
+    "envFingerprint": "ec313bc687208b5c",
+    "encoder": null
+  },
+  "produce": {
+    "ms": 4532,
+    "row": {
+      "topClipId": "k-mvk65ebj-c~k-mvk65b68-a~c-mvk65b67-4",
+      "kind": "card",
+      "plane": "local",
+      "streamKind": null,
+      "clipIds": [
+        "k-mvk65ebj-c~k-mvk65b68-a~c-mvk65b67-4"
+      ],
+      "contentKey": "42b2dd196e91",
+      "candidates": [
+        {
+          "envFingerprint": "ec313bc687208b5c",
+          "resultKey": "1e2d97d66749"
+        },
+        {
+          "envFingerprint": "27cc3278a22fdff6",
+          "resultKey": "77563b484d59"
+        }
+      ],
+      "originFrame": 6,
+      "lastSegment": 3,
+      "inputSig": "s1-358f385f655fedad"
+    },
+    "all": [
+      {
+        "topClipId": "k-mvk65ebj-c~k-mvk65b68-a~c-mvk65b67-4",
+        "kind": "card",
+        "plane": "local",
+        "streamKind": null,
+        "clipIds": [
+          "k-mvk65ebj-c~k-mvk65b68-a~c-mvk65b67-4"
+        ],
+        "contentKey": "42b2dd196e91",
+        "candidates": [
+          {
+            "envFingerprint": "ec313bc687208b5c",
+            "resultKey": "1e2d97d66749"
+          },
+          {
+            "envFingerprint": "27cc3278a22fdff6",
+            "resultKey": "77563b484d59"
+          }
+        ],
+        "originFrame": 6,
+        "lastSegment": 3,
+        "inputSig": "s1-358f385f655fedad"
+      }
+    ],
+    "encoders": [
+      "webcodecs-avc"
+    ]
+  },
+  "who": {
+    "node": {
+      "counters": {
+        "claims": 2,
+        "completed": 1,
+        "dedup": 1,
+        "failed": 0,
+        "lost": 0,
+        "bakedFrames": 0,
+        "streamFrames": 60,
+        "streamTasks": 1,
+        "active": 1,
+        "released": {},
+        "blocked": {
+          "6:plan-on-browser": 1
+        },
+        "frameMs": {
+          "n": 0,
+          "p50": null,
+          "p95": null
+        }
+      },
+      "failed": 0
+    },
+    "deskTasks": {
+      "stream:1e2d97d66749881b4f89de1816cb123f3481bd2c0cb4120d27b048cdf33277bf:0-3:sparse": {
+        "state": "done",
+        "at": 1792711524549
+      },
+      "stream:1e2d97d66749881b4f89de1816cb123f3481bd2c0cb4120d27b048cdf33277bf:0-3": {
+        "state": "done",
+        "at": 1792711526066
+      }
+    },
+    "deskCandidate": {
+      "resultKey": "77563b484d59",
+      "manifests": [
+        null
+      ]
+    }
+  },
+  "ready": {
+    "ready": 4,
+    "envFingerprint": "ec313bc687208b5c",
+    "staleStreams": [],
+    "plane": {
+      "clipIds": [
+        "k-mvk65ebj-c~k-mvk65b68-a~c-mvk65b67-4"
+      ],
+      "key": "1e2d97d66749",
+      "originFrame": 6,
+      "plane": null
+    }
+  },
+  "play": {
+    "samples": 33,
+    "drawn": 32,
+    "from": {
+      "key": "1e2d97d66749",
+      "plane": "local",
+      "kind": "card",
+      "pushed": true,
+      "lastDrawn": 11,
+      "drawn": 3,
+      "errors": 0,
+      "lastError": null
+    },
+    "to": {
+      "key": "1e2d97d66749",
+      "plane": "local",
+      "kind": "card",
+      "pushed": true,
+      "lastDrawn": 55,
+      "drawn": 16,
+      "errors": 0,
+      "lastError": null
+    },
+    "segSuppressed": 21,
+    "visible": 11
+  },
+  "pixels": {
+    "v": {
+      "tries": 2,
+      "rejected": [
+        {
+          "try": 1,
+          "placeholderShown": 0,
+          "drawing": true,
+          "placeholder": false,
+          "segSuppressed": false,
+          "canvasShown": true,
+          "frames": [
+            50,
+            53
+          ]
+        }
+      ],
+      "f0": 54,
+      "f1": 55,
+      "shotFile": "cut-stream-try2.png",
+      "frame": 55,
+      "raw": {
+        "same": {
+          "mad": 0.505,
+          "bad": 0.00391,
+          "w": 735,
+          "h": 414
+        },
+        "far": {
+          "mad": 4.868,
+          "bad": 0.07187,
+          "w": 735,
+          "h": 414
+        }
+      },
+      "same": {
+        "mad": 0.383,
+        "bad": 0.00002,
+        "w": 735,
+        "h": 414
+      },
+      "far": {
+        "mad": 4.71,
+        "bad": 0.07378,
+        "w": 735,
+        "h": 414
+      }
+    },
+    "top": {
+      "tries": 1,
+      "rejected": [],
+      "f0": 140,
+      "f1": 142,
+      "shotFile": "top-stream-try1.png",
+      "frame": 141,
+      "raw": {
+        "same": {
+          "mad": 0.703,
+          "bad": 0.00384,
+          "w": 735,
+          "h": 414
+        },
+        "far": {
+          "mad": 5.384,
+          "bad": 0.07192,
+          "w": 735,
+          "h": 414
+        }
+      },
+      "same": {
+        "mad": 0.565,
+        "bad": 0.00002,
+        "w": 735,
+        "h": 414
+      },
+      "far": {
+        "mad": 5.241,
+        "bad": 0.07415,
+        "w": 735,
+        "h": 414
+      }
+    },
+    "compare": {
+      "cut": {
+        "mad": 0.383,
+        "bad": 0.00002,
+        "w": 735,
+        "h": 414
+      },
+      "top": {
+        "mad": 0.565,
+        "bad": 0.00002,
+        "w": 735,
+        "h": 414
+      }
+    }
+  },
+  "pageErrors": [],
+  "ms": 39703,
+  "fails": []
+}

@@ -255,6 +255,11 @@ export interface BakeFrameRequest {
   pixels?: { rect: BakePixelRect };
   /** 给 `false` 时事件不带 HTML 字节(只要像素的调用方省一次压缩与转移);`hash`、`bytes` 照给。缺省带 */
   html?: boolean;
+  /**
+   * 剪辑段里的卡(`clipId` 是摊平出来的虚拟片段,〔裁〕R02):隔离工程时间不平移,本地帧 n 是项目帧 `frameBase + n`
+   * (`online/bakeTask.ts` 的 `bakeFrameBase`)。顶层的卡不给(本地帧就是全局帧)。
+   */
+  frameBase?: number;
 }
 /** `bakeFrame` 要像素时的矩形:包裹层自己的坐标(框的左上角是原点),单位是项目像素 */
 export interface BakePixelRect { x: number; y: number; w: number; h: number }

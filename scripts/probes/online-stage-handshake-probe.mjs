@@ -340,7 +340,11 @@ try {
     check(/握上手的舞台:A/.test(out.s3.reason ?? ''), 'S3 A 握上了手', out.s3);
     check(out.s3.fellMs !== null && out.s3.fellMs >= 19_000, 'S3 判失败不早于握手时限(≥ 19 秒)', out.s3);
     timings.record('S3 挂上到判握手失败', out.s3.fellMs, { formerLimit: '19～35 秒(上界不再作通过条件)' });
-    check(frames.length === 0 && sameOriginFrames.length === 0 && editorHits === 0, 'S3 跨源舞台 B 不可达、握手失败时绝不退回同源单舞台(编辑器源下 stage=1 iframe 数为 0)', out.s3);
+    // 2026-10-22 二级〔裁〕第 1 条：握手失败改为退回**跨源**单舞台 A（原来一个舞台都不挂、预览空白）。
+  // 要守的性质是「一律跨源隔离、绝不退回同源单舞台」，所以只查同源那两项（与上面 S2 同一口径）；
+  // 原来还要求 frames.length === 0（一个舞台都不许挂），那是旧行为，不是语义要求，按〔裁〕去掉。
+  check(sameOriginFrames.length === 0 && editorHits === 0, 'S3 跨源舞台 B 不可达、握手失败时绝不退回同源单舞台(编辑器源下 stage=1 iframe 数为 0)', out.s3);
+  check(frames.every((u) => !u.startsWith(`${SITE}/`)), 'S3 退回后挂着的舞台一律是跨源的', out.s3);
     await m.shot('s3-no-same-origin');
     await m.close();
   }
