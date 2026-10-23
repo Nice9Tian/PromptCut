@@ -14,6 +14,10 @@
  * | `google-drive.mjs` | 第一个实现。以后加 Dropbox 就再加一个,上层不改 |
  * | `pull.mjs` | 按分段把一份文件拉到本机临时文件,支持断点续传 |
  * | `import.mjs` | 把临时文件交给素材服务入库,入库后删掉 |
+ * | `route.mjs` | HTTP 层:给页面的配置口与导入口 |
+ * | `google-oauth.mjs` | A2:授权码兑换、换票、撤销 |
+ * | `credentials.mjs` | A2:refresh token 加密落盘,按「项目 × 成员 × 提供方」分格 |
+ * | `managed-token.mjs` | A2:接上、按需换票、断开 |
  *
  * # StorageProvider 接口
  *
@@ -39,8 +43,12 @@ import { StorageConnectorError } from './provider.mjs';
 
 export { StorageConnectorError, TRANSIENT_CODES, resolveToken, rangeHeader, codeForStatus } from './provider.mjs';
 export { pullToFile, PULL_CHUNK_SIZE } from './pull.mjs';
-export { importFromStorage } from './import.mjs';
+export { importFromStorage, discardPartial, safeName } from './import.mjs';
 export { createGoogleDriveProvider } from './google-drive.mjs';
+// A2「凭据托管」那条路。A3 用不到这几个
+export { exchangeCode, refreshAccessToken, revokeToken } from './google-oauth.mjs';
+export { createCredentialStore } from './credentials.mjs';
+export { connectWithCode, createManagedToken, disconnect, TOKEN_MARGIN_MS } from './managed-token.mjs';
 
 /** 本轮做通的网盘。Dropbox 记在任务书第 9 节的待办里,接口已经按可换后端设计 */
 export const SUPPORTED_KINDS = Object.freeze(['google-drive']);
