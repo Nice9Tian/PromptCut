@@ -40,3 +40,35 @@ export function projectNameFromPrompt(text: string, max = 24): string {
   const chars = [...line];
   return chars.length > max ? `${chars.slice(0, max).join("")}…` : line;
 }
+
+/**
+ * 项目名在这个服务里是**全站唯一**的(`server/auth/protocol.mjs` 的 `nameKey`、`server/auth/store.mjs`
+ * 的「Room name occupied」;重名建项目回 409 `name-taken`,`account-move.test.mjs` 的第 3 条写明
+ * 「别的账号用同一个名字新建回 name-taken」)。
+ *
+ * 开始页这两条路的名字是**自动取的**:空白项目一律叫「未命名」,说一句话取那句话的头一截。
+ * 名字既然是机器取的,撞上别人的同名项目时用户无从改起 —— 第二个点「新建项目」的人就会被
+ * 「这个项目名已被使用」挡死(2026-10-23 线上实测:全新游客点「新建项目」必回 409)。
+ * 所以这里撞一次就换一个再试:先原名,再「原名 2」…「原名 5」,还撞就在后面缀四位随机数。
+ * 名字上限 64 字(`isProjectName`),开始页取名最长 24 字,缀上去不会超。
+ */
+export function nextProjectName(base: string, attempt: number): string {
+  if (attempt <= 0) return base;
+  if (attempt <= 4) return `${base} ${attempt + 1}`;
+  return `${base} ${Math.floor(Math.random() * 0x10000).toString(16).padStart(4, "0")}`;
+}
+
+/**
+ * 按 `nextProjectName` 一个个试着建,直到建成(返回用上的那个名字)或试满 `tries` 次。
+ * 只有 `name-taken` 才换名重试,别的错(没登录、游客超额、网络断)照原样抛给调用方。
+ */
+export async function createWithFreeName(
+  create: (name: string) => Promise<void>, base: string, tries = 8,
+): Promise<string> {
+  for (let i = 0; ; i++) {
+    const name = nextProjectName(base, i);
+    try { await create(name); return name; } catch (e) {
+      if (i >= tries - 1 || (e as { code?: string })?.code !== "name-taken") throw e;
+    }
+  }
+}

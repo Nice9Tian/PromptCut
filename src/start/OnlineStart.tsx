@@ -45,7 +45,7 @@ import { addGroup, loadOrg, mergeChats, mergeProjects, moveProject, saveOrg, wit
 import { seenProjects, subscribeSeen } from "./thumbCache";
 import { useSeenProject } from "./useSeenProject";
 import { useVibeCloud } from "./useVibeCloud";
-import { RATIO_SIZE, projectNameFromPrompt } from "./format";
+import { RATIO_SIZE, createWithFreeName, projectNameFromPrompt } from "./format";
 import type { Ratio, VibeChat, VibeGroup, VibeProject } from "./types";
 import "./start.css";
 
@@ -180,7 +180,7 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
   /** 新建一个空白云端项目并进去(侧栏「新建项目」、缩略图第一格) */
   const createBlank = () => {
     if (createBlocked) { setNotice(createBlocked); return; }
-    void ap.perform(() => ap.create("未命名"));
+    void ap.perform(() => createWithFreeName(n => ap.create(n), "未命名").then(() => undefined));
   };
 
   /** 开始页说一句话:建项目 → 定画幅 → 传素材 → 进聊天页 → 这句话发给云端 Agent */
@@ -191,7 +191,7 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
     const picked = files;
     try {
       await ap.perform(async () => {
-        await ap.create(projectNameFromPrompt(text));
+        await createWithFreeName(n => ap.create(n), projectNameFromPrompt(text));
         const id = currentDocProjectId() || null;
         if (!id) throw new Error("项目建好了，但没能打开它。请在左边的项目列表里点它。");
         if (ratio !== "16:9") actions.setProjectMeta({ ...RATIO_SIZE[ratio] });
