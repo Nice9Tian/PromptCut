@@ -72,7 +72,9 @@ export const JOIN_REQUEST_POLL_MS = 10_000;
 export class AccountFailure extends Error {
   status: number;
   code: string;
-  constructor(status: number, code: string, message?: string) { super(message || accountErrorText(status, code)); this.status = status; this.code = code; }
+  /** 服务端回的整个 JSON(冲突时带着云端当前那一份,如 `start-org` 的 409);没有就是 undefined */
+  body?: Record<string, any>;
+  constructor(status: number, code: string, message?: string, body?: Record<string, any>) { super(message || accountErrorText(status, code)); this.status = status; this.code = code; if (body) this.body = body; }
 }
 export function accountErrorText(status: number, code: string): string {
   const messages: Record<string, string> = { 'login-required': '请先登录账号。', 'credential-revoked': '登录已失效，请重新登录。',
@@ -111,6 +113,12 @@ export function accountErrorText(status: number, code: string): string {
     'guest-read-only': '你在这个项目里只能查看，改不了内容。',
     // 云端 Agent 的告知记在网站账号上（`/api/account/cloud-agent-consent`），游客没地方记、服务端也核不了 —— 待用户定（claude/guest-enter）
     'guest-agent-unavailable': '游客暂时用不了云端 Agent。要用的话，请登录网站账号。',
+    // 云端分组(账号级整理信息,`/hosted/shared/account/start-org`,裁定 V22-05～09)
+    'guest-org-unavailable': '游客没有分组、置顶和归档。注册一个账号后，可以用云端分组整理项目。',
+    'org-unavailable': '这台云端现在不能保存分组。',
+    'org-version-mismatch': '云端的分组刚被另一台设备改过。',
+    'bad-org': '分组信息不完整，没有保存。',
+    'org-too-large': '分组、置顶和归档的记录太多了，没有保存。可以删掉一些不用的分组。',
     'guest-video-limit': `游客最多上传 ${GUEST_LIMITS.videos} 条视频。要传更多，请注册一个账号。`,
     'guest-file-too-large': `游客上传的每一条源文件不能超过 ${GUEST_LIMITS.assetMB} MB。`,
     'invalid-asset': '这条素材的信息不完整，请重新选择。',
@@ -193,7 +201,7 @@ export function createAccountClient(options: AccountClientOptions) {
     catch { throw new AccountFailure(0, 'network'); }
     let result: Record<string, any>;
     try { result = await response.json(); } catch (error) { throw (error as { name?: string })?.name === 'TimeoutError' ? new AccountFailure(0, 'network') : new AccountFailure(response.status, 'account-protocol'); }
-    if (!response.ok || result.ok !== true) throw new AccountFailure(response.status, String(result.code || result.error || 'account-unavailable'));
+    if (!response.ok || result.ok !== true) throw new AccountFailure(response.status, String(result.code || result.error || 'account-unavailable'), undefined, result);
     return result;
   }
   function accept(value: Record<string, any>): EditorLogin {
@@ -251,6 +259,25 @@ export function createAccountClient(options: AccountClientOptions) {
         ...options.device, requestId: crypto.randomUUID(), ...(login ? { loginId: login.loginId } : {}) }));
     })().finally(() => { renewTask = null; });
     return renewTask;
+  }
+  /** `start-org` 的一次调用(带编辑器令牌)。`allowConflict`:409 当结果返回,不抛 */
+  async function startOrgCall(body: Record<string, unknown>, allowConflict = false) {
+    if (guest) throw new AccountFailure(403, 'guest-org-unavailable');
+    if (!options.online) throw new AccountFailure(503, 'desktop-bridge-unavailable');
+    const current = await ensureLogin(), identity = authIdentity(), revision = authVersion;
+    let value: Record<string, any>;
+    try { value = await request('/hosted/shared/account/start-org', body, current.accessToken); }
+    catch (error) {
+      const failure = error as AccountFailure;
+      if (allowConflict && failure?.status === 409 && failure.code === 'org-version-mismatch' && Number.isSafeInteger(failure.body?.version)) {
+        if (identity !== authIdentity() || revision !== authVersion) throw new AccountFailure(401, 'credential-revoked');
+        return { conflict: true as const, version: failure.body!.version as number, org: failure.body!.org ?? null, updatedAt: Number(failure.body!.updatedAt) || 0 };
+      }
+      throw error;
+    }
+    if (identity !== authIdentity() || revision !== authVersion) throw new AccountFailure(401, 'credential-revoked');
+    if (!Number.isSafeInteger(value.version) || value.version < 0) throw new AccountFailure(503, 'account-protocol');
+    return { conflict: false as const, version: value.version as number, org: value.org ?? null, updatedAt: Number(value.updatedAt) || 0 };
   }
   return {
     /** 网站账号（桌面版是编辑器登录的那个账号）；游客时是 null。只有「凭账号做的事」才看它 */
@@ -379,6 +406,22 @@ export function createAccountClient(options: AccountClientOptions) {
       const consent = validateConsent(result, current.account.id);
       if (!consent.accepted) throw new AccountFailure(503, 'account-protocol');
       return consent;
+    },
+    /**
+     * 云端分组(账号级整理信息):取云端那一份。只有在线页面、只有网站账号;游客没有。
+     * 版本 0、`org` 是 null 是云端没存过。服务端还没有这条路由(老服务端)时 `AccountFailure.status` 是 404 / 405 / 501,
+     * 调用方当「不支持」安静地退回只记在本机(`src/start/useCloudOrg.ts`)。
+     */
+    async getStartOrg(): Promise<{ version: number; org: unknown | null; updatedAt: number }> {
+      return startOrgCall({ op: 'get' });
+    },
+    /**
+     * 写云端那一份。`baseVersion` 是上次拿到的版本;对不上(云端比这新)不抛,回 `conflict: true` 并带回云端当前那份,
+     * 调用方三方合并后用带回的版本重传。
+     */
+    async putStartOrg(baseVersion: number, org: unknown): Promise<{ conflict: false; version: number; org: unknown; updatedAt: number } | { conflict: true; version: number; org: unknown | null; updatedAt: number }> {
+      const out = await startOrgCall({ op: 'put', baseVersion, org }, true);
+      return out as any;
     },
     async lists(): Promise<ProjectLists> { if (!options.online) throw new AccountFailure(503, 'website-project-list', '请在官网登录，查看“我创建的”和“我加入的”项目。');
       await website(); const result = await request('/api/account/projects');

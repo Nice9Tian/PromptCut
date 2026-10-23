@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createEmptyProject } from '../kernel/project';
 import { setActiveDraftId } from '../editor/io/drafts';
 import { ensureDevice, enterAccountProject } from '../editor/sync/syncManager';
@@ -215,7 +215,15 @@ export function useAccountProjects({ online, onEnterEditor }: { online: boolean;
   }, [request?.state, request?.entry, request?.projectId]);
   // 读到申请被通过(`member`):马上重取项目列表,这个项目当场出现在「我加入的」里(设了二级密码、还没输的也在,从那里点进去先问密码)
   useEffect(() => { if (request?.state === 'member') void refreshLists(); }, [request?.state, request?.projectId]); // eslint-disable-line react-hooks/exhaustive-deps
-  return { origin, account, busy, error, setError, shellOld, link, setLink, lists, listError, refreshLists, perform, enter, open, login, logout, create, join,
+  /**
+   * 云端分组的网络口(`client.getStartOrg` / `putStartOrg`):取不到客户端(登录前)回 null。
+   * 对象是稳定的(只在这个 hook 的生命周期里建一次),`src/start/useCloudOrg.ts` 要靠它不变才不会反复重建同步引擎
+   */
+  const orgApi = useMemo(() => ({
+    getStartOrg: () => client.current!.getStartOrg(),
+    putStartOrg: (baseVersion: number, org: unknown) => client.current!.putStartOrg(baseVersion, org),
+  }), []);
+  return { origin, account, orgApi, busy, error, setError, shellOld, link, setLink, lists, listError, refreshLists, perform, enter, open, login, logout, create, join,
     guest, guestProject, enterAsGuest, newGuest, leaveGuest, openGuestProject,
     request, sendRequest, clearRequest, directSecondary, clearDirectSecondary: () => setDirectSecondary(null),
     projectLink: (projectId: string) => projectLink(origin, projectId) };

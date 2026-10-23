@@ -16,8 +16,9 @@
  *     进项目时它会调 `onEnterEditor`:这里**不进编辑器**,而是留在这一页、打开这个项目的聊天页;
  *     要自己动手时「进入传统式」(详细编辑头上那颗键)才调上层真正的 `onEnterEditor`(Shell 换成编辑界面,项目已经连着)。
  *   - **左侧项目列表**:真云端项目(我创建的 / 我加入的;游客是本机记着的那一个);分组是**云端分组**:只装云端项目,
- *     本机草稿放不进来(桌面版那一屏的是本地分组,`DesktopStart.tsx`)。云端分组存云端、跟着账号走的接口等用户确认才接
- *     (`vibeOrg.ts` 文件头的 `CLOUD_ORG_IN_CLOUD`),接上之前只缓存在这台浏览器里。游客没有分组(只有一个项目,身份也不跨设备)。
+ *     本机草稿放不进来(桌面版那一屏的是本地分组,`DesktopStart.tsx`)。云端分组存云端、跟着账号走、换设备能看到
+ *     (`useCloudOrg.ts` 驱动同步,`orgSync.ts` 是同步逻辑,`orgMerge.ts` 是两台设备同时改时的三方合并);
+ *     本机那一份是缓存,打开先用它。老服务端还没有这条接口时安静地退回只记在这台浏览器里。游客没有分组(只有一个项目,身份也不跨设备)。
  *   - **中间输入框**:说一句话 → 新建云端项目(按选的画幅定尺寸、带上挑好的素材)→ 进它的聊天页 → 这句话作为第一条消息发给云端 Agent。
  *   - **聊天页、右侧拓展栏**:真云端 Agent 对话(`useVibeCloud.ts`)、真画面(`VibeStage.tsx`)、真的修改前 / 修改后。
  *   - **详细编辑**:真舞台,以及编辑界面那条**真时间轴**(拖动、裁剪、分割都能做,`DetailEdit.tsx`)。
@@ -43,7 +44,9 @@ import { TopBar } from "./TopBar";
 import { VibeLogin, type LoginIntent } from "./VibeLogin";
 import { EXT_WIDTH, SIDE_WIDTH, clampWidth, readSideCollapsed, readWidth, writeSideCollapsed, writeWidth } from "./sideWidth";
 import { removeById, rename, reorder, setArchived, togglePin, visible } from "./treeState";
-import { addGroup, cloudOrgScope, groupNoteText, groupsOf, loadOrg, mergeChats, mergeProjects, moveProject, orgWhereText, saveOrg, withChats, withGroups, withProjects, type OrgEntry, type OrgState } from "./vibeOrg";
+import { CLOUD_ORG_IN_CLOUD, addGroup, cloudOrgScope, groupNoteText, groupsOf, mergeChats, mergeProjects, moveProject, orgWhereText, pruneOrg, withChats, withGroups, withProjects, type OrgEntry } from "./vibeOrg";
+import { accountOrgTransport } from "./orgTransport";
+import { useCloudOrg } from "./useCloudOrg";
 import { seenProjects, subscribeSeen } from "./thumbCache";
 import { useSeenProject } from "./useSeenProject";
 import { useVibeCloud } from "./useVibeCloud";
@@ -131,10 +134,13 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
   /** 云端分组跟着账号走;游客没有(null:读不到也存不了,整理信息一律空) */
   const orgScope = ap.account ? cloudOrgScope(ap.account.id) : null;
 
-  /* ---------------- 云端整理(云端分组、置顶、归档、顺序) ---------------- */
-  const [org, setOrgState] = useState<OrgState>(() => loadOrg("cloud", orgScope));
-  useEffect(() => { setOrgState(loadOrg("cloud", orgScope)); }, [orgScope]);
-  const setOrg = (next: (o: OrgState) => OrgState) => setOrgState((o) => { const n = next(o); saveOrg(orgScope, n); return n; });
+  /* ---------------- 云端整理(云端分组、置顶、归档、顺序):存云端,本机一份是缓存 ---------------- */
+  // 传输对象要稳定:换了就重建同步引擎。登录之前、游客都是 null(不同步)
+  const orgTransport = useMemo(() => (ap.account ? accountOrgTransport(() => ap.orgApi) : null), [ap.account?.id, ap.orgApi]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { org, setOrg, status: orgStatus } = useCloudOrg({ scope: orgScope, transport: orgTransport });
+  /** 此刻云端分组是不是真存在云端:老服务端(没有这条接口)时界面如实说只记在这台浏览器里 */
+  const orgInCloud = CLOUD_ORG_IN_CLOUD && orgStatus !== "unsupported";
+  const orgSyncNote = orgStatus === "pending" ? "云端分组没同步上：改动先记在这台浏览器里，联网后自动补上。" : null;
   /** 游客动整理信息:不做,说一句为什么。返回 true 表示已拦下 */
   const guestBlocked = (): boolean => {
     if (!ap.guest) return false;
@@ -160,6 +166,12 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
   }, [cloudEntries, openId, shared?.name, shared?.creator]);
   const projects = useMemo(() => mergeProjects(org, entries, seen), [org, entries, seen]);
   const groups = useMemo(() => groupsOf(org), [org]);
+  // 项目列表取到之后,把整理信息里已经不在列表里的项目清掉(云端那一份不会只增不减);列表没取到不清
+  useEffect(() => {
+    if (ap.guest || !ap.lists) return;
+    const ids = new Set(entries.map((e) => e.id));
+    setOrg((o) => pruneOrg(o, ids));
+  }, [ap.guest, ap.lists, entries]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---------------- 打开着的项目的云端 Agent ---------------- */
   const vibe = useVibeCloud({ connected: !!openId && connectedId === openId, shown: chatPage });
@@ -273,7 +285,7 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
       if (kind === "group") writeGroups((a) => togglePin(a, id));
       else if (kind === "project") writeProjects((a) => togglePin(a, id));
       else writeChats((a) => togglePin(a, id));
-      setNotice(`置顶只在自己同级里生效，${orgWhereText("cloud")}。`);
+      setNotice(`置顶只在自己同级里生效，${orgWhereText("cloud", orgInCloud)}。`);
     },
     archive: (kind, id) => {
       if (guestBlocked()) return;
@@ -281,7 +293,7 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
       if (kind === "group") writeGroups((a) => setArchived(a, id, next));
       else if (kind === "project") writeProjects((a) => setArchived(a, id, next));
       else writeChats((a) => setArchived(a, id, next));
-      setNotice(next ? `已归档：收进侧栏最下面「已归档」，那里右键能取消归档。${orgWhereText("cloud")}，项目本身不受影响。` : "已取消归档。");
+      setNotice(next ? `已归档：收进侧栏最下面「已归档」，那里右键能取消归档。${orgWhereText("cloud", orgInCloud)}，项目本身不受影响。` : "已取消归档。");
     },
     remove: (kind, id) => {
       if (kind === "group") {
@@ -483,11 +495,12 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
             vibe.chat.newChat();
             setChatPage(true);
           }}
-          groupNote={groupNoteText("cloud")}
+          groupNote={groupNoteText("cloud", orgInCloud)}
+          groupStatus={orgSyncNote}
           newGroupBlocked={ap.guest ? GUEST_ORG_TEXT : null}
           onNewGroup={() => {
             if (guestBlocked()) return;
-            const name = prompt(`新分组叫什么？（${groupNoteText("cloud")}）`, "新分组");
+            const name = prompt(`新分组叫什么？（${groupNoteText("cloud", orgInCloud)}）`, "新分组");
             if (name === null) return;
             setOrg((o) => addGroup(o, name).org);
           }}
@@ -546,7 +559,7 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
                   if (list.length) { setFiles((f) => [...f, ...list]); setNotice(`已挑 ${files.length + list.length} 个素材，发出这句话时一起放进新项目。`); }
                 }} />
               <p className={`ps-prompt-note${ap.error ? " is-err" : ""}`} role={ap.error ? "alert" : "status"} data-pc="start-notice">
-                {errorLine || (ap.guest ? GUEST_LIMITS_TEXT : openId && !chatPage ? "项目还开着：点左边它底下的对话回去接着聊。" : `行上右键可以置顶、归档、放进云端分组（${orgWhereText("cloud")}），按住能拖着排序，侧栏右边那条缝能拖宽窄。`)}
+                {errorLine || (ap.guest ? GUEST_LIMITS_TEXT : openId && !chatPage ? "项目还开着：点左边它底下的对话回去接着聊。" : `行上右键可以置顶、归档、放进云端分组（${orgWhereText("cloud", orgInCloud)}），按住能拖着排序，侧栏右边那条缝能拖宽窄。`)}
               </p>
 
               <ProjectRail

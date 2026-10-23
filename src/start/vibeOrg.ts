@@ -15,9 +15,10 @@
  * - **拼清单只收同一套的项目**(`mergeProjects`);
  * - **放进分组只能同一套**(`moveProject`、`moveRefusal`):跨套返回一句说明,整理信息原样不动。
  *
- * **云端那一套存哪**:设计是存在云端文档服务、按账号一份(`docs/reports/AGENT-claude-groups-local-cloud.md`「方案」),
- * 要新开接口,等用户确认才动服务端。接上之前(`CLOUD_ORG_IN_CLOUD` 为 false),云端分组仍只是这台浏览器里的一份缓存,
- * 界面如实说「暂时只记在这台浏览器里」。游客没有云端那一份(游客身份不跨设备、只有一个项目),也就没有分组。
+ * **云端那一套存哪**:存在云端文档服务、按账号一份,整份(分组、项目放在哪、置顶、归档、顺序、对话标记)一起上云
+ * (接口 `POST /hosted/shared/account/start-org`,服务端 `server/docservice/modules/account-org.mjs`,裁定 V22-05～09)。
+ * 本机的键 `pc.start.org.cloud.<账号>` 是它在这台浏览器里的缓存:打开先用它,同步逻辑见 `orgSync.ts`、`orgMerge.ts`、`useCloudOrg.ts`。
+ * 服务端还没有这条路由(老服务端)时安静地退回「只记在这台浏览器里」,界面据此改口。游客没有云端那一份(游客身份不跨设备、只有一个项目),也就没有分组。
  *
  * 项目本身(有哪些、叫什么、谁建的)一律以项目列表为准:这里只记整理信息,列表里没有的项目不会凭空出现;
  * 列表暂时取不到时也不丢已经记下的整理信息(`withProjects` 把这次没出现的条目原样留着)。
@@ -84,23 +85,41 @@ export function moveRefusal(projectRealm: OrgRealm, groupRealm: OrgRealm): strin
 }
 
 /**
- * 云端分组现在是不是真存在云端。
- * 设计里云端存在文档服务、跟着账号走,要新开接口,用户确认之后才接(见文件头);接上之前是 false,
- * 界面据此如实说「暂时只记在这台浏览器里」,不假装已经跨设备。接上服务端时把它改成 true。
+ * 云端分组是不是存在云端。云端存储接上之后(服务端有 `start-org`、页面有同步)恒为 true;
+ * 保留成常量是为了:服务端没部署到位的版本可以改回 false,界面立刻只说「只记在这台浏览器里」,不假装已经跨设备。
+ * 运行时探到老服务端(没有这条路由)另有一道,见 `orgWhereText` 的第二个参数。
  */
-export const CLOUD_ORG_IN_CLOUD = false;
+export const CLOUD_ORG_IN_CLOUD = true;
 
-/** 这一套的整理信息存在哪,说给用户的一句(新建分组的提示、侧栏的说明都用它) */
-export function orgWhereText(realm: OrgRealm): string {
+/**
+ * 这一套的整理信息存在哪,说给用户的一句(新建分组的提示、侧栏的说明都用它)。
+ * `inCloud`:云端这一套此刻是不是真存在云端;缺省看 `CLOUD_ORG_IN_CLOUD`,在线屏在探到老服务端时传 false。
+ */
+export function orgWhereText(realm: OrgRealm, inCloud: boolean = CLOUD_ORG_IN_CLOUD): string {
   if (realm === "local") return "只记在这台机器上";
-  return CLOUD_ORG_IN_CLOUD ? "存在云端，换设备也能看到" : "暂时只记在这台浏览器里";
+  return inCloud ? "存在云端，换设备也能看到" : "暂时只记在这台浏览器里";
 }
 
 /** 「新建分组」处说的话:这是哪一套分组、存在哪、装什么 */
-export function groupNoteText(realm: OrgRealm): string {
+export function groupNoteText(realm: OrgRealm, inCloud: boolean = CLOUD_ORG_IN_CLOUD): string {
   return realm === "local"
     ? `本地分组：${orgWhereText("local")}，只能放本机的项目。`
-    : `云端分组：${orgWhereText("cloud")}，只能放云端的项目。`;
+    : `云端分组：${orgWhereText("cloud", inCloud)}，只能放云端的项目。`;
+}
+
+/**
+ * 云端项目列表取到了之后,把整理信息里**已经不在列表里**的项目清掉,免得云端那一份只增不减:
+ * 项目条目没有分组、置顶、归档(没有任何整理信息,只剩一个位置)的去掉;项目下的对话条目跟着项目去掉。
+ * 有整理信息的条目留着(也许是列表一时没取全)。列表没取到(`ids` 为 null)不清理。没有要清的返回原对象。
+ */
+export function pruneOrg(org: OrgState, ids: ReadonlySet<string> | null): OrgState {
+  if (!ids) return org;
+  const keep = (p: OrgProject) => ids.has(p.id) || p.groupId !== null || !!p.pinned || !!p.archived;
+  const projects = org.projects.filter(keep);
+  const known = new Set([...ids, ...projects.map((p) => p.id)]);
+  const chats = org.chats.filter((c) => known.has(c.projectId));
+  if (projects.length === org.projects.length && chats.length === org.chats.length) return org;
+  return { ...org, projects, chats };
 }
 
 /** 侧栏要的分组清单:存起来的分组盖上这一套的标记 */

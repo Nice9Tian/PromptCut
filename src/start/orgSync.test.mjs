@@ -12,11 +12,13 @@
  *   SYNC-06 老服务端(没有这条路由):不报错、不重试、改动留本机;之后支持了再 refresh 就补上
  *   SYNC-07 传的过程中又有新改动:传完仍标待同步并再传一次
  *   SYNC-08 云端比本机记的版本还旧(云端被重置):以云端为出发点,把本机整份再传上去
+ *   SYNC-10 两台设备各自在存储接上之前做过分组、第一次连云端:取并集,谁的都不丢
+ *   SYNC-11 同步记录坏了读出来当没记过;存下去读回来一致
  *   SYNC-09 stop 之后不再排任务、不再回调
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { OrgUnsupportedError, createOrgSync } from './orgSync.ts';
+import { OrgUnsupportedError, createOrgSync, parseSyncMeta, syncMetaKey } from './orgSync.ts';
 import { emptyOrg } from './vibeOrg.ts';
 
 const org = (o = {}) => ({ v: 1, realm: 'cloud', groups: [], projects: [], chats: [], ...o });
@@ -251,4 +253,34 @@ test('SYNC-09 stop 之后不再排任务、不再回调', async () => {
   h.edit(org({ groups: [{ id: 'a', name: 'y' }] }));
   assert.equal(h.live().length, 0);
   assert.ok(h.state.statuses.length <= seen + 1);
+});
+
+test('SYNC-10 两台设备各自在存储接上之前做过分组、第一次连云端:取并集,谁的都不丢', async () => {
+  const server = fakeServer();
+  const d1 = harness({ server, local: org({ groups: [{ id: 'g1', name: '设备一的' }] }) });
+  await d1.sync.refresh(); // 设备一先连:整份传上去
+  const d2 = harness({ server, local: org({ groups: [{ id: 'g2', name: '设备二的' }] }) }); // 设备二第一次连,云端已有设备一的
+  await d2.sync.refresh();
+  assert.deepEqual(server.org.groups.map((g) => g.id).sort(), ['g1', 'g2']);
+  assert.deepEqual(d2.state.org.groups.map((g) => g.id).sort(), ['g1', 'g2']);
+  // 设备二本机什么都没有:直接采用云端的,不多传
+  const puts = server.puts;
+  const d3 = harness({ server });
+  await d3.sync.refresh();
+  assert.equal(server.puts, puts);
+  assert.deepEqual(d3.state.org.groups.map((g) => g.id).sort(), ['g1', 'g2']);
+});
+
+test('SYNC-11 同步记录坏了读出来当没记过;存下去读回来一致', () => {
+  assert.equal(parseSyncMeta(null), null);
+  assert.equal(parseSyncMeta('{not json'), null);
+  assert.equal(parseSyncMeta(JSON.stringify({ version: -1, dirty: true })), null);
+  assert.equal(parseSyncMeta(JSON.stringify({ version: 'x' })), null);
+  const base = org({ groups: [{ id: 'g', name: 'x' }] });
+  assert.deepEqual(parseSyncMeta(JSON.stringify({ version: 4, base, dirty: true })), { version: 4, base, dirty: true });
+  assert.deepEqual(parseSyncMeta(JSON.stringify({ version: 2 })), { version: 2, base: null, dirty: false });
+  // base 标着 local 的当成不认(不会把本地那一套混进云端的同步记录)
+  const local = parseSyncMeta(JSON.stringify({ version: 1, base: { v: 1, realm: 'local', groups: [{ id: 'g', name: 'x' }], projects: [], chats: [] }, dirty: false }));
+  assert.deepEqual(local.base, emptyOrg('cloud'));
+  assert.match(syncMetaKey('acc:x'), /^pc\.start\.orgsync\.cloud\./);
 });

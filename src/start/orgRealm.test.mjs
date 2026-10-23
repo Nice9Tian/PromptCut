@@ -6,13 +6,14 @@
  *   ORGR-01/02 本地分组只收本机项目、云端分组只收云端项目;
  *   ORGR-03/04 跨着放被拦住,并给出说明(整理信息原样不动);右键菜单里另一套的分组置灰并说明;
  *   ORGR-05/06/07 两套分组的存储键互不覆盖,内容里的标记对不上就不认,分套之前的老键认一次;
- *   ORGR-08 游客没有云端那一份:没有范围就读不到也存不了。
+ *   ORGR-08 游客没有云端那一份:没有范围就读不到也存不了;
+ *   ORGR-09/10 云端分组的说法(接上云端、老服务端改口)与清理。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  LOCAL_ORG_SCOPE, addGroup, cloudOrgScope, emptyOrg, groupsOf, loadOrg, mergeProjects, moveProject,
-  moveRefusal, moveTargetsFor, orgKey, parseOrg, saveOrg, withGroups, withProjects,
+  CLOUD_ORG_IN_CLOUD, LOCAL_ORG_SCOPE, addGroup, cloudOrgScope, emptyOrg, groupNoteText, groupsOf, loadOrg, mergeProjects, moveProject,
+  moveRefusal, moveTargetsFor, orgKey, orgWhereText, parseOrg, pruneOrg, saveOrg, withGroups, withProjects,
 } from './vibeOrg.ts';
 
 /** 一个最小的 localStorage:node 里没有,用例自己装一个,每条用例换一份干净的 */
@@ -177,4 +178,35 @@ test('ORGR-08 游客没有云端那一份:没有范围就读不到、也存不�
   assert.deepEqual(loadOrg('cloud', null), emptyOrg('cloud'));
   saveOrg(null, addGroup(emptyOrg('cloud'), '不该存', () => 'g1').org);
   assert.equal(store.size, 0);
+});
+
+test('ORGR-09 云端分组说话:接上云端是「存在云端,换设备也能看到」;探到老服务端改口成只记在这台浏览器里;本地分组不受影响', () => {
+  assert.equal(CLOUD_ORG_IN_CLOUD, true);
+  assert.equal(orgWhereText('cloud'), '存在云端，换设备也能看到');
+  assert.equal(orgWhereText('cloud', false), '暂时只记在这台浏览器里');
+  assert.equal(orgWhereText('local'), '只记在这台机器上');
+  assert.equal(orgWhereText('local', true), '只记在这台机器上');
+  assert.equal(groupNoteText('cloud'), '云端分组：存在云端，换设备也能看到，只能放云端的项目。');
+  assert.equal(groupNoteText('cloud', false), '云端分组：暂时只记在这台浏览器里，只能放云端的项目。');
+  assert.equal(groupNoteText('local'), '本地分组：只记在这台机器上，只能放本机的项目。');
+});
+
+test('ORGR-10 清理:列表里已经没有的项目,没有任何整理信息的条目去掉、对话跟着去掉;有整理信息的留着;列表没取到不清', () => {
+  const org = {
+    ...emptyOrg('cloud'),
+    groups: [{ id: 'g', name: '组' }],
+    projects: [
+      { id: 'live', groupId: null },
+      { id: 'gone-plain', groupId: null },
+      { id: 'gone-grouped', groupId: 'g' },
+      { id: 'gone-pinned', groupId: null, pinned: true },
+      { id: 'gone-archived', groupId: null, archived: true },
+    ],
+    chats: [{ id: 'c1', projectId: 'live' }, { id: 'c2', projectId: 'gone-plain' }, { id: 'c3', projectId: 'gone-pinned', pinned: true }],
+  };
+  const out = pruneOrg(org, new Set(['live']));
+  assert.deepEqual(out.projects.map((p) => p.id), ['live', 'gone-grouped', 'gone-pinned', 'gone-archived']);
+  assert.deepEqual(out.chats.map((c) => c.id), ['c1', 'c3']);
+  assert.equal(pruneOrg(org, null), org, '列表没取到:不动');
+  assert.equal(pruneOrg(out, new Set(['live'])), out, '没有要清的:返回原对象');
 });

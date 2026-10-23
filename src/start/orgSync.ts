@@ -118,7 +118,13 @@ export function createOrgSync(options: OrgSyncOptions): OrgSync {
   };
   const schedule = options.schedule ?? ((fn: () => void, ms: number) => { const id = setTimeout(fn, ms); return () => clearTimeout(id); });
 
-  let meta: SyncMeta = loadMeta() ?? { version: 0, base: null, dirty: false };
+  const loaded = loadMeta();
+  let meta: SyncMeta = loaded ?? { version: 0, base: null, dirty: false };
+  /**
+   * 这台设备从没跟云端对过(没有同步记录):它本机已有的整理信息(云端存储接上之前做的)是「没传上去的」,
+   * 不能因为云端已经有别的设备传的一份,就被直接顶掉;当成有未传改动、没有共同出发点,和云端的那份取并集。
+   */
+  let firstContact = loaded === null;
   let status: SyncStatus = "idle";
   let stopped = false;
   let cancelTimer: (() => void) | null = null;
@@ -166,6 +172,7 @@ export function createOrgSync(options: OrgSyncOptions): OrgSync {
     const remote = await transport.get();
     const theirs = readRemote(remote.org);
     const mine = getOrg();
+    if (firstContact && hasContent(mine) && !meta.dirty) setMeta({ ...meta, dirty: true });
     if (remote.version < meta.version) {
       // 云端比我记的还旧(云端数据被重置过):以云端为出发点,把本机的整份再传上去
       setMeta({ version: remote.version, base: theirs, dirty: hasContent(mine) || meta.dirty });
@@ -192,6 +199,7 @@ export function createOrgSync(options: OrgSyncOptions): OrgSync {
     setStatus("syncing");
     try {
       await pullAndPush();
+      firstContact = false;
       failures = 0;
       setStatus(meta.dirty ? "pending" : "synced");
     } catch (e) {
@@ -231,4 +239,30 @@ export function createOrgSync(options: OrgSyncOptions): OrgSync {
       clearTimer();
     },
   };
+}
+
+/* ---------------- 同步记录存在本机 ---------------- */
+
+/** 同步记录的键:和整理信息本身(`orgKey("cloud", scope)`)分开存,一个是内容、一个是「内容和云端的关系」 */
+export const syncMetaKey = (scope: string): string => `pc.start.orgsync.cloud.${scope}`;
+
+/** 读回来的东西不可信:认不出就当没记过(第一次、记录丢了、被改坏) */
+export function parseSyncMeta(raw: string | null): SyncMeta | null {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw) as Record<string, unknown>;
+    if (!v || typeof v !== "object" || !Number.isSafeInteger(v.version) || (v.version as number) < 0) return null;
+    const base = v.base === null || v.base === undefined ? null : readRemote(v.base);
+    return { version: v.version as number, base, dirty: v.dirty === true };
+  } catch {
+    return null;
+  }
+}
+
+export function loadSyncMeta(scope: string): SyncMeta | null {
+  try { return parseSyncMeta(localStorage.getItem(syncMetaKey(scope))); } catch { return null; }
+}
+
+export function saveSyncMeta(scope: string, meta: SyncMeta): void {
+  try { localStorage.setItem(syncMetaKey(scope), JSON.stringify(meta)); } catch { /* 存不了就只在这次打开期间有效 */ }
 }

@@ -156,6 +156,8 @@ export function ProjectSidebar(props: {
   groupNote?: string;
   /** 新建分组做不了(游客没有分组)时的说明;给了就置灰并挂在悬停上 */
   newGroupBlocked?: string | null;
+  /** 「分组」那张卡里「新建分组」下面的一行状态(云端分组没同步上时);没有就不显示 */
+  groupStatus?: string | null;
   /** 「项目」那张卡顶上的一行状态(正在取列表、取不到、重试);没有就不显示 */
   notice?: ReactNode;
   /** 聊天页正开着的那条对话:它那一行标成当前项 */
@@ -480,6 +482,7 @@ export function ProjectSidebar(props: {
             <span className="ps-row-icon" aria-hidden="true">＋</span>
             <span className="ps-row-name ps-muted">新建分组</span>
           </button>
+          {props.groupStatus && <div className="ps-side-hint" role="status" data-pc="start-group-status">{props.groupStatus}</div>}
           </div>}
         </div>
 
