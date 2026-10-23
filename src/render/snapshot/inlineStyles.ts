@@ -91,6 +91,15 @@ function isClipWrapper(el: Element | null): boolean {
 }
 
 /**
+ * 剪辑段里的卡在嵌套场景里的包裹层(`data-pc-flat-clip`;`createSnapshot` 的 `flatControls`,〔裁〕R02)。它的直接子节点也是
+ * control 快照的顶层:control 快照只取包裹层里面,重放时没有嵌套场景那几层祖先,继承属性(字体、行高、颜色……)要一律内联,
+ * 不然重放出来字体退回缺省、字的位置都不对。缺省不认它(整场景快照与别的调用方逐字节不变)。
+ */
+function isFlatClipWrapper(el: Element | null): boolean {
+  return !!el && el.hasAttribute("data-pc-flat-clip") && el.hasAttribute("data-pc-local-frame");
+}
+
+/**
  * 量基线:每个 (命名空间, 标签) 一个干净元素挂在场景根下量一次,**一次挂、一次读、一次摘**
  * (别在逐元素循环里反复进出 live DOM —— 每进出一次就是一次强制重排)。
  *
@@ -380,7 +389,9 @@ export function inlineDOMStyles(
   orig: Element[],
   copy: Element[],
   extraBaselineTags: string[] = [],
+  opts: { flatWrappers?: boolean } = {},
 ): InlineStylesResult {
+  const wrapperOf = opts.flatWrappers ? (el: Element | null) => isClipWrapper(el) || isFlatClipWrapper(el) : isClipWrapper;
   const needed = new Map<string, { ns: string; tag: string }>();
   for (const el of orig) {
     const key = keyOf(el);
@@ -399,7 +410,7 @@ export function inlineDOMStyles(
     const cs = getComputedStyle(from);
     const parent = from.parentElement;
     // 顶层 = 整场景 html 的场景根,或 control 快照里包裹层的直接子节点
-    const isTop = from === root || isClipWrapper(parent);
+    const isTop = from === root || wrapperOf(parent);
     const parentInherited = isTop || !parent ? null : inheritedOf.get(parent) ?? null;
     const grid = onLayoutGrid(from, cs, !!parent && (zoomedOf.get(parent) ?? false));
     const forced = forcedProps(from, animated);
@@ -415,7 +426,7 @@ export function inlineDOMStyles(
   return {
     styleAs(el, tag, ns = HTML_NS) {
       const parent = el.parentElement;
-      const isTop = topOf.get(el) ?? (el === root || isClipWrapper(parent));
+      const isTop = topOf.get(el) ?? (el === root || wrapperOf(parent));
       const parentInherited = isTop || !parent ? null : inheritedOf.get(parent) ?? null;
       const cs = getComputedStyle(el);
       const snap = snapOf.get(el) ?? onLayoutGrid(el, cs, !!parent && (zoomedOf.get(parent) ?? false)).snap;

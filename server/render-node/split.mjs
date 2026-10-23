@@ -4,6 +4,7 @@ import { resultKeyOf } from './fingerprint.mjs';
 import { isStreamOrigin, streamSegmentFrameCount, STREAM_SEGMENT_FRAMES } from '../../src/render/streamSegments.mjs';
 import { EXPORT_FRAMES_PRIORITY } from './export-plan.mjs';
 import { reviewedCard } from '../../src/kernel/frameMode.mjs';
+import { frame3d } from '../../src/render/streamPlanRules.mjs';
 
 /**
  * `plan` 任务 → 细任务(设计第 2 节、Q1,契约 B.4)。
@@ -366,11 +367,16 @@ const isNum = Number.isFinite;
  * 流的计划没给这两项(改分段规则之前的调用方)就不出浏览器那一份。
  * 流标了 `solo`(源依赖卡的流:要解素材、执行素材效果卡;框用了三维的独立卡的流:浏览器那条取像素的路没有验过)也不出:
  * 这两类只由桌面应用和渲染主机产,浏览器节点收不到这种任务(切分方自己的那一份要本机转码,`filter.mjs` 规则 2 本来就挡着)。
+ * 例外是 `solo: 'flat'`(剪辑段里摊出来的独立卡)里外框平面的那些:〔裁〕R02(2026-10-22 用户定「在线浏览器也替剪辑段里的重卡产流」),
+ * 和顶层的平面独立卡一样给浏览器出一份。浏览器按任务的片段 id 认出它是虚拟片段,隔离工程带着剪辑段链建
+ * (`src/online/bakeTask.ts` 的 `isolatedBakeProject`),后台舞台在嵌套场景里取这张卡的包裹层(`src/StageView.tsx` 的 `bakeFrame`)。
+ * 外框三维的(`control.appearance.frame`)照旧只由桌面应用和渲染主机产,同顶层的 `'spatial'`。
  */
 function browserStreamInputOf(stream, control) {
   if (stream?.kind !== 'card' || stream.plane !== 'local') return null;
-  // 单独成流的两类卡(`frame-stream.mjs` 的 `soloStreamKind`:源依赖卡、框用了三维的独立卡)只出切分方自己的那一份
-  if (stream.solo) return null;
+  // 单独成流的两类卡(`frame-stream.mjs` 的 `soloStreamKind`:源依赖卡、框用了三维的独立卡)只出切分方自己的那一份;
+  // 剪辑段里外框平面的独立卡(`'flat'`)例外(〔裁〕R02,见上)
+  if (stream.solo && !(stream.solo === 'flat' && !frame3d(control?.appearance?.frame ?? control?.frame))) return null;
   const ids = stream.clipIds;
   if (!Array.isArray(ids) || ids.length !== 1 || ids[0] !== stream.topClipId || control?.clipId !== ids[0]) return null;
   const { bound, offset } = stream;

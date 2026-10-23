@@ -6,6 +6,7 @@
 
 | 事项 | 计划文件 | 状态 |
 |---|---|---|
+| **下一版（0.7.21）要带什么：R01 返工与「速度」入口** | `docs/plan/handoff-021.md` | **接手先读这一份**。0.7.19／0.7.20 已发出并部署；用户 2026-10-23 推翻了剪辑段 `clip-path` 那条二级〔裁〕，R01 按做不通返工（分支 `claude/revert-r01`），随下一版一起发；「速度」入口在 `claude/clip-speed`，用户要先审〔裁〕才合 |
 | 轨道流：重卡在播放时贴的 alpha 视频流 | `docs/plan/r8-streams-task.md`；编码原型报告 `docs/plan/g0-b-stream-prototype.md` | 已合入 main（`787f7d9`，R8 G1～G7）；遗留见下文「已做步骤的遗留」的性能缺陷一条（2026-09-27 勘误，C10 契约第 19 节） |
 | 共享 WebGL 渲染器：canvas 卡共用一个 WebGL 上下文 | `docs/plan/r9-webgl-task.md` | 已合入 main（`eff2011`，R9 M1～M5）（2026-09-27 勘误，C10 契约第 19 节） |
 | 素材服务与文档服务（本地或远程，可任意组合部署）、产物入库、改动竞态、Agent 的查询进程、在线浏览器模式 | `docs/plan/cloud-task.md`；动工前的问题已定，见文末「已定的决议」 | 大部分已随 M5～M8 与 C5～C10 做完（素材服务、文档服务、产物入库、Agent 直接写文档服务、在线浏览器模式；见下文「语义与代码的差距」末条）。还没做的是 I 节：预渲染进程的三种模式与 Agent 查询进程（见「语义与代码的差距」的「查询渲染」一条；I4 的实现注写在 `cloud-task.md` 里） |
@@ -36,6 +37,7 @@
 | 以后再做：过期云端项目转本地后，独立时创建共同标记，将来从标记点合入，并用可视化界面处理冲突 | `docs/plan/account-binding-task.md`“以后再做”；具体计划另定 | 本期不做标记或独立副本合并；区别于本期暂时离线项目仍回原云端的冲突处理 |
 | 音频整体改成浏览器端 JS | `docs/plan/audio_structure_plan.md`（A0～A7）；判重测试计划 `docs/plan/audio_determine_plan.md` | 计划已写，未动工 |
 | 以后再做：桌面版给只有素材原尺寸的云端素材补转素材小尺寸；导出页装虚拟定时器 | `docs/plan/future_planning.md` | 暂缓 |
+| 以后再做：在线编辑器主页面自己读的素材也进浏览器长期缓存——声音播放、波形图（现在整份读声音文件）、素材库缩略图、导出（2026-10-23 用户定先记待办） | 还没有计划文件；舞台那条路的做法与清单见分支 `gemini/media-cache` 的 `docs/reports/AGENT-gemini-media-cache.md`（第 5 节列了主页面仍走 `?t=` 的每一处） | 舞台读素材已在 `gemini/media-cache` 做成按账号加项目固定的地址、一年不可变的私有缓存（未合 main）。主页面这些读法仍是地址带票据、`no-store`，下次打开要重下。做法方向：主站加一条和舞台 `/media-s/` 一样的同源 cookie 路由，PromptCut 的 nginx 模板与 VisuHive 官网的 landing 配置两份都要改；声音要进 Web Audio，得是同源或带跨源许可 |
 | Agent 与工作方式：创造力等级、「用户正在编辑」、多 Agent、SKILL 经 MCP 直连、后台运行（托盘与悬浮窗）、Agent 用 JS 自定义测量 | `docs/plan/agent-workflow-plan.md`（2026-09-30 写，A1～A6） | A1～A6均已合入main；A4/A5及ps1-bom、draft-lock、release-no-git本轮验收并出正式应用0.7.14/外壳0.2.7，release已从main快进（2026-10-03，REPORT-post-M8第15轮）；R1/R2/R3/R4/R5/R7/R8过，R6物理双屏待用户，草稿锁政策维持 |
 | 存储占用（二级功能项）：桌面版帧库设上限、按项目最近使用淘汰、给「清理缓存」入口；导出产物目录有列表、大小与删除 | `docs/plan/storage-plan.md`（2026-09-29 写，含语义 dry run 与接口约定）；排在 M8 之后、团队测试之前（主计划第 4 节） | 2026-09-29 用户加：帧库 `Videos\PromptCut\frame-library` 已长到 273 GB，没有上限也没有淘汰；导出产物每次一整份，连导三次就三份，没有清理入口。计划已写，按用户 2026-09-29 的 goal 不等确认开工（〔裁〕见计划第 3 节）。**已合入 main**（`fe62c17f`，2026-09-30，`docs/reports/REPORT-post-M8.md` 第 2 轮），随 0.7.3 发布（`/editor` 已部署，桌面补丁待 PC 上线） |
 
@@ -202,6 +204,12 @@
 - **一次改动很长的带 id 数组里的大量元素是平方级的**（2026-10-22 查出，未排期）。出处：`server/docservice/json-ops.mjs`。一批里增删同一条很长的带 id 数组的许多元素时，每个元素都要在当前数组里按 id 找位置，于是整批是 O(n²)。实测：在一条 16000 个片段的序列上撤销 16000 处改动要 **11.7 秒**。**不是 0.7.20 引入的**——页面提交走的是同一条路，有同样的代价；是查改密退出撤回的耗时（安全专审 SEC-03）时顺带量出来的。撤回那一侧已经按每批最多 1000 项、256 KiB 分批落地绕开，页面提交本来就受一次提交 256 KiB 的上限约束，所以眼下不致命。方向：给带 id 数组建一次 id → 下标的索引再整批套用，而不是每个元素各找一遍。验收：同样的 16000 片段 × 16000 改动的用例耗时从 11.7 秒降下来，`src/store/*.test.mjs`、`server/test/docservice-json-ops*` 与撤回那几条全过。
 
 - **舞台闸门判安卓只看 `userAgentData.platform`，非安全来源下这道保护会静默失效**（2026-10-22 主会话在安卓模拟器上实测查出，未排期）。出处：`src/online/stageGate.ts` 的 `readGateEnv()`——`platform` 只从 `navigator.userAgentData.platform` 取，没有退回 UA 字符串；而紧挨着的 `identity` 已经用了 `nav.userAgent`。`userAgentData` 和 `deviceMemory` 都是**仅安全来源**可用：实测在 `http://10.0.2.2:5950`（非安全来源）上 `isSecureContext:false`、`'userAgentData' in navigator` 与 `'deviceMemory' in navigator` 都是 **false**；经 `adb reverse` 改用 `http://localhost:5950`（安全来源）后，同一台模拟器报 `isSecureContext:true`、`deviceMemory:4`、`uaDataPlatform:"Android"`。后果：非安全来源（局域网自建、纯 HTTP 部署）上 `platform` 为 null，`stageGate.ts` 第 138 行那条「安卓不到 8 GB 就停在一个舞台、不往上试」的保护不触发，低内存安卓会去试多舞台——而安卓上舞台崩了整页跟着崩、又不会自动重新载入，正是这条保护要防的。**生产不受影响**：在线编辑器走 HTTPS，是安全来源，这次实测已证明那里读得到。改法：`platform` 取不到时退回按 `navigator.userAgent` 里的 `Android` 判（UA 精简后仍带 Android）；那时 `deviceMemory` 同样读不到，`!(NaN >= 8)` 为真，正好落到保守的「停在一个舞台」。验收：补一条 `readGateEnv` 的单测（无 `userAgentData`、UA 带 Android → platform 判为安卓），`src/online/stageGate.test.mjs` 原有用例不退化。
+
+- **舞台端口白名单把正当的素材请求拦掉**（2026-10-23 主会话实测，未排期）。`scripts/probes/stage-port-whitelist-probe.mjs` 的「新建项目、点、播放、卡片声音这一路，舞台端口没有一个正当请求被拒」不过，被拒的是 `GET /@media/<hash>`。**不是 0.7.19 引入的**：主会话在在线浏览器合并前的提交 `efd24aec` 上跑同一支探针，同一条断言同样失败（合并前 2 个请求被拒、合并后 1 个）。方向是「拦过头」不是「放过头」，不是安全漏洞，但正当的素材请求被挡会影响舞台取素材。要查的是舞台端口白名单对 `/@media/<hash>` 这类带哈希路径的判法。验收：这支探针 `fails: []`。
+
+- **渲染队列「plan 切分完、细任务全部落定」等不到**（2026-10-23 主会话实测，未排期）。`claim-gate-probe` 的 `[off] plan 切分完、细任务全部落定` 等不到；`S3-1`（渲染服务本机整套演练）栽在同一症状「等『计划与细任务做完』超时（240000 ms）」；清单里 `P-c10-browser-full` 的 known 也记着「main 上 A5（独立渲染主机认领清单计划）超时」。**不是 0.7.19 引入的**：主会话在合并前的提交 `efd24aec` 上跑 `claim-gate-probe`，`ok:false`、`fails` 一字不差。三处同一族，值得当一件事查。验收：`claim-gate-probe` 与 `S3-1` 都 `ok: true`。
+
+- **给 Agent 一个改片段速度的工具**（2026-10-23 用户定「暂时不用。写个待办。」，未排期）。现状：`claude/clip-speed` 分支做了片段速度（`TrackClip.speed`），Agent 在时间轴一览里**看得到** `speed`，但没有改它的工具，只能由用户在界面上改（手机版子导航「速度」、桌面编辑分区「速度」一栏）。要加的话得在 `server/tools/` 下加一个工具并改 `product/agent.md`「Agent 能做什么」那一节——**那是二级语义，加之前要先问用户**。做之前先确认：改速度会连带后面的段后移（用户 2026-10-23 定：变长重合就推着后移、变短尾部留空），所以这个工具的回包要说清它动了哪几段，不能只回改了哪一段。
 
 ## 以后研究（未排期）
 

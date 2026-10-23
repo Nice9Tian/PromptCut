@@ -9,11 +9,15 @@
  *   - `manifestKey`:清单在内容库里的键 `<resultKey>:<from>-<to>`(同 `manifestKeyOf`)。
  *
  * `isolatedCardProject` 已挪进页面与服务端共用的纯模块 `src/kernel/isolatedCard.mjs`,桌面 `FramePipeline#isolatedCardProject` 改引它(契约第 4.3 节)。
+ * 剪辑段里摊出来的卡(虚拟片段,〔裁〕R02:在线浏览器也替剪辑段里的重卡产流)走 `isolatedBakeProject` 的另一支:隔离工程带着剪辑段链
+ * (`kernel/cutFlatten.mjs` 的 `isolatedFlatProject`,和切分方产 `'flat'` 流同一份),时间不平移;后台舞台按「任务的本地帧 + 卡的第一帧」
+ * 推到项目帧、在嵌套场景里取这张卡的包裹层(`StageView.tsx` 的 `bakeFrame`,请求带 `frameBase`)。
  *
  * 本模块属于 render 这一层(`src/online/`):不引 editor,不引 `mode.ts`。
  */
 
 import { isolatedCardProject } from "../kernel/isolatedCard.mjs";
+import { isFlatClipId, isolatedFlatProject } from "../kernel/cutFlatten.mjs";
 
 /** 清单的版本(同 `artifact-transfer.mjs` 的 `RESULT_VERSION`) */
 export const RESULT_VERSION = 1;
@@ -44,6 +48,32 @@ export function bakeInputOf(task: { input?: Record<string, unknown> } | null | u
 
 /** 隔离单卡工程:桌面预渲染与本页共用的唯一一份(`src/kernel/isolatedCard.mjs`) */
 export { isolatedCardProject };
+
+/** 剪辑段里的卡在隔离工程里拿掉自己的外观(由舞台上它外面的包裹层加,不在流里;同切分方 `localClip` 去掉的那几项);框原样(快照取包裹层里面) */
+function bareCardClip(clip: Record<string, unknown>): Record<string, unknown> {
+  const out = structuredClone(clip);
+  delete out.motion; delete out.opacity; delete out.fadeIn; delete out.fadeOut; delete out.emphasis;
+  return out;
+}
+
+/**
+ * 这一段任务的隔离工程:顶层的卡是隔离单卡工程(目标平移到 `-phase` 起,本地帧 n 就是全局帧 n);剪辑段里摊出来的卡
+ * (片段 id 带 `~`)带着剪辑段链、时间不平移(`isolatedFlatProject`),本地帧 n 是项目帧 `input.sampling.firstFrame + n`。
+ * 找不到片段抛错(不可重试)。
+ */
+export function isolatedBakeProject<P extends object>(project: P, input: BakeInput): P {
+  if (!isFlatClipId(input.clipId)) return isolatedCardProject(project, input);
+  const isolated = isolatedFlatProject(project, input.clipId, bareCardClip);
+  if (!isolated) throw Object.assign(new Error(`剪辑段里没有片段 ${input.clipId}`), { retryable: false });
+  return isolated as P;
+}
+
+/** 剪辑段里的卡:任务的本地帧 0 是项目的第几帧(`input.sampling.firstFrame`);顶层的卡回 null(本地帧就是隔离工程的全局帧) */
+export function bakeFrameBase(input: BakeInput): number | null {
+  if (!isFlatClipId(input.clipId)) return null;
+  const first = Number((input.sampling as { firstFrame?: unknown }).firstFrame);
+  return Number.isSafeInteger(first) && first >= 0 ? first : null;
+}
 
 /** 清单在内容库里的键:`<resultKey>:<from>-<to>`;缺东西回 null */
 export function manifestKey(ref: { resultKey?: unknown; range?: { from?: unknown; to?: unknown } | null } | null | undefined): string | null {
