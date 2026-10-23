@@ -82,12 +82,33 @@ function JoinSection(props: { onEnterEditor: () => void }): JSX.Element {
   );
 }
 
+/** 地址里显式要看新开始页(`?ui=vibe`);读不到地址(非浏览器环境)按没要 */
+function vibePreviewAsked(): boolean {
+  try { return new URLSearchParams(location.search).get("ui") === "vibe"; } catch { return false; }
+}
+
 /**
- * 在线浏览器(电脑身份)的首屏整页换成 `src/start/`:没登录是登录页,登录了是带左侧项目栏的开始页。
- * 原来这里只摆一块账号表单(`AccountProjects`),桌面开始页仍在用它,所以那个组件不动。
+ * 在线浏览器(电脑身份)的首屏。
+ *
+ * 两套并存(〔裁〕:主会话 2026-10-23,二级,0.7.21 发版时定,记在 `docs/plan/release-021-rulings.md` V21-12):
+ *   - **缺省**:账号表单那一块(`AccountProjects`)—— 真实的项目列表、游客入口、加入别人的项目。线上就是这一套。
+ *   - **`?ui=vibe`**:`src/start/` 那一整套新界面(Vibe 模式的登录页、开始页、聊天页、详细编辑)。它这一版
+ *     **只跑界面**:项目、聊天、时间轴都是 `src/start/mock*.ts` 里的假数据(`claude/browser-start-ui` 的任务范围,
+ *     用户 2026-10-23 边看边定的界面取舍记在 `docs/plan/user-decisions-2026-10-23.md`)。接上业务层之后把缺省换成它。
+ *
+ * 桌面开始页仍用 `AccountProjects`,那个组件不动。
  */
 function OnlineStartPage(props: { onEnterEditor: () => void }): JSX.Element {
-  return <OnlineStart onEnterEditor={props.onEnterEditor} />;
+  if (vibePreviewAsked()) return <OnlineStart onEnterEditor={props.onEnterEditor} />;
+  return (
+    <div className="sp">
+      <header className="sp-bar">
+        <Logo size={22} />
+        <span className="sp-bar-spacer" />
+      </header>
+      <main className="sp-main"><AccountProjects online onEnterEditor={props.onEnterEditor} /></main>
+    </div>
+  );
 }
 
 export const StartPage: (props: { onEnterEditor: () => void }) => JSX.Element = ONLINE_BUILD ? OnlineStartPage : DesktopStartPage;
