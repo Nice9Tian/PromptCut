@@ -190,3 +190,26 @@ B12b 块点出第三类写法：**阈值是表达式**（`x > beat * 3`），我
 
 B08b 块的 manager 如实上报：那一轮 agy（Argon）在**首轮**自己调了 `manage_subagents {"Action":"list"}` 和 `{"Action":"kill_all"}`，清掉了 agy 侧的 subagent；另外读了它自己的会话日志 `C:\Users\admin\.gemini\antigravity-cli\brain\…\transcript.jsonl`（`~\.gemini` 属凭据类路径，读到的是它自己的对话记录，不是密钥）。两样都超出「只读仓库与 scratchpad」的授权范围，manager 从第二轮起明令禁止、之后没再出现。
 **可能的影响**：如果 agy 的 subagent 列表是跨会话全局的，当时并行在跑的其它块（B08a、B12a、B05b 等）可能被波及。本次各块最终都交出了报告，但多块出现过「首轮超时／STATUS=ERROR 后返工」，无法排除与这次 `kill_all` 有关。
+
+## 九、B07a 报到，以及一件主 Agent 必须更正的事
+
+### 更正：本分支的基准已经落后 main 很多
+
+我的基准是 `2249179a`。写这份报告期间，发版主会话一直在往 main 合东西，**到现在我落后 main 159 个提交**（合了 `stage-guard-fix`、`guest-fix`、`drive-connector` 的服务端层、`mobile-thumbstrip`、`browser-start-ui` 等）。两个后果：
+
+1. **我给 B07a 的一个前提是错的**：我说「卡片在隔离环境里用的浏览器存储不跨会话、不跨项目留存」还没进 main 的语义。它的 manager 查出那条**已经在 main** 的 `docs/semantics/product/platforms.md`（现在是第 86 行，带〔裁：主会话 2026-10-23，二级〕），在分支上的只是代码与探针。我自己核过：我的基准里没有，main 里有 —— 是我的基准旧，不是它读错。
+2. **main 多了 3 支我这次没审过的探针**：`drive-range-probe.html`、`guest-readonly-ui-probe.mjs`、`media-cache-probe.mjs`。发版会话已经自己建了 `v21-manifest.mjs` 给它们写排除原因。
+
+**合并代价（我用 `git merge-tree` 只读试算过，没动工作区）**：退出码 0、**没有冲突**，自动合并的只有三个双方都改过的文件 —— `docs/plan/TODO.md`、`scripts/acceptance/acceptance-lib.mjs`、`scripts/acceptance/four-stage-manifest.mjs`。
+**合完必须重跑一次 `--check-coverage`**：双方都动过台账，而且 main 新增的 3 支探针归 `v21-manifest.mjs` 登记，我这边改了 `coverageReport()` 的判据（新增「既被点名又被排除」判红），两边叠加的结果要实跑才算数。
+
+### B07a 的结论：已核的与仍开着的
+
+- **已采纳**：`c66-t9-probe` 第 1402、1405 行那两处 5 秒门槛 —— 我在第一遍耗时扫描里就改了。
+- **仍开着（我没动）**：
+  1. `c10-browser-probe.mjs`（被 3 个必跑清单项点名、且被 PT-05 读源码）第 315 行仍设 `PROMPTCUT_STREAMS: '0'`，A1/A2/A3/A5 全面断言已于 2026-10-13 作废的 `snap/` HTML 快照与 IndexedDB 表，A5 在 main 上已知超时。这是「必跑项里的核心探针要迁到轨道流」，工作量不小，要用户定时机。
+  2. `c10a-demo-probe.mjs`（挂在可选项 `X-c10a-demo-local`、清单已标 `STALE_OLD_ENTRY`）：B07a 建议删，理由是主干几步按已撤销的低内存档与已停产的 `px/`/`snap/` 写的。它是**注册在案的清单项**，删要连清单项一起收，留给用户拍板。
+  3. `card-plan-key-compare.mjs`：B07a 说它是合入前的一次性 git-diff 脚本、合进 main 后对 main 恒失败，规则已被 `server/test/card-cache-upstream-key.test.mjs`（我核过，文件在）与 `emphasis-key-probe.mjs` 覆盖。**它的「恒失败」我没核**（要看它怎么取 before/after），所以没动。
+  4. `card-table-digest-compare.mjs` 第 40 行缺省 `--expect` 写死了一串卡名，建议改空串。
+  5. `emphasis-key-probe.mjs` 第 205～221、273～288 行还在等/读 HTML 快照。
+  6. **桌面侧卡片隔离的覆盖缺口**：这一块 27 支里没有任何一支验「桌面版舞台与本机预渲染进程下，卡片代码调本机编辑器 `/api/*` 被拒」和「本机按哈希读素材只放行当前项目」。这是**缺探针**，不是探针过时。
