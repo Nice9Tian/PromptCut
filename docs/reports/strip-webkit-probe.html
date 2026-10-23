@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<title>iPhone Safari 缩略时间轴横向滚动探针页</title>
+<style>
+  :root {
+    --bg: #12151b;
+    --bg-page: #07090c;
+    --panel: #1a1f28;
+    --panel2: #222834;
+    --line: #2d3442;
+    --text: #e6eaf2;
+    --dim: #8b95a8;
+    --white: #ffffff;
+    --accent: #26c6e6;
+    --accent-dim: #12404c;
+    --on-accent: #04222a;
+    --warn: #e8b04a;
+    --danger: #e5604f;
+    --ok: #4cc38a;
+    --shade-weak: #0006;
+    --shade-strong: #000d;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  }
+
+  * {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg-page);
+    color: var(--text);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  .page-wrap {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 12px 12px 48px;
+  }
+
+  .top-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 12px;
+    margin-bottom: 14px;
+  }
+
+  .top-title {
+    margin: 0 0 6px;
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--white);
+  }
+
+  .top-guide {
+    margin: 0 0 10px;
+    padding: 8px 10px;
+    background: var(--accent-dim);
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--text);
+  }
+
+  .env-box {
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.5;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 10px;
+    color: var(--text);
+    word-break: break-all;
+    margin-bottom: 10px;
+  }
+
+  .env-box span.k {
+    color: var(--dim);
+  }
+
+  .top-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  button.act-btn {
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--on-accent);
+    background: var(--accent);
+    border: 0;
+    border-radius: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+  }
+
+  button.act-btn.secondary {
+    color: var(--text);
+    background: var(--panel2);
+    border: 1px solid var(--line);
+  }
+
+  button.act-btn:active {
+    filter: brightness(1.18);
+  }
+
+  .probe-group {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 12px;
+    margin-bottom: 14px;
+  }
+
+  .group-head {
+    margin: 0 0 4px;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--accent);
+  }
+
+  .group-desc {
+    margin: 0 0 8px;
+    font-size: 13px;
+    color: var(--text);
+  }
+
+  .metrics-box {
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.55;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
+  }
+
+  .metrics-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .ok-val { color: var(--ok); font-weight: 700; }
+  .bad-val { color: var(--danger); font-weight: 700; }
+  .warn-val { color: var(--warn); font-weight: 700; }
+
+  .ctrl-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0 8px;
+  }
+
+  .js-result, .touch-result {
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  /* 外层包裹：模拟 .mainstrip 及居中白线 .cf-line */
+  .mainstrip {
+    position: relative;
+    background: #0d1016;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+  }
+
+  .cf-line {
+    position: absolute;
+    left: 50%;
+    top: 2px;
+    bottom: 6px;
+    width: 2px;
+    margin-left: -1px;
+    background: var(--white);
+    border-radius: 6px;
+    box-shadow: 0 0 0 1px var(--shade-weak);
+    z-index: 6;
+    pointer-events: none;
+  }
+
+  /* 缩略块公共样式（与 src/mobile/mobile.css 第 158-169 行一致） */
+  .sp-l { flex: none; width: calc(50% - 46px); }
+  .sp-r { flex: none; width: 50%; }
+  .mblock {
+    flex: none;
+    width: 80px;
+    height: 64px;
+    border-radius: 10px;
+    position: relative;
+    overflow: hidden;
+    border: 2px solid transparent;
+    user-select: none;
+    -webkit-user-select: none;
+    margin-right: 4px;
+  }
+  .mblock.sel {
+    border-color: var(--accent);
+  }
+  .mblock .no {
+    position: absolute;
+    left: 5px;
+    top: 4px;
+    font-size: 11px;
+    font-family: var(--mono);
+    background: var(--shade-weak);
+    color: var(--white);
+    padding: 0 5px;
+    border-radius: 4px;
+  }
+  .mblock .du {
+    position: absolute;
+    left: 6px;
+    bottom: 4px;
+    font-size: 12px;
+    font-family: var(--mono);
+    font-weight: 600;
+    color: var(--white);
+    text-shadow: 0 1px 3px var(--shade-strong);
+  }
+
+  /* =========================================================================
+   * 各组独立样式：每组严格只改一条，不使用全局 ::-webkit-scrollbar 污染不需要它的组
+   * ========================================================================= */
+
+  /* 第 1 组：对照组（原样照抄 src/mobile/mobile.css 第 154-159 行） */
+  .g1 .strip-scroll {
+    display: flex; align-items: center; overflow-x: auto; overflow-y: hidden;
+    scrollbar-width: none; padding: 6px 0 10px; min-height: 80px;
+    touch-action: pan-x; overscroll-behavior-x: contain;
+    user-select: none; -webkit-user-select: none;
+  }
+  .g1 .strip-scroll .mblock.sel { touch-action: none; }
+  .g1 .strip-scroll::-webkit-scrollbar { display: none; }
+
+  /* 第 2 组：只去掉 overflow-y: hidden */
+  .g2 .strip-scroll {
+    display: flex; align-items: center; overflow-x: auto;
+    scrollbar-width: none; padding: 6px 0 10px; min-height: 80px;
+    touch-action: pan-x; overscroll-behavior-x: contain;
+    user-select: none; -webkit-user-select: none;
+  }
+  .g2 .strip-scroll .mblock.sel { touch-action: none; }
+  .g2 .strip-scroll::-webkit-scrollbar { display: none; }
+
+  /* 第 3 组：只去掉 ::-webkit-scrollbar { display: none } 那条规则 */
+  .g3 .strip-scroll {
+    display: flex; align-items: center; overflow-x: auto; overflow-y: hidden;
+    scrollbar-width: none; padding: 6px 0 10px; min-height: 80px;
+    touch-action: pan-x; overscroll-behavior-x: contain;
+    user-select: none; -webkit-user-select: none;
+  }
+  .g3 .strip-scroll .mblock.sel { touch-action: none; }
+
+  /* 第 4 组：只去掉 scrollbar-width: none */
+  .g4 .strip-scroll {
+    display: flex; align-items: center; overflow-x: auto; overflow-y: hidden;
+    padding: 6px 0 10px; min-height: 80px;
+    touch-action: pan-x; overscroll-behavior-x: contain;
+    user-select: none; -webkit-user-select: none;
+  }
+  .g4 .strip-scroll .mblock.sel { touch-action: none; }
+  .g4 .strip-scroll::-webkit-scrollbar { display: none; }
+
+  /* 第 5 组：只去掉容器上的 touch-action: pan-x */
+  .g5 .strip-scroll {
+    display: flex; align-items: center; overflow-x: auto; overflow-y: hidden;
+    scrollbar-width: none; padding: 6px 0 10px; min-height: 80px;
+    overscroll-behavior-x: contain;
+    user-select: none; -webkit-user-select: none;
+  }
+  .g5 .strip-scroll .mblock.sel { touch-action: none; }
+  .g5 .strip-scroll::-webkit-scrollbar { display: none; }
+
+  /* 第 6 组：只去掉 overscroll-behavior-x: contain */
+  .g6 .strip-scroll {
+    display: flex; align-items: center; overflow-x: auto; overflow-y: hidden;
+    scrollbar-width: none; padding: 6px 0 10px; min-height: 80px;
+    touch-action: pan-x;
+    user-select: none; -webkit-user-select: none;
+  }
+  .g6 .strip-scroll .mblock.sel { touch-action: none; }
+  .g6 .strip-scroll::-webkit-scrollbar { display: none; }
+
+  /* 第 7 组：只去掉选中块 .mblock.sel 上的 touch-action: none */
+  .g7 .strip-scroll {
+    display: flex; align-items: center; overflow-x: auto; overflow-y: hidden;
+    scrollbar-width: none; padding: 6px 0 10px; min-height: 80px;
+    touch-action: pan-x; overscroll-behavior-x: contain;
+    user-select: none; -webkit-user-select: none;
+  }
+  .g7 .strip-scroll::-webkit-scrollbar { display: none; }
+
+  /* 第 8 组：只把 .sp-l / .sp-r 的百分比宽度换成固定 px（140px 与 186px） */
+  .g8 .strip-scroll {
+    display: flex; align-items: center; overflow-x: auto; overflow-y: hidden;
+    scrollbar-width: none; padding: 6px 0 10px; min-height: 80px;
+    touch-action: pan-x; overscroll-behavior-x: contain;
+    user-select: none; -webkit-user-select: none;
+  }
+  .g8 .strip-scroll .mblock.sel { touch-action: none; }
+  .g8 .strip-scroll::-webkit-scrollbar { display: none; }
+  .g8 .sp-l { flex: none; width: 140px; }
+  .g8 .sp-r { flex: none; width: 186px; }
+
+  /* 第 9 组：只把 display: flex 换成 display: block + white-space: nowrap + inline-block 子项 */
+  .g9 .strip-scroll {
+    display: block; white-space: nowrap; font-size: 0;
+    overflow-x: auto; overflow-y: hidden;
+    scrollbar-width: none; padding: 6px 0 10px; min-height: 80px;
+    touch-action: pan-x; overscroll-behavior-x: contain;
+    user-select: none; -webkit-user-select: none;
+  }
+  .g9 .strip-scroll .mblock.sel { touch-action: none; }
+  .g9 .strip-scroll::-webkit-scrollbar { display: none; }
+  .g9 .sp-l { display: inline-block; vertical-align: middle; width: calc(50% - 46px); height: 64px; }
+  .g9 .sp-r { display: inline-block; vertical-align: middle; width: 50%; height: 64px; }
+  .g9 .mblock { display: inline-block; vertical-align: middle; }
+
+  /* 第 10 组：只在对照组基础上加 -webkit-overflow-scrolling: touch */
+  .g10 .strip-scroll {
+    display: flex; align-items: center; overflow-x: auto; overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none; padding: 6px 0 10px; min-height: 80px;
+    touch-action: pan-x; overscroll-behavior-x: contain;
+    user-select: none; -webkit-user-select: none;
+  }
+  .g10 .strip-scroll .mblock.sel { touch-action: none; }
+  .g10 .strip-scroll::-webkit-scrollbar { display: none; }
+
+  /* 第 11 组：单段短内容（仅 1 个 .mblock，模拟 1 段 6 秒视频）+ 原样零高度 .sp-l / .sp-r */
+  .g11 .strip-scroll {
+    display: flex; align-items: center; overflow-x: auto; overflow-y: hidden;
+    scrollbar-width: none; padding: 6px 0 10px; min-height: 80px;
+    touch-action: pan-x; overscroll-behavior-x: contain;
+    user-select: none; -webkit-user-select: none;
+  }
+  .g11 .strip-scroll .mblock.sel { touch-action: none; }
+  .g11 .strip-scroll::-webkit-scrollbar { display: none; }
+
+  /* 第 12 组：全部可疑属性都去掉的最小可滚基准组 */
+  .g12 .strip-scroll {
+    display: flex; align-items: center; overflow-x: auto;
+    padding: 6px 0 10px; min-height: 80px;
+  }
+  .g12 .sp-l { flex: none; width: 140px; height: 1px; }
+  .g12 .sp-r { flex: none; width: 186px; height: 1px; }
+
+  /* 第 13 组：单段短内容（仅 1 个 .mblock），其余照对照组，只给 .sp-l 和 .sp-r 加 height: 1px */
+  .g13 .strip-scroll {
+    display: flex; align-items: center; overflow-x: auto; overflow-y: hidden;
+    scrollbar-width: none; padding: 6px 0 10px; min-height: 80px;
+    touch-action: pan-x; overscroll-behavior-x: contain;
+    user-select: none; -webkit-user-select: none;
+  }
+  .g13 .strip-scroll .mblock.sel { touch-action: none; }
+  .g13 .strip-scroll::-webkit-scrollbar { display: none; }
+  .g13 .sp-l { flex: none; width: calc(50% - 46px); height: 1px; }
+  .g13 .sp-r { flex: none; width: 50%; height: 1px; }
+
+  /* 第 14 组：单段短内容（仅 1 个 .mblock），.sp-l / .sp-r 改固定 px（140px / 186px）但仍不设 height（高度仍为 0） */
+  .g14 .strip-scroll {
+    display: flex; align-items: center; overflow-x: auto; overflow-y: hidden;
+    scrollbar-width: none; padding: 6px 0 10px; min-height: 80px;
+    touch-action: pan-x; overscroll-behavior-x: contain;
+    user-select: none; -webkit-user-select: none;
+  }
+  .g14 .strip-scroll .mblock.sel { touch-action: none; }
+  .g14 .strip-scroll::-webkit-scrollbar { display: none; }
+  .g14 .sp-l { flex: none; width: 140px; }
+  .g14 .sp-r { flex: none; width: 186px; }
+</style>
+</head>
+<body>
+  <div class="page-wrap">
+    <div class="top-card">
+      <h1 class="top-title">缩略时间轴 WebKit 横向滚动探针页</h1>
+      <p class="top-guide">
+        <b>使用说明：</b>打开后先看每组「可滚距离」是否大于 0；再点「一键测试全部 scrollLeft」看哪组能滚到 200；最后用手指在每组色块上左右划一下，看「手指滑过之后的 scrollLeft 最大值」并截图回报。
+      </p>
+      <div class="env-box" id="env-box">正在读取设备信息…</div>
+      <div class="top-actions">
+        <button type="button" class="act-btn" id="btn-recalc-all">重新测量全部</button>
+        <button type="button" class="act-btn" id="btn-scroll-all">一键测试全部 scrollLeft = 200</button>
+        <button type="button" class="act-btn secondary" id="btn-reset-all">全部归零重置</button>
+      </div>
+    </div>
+
+    <div id="groups-root"></div>
+  </div>
+
+<script>
+(function () {
+  var GROUPS = [
+    {
+      id: "g1",
+      title: "第 1 组：对照组（原样照搬现场 CSS 与结构）",
+      desc: "保留全部现场属性（display:flex + overflow-x:auto + overflow-y:hidden + scrollbar-width:none + ::-webkit-scrollbar display:none + touch-action:pan-x + overscroll-behavior-x:contain + 百分比 sp-l/sp-r + 第 3 块 sel 带 touch-action:none），看是否复现划不动和 scrollLeft 失效。",
+      count: 12
+    },
+    {
+      id: "g2",
+      title: "第 2 组：去掉 overflow-y: hidden",
+      desc: "只去掉 overflow-y: hidden，看是不是 overflow-x: auto 配 overflow-y: hidden 在 WebKit 下引发不可滚。",
+      count: 12
+    },
+    {
+      id: "g3",
+      title: "第 3 组：去掉 ::-webkit-scrollbar { display: none }",
+      desc: "只去掉 ::-webkit-scrollbar 隐藏滚动条规则，看隐藏 WebKit 滚动条会不会连带把滚动或惯性关掉。",
+      count: 12
+    },
+    {
+      id: "g4",
+      title: "第 4 组：去掉 scrollbar-width: none",
+      desc: "只去掉标准属性 scrollbar-width: none，看 Safari 对该属性的处理是否影响可滚性。",
+      count: 12
+    },
+    {
+      id: "g5",
+      title: "第 5 组：去掉 touch-action: pan-x",
+      desc: "只去掉容器上的 touch-action: pan-x（恢复默认 auto），看是不是 pan-x 在 iOS Safari 上反而挡住了原生横滑。",
+      count: 12
+    },
+    {
+      id: "g6",
+      title: "第 6 组：去掉 overscroll-behavior-x: contain",
+      desc: "只去掉 overscroll-behavior-x: contain，看 iOS Safari 的 overscroll-behavior-x 实现是否锁死了横向滚动。",
+      count: 12
+    },
+    {
+      id: "g7",
+      title: "第 7 组：去掉选中块（第 3 块 .sel）上的 touch-action: none",
+      desc: "只去掉第 3 块 .mblock.sel 上的 touch-action: none，看是不是子元素的 touch-action: none 把选中块或整个容器的手势一起废掉了。",
+      count: 12
+    },
+    {
+      id: "g8",
+      title: "第 8 组：把 .sp-l / .sp-r 的百分比宽度换成固定 px",
+      desc: "只把 .sp-l 的 calc(50% - 46px) 换成 140px、.sp-r 的 50% 换成 186px，看是不是 Flex 容器下百分比宽度解析异常导致没有可滚距离。",
+      count: 12
+    },
+    {
+      id: "g9",
+      title: "第 9 组：把 display: flex 换成 block + white-space: nowrap + inline-block",
+      desc: "只把 Flex 布局换成 display: block + white-space: nowrap + inline-block 子项，看是不是 WebKit 的 Flex 滚动容器算错了 scrollWidth。",
+      count: 12
+    },
+    {
+      id: "g10",
+      title: "第 10 组：加 -webkit-overflow-scrolling: touch",
+      desc: "只在对照组基础上加 -webkit-overflow-scrolling: touch，看当前 iOS 版本是否仍需该属性才能滑得动或设进 scrollLeft。",
+      count: 12
+    },
+    {
+      id: "g11",
+      title: "第 11 组：单段短内容（仅 1 个块，测零高度 .sp-r 尾部溢出）",
+      desc: "保持对照组全部 CSS，但只放 1 个 80×64 的块（模拟只有 1 段 6 秒视频的项目），看当块本身未超屏、全靠 align-items:center 下高度为 0 的 .sp-r 撑开右侧可滚区时，可滚距离会不会变成 0。",
+      count: 1
+    },
+    {
+      id: "g12",
+      title: "第 12 组：最小可滚基准组（全部可疑属性都去掉）",
+      desc: "去掉 overflow-y:hidden、::-webkit-scrollbar、scrollbar-width:none、touch-action:pan-x、overscroll-behavior-x:contain、选中块 touch-action:none，且 .sp-l/.sp-r 用固定 px 并给 1px 高度，只留最基础的 display:flex + overflow-x:auto。",
+      count: 12
+    },
+    {
+      id: "g13",
+      title: "第 13 组：这一组只给两个占位块加了 1px 高度，用来验证零高度占位块是不是真因、以及加高度能不能修好",
+      desc: "单段短内容（只 1 个块，同第 11 组），其余 CSS 全部照对照组，唯一改动是给 .sp-l 和 .sp-r 加 height: 1px。",
+      count: 1
+    },
+    {
+      id: "g14",
+      title: "第 14 组：这一组把百分比换成固定 px、但高度仍是 0，用来把「百分比宽度」和「零高度」两个变量分开",
+      desc: "单段短内容（只 1 个块），.sp-l / .sp-r 改成固定像素宽（和第 8 组一样的 140px / 186px）但仍不设 height（高度仍为 0）。",
+      count: 1
+    }
+  ];
+
+  var PALETTE = [
+    "#1b5f78", "#2b6b4f", "#5b5530", "#6b3a5b",
+    "#3a4f7a", "#7a4e2d", "#2d6a6a", "#5c3d7a",
+    "#4a6b2d", "#7a3b3b", "#2d527a", "#6a5d2d"
+  ];
+
+  var envBox = document.getElementById("env-box");
+  function updateEnvInfo() {
+    envBox.innerHTML =
+      '<div><span class="k">UA: </span>' + escapeHtml(navigator.userAgent) + '</div>' +
+      '<div><span class="k">innerWidth: </span><b>' + window.innerWidth + 'px</b>' +
+      ' &nbsp;|&nbsp; <span class="k">innerHeight: </span><b>' + window.innerHeight + 'px</b>' +
+      ' &nbsp;|&nbsp; <span class="k">DPR: </span><b>' + window.devicePixelRatio + '</b></div>';
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
+  var root = document.getElementById("groups-root");
+  var controllers = [];
+
+  for (var i = 0; i < GROUPS.length; i++) {
+    controllers.push(createGroup(GROUPS[i]));
+  }
+
+  function createGroup(cfg) {
+    var wrap = document.createElement("section");
+    wrap.className = "probe-group " + cfg.id;
+
+    var blocksHtml = "";
+    var selIndex = cfg.count >= 3 ? 2 : 0; // 12 个块时第 3 块加 sel；1 个块时第 1 块加 sel
+    for (var b = 0; b < cfg.count; b++) {
+      var isSel = b === selIndex;
+      var color = PALETTE[b % PALETTE.length];
+      blocksHtml +=
+        '<div class="mblock' + (isSel ? ' sel' : '') + '" style="background:linear-gradient(135deg,' + color + ',#10151d)">' +
+          '<span class="no">#' + (b + 1) + (isSel ? ' [sel]' : '') + '</span>' +
+          '<span class="du">0:06</span>' +
+        '</div>';
+    }
+
+    wrap.innerHTML =
+      '<h2 class="group-head">' + escapeHtml(cfg.title) + '</h2>' +
+      '<p class="group-desc">' + escapeHtml(cfg.desc) + '</p>' +
+      '<div class="metrics-box">' +
+        '<div class="metrics-row" data-role="dims">正在测量…</div>' +
+        '<div class="ctrl-row">' +
+          '<button type="button" class="act-btn" data-role="btn-set">点我用 JS 设 scrollLeft</button>' +
+          '<button type="button" class="act-btn secondary" data-role="btn-zero">归零</button>' +
+          '<span class="js-result" data-role="js-res">尚未点击测试按钮</span>' +
+        '</div>' +
+        '<div class="touch-result" data-role="touch-res">手指滑过之后的 scrollLeft 最大值：<b class="warn-val">0</b> px（请用手指在下方色块上左右划动）</div>' +
+      '</div>' +
+      '<div class="mainstrip">' +
+        '<div class="cf-line"></div>' +
+        '<div class="strip-scroll" data-role="scroller">' +
+          '<div class="sp-l"></div>' +
+          blocksHtml +
+          '<div class="sp-r"></div>' +
+        '</div>' +
+      '</div>';
+
+    root.appendChild(wrap);
+
+    var scroller = wrap.querySelector('[data-role="scroller"]');
+    var dimsEl = wrap.querySelector('[data-role="dims"]');
+    var btnSet = wrap.querySelector('[data-role="btn-set"]');
+    var btnZero = wrap.querySelector('[data-role="btn-zero"]');
+    var jsResEl = wrap.querySelector('[data-role="js-res"]');
+    var touchResEl = wrap.querySelector('[data-role="touch-res"]');
+
+    var maxTouchScroll = 0;
+    var suppressUntil = 0;
+    var lastProgTarget = -1;
+
+    scroller.addEventListener("scroll", function () {
+      var cur = Math.round(scroller.scrollLeft);
+      var now = Date.now();
+      // 若是刚刚点按钮触发的程序滚动事件，不覆盖手指滑动峰值
+      if (now < suppressUntil && Math.abs(cur - lastProgTarget) <= 2) {
+        return;
+      }
+      if (cur > maxTouchScroll) {
+        maxTouchScroll = cur;
+      }
+      renderTouchPeak(cur);
+    }, { passive: true });
+
+    function renderTouchPeak(curNow) {
+      var cls = maxTouchScroll > 0 ? "ok-val" : "warn-val";
+      touchResEl.innerHTML =
+        '手指滑过之后的 scrollLeft 最大值：<b class="' + cls + '">' + maxTouchScroll + '</b> px' +
+        (typeof curNow === "number" ? '（当前实时 scrollLeft: ' + curNow + ' px）' : '');
+    }
+
+    function measure() {
+      var cw = scroller.clientWidth;
+      var sw = scroller.scrollWidth;
+      var maxDist = Math.max(0, sw - cw);
+      var distCls = maxDist > 0 ? "ok-val" : "bad-val";
+      dimsEl.innerHTML =
+        '<span>clientWidth: <b>' + cw + '</b></span>' +
+        '<span>scrollWidth: <b>' + sw + '</b></span>' +
+        '<span>可滚距离 (scrollWidth - clientWidth): <b class="' + distCls + '">' + maxDist + '</b></span>';
+      return { cw: cw, sw: sw, maxDist: maxDist };
+    }
+
+    function testProgrammaticScroll() {
+      var m = measure();
+      var want = m.maxDist === 0 ? 200 : Math.min(200, m.maxDist);
+      suppressUntil = Date.now() + 250;
+      lastProgTarget = want;
+
+      scroller.scrollLeft = want;
+      var immediateRead = Math.round(scroller.scrollLeft);
+
+      requestAnimationFrame(function () {
+        var nextFrameRead = Math.round(scroller.scrollLeft);
+        var ok = nextFrameRead > 0 && Math.abs(nextFrameRead - want) <= 2;
+        var cls = ok ? "ok-val" : "bad-val";
+        jsResEl.innerHTML =
+          '<span class="' + cls + '">设 ' + want + ' → 立刻回读 ' + immediateRead + ' → 下一帧 ' + nextFrameRead + '</span>';
+      });
+    }
+
+    function resetZero() {
+      suppressUntil = Date.now() + 250;
+      lastProgTarget = 0;
+      scroller.scrollLeft = 0;
+      maxTouchScroll = 0;
+      jsResEl.textContent = "已归零，尚未点击测试按钮";
+      renderTouchPeak(0);
+      measure();
+    }
+
+    btnSet.addEventListener("click", testProgrammaticScroll);
+    btnZero.addEventListener("click", resetZero);
+
+    return {
+      measure: measure,
+      testProgrammaticScroll: testProgrammaticScroll,
+      resetZero: resetZero
+    };
+  }
+
+  function measureAll() {
+    updateEnvInfo();
+    for (var i = 0; i < controllers.length; i++) {
+      controllers[i].measure();
+    }
+  }
+
+  function scrollAll() {
+    for (var i = 0; i < controllers.length; i++) {
+      controllers[i].testProgrammaticScroll();
+    }
+  }
+
+  function resetAll() {
+    for (var i = 0; i < controllers.length; i++) {
+      controllers[i].resetZero();
+    }
+  }
+
+  document.getElementById("btn-recalc-all").addEventListener("click", measureAll);
+  document.getElementById("btn-scroll-all").addEventListener("click", scrollAll);
+  document.getElementById("btn-reset-all").addEventListener("click", resetAll);
+
+  window.addEventListener("resize", measureAll);
+  window.addEventListener("orientationchange", function () {
+    setTimeout(measureAll, 100);
+  });
+
+  measureAll();
+})();
+</script>
+</body>
+</html>
