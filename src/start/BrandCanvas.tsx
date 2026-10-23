@@ -150,6 +150,10 @@ uniform vec3  uWarm;
 uniform float uScale, uYStretch, uSplit, uFalloff, uBlend, uMixWarp, uStreak, uGrain;
 uniform float uAxis, uSeeThrough, uFadeEdge;
 uniform float uRefPx, uPxScale;
+/* 压平:预渲染成视频时置 1。视频带不了 alpha,要把底色先合进来、输出不透明;屏幕上那一版置 0,照旧出预乘的半透明 */
+uniform float uFlatten;
+/* 压平时垫在底下的颜色(登录页的 --bg-canvas) */
+uniform vec3  uBg;
 uniform float uWarpA, uWarpB, uGamma, uGain, uFloor, uRoll, uSat;
 uniform float uStripeN, uStripeSkew, uFrostBlur, uFrost, uMilky, uEdge;
 uniform float uGrainSize, uGrainJitter, uGrainSoft;
@@ -328,7 +332,12 @@ void main() {
   // 预乘输出:颜色先乘上 alpha(上下文开的是预乘模式)。
   // 直通 alpha 在 GPU 合成那条路上会被当成不透明画出来(2026-10-24 用户报的那个毛病)
   float aOut = clamp(a, 0.0, 1.0);
-  fragColor = vec4(max(col, 0.0) * aOut, aOut);
+  vec3 rgbOut = max(col, 0.0);
+  // 压平那条路:把底色合进来、alpha 给 1。预渲染成视频要走这条 —— 视频带不了 alpha,
+  // 而且导出写的是直通 alpha 的 PNG,预乘的值直接当直通存会在淡出边缘出一圈红绿杂边。
+  fragColor = uFlatten > 0.5
+    ? vec4(mix(uBg, rgbOut, aOut), 1.0)
+    : vec4(rgbOut * aOut, aOut);
 }`;
 
 /** 十六进制 → 0..1 的 RGB */
@@ -438,6 +447,8 @@ export function BrandCanvas(): JSX.Element {
 
     // 一次性的那些:画面参数不随帧变,设一遍就够
     gl.uniform3f(at("uWarm"), ...hexToRgb(LOOK.warm, [0.886, 0.451, 0.122]));
+    gl.uniform1f(at("uFlatten"), 0);   // 屏幕上这一版要半透明,不压平
+    gl.uniform3f(at("uBg"), 0, 0, 0);  // 不压平时用不到,传个值免得驱动抱怨
     gl.uniform1f(at("uSwirl"), LOOK.swirl);
     gl.uniform1f(at("uScale"), LOOK.scale);
     gl.uniform1f(at("uYStretch"), LOOK.yStretch);

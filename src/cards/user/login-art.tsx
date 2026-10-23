@@ -14,12 +14,14 @@ interface Params {
   cool: string;
   /** 暖色那一侧 */
   warm: string;
+  /** 压平时垫在底下的颜色（登录页的 --bg-canvas）。视频带不了 alpha，底色必须先合进来 */
+  bg: string;
   /** 循环一圈多少秒 */
   loopSeconds: number;
 }
 
-const WIDTH = 600;
-const HEIGHT = 800;
+const WIDTH = 880;
+const HEIGHT = 1080;
 
 const LOOK = {
   /**
@@ -144,6 +146,10 @@ uniform vec3  uWarm;
 uniform float uScale, uYStretch, uSplit, uFalloff, uBlend, uMixWarp, uStreak, uGrain;
 uniform float uAxis, uSeeThrough, uFadeEdge;
 uniform float uRefPx, uPxScale;
+/* 压平:预渲染成视频时置 1。视频带不了 alpha,要把底色先合进来、输出不透明;屏幕上那一版置 0,照旧出预乘的半透明 */
+uniform float uFlatten;
+/* 压平时垫在底下的颜色(登录页的 --bg-canvas) */
+uniform vec3  uBg;
 uniform float uWarpA, uWarpB, uGamma, uGain, uFloor, uRoll, uSat;
 uniform float uStripeN, uStripeSkew, uFrostBlur, uFrost, uMilky, uEdge;
 uniform float uGrainSize, uGrainJitter, uGrainSoft;
@@ -322,7 +328,12 @@ void main() {
   // 预乘输出:颜色先乘上 alpha(上下文开的是预乘模式)。
   // 直通 alpha 在 GPU 合成那条路上会被当成不透明画出来(2026-10-24 用户报的那个毛病)
   float aOut = clamp(a, 0.0, 1.0);
-  fragColor = vec4(max(col, 0.0) * aOut, aOut);
+  vec3 rgbOut = max(col, 0.0);
+  // 压平那条路:把底色合进来、alpha 给 1。预渲染成视频要走这条 —— 视频带不了 alpha,
+  // 而且导出写的是直通 alpha 的 PNG,预乘的值直接当直通存会在淡出边缘出一圈红绿杂边。
+  fragColor = uFlatten > 0.5
+    ? vec4(mix(uBg, rgbOut, aOut), 1.0)
+    : vec4(rgbOut * aOut, aOut);
 }`;
 
 function hexToRgb(hex: string, fallback: [number, number, number]): [number, number, number] {
@@ -341,7 +352,7 @@ function LoginArt({ params, t = 0 }: CardProps<Params>) {
     // WebGL2 起不来就画一块底色，别让整张卡炸掉
     if (!gl) {
       const c2 = canvas.getContext("2d");
-      if (c2) { c2.fillStyle = "#111016"; c2.fillRect(0, 0, WIDTH, HEIGHT); }
+      if (c2) { c2.fillStyle = params.bg || "#111016"; c2.fillRect(0, 0, WIDTH, HEIGHT); }
       return;
     }
     const make = (type: number, src: string) => {
@@ -389,6 +400,9 @@ function LoginArt({ params, t = 0 }: CardProps<Params>) {
     gl.uniform1f(at("uGrainSoft"), LOOK.grainSoft);
     gl.uniform3f(at("uCool"), ...hexToRgb(params.cool, [0.149, 0.776, 0.902]));
     gl.uniform3f(at("uWarm"), ...hexToRgb(params.warm, [0.886, 0.451, 0.122]));
+    // 预渲染成视频:压平。底色合进来、alpha 给 1
+    gl.uniform1f(at("uFlatten"), 1);
+    gl.uniform3f(at("uBg"), ...hexToRgb(params.bg, [0.067, 0.063, 0.086]));
     gl.uniform2f(at("uRes"), WIDTH, HEIGHT);
     gl.uniform1f(at("uPxScale"), 1);
     // 走满一圈回到起点：t 到了 loopSeconds 这一帧和 t = 0 那一帧算出来一样
@@ -400,7 +414,7 @@ function LoginArt({ params, t = 0 }: CardProps<Params>) {
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.deleteProgram(prog);
-  }, [t, params.cool, params.warm, params.loopSeconds]);
+  }, [t, params.cool, params.warm, params.bg, params.loopSeconds]);
   return <canvas ref={ref} width={WIDTH} height={HEIGHT} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />;
 }
 
@@ -412,10 +426,11 @@ export const loginArt: CardDef<Params> = {
   useWhen: "只给「把登录页左栏渲成循环视频」这一件事用；别的场合要流动背景请另写一张。",
   tags: ["背景", "极光", "着色器", "登录页"],
   frameMode: "direct",
-  defaults: { cool: "#26c6e6", warm: "#e2731f", loopSeconds: LOOK.loopSeconds },
+  defaults: { cool: "#26c6e6", warm: "#e2731f", bg: "#111016", loopSeconds: LOOK.loopSeconds },
   controls: [
     { key: "cool", label: "冷色", type: "color" },
     { key: "warm", label: "暖色", type: "color" },
+    { key: "bg", label: "底色", type: "color" },
     { key: "loopSeconds", label: "循环秒数", type: "number", min: 4, max: 600, step: 1 },
   ],
   Component: LoginArt,

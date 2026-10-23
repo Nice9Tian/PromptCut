@@ -46,8 +46,8 @@ for (const m of FRAG.matchAll(/uniform\s+(float|vec2|vec3)\s+([^;]+);/g)) {
   for (const n of m[2].split(',')) uniforms.push([m[1], n.trim()]);
 }
 
-/** 每帧单独传的那几个，不从 LOOK 取 */
-const PER_FRAME = new Set(['uRes', 'uLoop', 'uPxScale']);
+/** 每帧单独传、或由卡片参数决定的那几个，不从 LOOK 取 */
+const PER_FRAME = new Set(['uRes', 'uLoop', 'uPxScale', 'uFlatten']);
 /** 颜色：卡片参数给，不读 CSS 变量（导出要可重放，不能依赖页面上的 --ui-accent） */
 const COLORS = new Set(['uCool', 'uWarm']);
 const lookNameOf = (u) => u[1].toLowerCase() + u.slice(2);
@@ -84,6 +84,8 @@ interface Params {
   cool: string;
   /** 暖色那一侧 */
   warm: string;
+  /** 压平时垫在底下的颜色（登录页的 --bg-canvas）。视频带不了 alpha，底色必须先合进来 */
+  bg: string;
   /** 循环一圈多少秒 */
   loopSeconds: number;
 }
@@ -114,7 +116,7 @@ function LoginArt({ params, t = 0 }: CardProps<Params>) {
     // WebGL2 起不来就画一块底色，别让整张卡炸掉
     if (!gl) {
       const c2 = canvas.getContext("2d");
-      if (c2) { c2.fillStyle = "#111016"; c2.fillRect(0, 0, WIDTH, HEIGHT); }
+      if (c2) { c2.fillStyle = params.bg || "#111016"; c2.fillRect(0, 0, WIDTH, HEIGHT); }
       return;
     }
     const make = (type: number, src: string) => {
@@ -134,6 +136,9 @@ function LoginArt({ params, t = 0 }: CardProps<Params>) {
 ${floatUploads}
     gl.uniform3f(at("uCool"), ...hexToRgb(params.cool, [0.149, 0.776, 0.902]));
     gl.uniform3f(at("uWarm"), ...hexToRgb(params.warm, [0.886, 0.451, 0.122]));
+    // 预渲染成视频:压平。底色合进来、alpha 给 1
+    gl.uniform1f(at("uFlatten"), 1);
+    gl.uniform3f(at("uBg"), ...hexToRgb(params.bg, [0.067, 0.063, 0.086]));
     gl.uniform2f(at("uRes"), WIDTH, HEIGHT);
     gl.uniform1f(at("uPxScale"), 1);
     // 走满一圈回到起点：t 到了 loopSeconds 这一帧和 t = 0 那一帧算出来一样
@@ -145,7 +150,7 @@ ${floatUploads}
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.deleteProgram(prog);
-  }, [t, params.cool, params.warm, params.loopSeconds]);
+  }, [t, params.cool, params.warm, params.bg, params.loopSeconds]);
   return <canvas ref={ref} width={WIDTH} height={HEIGHT} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />;
 }
 
@@ -157,10 +162,11 @@ export const loginArt: CardDef<Params> = {
   useWhen: "只给「把登录页左栏渲成循环视频」这一件事用；别的场合要流动背景请另写一张。",
   tags: ["背景", "极光", "着色器", "登录页"],
   frameMode: "direct",
-  defaults: { cool: "#26c6e6", warm: "#e2731f", loopSeconds: LOOK.loopSeconds },
+  defaults: { cool: "#26c6e6", warm: "#e2731f", bg: "#111016", loopSeconds: LOOK.loopSeconds },
   controls: [
     { key: "cool", label: "冷色", type: "color" },
     { key: "warm", label: "暖色", type: "color" },
+    { key: "bg", label: "底色", type: "color" },
     { key: "loopSeconds", label: "循环秒数", type: "number", min: 4, max: 600, step: 1 },
   ],
   Component: LoginArt,
