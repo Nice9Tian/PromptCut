@@ -113,7 +113,7 @@ export function accountErrorText(status: number, code: string): string {
     'guest-read-only': '你在这个项目里只能查看，改不了内容。',
     // 云端 Agent 的告知记在网站账号上（`/api/account/cloud-agent-consent`），游客没地方记、服务端也核不了 —— 待用户定（claude/guest-enter）
     'guest-agent-unavailable': '游客暂时用不了云端 Agent。要用的话，请登录网站账号。',
-    // 云端分组(账号级整理信息,`/hosted/shared/account/start-org`,裁定 V22-05～09)
+    // 云端分组(账号级整理信息,公开路由 `start-org`,裁定 V22-05～09)
     'guest-org-unavailable': '游客没有分组、置顶和归档。注册一个账号后，可以用云端分组整理项目。',
     'org-unavailable': '这台云端现在不能保存分组。',
     'org-version-mismatch': '云端的分组刚被另一台设备改过。',
