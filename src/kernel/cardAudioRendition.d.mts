@@ -7,6 +7,8 @@ export function isAudiovisualCard(def: unknown): boolean;
 export function assertAudiovisualCardKind(def: unknown): void;
 export function clipHasEmbeddedAudio(project: Pick<Project, 'cardNodes'>, clip: Partial<TrackClip>, getCard?: (id: string) => CardDef<any> | undefined): boolean;
 export function clipHasAudio(project: Pick<Project, 'cardNodes' | 'media'>, clip: Partial<TrackClip>, getCard?: (id: string) => CardDef<any> | undefined): boolean;
+export function clipHasCardAudio(project: Pick<Project, 'cardNodes'>, clip: Partial<TrackClip>, getCard?: (id: string) => CardDef<any> | undefined): boolean;
+export function clipGoesSilentBySpeed(project: Pick<Project, 'cardNodes' | 'media'>, clip: Partial<TrackClip>, getCard?: (id: string) => CardDef<any> | undefined): boolean;
 export function cardAudioSourceOffset(project: Pick<Project, 'cardNodes'>, clip: Partial<TrackClip>): number;
 export class CardAudioRenditionError extends Error { code: 'missing' | 'stale' }
 export function cardAudioIdentity(project: Project, clip: TrackClip, hooks?: CardAudioIdentityHooks, saved?: CardAudioIdentity): CardAudioIdentity;
