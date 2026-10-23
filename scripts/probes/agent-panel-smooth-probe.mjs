@@ -185,7 +185,7 @@ async function main() {
     const bubble = await page.evaluate(() => window.__pcProbeBubble);
     record('S1-enter-to-bubble-ms(in-page)', Math.round(bubble.ms));
     await shot(page, '02-right-after-enter');
-    check(bubble.ms < 300, 'S1-bubble-within-300ms-of-enter', { ms: Math.round(bubble.ms), before });
+    check(bubble.ms !== null, 'S1-bubble-appears-on-enter(ms 只记录,见上面 record;耗时只记录,不当闸门(verification.md,2026-10-07 用户改定);2026-10-23 探针总审改)', { ms: Math.round(bubble.ms), before });
     check(bubble.input === '', 'S1-input-cleared-immediately', { input: bubble.input });
     check(bubble.state === 'sending' || bubble.state === 'accepted', 'S1-bubble-says-sending-not-sent', { state: bubble.state });
     const post = await postWait;

@@ -695,7 +695,7 @@ try {
     const gone = await until('G:舞台上没有旧键的轨道', async () => { const s = await stageState(pageA, glassId); return s && !s.tracks.some((t) => t.key === key1) ? s : null; }, 10_000, 30);
     // 舞台那一侧:从页面里改完(上面那一段返回)到探针读到「旧键的轨道没了」,含探针自己一来一回的耗时,只记录
     out.edit = { ...edit, sourceStale: withdrawn?.staleStreams ?? null, stageGone: !!gone, stageGoneWithinMs: gone ? Date.now() - tEdited : null, clipAfter: gone && { suppressed: gone.clip.suppressed, placeholder: gone.clip.placeholder, snapshot: gone.clip.snapshot } };
-    check(edit?.hadBefore === true && edit.goneMs !== null && edit.goneMs <= 1000 && edit.staleSeen === true, 'G:改之前父页在发这条流;改下层以后当场不再发、认它过期(1 秒以内;实测毫秒记在结果里)', edit);
+    check(edit?.hadBefore === true && edit.goneMs !== null && edit.staleSeen === true, 'G:改之前父页在发这条流;改下层以后不再发、认它过期(毫秒只记录;耗时只记录,不当闸门(verification.md,2026-10-07 用户改定);2026-10-23 探针总审改)', edit);
     check(!!withdrawn && withdrawn.staleStreams.includes(glassId), 'G:在线来源认出旧流过期、不再列它', withdrawn && { stale: withdrawn.staleStreams, streams: withdrawn.streams.map((x) => short(x.resultKey)) });
     check(!!gone, 'G:舞台上旧流的轨道关掉了', (await stageState(pageA, glassId))?.tracks.map(trackBrief));
     out.edit.oldShot = !!oldShot;
