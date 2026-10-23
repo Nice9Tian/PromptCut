@@ -166,3 +166,19 @@ test('MCA12 变速在主轨中间造出空档:没有别的序列盖住时就是�
   ]);
   assert.deepEqual(span(shapeOk(p, '中间空档没得补')), [['a', 0, 4], ['b', 4, 7], ['c', 10, 14]]);
 });
+
+test('MCA13 短项目的门槛按总长 5% 算:比门槛小的缝不补,比门槛大的缝才补', () => {
+  // 总长 4 秒 → 门槛 min(0.5, 4×0.05) = 0.2 秒。
+  // 0.1 秒的缝（相邻两段之间的误差）不该补出碎块；0.5 秒的缝（例如 1 秒的素材改成 2×）该补。
+  const tiny = project([
+    { id: 't1', name: '底', clips: [clip('bg', 0, 4)] },
+    { id: 't2', name: '主', clips: [vid('a', 0, 2), vid('b', 2.1, 4)] },
+  ]);
+  assert.deepEqual(span(shapeOk(tiny, '短项目·小缝')), [['a', 0, 2], ['b', 2.1, 4]]);
+
+  const wide = project([
+    { id: 't1', name: '底', clips: [clip('bg', 0, 4)] },
+    { id: 't2', name: '主', clips: [vid('a', 0, 2), vid('b', 2.5, 4)] },
+  ]);
+  assert.deepEqual(span(shapeOk(wide, '短项目·大缝')), [['a', 0, 2], ['bg', 2, 2.5], ['b', 2.5, 4]]);
+});
