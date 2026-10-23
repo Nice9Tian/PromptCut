@@ -2,20 +2,31 @@ import { useEffect, useRef, useState } from 'react';
 import { createEmptyProject } from '../kernel/project';
 import { setActiveDraftId } from '../editor/io/drafts';
 import { ensureDevice, enterAccountProject } from '../editor/sync/syncManager';
-import { AccountFailure, createAccountClient, projectIdFromLink, projectLink, JOIN_REQUEST_POLL_MS, type Account, type CloudAccountClient, type JoinRequestStatus, type ProjectLists } from './client';
+import { AccountFailure, createAccountClient, linkTokenFromLink, projectIdFromLink, projectLink, JOIN_REQUEST_POLL_MS, type Account, type CloudAccountClient, type GuestLogin, type JoinRequestStatus, type ProjectLists } from './client';
 import { desktopAccountBridge, isDesktopShellTooOld } from './desktopVault';
 import { createRequestIds } from './requestIds';
 import { enterOrAskPassword } from './entryFlow';
+import { JOIN_REQUEST_TEXT } from './joinRequestText';
+import { projectPath, readProjectAddress, type ProjectAddress } from '../online/projectAddress';
+import { forgetGuestProject, loadGuest, rememberGuestProject } from './guest';
 
-function tokenFromLink(text: string): string | undefined {
-  const value = text.trim();
-  if (/^https?:/i.test(value)) {
-    try {
-      const url = new URL(value);
-      return url.searchParams.get('token') || url.searchParams.get('linkToken') || undefined;
-    } catch {}
-  }
-  return undefined;
+/** 编辑器页的根路径:在线构建是 `/editor/`,桌面是 `/` */
+const PAGE_BASE = (typeof import.meta.env !== 'undefined' && import.meta.env.BASE_URL) || '/';
+
+/** 这一页地址里的项目:直达地址、分享链接、旧的 `?project=&token=`(`projectAddress.ts`) */
+function pageAddress(): ProjectAddress | null {
+  try { return readProjectAddress(new URL(location.href), PAGE_BASE); } catch { return null; }
+}
+const linkOf = (origin: string, a: ProjectAddress) => projectLink(origin, a.projectId, a.kind === 'share' ? a.token : undefined);
+
+/** 进了项目:地址栏换成它的直达地址,刷新后还在这个项目里;链接令牌、旧的 `?project=` 不留在地址栏里(`product/platforms.md`「项目直达地址」) */
+function showProjectAddress(projectId: string) {
+  try {
+    const url = new URL(location.href);
+    url.pathname = projectPath(projectId, PAGE_BASE);
+    for (const key of ['project', 'token', 'linkToken']) url.searchParams.delete(key);
+    history.replaceState(history.state, '', url);
+  } catch { /* 改不了地址栏不影响进项目 */ }
 }
 
 /**
@@ -34,14 +45,17 @@ export function useAccountProjects({ online, onEnterEditor }: { online: boolean;
   const [origin, setOrigin] = useState(online ? location.origin : 'https://visuhive.com');
   const client = useRef<CloudAccountClient | null>(null);
   const [account, setAccount] = useState<Account | null>(null), [busy, setBusy] = useState(true), [error, setError] = useState('');
+  /** 以游客身份进来时的那一个身份（2026-10-23 用户定）；不是游客就是 null */
+  const [guest, setGuest] = useState<GuestLogin | null>(null);
+  /** 游客自己建的那个项目（只有一个）。游客没有账号，查不到「我创建的」那张表，靠本机记着的这一条回去 */
+  const [guestProject, setGuestProject] = useState<{ id: string; name: string } | null>(null);
   /** 桌面外壳太老(0.2.8 以前的外壳打了补丁)没有账号桥:入口不报错,只说明要装完整安装包 */
   const [shellOld, setShellOld] = useState(false);
-  const [link, setLink] = useState(() => {
-    const sp = new URL(location.href).searchParams;
-    const id = sp.get('project');
-    const token = sp.get('token') || sp.get('linkToken') || undefined;
-    return id ? projectLink(origin, id, token) : '';
-  });
+  const [link, setLink] = useState(() => { const a = pageAddress(); return a ? linkOf(origin, a) : ''; });
+  /** 页面是从项目直达地址打开的(只认在线页面):登录恢复或登录之后自动进一次,进过就清掉 */
+  const direct = useRef<string | null>(null);
+  /** 自动进项目时要先输二级密码:界面照「从列表点进去」那样弹出输入框(`AccountProjects.tsx`、`MobileStart.tsx`) */
+  const [directSecondary, setDirectSecondary] = useState<string | null>(null);
   const [lists, setLists] = useState<ProjectLists | null>(null), [listError, setListError] = useState('');
   const createAttempt = useRef<{ name: string; requestId: string; initial: ReturnType<typeof createEmptyProject>; projectId?: string } | null>(null);
   const joinAttempt = useRef<{ projectId: string; requestId: string } | null>(null);
@@ -50,19 +64,20 @@ export function useAccountProjects({ online, onEnterEditor }: { online: boolean;
   const [request, setRequest] = useState<JoinRequestStatus | null>(null);
   /** 「发送申请」的请求号:没收到回包再点沿用原来的,收到结论就丢掉(`requestIds.ts`,与成员浮层、重开文件那条提示共用) */
   const sendIds = useRef(createRequestIds());
-  async function refreshLists() { if (!online || !client.current) return;
-    setListError(''); try { setLists(await client.current.lists()); } catch (e) { setLists(null); if (isDesktopShellTooOld(e)) setShellOld(true); else setListError(e instanceof Error ? e.message : '项目列表暂时不可用。'); } }
+  // 游客没有网站账号,「我创建的 / 我加入的」是向官网要的(`/api/account/projects`),问了只会被 401 挡回来。
+  // 他自己建的那一个项目靠本机记着的项目链接回去(开始页那一栏),不走列表
+  async function refreshLists(): Promise<ProjectLists | null> { if (!online || !client.current || client.current.guest) return null;
+    setListError(''); try { const next = await client.current.lists(); setLists(next); return next; } catch (e) { setLists(null); if (isDesktopShellTooOld(e)) setShellOld(true); else setListError(e instanceof Error ? e.message : '项目列表暂时不可用。'); return null; } }
   useEffect(() => { let alive = true;
     void (async () => { const device = await ensureDevice(); if (!alive) return;
       if (!device) throw new Error('无法取得当前设备身份，请重试。');
       const serviceOrigin = online ? location.origin : (await desktopAccountBridge('configuration') as { origin: string }).origin;
       if (!alive) return; setOrigin(serviceOrigin);
-      const sp = new URL(location.href).searchParams;
-      const invited = sp.get('project');
-      const token = sp.get('token') || sp.get('linkToken') || undefined;
-      if (invited) setLink(projectLink(serviceOrigin, invited, token));
+      const invited = pageAddress();
+      if (invited) setLink(linkOf(serviceOrigin, invited));
+      direct.current = online && invited?.kind === 'project' ? invited.projectId : null;
       const c = createAccountClient({ online, origin: serviceOrigin, device, ...(!online ? { native: desktopAccountBridge } : {}) }); client.current = c;
-      try { const current = await c.restore(); if (alive) { setAccount(current); if (current) await refreshLists(); } }
+      try { const current = await c.restore(); if (alive) { setAccount(current); if (current) { const l = await refreshLists(); if (alive) await enterDirect(l); } } }
       catch (e) { if (alive) { if (isDesktopShellTooOld(e)) setShellOld(true); else setError(e instanceof Error ? e.message : '登录恢复失败，请重新登录。'); } }
       finally { if (alive) setBusy(false); }
     })().catch(e => { if (alive) { if (isDesktopShellTooOld(e)) setShellOld(true); else setError(e instanceof Error ? e.message : '账号入口初始化失败。'); setBusy(false); } });
@@ -74,6 +89,24 @@ export function useAccountProjects({ online, onEnterEditor }: { online: boolean;
     if (!client.current) throw new Error('账号入口尚未就绪。');
     await enterAccountProject({ client: client.current, origin, projectId, name: label, initial: createEmptyProject(label), firstSession });
     setActiveDraftId(null); onEnterEditor();
+    if (online) showProjectAddress(projectId);
+  }
+  /**
+   * 页面是从项目直达地址打开的:恢复登录或登录之后自动进一次(`product/platforms.md`「项目直达地址」)。进不去照常抛出,
+   * 由调用方显示原因;要二级密码时交给界面弹输入框(`directSecondary`)
+   */
+  async function enterDirect(current: ProjectLists | null) {
+    const projectId = direct.current;
+    if (!projectId || !client.current) return;
+    direct.current = null;
+    const label = current?.owned.concat(current.joined).find(p => p.projectId === projectId)?.name || '云端项目';
+    try {
+      if (await open(projectId, label) === 'secondary-required') setDirectSecondary(projectId);
+    } catch (e) {
+      // 还不是成员:不当错误,说一句让用户自己点加入(链接已填好;加入是用户的动作,不自动加。只许名单的项目点了走「发送申请」)
+      if (e instanceof AccountFailure && e.code === 'not-listed') { setError(JOIN_REQUEST_TEXT.directNotMember); return; }
+      throw e;
+    }
   }
   /**
    * 从「我的项目」列表点进去。项目设了二级密码而这个账号还没输过当前这一版(刚被通过的申请人、改过密码之后的老成员):
@@ -88,19 +121,44 @@ export function useAccountProjects({ online, onEnterEditor }: { online: boolean;
     if (!client.current) throw new Error('账号入口尚未就绪。');
     if (loginAttempt.current?.name !== name) loginAttempt.current = { name, requestId: crypto.randomUUID() };
     const current = await client.current.login(name, password, remember, loginAttempt.current!.requestId);
-    setAccount(current); loginAttempt.current = null; await refreshLists();
+    setAccount(current); loginAttempt.current = null;
+    await enterDirect(await refreshLists());
   }
   async function logout() { await client.current!.logout(); setAccount(null); setLists(null); clearRequest(); }
+  /** 以游客身份进来：本机记着的那一张交回去续期（还是同一个人），没有就领一个新身份 */
+  async function enterAsGuest() { setGuest(await client.current!.enterAsGuest()); setGuestProject(loadGuest()?.project ?? null); }
+  /** 「换一个」：不交旧令牌，服务端给个新的 */
+  async function newGuest() { setGuest(await client.current!.newGuest()); setGuestProject(null); }
+  /** 不当游客了（去登录账号）。本机那一份一并清掉 */
+  function leaveGuest() { client.current?.leaveGuest(); setGuest(null); setGuestProject(null); setLists(null); clearRequest(); }
+  /**
+   * 打开游客自己建的那个项目。它可能已经被三天清理清掉了（或者创建者自己删了）：
+   * 那就把记的那一条划掉，不然开始页上一直挂着一个打不开的项目。
+   */
+  async function openGuestProject() {
+    if (!guestProject) return;
+    try { await enter(guestProject.id, guestProject.name); }
+    catch (e) {
+      if ((e as { code?: string })?.code === 'no-project' || (e as { code?: string })?.code === 'project-gone') {
+        forgetGuestProject(); setGuestProject(null);
+      }
+      throw e;
+    }
+  }
   async function create(projectName: string) {
     const c = client.current!;
     if (createAttempt.current?.name !== projectName) createAttempt.current = { name: projectName, requestId: crypto.randomUUID(), initial: createEmptyProject(projectName) };
     const attempt = createAttempt.current!;
     if (!attempt.projectId) attempt.projectId = (await c.create(attempt.name, attempt.initial, attempt.requestId)).projectId;
+    // 游客记下自己这一个项目:下次进来开始页才列得出来(他没有账号,查不到「我创建的」)
+    if (c.guest) { rememberGuestProject({ id: attempt.projectId, name: attempt.name }); setGuestProject({ id: attempt.projectId, name: attempt.name }); }
     setLink(projectLink(origin, attempt.projectId)); await refreshLists(); await enter(attempt.projectId, attempt.name); createAttempt.current = null;
   }
   async function join(linkText: string, secondaryPassword: string | undefined): Promise<JoinOutcome> {
     const projectId = projectIdFromLink(linkText, origin);
-    const token = tokenFromLink(linkText) || new URL(location.href).searchParams.get('token') || new URL(location.href).searchParams.get('linkToken') || undefined;
+    // 输入框里只填了项目号时,用这一页地址里同一个项目的链接令牌(分享链接打开的页面)
+    const page = pageAddress();
+    const token = linkTokenFromLink(linkText) || (page?.kind === 'share' && page.projectId === projectId ? page.token : undefined);
     if (joinAttempt.current?.projectId !== projectId) joinAttempt.current = { projectId, requestId: crypto.randomUUID() };
     let firstSession;
     try {
@@ -153,6 +211,7 @@ export function useAccountProjects({ online, onEnterEditor }: { online: boolean;
   // 读到申请被通过(`member`):马上重取项目列表,这个项目当场出现在「我加入的」里(设了二级密码、还没输的也在,从那里点进去先问密码)
   useEffect(() => { if (request?.state === 'member') void refreshLists(); }, [request?.state, request?.projectId]); // eslint-disable-line react-hooks/exhaustive-deps
   return { origin, account, busy, error, setError, shellOld, link, setLink, lists, listError, refreshLists, perform, enter, open, login, logout, create, join,
-    request, sendRequest, clearRequest,
+    guest, guestProject, enterAsGuest, newGuest, leaveGuest, openGuestProject,
+    request, sendRequest, clearRequest, directSecondary, clearDirectSecondary: () => setDirectSecondary(null),
     projectLink: (projectId: string) => projectLink(origin, projectId) };
 }

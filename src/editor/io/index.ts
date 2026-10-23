@@ -11,6 +11,8 @@ import { exportGate } from "../media/assetTiers";
 import { awaitingUploaderMessage } from "../../render/mediaTier";
 import { parseExportSkipped, type ExportSkipped } from "./exportSkipped";
 import { holdOnlineQueueOriginals } from "../../online/mediaUploadQueue";
+import { blockedByReadOnly } from "../readOnlyCore";
+import { viewOnlyText } from "./viewOnly";
 
 // 模块级变量存 File，供阶段 2 导出时使用
 const mediaFiles = new Map<string, File>();
@@ -45,6 +47,8 @@ export function registerMediaFile(id: string, file: File): void {
  */
 /** `place: false` 只进素材库、不放到时间轴(云端对话的附件发送时放进素材库用,2026-10-18 用户定) */
 export async function importVideoFiles(files: FileList | File[], { place = true }: { place?: boolean } = {}): Promise<string[]> {
+  // 只读项目(游客):导入素材是写。按钮已置灰,走到这里是拖放之类没盖到的路
+  if (blockedByReadOnly()) throw new Error(viewOnlyText());
   const releaseHold = holdOnlineQueueOriginals();
   try {
     const fileArray = Array.from(files);
@@ -289,6 +293,7 @@ export async function importSrtFile(
   file: File,
   opts: { mediaId?: string } = {},
 ): Promise<{ mediaId: string; count: number }> {
+  if (blockedByReadOnly()) throw new Error(viewOnlyText());
   const segments = parseSrt(await file.text());
   if (segments.length === 0) {
     throw new Error(`${file.name} 里没解析出字幕段,检查是不是 SRT / VTT 格式`);

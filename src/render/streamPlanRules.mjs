@@ -66,16 +66,18 @@ export function graphCardWithInputs(project, clip) {
  *   - `'flat'` **剪辑段里摊出来的独立卡**(`src/kernel/cutFlatten.mjs`;用户 2026-10-21 定:剪辑段里的卡和没有剪辑段时一样,
  *     重卡各自走轨道流):流里是这张卡在它自己包裹层里的画面(平面的和外框三维的都一样,三维那几项不在流里),贴的时候嵌套场景
  *     外面那几层(段的框、不透明度、淡入淡出)照常加。产流的隔离工程要带着这条剪辑段链(`isolatedFlatProject`),
- *     所以不并进组流(组流按舞台坐标画,嵌套场景里的卡摆不进去);浏览器不产。只收独立卡:剪辑段里依赖下层、源依赖、
- *     没审阅过的卡不产流,照旧在嵌套场景里活渲(v1)。
+ *     所以不并进组流(组流按舞台坐标画,嵌套场景里的卡摆不进去)。浏览器也产外框平面的那些(〔裁〕R02:在线浏览器也替剪辑段里的重卡产流;
+ *     外框三维的和顶层的 `'spatial'` 一样只由桌面应用和渲染主机产,见 `render-node/split.mjs` 的 `browserStreamInputOf`)。
+ *     只收独立卡:剪辑段里依赖下层、源依赖、没审阅过的卡不产流,照旧在嵌套场景里活渲(〔裁〕R01 2026-10-23 用户推翻「带着下层一起产流」,
+ *     按做不通处理:嵌套场景里的毛玻璃会透过剪辑段采样段外面的层,只带段里下层的流和活渲对不上)。
  *
  * 两类同时成立时算 `'source'`(框的三维照样不在流里)。别的卡回 null:平面的独立卡走 `streamEligible`,
  * 依赖下层的、没审阅过又没接输入的走 `belowStreamEligible`(外框带不带三维都走那条路:带三维时三维摆放画进流里)。
  *
  * 不参加组流合并:组流按舞台坐标产,成员的外观(含三维)全画进流里,和「流里是变形之前的画面」对不上;源依赖卡多半整幅不透明,
  * 并进组流会把夹在中间的层关系压平。它们各占一个解码器,算进预算。
- * 浏览器不产:源依赖卡要解素材、执行素材效果卡,三维外框的卡浏览器那条取像素的路没有验过;切分不出浏览器那一份
- * (`render-node/split.mjs` 的 `browserStreamInputOf`),在线页面本页产流也不认它们(`src/online/pageStreamPlan.ts`),只算进预算。
+ * 浏览器不产(`'flat'` 里外框平面的那些除外,见上):源依赖卡要解素材、执行素材效果卡,三维外框的卡浏览器那条取像素的路没有验过;
+ * 切分不出浏览器那一份(`render-node/split.mjs` 的 `browserStreamInputOf`),在线页面本页产流也不认它们(`src/online/pageStreamPlan.ts`),只算进预算。
  */
 export function soloStreamKind(control, clip, track, project) {
   if (!control?.clipId || !clip || !track) return null;
@@ -108,6 +110,16 @@ export function soloStreamKind(control, clip, track, project) {
 export const BELOW_STREAM_RULES = Object.freeze({ sourceDependent: false, frame3d: true });
 
 /**
+ * 回放从哪一刻挂载算:剪辑段里摊出来的片段(带 `flat`)从嵌套场景最早挂上的那一刻起(`flat.mount`,预卷不会比它更早),
+ * 别的片段就是它自己(原样回同一个对象)。与 `server/frame-stream.mjs` 里同名的那一份一字不差;在线页面算预算时用它
+ * (`src/online/pageStreamPlan.ts`,剪辑段里单独成流的卡的解码器窗口和切分方一样从这一帧算)。
+ */
+export function mountClipOf(clip) {
+  const mount = clip?.flat?.mount;
+  return Number.isFinite(mount) ? { ...clip, start: Math.min(clip.start, mount) } : clip;
+}
+
+/**
  * 这张卡进不进「依赖下层的流」。收:依不依赖下层这一样是「依赖下层」(`belowDependent`)、旧的统称 `context`、
  * 或「未知」(`unknown`,审阅表没覆盖到的卡;没写、认不出的值也按未知)的卡,外框带三维的也收(`rules.frame3d`)。
  * 独立卡一律不进这里(平面的走单卡流 `streamEligible`,带三维的单独成流 `soloStreamKind`);源依赖卡看 `rules`。
@@ -117,7 +129,7 @@ export function belowStreamEligible(control, clip, track, rules = BELOW_STREAM_R
   if (!control?.clipId || !clip || !track) return false;
   if (track.hidden || track.sourceOnly) return false;
   if (!clip.cardId) return false;
-  // 剪辑段里摊出来的卡不出依赖下层的流(v1:嵌套场景里的毛玻璃照旧活渲)
+  // 剪辑段里摊出来的卡不出依赖下层的流(嵌套场景里的毛玻璃照旧活渲;〔裁〕R01 2026-10-23 被推翻,按做不通处理)
   if (clip.flat) return false;
   const spatial = frame3d(clip.frame);
   if (spatial && rules?.frame3d !== true) return false;

@@ -125,7 +125,7 @@
   - 收集端本身（Cloudflare Worker，`tools/report-worker/`）的 `SUBMIT_TOKEN` 与前端这份一致由用户核对，会话不读它。
 - **命令。**
   1. `npx vite build --mode online --outDir <目录>`（本机）；
-  2. 上传与换代用上一次的办法（`REPORT-cloud-node-deploy.md` 第 2 节）：本机用 `server/hosted/deploy.mjs` 的 `stageEditorBuild` 生成预压缩 `.gz`，拷成部署目录下的 `.incoming-editor`，在节点上只跑 `editorSwapLines()` 那几行（先整份备份旧的 `editor/`、保留上一代 `assets/`、**保留 `runtime-config.json`**）；**不要用 `deploy-hosted`**（它会换应用目录并重载 PM2，那是 C3 的事）。
+  2. 上传与换代用上一次的办法（`REPORT-cloud-node-deploy.md` 第 2 节）：本机用 `server/hosted/deploy.mjs` 的 `stageEditorBuild` 生成预压缩 `.gz`，拷成部署目录下的 `.incoming-editor`，在节点上只跑 `editorSwapLines()` 那几行（先整份备份旧的 `editor/`、保留前 3 代 `assets/`（2026-10-23 起；原为上一代）、**保留 `runtime-config.json`**）；**不要用 `deploy-hosted`**（它会换应用目录并重载 PM2，那是 C3 的事）。
   3. 看 `runtime-config.json`：`stageOrigins` 两个舞台源还在；**不要出现 `"onlineCardExec": false`**（那是第二段的总开关，写 false 就整体退回不执行用户卡与素材效果卡）。
 - **备份。** B1 的 `editor/` 整份备份。
 - **核对。**

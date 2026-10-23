@@ -26,10 +26,11 @@ test('MC1 主轨 = 最底下那条放着视频/图片/剪辑段的序列;卡片�
   assert.equal(mainTotal(mainClipsOf(p)), 9);
 });
 
-test('MC2 没有主要内容:主轨是最底下那条,段为空', () => {
+test('MC2 没有视频/图片/剪辑段:主轨是最底下那条,卡片段补进主要内容(2026-10-23 用户定);一段都没有时为空', () => {
   const p = project([{ id: 't1', name: '上', clips: [clip('card', 0, 3, { cardId: 'title' })] }, { id: 't2', name: '下', clips: [] }]);
   assert.equal(mainTrackOf(p).id, 't2');
-  assert.deepEqual(mainClipsOf(p), []);
+  assert.deepEqual(mainClipsOf(p).map((c) => c.id), ['card']);
+  assert.deepEqual(mainClipsOf(project([{ id: 't', name: 's', clips: [] }])), []);
 });
 
 test('MC3 交叉溶解挪到别的序列上的后一段仍算主要内容;边界转场按 溶解 → 淡出 → 淡入 认', () => {
@@ -50,9 +51,12 @@ test('MC4 换顺序:保留空档,时长不同时后面的位置跟着移;撞到�
   const p = project([{ id: 't', name: 's', clips: [clip('a', 0, 2, { mediaId: 'mv' }), clip('b', 3, 7, { mediaId: 'mv' }), clip('c', 7, 8, { mediaId: 'mi' })] }]);
   assert.deepEqual(planReorder(p, ['b', 'a', 'c']), { moves: [{ id: 'b', start: 0 }, { id: 'a', start: 5 }] });
   assert.deepEqual(planReorder(p, ['a', 'b', 'c']), { moves: [] });
+  // 结尾那段卡片(0.5 秒,不短于空档门槛)补进了主要内容,换顺序时它留在原位
   const crowded = project([{ id: 't', name: 's', clips: [clip('a', 0, 2, { mediaId: 'mv' }), clip('b', 2, 6, { mediaId: 'mv' }), clip('card', 6, 6.5, { cardId: 'x' })] }]);
-  assert.ok('error' in planReorder(crowded, ['b', 'a']) === false, '4+2 正好排满 0～6,不撞卡片');
-  const tight = project([{ id: 't', name: 's', clips: [clip('a', 0, 2, { mediaId: 'mv' }), clip('card', 2, 3, { cardId: 'x' }), clip('b', 3, 7, { mediaId: 'mv' })] }]);
+  assert.deepEqual(planReorder(crowded, ['b', 'a', 'card']), { moves: [{ id: 'b', start: 0 }, { id: 'a', start: 4 }] }, '4+2 正好排满 0～6,不撞卡片');
+  // 卡片短于空档门槛,不补进来,换顺序时仍会撞到它
+  const tight = project([{ id: 't', name: 's', clips: [clip('a', 0, 2, { mediaId: 'mv' }), clip('card', 2, 2.3, { cardId: 'x' }), clip('b', 2.3, 6.3, { mediaId: 'mv' })] }]);
+  assert.deepEqual(mainClipsOf(tight).map((c) => c.id), ['a', 'b']);
   assert.ok('error' in planReorder(tight, ['b', 'a']));
   const locked = project([{ id: 't', name: 's', clips: [clip('a', 0, 2, { mediaId: 'mv', fadeIn: 0.6 }), clip('b', 2, 4, { mediaId: 'mv' })] }], [{ id: 'f', kind: 'fadeIn', aId: 'a', dur: 0.6 }]);
   assert.ok('error' in planReorder(locked, ['b', 'a']));

@@ -20,6 +20,11 @@
  *   分片不 `fsync`：丢了的分片对账时报「没收到」，续传即可；
  * - 两种布局读取互不兼容，所以布局记在调用方选定的目录里的 `.layout` 文件（`ensureLayoutSync`），启动时核对。
  * 本机编辑器不传 `shard`，布局与行为和原来逐字节一致（不做 `fsync`）。
+ *
+ * **档位**（规则见 `blob-store.mjs`「档位」）：暂存里记在 `meta.json` 的 `tier` 字段（只在是 `small` 时写）；
+ * 入库后记成 `<dir>/.tiers/<hash>` 这个空文件，有它就是小档，没有就是原尺寸。两种布局都放在 `<dir>/.tiers/` 下。
+ * 只有报了 `small` 的才会留下这个文件，所以没人报档位的地方（本机编辑器、桌面版）目录与原来一样。
+ * 收尾时先删掉这个哈希的旧标记、改名入库之后才写新标记：中途出了事最多是少一个标记，也就是多算一条，不会少算。
  */
 import path from 'node:path';
 import fs from 'node:fs/promises';
@@ -29,7 +34,7 @@ import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import {
   BLOB_CHUNK_SIZE, normalizeHash, normalizeExt, checkChunkArgs, chunkCountOf, chunkLengthOf,
-  extOfName, createKeyedLock, drainSource, countSource, toBuffer, minimalContentType,
+  extOfName, createKeyedLock, drainSource, countSource, toBuffer, minimalContentType, normalizeTier,
 } from './blob-store.mjs';
 
 /**
@@ -151,11 +156,13 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
 
   const lockKey = (hash) => `${base}\0${hash}`;
   const stagingDir = (hash) => path.join(base, '.chunks', hash);
+  const tierDir = path.join(base, '.tiers');
+  const tierMark = (hash) => path.join(tierDir, hash);
 
   async function readMeta(hash) {
     try {
       const raw = JSON.parse(await fs.readFile(path.join(stagingDir(hash), 'meta.json'), 'utf8'));
-      if (Number.isSafeInteger(raw?.size) && raw.size > 0) return { size: raw.size, ext: String(raw.ext || '') };
+      if (Number.isSafeInteger(raw?.size) && raw.size > 0) return { size: raw.size, ext: String(raw.ext || ''), tier: normalizeTier(raw.tier) };
     } catch { /* 没有暂存 */ }
     return null;
   }
@@ -164,7 +171,9 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
     const d = stagingDir(hash);
     await fs.mkdir(d, { recursive: true });
     const tmp = path.join(d, `meta.${crypto.randomBytes(4).toString('hex')}.tmp`);
-    await fs.writeFile(tmp, JSON.stringify(meta));
+    // tier 只在是小档时写：原尺寸（绝大多数）的 meta.json 与原来逐字节一致
+    const { tier, ...rest } = meta;
+    await fs.writeFile(tmp, JSON.stringify(tier === 'small' ? { ...rest, tier } : rest));
     await fs.rename(tmp, path.join(d, 'meta.json'));
   }
 
@@ -193,8 +202,8 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
     }
   }
 
-  /** 已入库的全件：哈希 → 字节数 */
-  async function scanStored() {
+  /** 已入库的全件：哈希 → 字节数；传了 `exts` 就顺手记下哈希 → 扩展名 */
+  async function scanStored(exts = null) {
     const sizes = new Map();
     async function countIn(home, prefix) {
       let entries = [];
@@ -206,7 +215,7 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
         const key = m[1].toLowerCase();
         if (prefix !== null && !key.startsWith(prefix)) continue;
         if (sizes.has(key)) continue;
-        try { sizes.set(key, (await fs.stat(path.join(home, ent.name))).size); } catch { /* 刚被删 */ }
+        try { sizes.set(key, (await fs.stat(path.join(home, ent.name))).size); exts?.set(key, extOfName(ent.name)); } catch { /* 刚被删 */ }
       }
     }
     if (sharded) {
@@ -256,12 +265,13 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
       return { size: meta.size, chunkSize, received: await receivedChunks(key, meta), complete: false };
     },
 
-    async putChunk(hash, n, { size, ext, beforeCommit, signal, track } = /** @type {any} */ ({}), source) {
+    async putChunk(hash, n, { size, ext, tier, beforeCommit, signal, track } = /** @type {any} */ ({}), source) {
       await beforeCommit?.();
       signal?.throwIfAborted();
       const key = normalizeHash(hash);
       checkChunkArgs(n, size);
       const wantExt = normalizeExt(ext);
+      const wantTier = normalizeTier(tier);
       const count = chunkCountOf(size, chunkSize);
       if (n >= count) return { status: 'out-of-range', count };
       const expected = chunkLengthOf(size, n, chunkSize);
@@ -275,12 +285,17 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
         const meta = await readMeta(key);
         if (meta && meta.size !== size) return { conflict: meta.size };
         const d = stagingDir(key);
+        // ext 以最先登记的非空值为准；档位只往 original 退（见 blob-store.mjs「档位」）
+        const next = meta
+          ? { size, ext: meta.ext || wantExt, tier: meta.tier === 'small' && wantTier === 'small' ? 'small' : 'original' }
+          : { size, ext: wantExt, tier: wantTier };
+        const changed = !meta || next.ext !== meta.ext || next.tier !== meta.tier;
         if (meta && await exists(path.join(d, `${n}.ok`))) {
-          if (!meta.ext && wantExt) await writeMeta(key, { size, ext: wantExt });
+          if (changed) await writeMeta(key, next);
           return 'have';
         }
         if (!meta) await fs.rm(path.join(d, `${n}.ok`), { force: true });
-        if (!meta || (!meta.ext && wantExt)) await writeMeta(key, { size, ext: meta?.ext || wantExt });
+        if (changed) await writeMeta(key, next);
         // data 不存在就建一个空的；已经存在的不截断（别的片可能已经写进去了）
         await (await fs.open(path.join(d, 'data'), 'a')).close();
         return 'ok';
@@ -360,10 +375,16 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
         }
         await beforeCommit?.();
         signal?.throwIfAborted();
+        // 这个哈希以前留下的小档标记先清掉（删不掉就照原样抛，不入库）：免得一条原尺寸顶着旧标记少算
+        await fs.rm(tierMark(key), { force: true });
         const target = path.join(home, file);
         await fs.rename(data, target);
         // 撤销/关项目与 rename 在途竞态：未完成发布的此份新全件撤回暂存；不动任何已有全件。
         if (signal?.aborted) { await fs.rename(target, data); signal.throwIfAborted(); }
+        // 小档的标记在入库之后才写；写不成就当原尺寸（多算一条，不少算）
+        if (meta.tier === 'small') {
+          try { await fs.mkdir(tierDir, { recursive: true }); await fs.writeFile(tierMark(key), ''); } catch { /* 当原尺寸 */ }
+        }
         if (sharded) await fsyncPath(home, { dir: true });
         await fs.rm(d, { recursive: true, force: true });
         await onStored({ hash: key, file, ext: meta.ext, size: meta.size, contentType: contentTypeForExt(meta.ext) });
@@ -384,6 +405,7 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
           await fs.rm(d, { recursive: true, force: true });
           removed = true;
         }
+        await fs.rm(tierMark(key), { force: true });
         return removed;
       });
     },
@@ -406,6 +428,24 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
       let bytes = 0;
       for (const v of sizes.values()) bytes += v;
       return { blobs: sizes.size, bytes, staging };
+    },
+
+    async inventory() {
+      const exts = new Map();
+      const sizes = await scanStored(exts);
+      let marks = [];
+      try { marks = await fs.readdir(tierDir); } catch { /* 没有小档标记 */ }
+      const small = new Set(marks.map((n) => n.toLowerCase()).filter((n) => /^[0-9a-f]{64}$/.test(n)));
+      const stored = [...sizes.keys()].sort().map((hash) => ({ hash, ext: exts.get(hash) ?? '', tier: small.has(hash) ? 'small' : 'original' }));
+      const staging = [];
+      let dirs = [];
+      try { dirs = await fs.readdir(path.join(base, '.chunks'), { withFileTypes: true }); } catch { /* 没有暂存 */ }
+      for (const ent of dirs) {
+        if (!ent.isDirectory() || !/^[0-9a-f]{64}$/.test(ent.name)) continue;
+        const meta = await readMeta(ent.name);
+        if (meta) staging.push({ hash: ent.name, ext: meta.ext, tier: meta.tier });
+      }
+      return { stored, staging };
     },
   };
 }

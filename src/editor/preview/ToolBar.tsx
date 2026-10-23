@@ -5,6 +5,7 @@
  */
 import { useStore } from "../../store/project";
 import { IconCursor, IconText, IconMove } from "../../ui/icons";
+import { useReadOnly } from "../readOnly";
 import "./preview.css";
 
 export type ToolType = "select" | "text" | "move";
@@ -33,6 +34,8 @@ export function ToolBar({
   const width = useStore((s) => s.project.width);
   const height = useStore((s) => s.project.height);
   const fps = useStore((s) => s.project.fps);
+  // 这个项目只给了只读权限(游客):移动、文字两个工具会改项目,置灰;选择照常
+  const ro = useReadOnly();
   return (
     <div className="pc-pv-tools" role="toolbar" aria-label="预览工具">
       {TOOLS.map(({ key, label, Icon }) => (
@@ -41,8 +44,9 @@ export function ToolBar({
           type="button"
           className={`pc-pv-tool${tool === key ? " is-on" : ""}`}
           aria-pressed={tool === key}
+          disabled={ro.locked && key !== "select"}
           onClick={() => onToolChange(key)}
-          title={label}
+          title={ro.locked && key !== "select" ? `${label}:${ro.why}` : label}
         >
           <Icon size={14} />
         </button>

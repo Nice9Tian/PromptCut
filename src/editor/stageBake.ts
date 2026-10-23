@@ -18,7 +18,7 @@
  *
  * 舞台、单飞队列、事件都经 `deps` 注入(宿主传 `stageJobs` / `stageBridge` 的真函数;剧本传同一套真函数配假舞台)。
  */
-import { bakeInputOf, isolatedCardProject, type BakeInput } from "../online/bakeTask.ts";
+import { bakeFrameBase, bakeInputOf, isolatedBakeProject, type BakeInput } from "../online/bakeTask.ts";
 import type { Project } from "../kernel/project";
 import type { BakeFrameReply, StageEvent, StageRpcClient } from "../render/stageRpc.ts";
 import type { NodeTask } from "../online/browserNode.ts";
@@ -90,6 +90,8 @@ interface Lease {
   taskId: string;
   isolated: Project;
   input: BakeInput;
+  /** 剪辑段里的卡:本地帧 0 是项目的第几帧(`bakeFrameBase`,〔裁〕R02);顶层的卡是 null */
+  frameBase: number | null;
   stage: StageRpcClient;
   /** 这台舞台灌过这一段的隔离单卡工程没有 */
   pushedTo: StageRpcClient | null;
@@ -126,13 +128,15 @@ export function createStageBaker(deps: StageBakerDeps): StageBaker {
     const input = bakeInputOf(task);
     if (!input) return Promise.reject(retryable("任务没有 input.bake / clipId(切分方没给浏览器那一份的参数)", false));
     let isolated: Project;
-    try { isolated = isolatedCardProject(project as Project, input) as Project; } catch (e) { return Promise.reject(Object.assign(e as Error, { retryable: false })); }
+    // 顶层的卡:隔离单卡工程;剪辑段里的卡:带着剪辑段链的隔离工程(`isolatedBakeProject`)
+    try { isolated = isolatedBakeProject(project as Project, input) as Project; } catch (e) { return Promise.reject(Object.assign(e as Error, { retryable: false })); }
+    const frameBase = bakeFrameBase(input);
     return new Promise<Lease>((resolve, reject) => {
       let got = false;
       void deps.runBackJob("bake", async (ctx) => {
         let release!: () => void;
         const done = new Promise<void>((r) => { release = r; });
-        const l: Lease = { taskId: task.id, isolated, input, stage: ctx.stage, pushedTo: null, ahead: null, close: () => release() };
+        const l: Lease = { taskId: task.id, isolated, input, frameBase, stage: ctx.stage, pushedTo: null, ahead: null, close: () => release() };
         // 更急的活来了(补跑、测量、探针):当前帧做完就放回(D8)
         ctx.signal.addEventListener("abort", () => { deps.onUrgent(); }, { once: true });
         got = true;
@@ -178,7 +182,7 @@ export function createStageBaker(deps: StageBakerDeps): StageBaker {
       try {
         reply = ahead && ahead.frame === localFrame && ahead.stage === stage
           ? await ahead.reply
-          : await stage.bakeFrame({ session, clipId: l.input.clipId, localFrame, mode: deps.mode, small });
+          : await stage.bakeFrame({ session, clipId: l.input.clipId, localFrame, mode: deps.mode, small, ...(l.frameBase !== null ? { frameBase: l.frameBase } : {}) });
       } finally {
         signal.removeEventListener("abort", onAbort);
       }
@@ -196,7 +200,7 @@ export function createStageBaker(deps: StageBakerDeps): StageBaker {
       // 先发哪一帧:缺省是下一帧;调用方给了 `ahead` 就照它(稀疏的一趟每个分段只取第一帧,先发的是下一个分段的第一帧;null = 不先发)
       const next = aheadFrame === undefined ? localFrame + 1 : aheadFrame;
       if (reply.ok && deps.mode === "seq" && range && next !== null && Number.isInteger(next) && next > localFrame && next <= range.to && !signal.aborted && deps.isIdle() && lease === l && !moved()) {
-        const p = stage.bakeFrame({ session, clipId: l.input.clipId, localFrame: next, mode: deps.mode, small })
+        const p = stage.bakeFrame({ session, clipId: l.input.clipId, localFrame: next, mode: deps.mode, small, ...(l.frameBase !== null ? { frameBase: l.frameBase } : {}) })
           .catch((e): BakeFrameReply => ({ ok: false, reason: "cancelled", detail: String((e as Error)?.message ?? e).slice(0, 200) }));
         l.ahead = { frame: next, stage, reply: p };
       }

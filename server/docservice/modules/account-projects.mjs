@@ -1,6 +1,7 @@
 import https from 'node:https';
 import { accountError, certificateFingerprint } from '../../account/client.mjs';
 import { requireRequestId } from '../../account/protocol.mjs';
+import { clientKeyOf, createGuestRateLimit } from '../../account/guest-rate.mjs';
 
 const INTERNAL = '/internal/v2/';
 const PUBLIC = '/hosted/shared/account';
@@ -30,9 +31,9 @@ async function readBody(req) {
   try { const body = JSON.parse(Buffer.concat(chunks).toString('utf8')); if (!body || typeof body !== 'object' || Array.isArray(body)) bad(400, 'invalid-body'); return body; }
   catch (error) { if (error.status) throw error; bad(400, 'invalid-body'); }
 }
-const send = (res, status, value, cors = false) => {
+const send = (res, status, value, cors = false, extra = {}) => {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff',
-    ...(cors ? { 'access-control-allow-origin': '*' } : {}) });
+    ...(cors ? { 'access-control-allow-origin': '*' } : {}), ...extra });
   res.end(JSON.stringify(value));
 };
 
@@ -40,7 +41,8 @@ const send = (res, status, value, cors = false) => {
  * Caller certificate registration is immutable owner configuration, never body/loopback identity.
  * No cookies, legacy LAN tickets, runGrant body exemptions or automatic logout-complete ACKs.
  */
-export function mountAccountProjects({ authority, services = [], issueSession, resolveAssetTicket, membersSnapshot }) {
+export function mountAccountProjects({ authority, services = [], issueSession, resolveAssetTicket, membersSnapshot,
+  guestRateLimit = createGuestRateLimit() }) {
   const registry = new Map();
   for (const entry of services) {
     const fingerprint = certificateFingerprint(entry.fingerprint256);
@@ -103,6 +105,17 @@ export function mountAccountProjects({ authority, services = [], issueSession, r
         // 回的是签名过的证明，桌面版的页面跨源来问，所以连同错误一起放开只读的跨源读取（不带凭证）。
         cors = true;
         result = authority.legacyGoneStatus({ authorityId: url.searchParams.get('authorityId'), projectId: url.searchParams.get('projectId') });
+      } else if (req.method === 'POST' && url.pathname === `${PUBLIC}/guest`) {
+        // 领一张游客令牌（`docs/semantics/product/document-service.md`「游客」）。这一条**不要** Bearer：
+        // 他还没有身份，要的就是这一张。带着旧令牌来就续期、编号不变；不带或者过期就随机一个新身份。
+        // 编号只由服务端生成，请求体里写什么都不收（`authority.issueGuest`）。
+        if (typeof authority.issueGuest !== 'function') bad(503, 'guest-unavailable');
+        // 按来访 IP 限流（2026-10-23 用户定「先用 IP 拦」）：不要登录的路由，不拦的话谁都能反复领新身份。
+        // 只挡得住随手刷的，换 IP 就绕过去了；真正挡得住的是验证码或账号，这一版不做（`guest-rate.mjs`）
+        const verdict = guestRateLimit.take(clientKeyOf(req));
+        if (!verdict.ok) throw Object.assign(accountError(429, 'guest-rate-limited'), { retryAfterSec: verdict.retryAfterSec });
+        const body = await readBody(req);
+        result = authority.issueGuest(typeof body.token === 'string' ? body.token : null);
       } else {
         const actor = bearer(req);
         if (req.method === 'POST') {
@@ -152,7 +165,9 @@ export function mountAccountProjects({ authority, services = [], issueSession, r
     } catch (error) {
       const code = error.code ?? 'authority-unavailable';
       const message = code === 'version-expired' ? VERSION_EXPIRED_TEXT : code;
-      send(res, error.status ?? (error.code?.startsWith('bad-') ? 400 : 503), { ok: false, error: code, code, message }, cors);
+      // 限流回 429 时带上 Retry-After:让页面知道等多久,不要原地重试
+      const extra = Number.isSafeInteger(error.retryAfterSec) ? { 'retry-after': String(error.retryAfterSec) } : {};
+      send(res, error.status ?? (error.code?.startsWith('bad-') ? 400 : 503), { ok: false, error: code, code, message }, cors, extra);
     }
     return true;
   }

@@ -9,6 +9,7 @@ import { installStageClock } from "./render/stageClock";
 import { cardMountedAt, mountFrameOf } from "./render/frameWindow.mjs";
 import { createAnimationPinner } from "./render/pinAnimations";
 import { createSnapshot } from "./render/createSnapshot";
+import { flatClipOf, isFlatClipId } from "./kernel/cutFlatten.mjs";
 import { clipWrapper, hitTest as solidHitTest, rectsWithBounds as solidRectsWithBounds } from "./render/solid";
 import { applyProjectPatch, type ProjectPatch } from "./render/changedClips.mjs";
 import {
@@ -2458,17 +2459,29 @@ export default function StageView() {
        *
        * 要像素(`req.pixels`,浏览器节点产轨道流用):生成快照之后照小尺寸那条路按原尺寸把矩形那一块画成位图(`bakeSmall.ts` 的
        * `renderSnapshotBitmap`),随 `bake-frame` 事件转移给父页;画不出来回 `pixels-failed`。`req.html === false` 时事件不带 HTML 字节。
+       *
+       * **剪辑段里的卡**(片段 id 是摊平出来的虚拟片段,〔裁〕R02:在线浏览器也替剪辑段里的重卡产流):灌进来的是带着剪辑段链的隔离工程
+       * (`online/bakeTask.ts` 的 `isolatedBakeProject`),时间不平移,所以本地帧 n 是项目帧 `req.frameBase + n`;顶层只有那个剪辑段,
+       * 一律从挂载帧逐帧推(嵌套场景里的卡按段的预卷挂上,不走直接拨到那一支);快照取这张卡在嵌套场景里的包裹层
+       * (`[data-pc-flat-clip]`,`createSnapshot` 的 `flatControls`)。包裹层的本地帧按卡自己的起点算(露出窗口可以截了头),
+       * 核对时按同一个式子算期望值,允许差一帧(两边的浮点次序不同)。顶层的卡一个字不变。
        */
       async bakeFrame(req) {
         if (!ONLINE || !clock) return { ok: false, reason: "unsupported" } satisfies BakeFrameReply;
         if (ref.current.role !== "back") return { ok: false, reason: "role" } satisfies BakeFrameReply;
         const p = ref.current.project;
         if (!p) return { ok: false, reason: "no-project" } satisfies BakeFrameReply;
-        const clip = p.tracks.filter((tr) => !tr.hidden).flatMap((tr) => tr.clips).find((c) => c.id === req.clipId);
+        const flat = isFlatClipId(req.clipId);
+        const clip = flat
+          ? (flatClipOf(p, req.clipId)?.clip as Project["tracks"][number]["clips"][number] | undefined)
+          : p.tracks.filter((tr) => !tr.hidden).flatMap((tr) => tr.clips).find((c) => c.id === req.clipId);
         if (!clip) return { ok: false, reason: "no-clip" } satisfies BakeFrameReply;
         const fps = Math.max(1, p.fps || 30);
         const n = Math.max(0, Math.floor(Number(req.localFrame) || 0));
-        const sec = n / fps;
+        // 剪辑段里的卡:本地帧 0 是项目的第 `frameBase` 帧;顶层的卡是 0(本地帧就是全局帧)
+        const base = flat ? Math.max(0, Math.floor(Number(req.frameBase) || 0)) : 0;
+        const g = n + base;
+        const sec = g / fps;
         const gen = ++bakeGen;
         const started = realNow();
         let pausedMs = 0;
@@ -2481,12 +2494,12 @@ export default function StageView() {
         // 取卡的能力表里的写法,声明了要预渲染的、认不出来的卡一律按有状态处理(宁可多推,不可画错)
         const def = clip.cardId ? getCard(clip.cardId) : undefined;
         const caps = def && !unsupportedHere(clip.cardId, def) ? cardCapabilities(def as never, { ...def.defaults, ...clip.params }, clip.parts as never) : null;
-        const direct = !!caps && caps.frameMode === "direct" && caps.need_prerendering !== true
+        const direct = !flat && !!caps && caps.frameMode === "direct" && caps.need_prerendering !== true
           && p.tracks.filter((tr) => !tr.hidden).flatMap((tr) => tr.clips).length === 1;
-        // 接得上:舞台还挂着这份项目的这个片段,时钟就停在上一帧的时刻上
+        // 接得上:舞台还挂着这份项目的这个片段,时钟就停在上一帧的时刻上(接续点记的是全局帧;顶层的卡全局帧就是本地帧)
         const held = !!cur && cur.project === p && cur.clipId === req.clipId && Math.abs(clock.now() - (cur.frame / fps) * 1000) < 1e-6;
-        const continuing = !direct && held && cur.frame <= n
-          && (req.mode !== "batch4" || (n % 4 !== 0 && Math.floor(cur.frame / 4) === Math.floor(n / 4)));
+        const continuing = !direct && held && cur.frame <= g
+          && (req.mode !== "batch4" || (g % 4 !== 0 && Math.floor(cur.frame / 4) === Math.floor(g / 4)));
         /**
          * 一帧收尾(挂载帧、推过的每一帧、直接拨到的那一帧都走它,两条路一样):这一帧的回调跑完以后,
          * 提交排下的 React 更新 → 钉动画并当场交付结束回调 → 有动画在这一帧结束就再提交一次 → 等 GL 位图。
@@ -2546,11 +2559,13 @@ export default function StageView() {
         if (!ready.ok) return bakeFail({ ok: false, reason: "not-ready", detail: ready.detail.slice(0, 300) } satisfies BakeFrameReply);
         const readyMs = realNow() - t0;
         const root = rootRef.current;
-        const snap = createSnapshot(root);
+        const snap = createSnapshot(root, flat ? { flatControls: true } : undefined);
         if (snap.lossy) return bakeFail({ ok: false, reason: "lossy", detail: `${snap.lossy} 张读不出像素的画布` } satisfies BakeFrameReply);
         const own = snap.controls.find((c) => c.id === req.clipId);
         if (!own) return bakeFail({ ok: false, reason: "no-control" } satisfies BakeFrameReply);
-        if (own.frame !== n) return bakeFail({ ok: false, reason: "frame-mismatch", detail: `生成快照的本地帧是 ${own.frame},要的是 ${n}` } satisfies BakeFrameReply);
+        // 剪辑段里的卡:包裹层的本地帧从卡自己的起点算 = 这一刻 − (露出起点 − 截掉的那一截)
+        const wantFrame = flat ? Math.round((sec - (clip.start - (Number((clip as { flat?: { lead?: number } }).flat?.lead) || 0))) * fps) : n;
+        if (flat ? Math.abs(own.frame - wantFrame) > 1 : own.frame !== n) return bakeFail({ ok: false, reason: "frame-mismatch", detail: `生成快照的本地帧是 ${own.frame},要的是 ${wantFrame}` } satisfies BakeFrameReply);
         const bytes = new TextEncoder().encode(own.html);
         const hash = await sha256Hex(bytes);
         const wantHtml = req.html !== false;
@@ -2596,7 +2611,7 @@ export default function StageView() {
         if (small) transfer.push(small.webp);
         if (pixels) transfer.push(pixels.bitmap);
         postStageEvent(event, "*", transfer);
-        bakeCursor = { project: p, clipId: req.clipId, frame: n };
+        bakeCursor = { project: p, clipId: req.clipId, frame: g };
         bakeStats.frames++;
         bakeStats.ms.push(realNow() - started - pausedMs);
         bakeStats.pausedMs += pausedMs;

@@ -228,13 +228,17 @@ export function layerOutside(upper, lower, width, height, crop, { glass = null, 
  *     旋转过的外框不是它的形状 —— 这些不进掩码,照最小不透明度算(仍然盖回去等于原画面)。
  *
  * 藏的是导出页给每张卡包的那一层 `[data-pc-native-layer]`,没有这一层(旧形状的时间轴)就藏包裹层 `[data-pc-clip]`。
+ * 剪辑段里的卡(摊平出来的虚拟片段,〔裁〕R01)藏它在嵌套场景里的包裹层 `[data-pc-flat-clip]`;虚拟片段的 id 带 `~`,和顶层的 id 撞不上。
+ * 找毛玻璃外框时往上查祖先查到嵌套场景(`[data-pc-cut-scene]`)为止:嵌套场景是毛玻璃的采样边界(`CutSegmentScene` 的 `clip-path`),
+ * 玻璃这一块在场景里是整块盖上去的;场景自己的 `clip-path` 不算「另起一层」。
  */
 export function pageHideTarget(clipId) {
   const ID = '__pc_below_hide';
   document.getElementById(ID)?.remove();
   const esc = CSS.escape(String(clipId));
-  const sel = `[data-pc-native-layer="${esc}"], [data-pc-clip="${esc}"]:not([data-pc-media])`;
-  const layer = document.querySelector(`[data-pc-native-layer="${esc}"]`) ?? document.querySelector(`[data-pc-clip="${esc}"]:not([data-pc-media])`);
+  const sel = `[data-pc-native-layer="${esc}"], [data-pc-clip="${esc}"]:not([data-pc-media]), [data-pc-flat-clip="${esc}"]`;
+  const layer = document.querySelector(`[data-pc-native-layer="${esc}"]`) ?? document.querySelector(`[data-pc-clip="${esc}"]:not([data-pc-media])`)
+    ?? document.querySelector(`[data-pc-flat-clip="${esc}"]`);
   if (!layer) return { ok: true, absent: true, reason: null, glass: [] };
   const plain = v => !v || v === 'none' || v === 'normal';
   const ownLayer = cs => cs.opacity !== '1' || !plain(cs.filter) || !plain(cs.mixBlendMode) || !plain(cs.clipPath)
@@ -256,6 +260,7 @@ export function pageHideTarget(clipId) {
     if (ownLayer(cs) || !axisAligned(cs)) continue;
     let direct = true;
     for (let p = el.parentElement; p && direct; p = p.parentElement) {
+      if (p.hasAttribute('data-pc-cut-scene')) break;
       const ps = getComputedStyle(p);
       if (ownLayer(ps) || !plain(ps.backdropFilter || ps.webkitBackdropFilter) || !axisAligned(ps)) direct = false;
       if (p.hasAttribute('data-pc-scene')) break;

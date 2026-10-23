@@ -17,7 +17,7 @@ export const MEDIA_COOKIE = "pc_rt";
 export const MEDIA_COOKIE_MAX_AGE_S = 900;
 /** 舞台源上凭 cookie 读素材的路径前缀:`/media-s/<sid>/media/<哈希>`;交接票据的地址是 `/media-s/<sid>/_grant` */
 export const MEDIA_S_PREFIX = "/media-s";
-/** 页面会话号的形状:不是秘密,只用来把 cookie 圈在一段路径上 */
+/** 舞台素材路径号的形状:按账号加项目固定,对其它项目的舞台保密,把 cookie 与缓存圈在一段路径上 */
 export const SID_PATTERN = "[A-Za-z0-9]{16,64}";
 /** `/media-s/<sid>/` 之后放行的路径(只读素材字节:原尺寸与小尺寸都按哈希寻址) */
 export const MEDIA_S_PATH_PATTERN = "media/[0-9a-f]{64}(?:\\.[A-Za-z0-9]{1,8})?";

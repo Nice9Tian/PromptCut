@@ -26,6 +26,8 @@ export function ThumbStrip(props: {
   onScrub: (t: number) => void;
   onAddMedia: () => void;
   onAddTransition: (a: TrackClip, b: TrackClip) => void;
+  /** 只读项目(游客):长按拖动换顺序不接,点选、滚动、看都照常 */
+  locked?: boolean;
 }) {
   const { project, clips, selected } = props;
   const sc = useRef<HTMLDivElement>(null);
@@ -87,7 +89,7 @@ export function ThumbStrip(props: {
     let mode: "pending" | "scroll" | "reorder" = "pending";
     let timer = 0;
     dragging.current = true;
-    if (isBlock && id && selected === id) {
+    if (!props.locked && isBlock && id && selected === id) {
       timer = window.setTimeout(() => { if (mode === "pending") { mode = "reorder"; target!.classList.add("lift"); } }, LIFT_MS);
     }
     const mv = (ev: PointerEvent) => {
@@ -144,9 +146,11 @@ export function ThumbStrip(props: {
           {clips.map((c, i) => {
             const tr = i < clips.length - 1 ? boundaryTransition(project, c, clips[i + 1]) : null;
             const muted = !!c.audioMuted;
+            // 补空档补进来的长段可能在几处各出现一截(同一个 id),键带上起点
+            const key = `${c.id}@${c.start}`;
             return [
               <div
-                key={c.id}
+                key={key}
                 className={selected === c.id ? "mblock sel" : "mblock"}
                 data-id={c.id}
                 data-kind={clipKind(project, c)}
@@ -159,8 +163,8 @@ export function ThumbStrip(props: {
               </div>,
               i < clips.length - 1 && (
                 tr
-                  ? <button key={`m-${c.id}`} type="button" className={selected === tr.id ? "mark has sel" : "mark has"} data-id={tr.id} data-k={i} data-pcm="mark" title="转场">◇</button>
-                  : <button key={`m-${c.id}`} type="button" className="mark" data-k={i} data-pcm="mark-add" title="添加转场" onClick={() => props.onAddTransition(c, clips[i + 1])}>＋</button>
+                  ? <button key={`m-${key}`} type="button" className={selected === tr.id ? "mark has sel" : "mark has"} data-id={tr.id} data-k={i} data-pcm="mark" title="转场">◇</button>
+                  : <button key={`m-${key}`} type="button" className="mark" data-k={i} data-pcm="mark-add" title="添加转场" onClick={() => props.onAddTransition(c, clips[i + 1])}>＋</button>
               ),
             ];
           })}
@@ -171,9 +175,19 @@ export function ThumbStrip(props: {
   );
 }
 
-/** 缩略卡的画面:视频段取它入点那一帧,图片段取缩略图;剪辑段、取不到时只有取色底色 */
+const KIND_ICON = { video: "video", image: "image", cut: "clip", card: "card", audio: "audio" } as const;
+
+/**
+ * 缩略卡的画面:视频段取它入点那一帧,图片段取缩略图;垫在下面的是类型图标,卡片段、剪辑段、取不到时
+ * 露出的就是取色底色 + 类型图标(+ 卡上的时长),不留空白、不出破图
+ */
 function BlockThumb({ project, clip }: { project: Project; clip: TrackClip }) {
   const media = clip.mediaId && !clip.cardId ? project.media.find((m) => m.id === clip.mediaId) : undefined;
   const thumb = useThumb(media, media?.kind === "video" ? clip.mediaOffset ?? 0 : 0);
-  return media && media.kind !== "audio" ? <ThumbImg thumb={thumb} /> : null;
+  return (
+    <>
+      <span className="kic" data-pcm="mblock-icon"><Icon name={KIND_ICON[clipKind(project, clip)]} /></span>
+      {media && media.kind !== "audio" ? <ThumbImg thumb={thumb} /> : null}
+    </>
+  );
 }

@@ -48,7 +48,8 @@ export function testIdentities() {
 }
 export function projectFromVisibleLink(value) {
   if (typeof value !== 'string') throw new Error('visible-project-link-required');
-  const match = /https:\/\/visuhive\.com\/editor\?project=(sp_[a-z2-7]{26})(?![a-zA-Z0-9_-])/.exec(value);
+  // 生成的链接 2026-10-23 起是直达地址 `/editor/p/<项目号>` 或分享链接 `/editor/s/<项目号>/<令牌>`;旧形式 `?project=` 也认
+  const match = /https:\/\/visuhive\.com\/editor(?:\?project=|\/[ps]\/)(sp_[a-z2-7]{26})(?![a-zA-Z0-9_-])/.exec(value);
   if (!match) throw new Error('visible-project-link-required');
   return { link:match[0], projectId:match[1] };
 }

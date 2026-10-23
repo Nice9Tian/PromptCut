@@ -1,4 +1,7 @@
+import { GUEST_ID_RE, GUEST_LIMITS, adoptGuestSession, clearGuest, guestName, loadGuest } from './guest.ts';
+
 /** Account credentials live in RAM. Only the native vault owns desktop recovery. */
+import { PROJECT_ID_RE, projectPath, readProjectAddress, sharePath } from '../online/projectAddress.ts';
 export interface Account { id: string; name: string; email?: string | null }
 export interface EditorLogin { account: Account; loginId: string; accessToken: string; accessExpiresAt: number }
 export interface ProjectSession {
@@ -14,6 +17,11 @@ export interface ProjectSession {
   hasSecondaryPassword?: boolean;
   needsSecondaryPassword?: boolean;
 }
+/**
+ * 游客这一侧手里的东西（2026-10-23 用户定）：编号、显示名、令牌和它什么时候过期。
+ * 令牌是持有即身份的，和账号的访问令牌一样只留在内存与本机存档里（`guest.ts`），不进地址、不进日志。
+ */
+export interface GuestLogin { id: string; name: string; token: string; expiresAt: number }
 export interface CloudAgentConsent { accountId: string; accepted: boolean; noticeVersion: 1; acceptedAt?: number }
 /** Keep the standard transport protocol alongside the opaque account credential. */
 export function accountConnectionProtocols(session: ProjectSession): string[] { return ['promptcut.v1', `promptcut.account.${session.connectionTicket}`]; }
@@ -80,39 +88,59 @@ export function accountErrorText(status: number, code: string): string {
     // 项目设了二级密码而这个账号没输过当前这一版(新设、改过之后、刚被通过):进项目、续会话、读成员名单都回它。
     // 原来落到 403 的兜底「没有访问这个项目的权限。」,像是被移出了项目;要让人知道是要输这个项目的二级密码
     'secondary-password-required': '这个项目要输入项目二级密码才能进。请用项目链接加入，按提示输入二级密码。',
-    'bad-secondary-password': '项目二级密码不正确。' };
+    'bad-secondary-password': '项目二级密码不正确。',
+    // 游客（2026-10-23 用户定，`product/document-service.md`「游客」）。数都从 GUEST_LIMITS 拼，别手写死：
+    // 界面说的和服务端真正拦的不一致，就是在骗人（`guest.test.mjs` 有一条守着两边的数一致）
+    'guest-unavailable': '这个云端现在不接待游客，请登录网站账号。',
+    'guest-rate-limited': '领取游客身份的次数太多了，请过一会儿再试，或者登录网站账号。',
+    'guest-project-limit': `游客只能建 ${GUEST_LIMITS.projects} 个项目。要建更多，请注册一个账号。`,
+    'guest-read-only': '你在这个项目里只能查看，改不了内容。',
+    'guest-video-limit': `游客最多上传 ${GUEST_LIMITS.videos} 条视频。要传更多，请注册一个账号。`,
+    'guest-file-too-large': `游客上传的每一条源文件不能超过 ${GUEST_LIMITS.assetMB} MB。`,
+    'invalid-asset': '这条素材的信息不完整，请重新选择。' };
   return messages[code] || (status === 401 ? '登录已失效，请重新登录。' : status === 503 ? '云端服务暂时不可用，请稍后重试。' : status === 403 ? '没有访问这个项目的权限。' : status === 0 ? '连接云端失败，请检查网络后重试。' : `请求失败（${code}）。`);
 }
 /** 在线页面一次账号请求最多等多久(桌面版走外壳的账号桥,那边自己有 20 秒的时限) */
 export const REQUEST_TIMEOUT_MS = 20_000;
 type Native = (operation: string, args?: Record<string, unknown>) => Promise<unknown>;
 export interface AccountClientOptions { online: boolean; origin: string; device: { deviceId: string; deviceName: string }; fetch?: typeof fetch; native?: Native; now?: () => number }
+/** 链接里的项目号:直达地址、分享链接、旧的 `?project=` 都认(`projectAddress.ts`);也可以直接输项目号 */
 export function projectIdFromLink(text: string, origin: string): string {
   const value = text.trim();
   let id = value;
   if (/^https?:/i.test(value)) {
     const url = new URL(value);
     if (url.origin !== new URL(origin).origin || url.username || url.password) throw new AccountFailure(400, 'wrong-project-origin', '这不是当前云端服务的项目链接。');
-    id = url.searchParams.get('project') || '';
+    id = readProjectAddress(url)?.projectId ?? '';
   }
-  if (!/^(?:sp_[a-z2-7]{26}|[A-Za-z0-9_-]{8,64})$/.test(id)) throw new AccountFailure(400, 'invalid-project', '请输入有效的云端项目链接。');
+  if (!PROJECT_ID_RE.test(id)) throw new AccountFailure(400, 'invalid-project', '请输入有效的云端项目链接。');
   return id;
 }
+/** 链接里的链接令牌:分享链接的路径、旧的 `?token=` / `?linkToken=`;没有回 undefined */
+export function linkTokenFromLink(text: string): string | undefined {
+  const value = text.trim();
+  if (!/^https?:/i.test(value)) return undefined;
+  try {
+    const address = readProjectAddress(new URL(value));
+    return address?.kind === 'share' ? address.token : undefined;
+  } catch { return undefined; }
+}
+/** 生成的项目链接一律用不带版本的新形式:有链接令牌是分享链接 `/editor/s/<项目号>/<令牌>`,没有是直达地址 `/editor/p/<项目号>` */
 export function projectLink(origin: string, projectId: string, linkToken?: string): string {
-  const u = new URL('/editor', new URL(origin).origin);
-  u.searchParams.set('project', projectId);
-  if (linkToken) u.searchParams.set('token', linkToken);
-  return u.toString();
+  const base = new URL(origin).origin;
+  return new URL(linkToken ? sharePath(projectId, linkToken) : projectPath(projectId), base).toString();
 }
 export function createAccountClient(options: AccountClientOptions) {
   const fetcher = options.fetch ?? fetch, now = options.now ?? Date.now;
   const origin = new URL(options.origin).origin;
   let login: EditorLogin | null = null, csrf = '', websiteAccount: Account | null = null;
+  /** 游客模式：非 null 时这台页面以游客身份行事，不去问网站账号 */
+  let guest: GuestLogin | null = null;
   let renewTask: Promise<EditorLogin> | null = null;
   let authVersion = 0;
   const authListeners = new Set<() => void>();
   const authChanged = () => { authVersion++; for (const listener of [...authListeners]) listener(); };
-  const authIdentity = () => login ? `${login.account.id}:${login.loginId}` : null;
+  const authIdentity = () => guest ? `${guest.id}:guest` : login ? `${login.account.id}:${login.loginId}` : null;
   const native = async (operation: string, args: Record<string, unknown> = {}) => {
     if (!options.native) throw new AccountFailure(503, 'desktop-bridge-unavailable');
     return options.native(operation, args);
@@ -150,8 +178,30 @@ export function createAccountClient(options: AccountClientOptions) {
     return login;
   }
   async function website() { const value = await request('/api/account/me'); csrf = value.csrfToken || ''; websiteAccount = value.account ?? null; return websiteAccount; }
+  /**
+   * 游客（`server/account/guest.mjs`）：向文档服务领一张令牌。带着手里那一张就是续期、编号不变；
+   * 不带、或者它已经过期，服务端就随机一个新身份。编号只由服务端给，这里报什么都不算数。
+   *
+   * 只在线页面有这条路：桌面版走外壳的账号桥，桥只放行 create / join / session / admin / members 五条，
+   * 加一条要换外壳（`desktop/src-tauri/src/account_vault.rs`），所以桌面版点游客时如实说要用官网。
+   */
+  async function guestSession(previous: string | null): Promise<GuestLogin> {
+    if (!options.online) throw new AccountFailure(503, 'desktop-bridge-unavailable');
+    const value = await request('/hosted/shared/account/guest', previous ? { token: previous } : {});
+    if (!GUEST_ID_RE.test(String(value.guestId)) || typeof value.token !== 'string' || !value.token ||
+      !Number.isSafeInteger(value.expiresAt) || value.expiresAt <= now()) throw new AccountFailure(503, 'account-protocol');
+    const before = authIdentity();
+    guest = { id: value.guestId, name: guestName(value.guestId), token: value.token, expiresAt: value.expiresAt };
+    if (authIdentity() !== before) authChanged();
+    return guest;
+  }
+  /** 游客手里那一张摆成登录的样子：下面 `/hosted/shared/account/*` 那几条不用分辨这是账号还是游客 */
+  const asLogin = (g: GuestLogin): EditorLogin =>
+    ({ account: { id: g.id, name: g.name }, loginId: `guest:${g.id}`, accessToken: g.token, accessExpiresAt: g.expiresAt });
   /** `minRemainingMs`:手里的访问令牌至少还要剩这么久,不够就先续(缺省 10 秒;页面换连接时要一张寿命足够的票据,会给得更大) */
   async function ensureLogin(minRemainingMs = 10_000): Promise<EditorLogin> {
+    // 游客模式下这一步问的是游客令牌,不去碰网站账号:游客没有账号,问了只会被 401 挡回来
+    if (guest) return asLogin(guest.expiresAt > now() + minRemainingMs ? guest : await guestSession(guest.token));
     if (login && login.accessExpiresAt > now() + minRemainingMs) return login;
     if (renewTask) return renewTask;
     renewTask = (async () => {
@@ -165,11 +215,36 @@ export function createAccountClient(options: AccountClientOptions) {
   }
   return {
     get account() { return login?.account ?? websiteAccount; },
+    /** 这台页面此刻的游客身份；不是游客就是 null。界面拿它取名字和头像 */
+    get guest() { return guest; },
     get authVersion() { return authVersion; },
+    /**
+     * 以游客身份进来（2026-10-23 用户定）：本机记着的那一张令牌交回去续期、编号不变；
+     * 没有或者过期了，服务端随机一个新身份。拿到之后以服务端给的编号为准并存回本机。
+     */
+    async enterAsGuest(): Promise<GuestLogin> {
+      const saved = loadGuest();
+      const session = await guestSession(saved?.token ?? null);
+      adoptGuestSession({ id: session.id, token: session.token, expiresAt: session.expiresAt });
+      return session;
+    },
+    /** 换一个游客身份：不交旧令牌，服务端就给个新的 */
+    async newGuest(): Promise<GuestLogin> {
+      const session = await guestSession(null);
+      adoptGuestSession({ id: session.id, token: session.token, expiresAt: session.expiresAt });
+      return session;
+    },
+    /** 不当游客了（去登录账号，或者离开）。本机那一份一并清掉：留着也用不上，还会被下次进入捡回来 */
+    leaveGuest() {
+      if (!guest) return;
+      guest = null; clearGuest(); authChanged();
+    },
     subscribeAuth(listener: () => void) { authListeners.add(listener); return () => { authListeners.delete(listener); }; },
     async restore() { if (options.online) { await website(); if (!websiteAccount) return null; return (await ensureLogin()).account; }
       const value = await native('recover', options.device); if (value === null) return null; return accept(check(value)).account; },
     async login(identifier: string, password: string, remember: boolean, requestId: string = crypto.randomUUID()) {
+      // 登录了账号就不再是游客:`ensureLogin` 在游客模式下问的是游客令牌,不清掉的话登录完还在拿游客身份行事
+      if (guest) { guest = null; clearGuest(); }
       if (!options.online) return accept(check(await native('login', { ...options.device, name: identifier, password, requestId }))).account;
       await website(); const value = await request('/api/account/login', { name: identifier, password, remember });
       csrf = value.csrfToken || ''; websiteAccount = value.account; login = null; authChanged();

@@ -41,3 +41,17 @@
 .pc-account-request-actions .pc-account-request-approve { background: var(--ui-accent); color: var(--ui-accent-fg, #fff); }
 .pc-account-request-actions .pc-account-request-reject { background: var(--ui-panel-2); color: var(--ui-fg); box-shadow: inset 0 0 0 1px var(--ui-border-strong); }
 .pc-account-request-actions button:disabled { opacity: .5; cursor: default; }
+
+/* 游客入口（2026-10-23 用户定）：摆在登录表单下面，和它之间拉一条细线分开 ——
+   「登录」和「先进来看看」是两条路，不该看着像同一张表单的一部分 */
+.sp-guest-entry {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--ui-border, var(--hairline-strong));
+}
+/* 限额那一句话长，单独放宽行距；它是说明不是警告，用次要色 */
+.sp-guest-limits { line-height: 1.5; }

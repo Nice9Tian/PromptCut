@@ -179,7 +179,7 @@ test('账号办法的搬到云端:真的账号服务与文档服务', { timeout:
     const r = await d.move();
     assert.equal(r.ok, true, JSON.stringify(r));
     assert.match(r.projectId, /^(?:sp_[a-z2-7]{26}|p-[a-z0-9-]+)$/);
-    assert.equal(r.link, `${origin}/editor?project=${r.projectId}`);
+    assert.equal(r.link, `${origin}/editor/p/${r.projectId}`);
     assert.deepEqual(d.calls, ['create', 'upload', 'read', 'save', 'enter', 'queue']);
     const create = requests.slice(mark).filter((q) => q.route === '/hosted/shared/account/create');
     assert.equal(create.length, 1);

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { commitDraft, useAgentTabs } from "../../../ai/agentTabs";
+import { useReadOnly } from "../../readOnly";
 import "./startHero.css";
 
 /**
@@ -49,7 +50,21 @@ export function useStartPage(tabId: string, inputText: string, setInputText: (v:
 }
 
 export function StartHero(props: { animated: boolean; onPickPreset: () => void }) {
-  const { animated, onPickPreset } = props;
+  // 这个项目只给了只读权限(游客):不能给 Agent 发话,不放「在下面输入」的引导动画和预设,只说明为什么
+  const ro = useReadOnly();
+  const { onPickPreset } = props;
+  const animated = props.animated && !ro.locked;
+  if (ro.locked) {
+    return (
+      <div className="ai-messages pc-start" data-pc="ai-start" data-pc-start-animated="0" data-pc-readonly="1">
+        <div className="pc-start-title">只能查看</div>
+        <div className="pc-start-hint">{ro.why}</div>
+        <button type="button" className="pc-start-preset" data-pc="ai-start-preset" disabled title={ro.why}>
+          {START_PRESET}
+        </button>
+      </div>
+    );
+  }
   return (
     <div className={`ai-messages pc-start${animated ? " is-animated" : ""}`} data-pc="ai-start" data-pc-start-animated={animated ? "1" : "0"}>
       {animated && (

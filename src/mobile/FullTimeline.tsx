@@ -39,6 +39,10 @@ export const FullTimeline = forwardRef<FullTimelineHandle, {
   onScrub: (t: number) => void;
   onCommitMove: (clipId: string, patch: { start: number; end: number }) => void;
   onAlign: (which: "start" | "end") => void;
+  /** 只读项目(游客):拖动平移 / 改起止、对齐播放头都不接,点选、缩放、播放头照常 */
+  locked?: boolean;
+  /** 置灰时的悬停说明(`viewOnlyText()` 那一句,由调用方给) */
+  lockedWhy?: string;
 }>(function FullTimeline(props, ref) {
   const { project, selected } = props;
   const total = Math.max(project.duration, ...project.tracks.flatMap((t) => t.clips.map((c) => c.end)), 1);
@@ -189,6 +193,7 @@ export const FullTimeline = forwardRef<FullTimelineHandle, {
       window.addEventListener("pointerup", up);
       return;
     }
+    if (props.locked) return;
     const cls = (e.target as HTMLElement).classList;
     const edge = cls.contains("l") ? "l" : cls.contains("r") ? "r" : "m";
     if (onMain && edge === "m") return;
@@ -263,8 +268,8 @@ export const FullTimeline = forwardRef<FullTimelineHandle, {
           <button type="button" data-pcm="zoom-fit" aria-label="适应宽度" title="适应宽度" onClick={fit}><Icon name="fit" />适应宽度</button>
         </div>
         <span className="spacer" />
-        <button type="button" data-pcm="align-start" title="起点对齐播放头" onClick={() => props.onAlign("start")}><Icon name="alignStart" />起点</button>
-        <button type="button" data-pcm="align-end" title="终点对齐播放头" onClick={() => props.onAlign("end")}>终点<Icon name="alignEnd" /></button>
+        <button type="button" data-pcm="align-start" disabled={props.locked} title={props.locked ? props.lockedWhy : "起点对齐播放头"} onClick={() => props.onAlign("start")}><Icon name="alignStart" />起点</button>
+        <button type="button" data-pcm="align-end" disabled={props.locked} title={props.locked ? props.lockedWhy : "终点对齐播放头"} onClick={() => props.onAlign("end")}>终点<Icon name="alignEnd" /></button>
       </div>
     </div>
   );

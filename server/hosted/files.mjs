@@ -94,6 +94,8 @@ export const HOSTED_ASSET_DEPLOY_FILES = Object.freeze([
   'server/account/agent-instance-internal.mjs',
   'server/account/agent-read-control.mjs',
   'server/account/client.mjs',
+  // 游客素材限额：`asset-store/guest-quota.mjs` 要它的 GUEST_LIMITS 与判断函数（2026-10-23）
+  'server/account/guest.mjs',
   'server/account/ledger.mjs',
   'server/account/protocol.mjs',
   'server/account/run-asset-protocol.mjs',
@@ -104,6 +106,7 @@ export const HOSTED_ASSET_DEPLOY_FILES = Object.freeze([
   'server/asset-store/blob-store.mjs',
   'server/asset-store/client.mjs',
   'server/asset-store/fs-store.mjs',
+  'server/asset-store/guest-quota.mjs',
   'server/asset-store/index.mjs',
   'server/asset-store/memory-store.mjs',
   'server/asset-store/project-access.mjs',

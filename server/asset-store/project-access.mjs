@@ -150,7 +150,7 @@ export function authorizedAssetStore(store, lease) {
     if (key === 'putChunk') return (hash, n, info, source) => lease.run(async () => { await lease.assert(); if (source?.destroy) lease.track(source); const value = await target.putChunk(hash, n, { ...info, ...guard }, source); await lease.assert(); return value; });
     if (key === 'complete') return hash => lease.run(async () => { await lease.assert(); return target.complete(hash, guard); });
     if (key === 'read') return (...args) => lease.run(async () => { await lease.assert(); const stream = await target.read(...args); if (stream) lease.track(stream); return stream; });
-    if (['stat', 'chunks', 'list', 'usage'].includes(key)) return (...args) => lease.run(async () => { await lease.assert(); const value = await target[key](...args); await lease.assert(); return value; });
+    if (['stat', 'chunks', 'list', 'usage', 'inventory'].includes(key)) return (...args) => lease.run(async () => { await lease.assert(); const value = await target[key](...args); await lease.assert(); return value; });
     return Reflect.get(target, key);
   } });
 }

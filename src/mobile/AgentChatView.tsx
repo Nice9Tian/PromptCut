@@ -9,6 +9,7 @@ import { CREATIVITY_HINT, CREATIVITY_LABEL, CREATIVITY_LEVELS } from "../kernel/
 import type { StartGuide } from "../editor/right/chat/StartHero";
 import { EMPTY_EXAMPLE } from "../editor/right/chat/MessageList";
 import { Icon } from "./icons";
+import { useReadOnly } from "../editor/readOnly";
 import { AgentRound, QuoteBar, StartHero, UserBubble } from "./agentParts";
 import { isUserBubble, ordinals, type QuoteRef } from "./agentView";
 
@@ -61,6 +62,8 @@ export interface AgentChatViewProps {
 
 export function AgentChatView(p: AgentChatViewProps) {
   const { messages } = p;
+  // 这个项目只给了只读权限(游客):对话历史照常读,但不能发消息;输入区换成一句说明
+  const ro = useReadOnly();
   const listRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const onScroll = () => {
@@ -98,7 +101,7 @@ export function AgentChatView(p: AgentChatViewProps) {
         <span>创造力</span>
         <div className="level" data-pcm="creativity">
           {CREATIVITY_LEVELS.map((lv: CreativityLevel) => (
-            <button key={lv} type="button" className={lv === p.level ? "on" : undefined} data-l={CREATIVITY_LABEL[lv]} disabled={p.levelDisabled}
+            <button key={lv} type="button" className={lv === p.level ? "on" : undefined} data-l={CREATIVITY_LABEL[lv]} disabled={p.levelDisabled || ro.locked}
               title={`${CREATIVITY_LABEL[lv]}:${CREATIVITY_HINT[lv]}`} onClick={() => p.onLevel(lv)}>{CREATIVITY_LABEL[lv]}</button>
           ))}
         </div>
@@ -116,7 +119,7 @@ export function AgentChatView(p: AgentChatViewProps) {
         ) : empty ? (
           <div className="empty" data-pcm="agent-empty">
             <div className="hint">这是一个新对话。想让我做点什么?</div>
-            <button type="button" className="preset" data-pcm="agent-empty-example" onClick={() => p.onPickExample(EMPTY_EXAMPLE)}>{EMPTY_EXAMPLE}</button>
+            <button type="button" className="preset" data-pcm="agent-empty-example" disabled={ro.locked} title={ro.title()} onClick={() => p.onPickExample(EMPTY_EXAMPLE)}>{EMPTY_EXAMPLE}</button>
           </div>
         ) : messages.map((m) => (isUserBubble(m)
           ? <UserBubble key={m.id} m={m} />
@@ -124,8 +127,8 @@ export function AgentChatView(p: AgentChatViewProps) {
         {p.queued > 0 && <div className="queue-note" data-pcm="queue-note">有 {p.queued} 条消息在排队,前面的做完就轮到</div>}
       </div>
 
-      {p.readOnly ? (
-        <div className="composer" data-pcm="agent-composer"><div className="note">项目创建者可以查看这段私有对话,但不能发送消息。</div></div>
+      {p.readOnly || ro.locked ? (
+        <div className="composer" data-pcm="agent-composer" data-readonly={ro.locked ? "1" : undefined}><div className="note">{p.readOnly ? "项目创建者可以查看这段私有对话,但不能发送消息。" : ro.why}</div></div>
       ) : (
         <div className="composer" data-pcm="agent-composer" data-guide={p.start.guide ?? undefined}>
           <QuoteBar quotes={p.quotes} onRemove={p.onRemoveQuote} />
