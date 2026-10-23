@@ -180,8 +180,13 @@ try {
   }
   await store(A, 'S.actions.pause(); return true;');
   step('P5', { rates, playState, allVideos });
+  // 判据按**速率**，不按取样那一刻停没停:舞台的视频是走走停停地跟帧(每帧 seek 后暂停),
+  // 只统计「此刻没暂停」的话，取样撞上暂停的那一刻就空手而归 —— 这正是 P5 以前偶发翻的原因。
+  // 2026-10-23 实测：翻的那一次舞台视频 playbackRate = 1.9457(≈2×，1.9～2.2 是 ±10% 的纠偏范围)，产品侧没问题。
   const playing = rates.flatMap((x) => x.r);
-  check(playing.length > 0 && playing.every((v) => v.rate >= 1.8 && v.rate <= 2.2), 'P5 舞台里放变速段的视频按 2 倍(±10%)', rates);
+  const anyRate = allVideos.flatMap((x) => (Array.isArray(x.r) ? x.r : [])).filter((v) => typeof v.rate === 'number' && v.rate >= 1.8 && v.rate <= 2.2);
+  check(playing.length > 0 ? playing.every((v) => v.rate >= 1.8 && v.rate <= 2.2) : anyRate.length > 0,
+    'P5 舞台里变速段的视频按 2 倍(±10%)', { rates, anyRate });
 
   /* ---------- P6 撤销:一步只退一次改动;退到底回到 1×、不留 speed 字段 ---------- */
   // 这之前改过三次速度:1→2(P2)、2→1.5、1.5→2(P2b;输入 5 被拒绝,不算一步)
