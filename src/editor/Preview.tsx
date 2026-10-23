@@ -40,7 +40,7 @@ import { MEDIA_MARK_MS, decodeLimit, originalLoadSignature, subscribeDecodeLimit
 import { TierBubble } from "./TierBubble";
 import { GateViewer, gateViewerWanted } from "./GateViewer";
 import { setMediaTierPolicy, type MediaTierPolicy } from "../render/mediaTier";
-import { assetAuthHeaders, docRequest, hasDocLink, remoteAssetBase, remoteAssetTicket, remoteAssetTicketInfo, setNoEditorProcess, subscribeRemoteAssets } from "./media/assetTiers";
+import { assetAuthHeaders, docRequest, hasDocLink, remoteAccountProjectId, remoteAssetBase, remoteAssetTicket, remoteAssetTicketInfo, setNoEditorProcess, subscribeRemoteAssets } from "./media/assetTiers";
 import { currentDocProjectId, currentSharedLink, getSyncView, pageSession, pushToast, subscribeQueueEvents } from "./sync/syncManager";
 import { hostedStreamsOn } from "./sync/hostedServices";
 import { needsLocalPc, onlineBrowserMode, setOnlineBrowserMode } from "../render/placeholderHost";
@@ -65,7 +65,7 @@ import { beatSwapDebug, setBeatSwap } from "./snapshotFeed";
 import { SWAP_MS } from "../render/beatSwap.mjs";
 import { layerSwapMs } from "./swapCost";
 import { markStageHandshake, onlineStageState, stageAssetBase, subscribeOnlineStages } from "../online/stageOrigins";
-import { STAGE_SANDBOX, onlineCardExec, pageStageIsolation, sanitizeBreach, sanitizeIsolationReport, subscribeOnlineCardExec } from "../online/stageIsolation";
+import { STAGE_SANDBOX, onlineCardExec, pageStageIsolation, sanitizeBreach, sanitizeIsolationReport, subscribeOnlineCardExec, type StageSidScope } from "../online/stageIsolation";
 import { sanitizeHostCapabilities } from "../online/stageMessageGuard";
 import { MEDIA_PROXY_BASE } from "../online/stagePolicy.mjs";
 import type { IsolationReport } from "../online/isolation/isolationCheck";
@@ -140,6 +140,16 @@ function mountedStageIds(): StageId[] {
   if (!ONLINE) return [...STAGE_IDS];
   if (!stageOrigins()) return [];
   return dualStage() ? [...STAGE_IDS] : ["A"];
+}
+
+/**
+ * 舞台素材路径号的作用域(`online/stageIsolation.ts` 的 `setScope`):路径号跟素材连接的项目走(cookie 里是那个项目的票据);
+ * `codeProjectId` 是此刻打开的项目(要往舞台发的卡片代码属于它)。页面原地换项目时,项目先换、素材连接后换,
+ * 中间这一段两者不同,本页不点头执行,新项目的卡片代码不进拿着上一个项目路径号的舞台文档。
+ */
+function stageSidScope(): StageSidScope {
+  const codeProjectId = currentDocProjectId() || null;
+  return { accountId: getSyncView().shared?.accountId || null, projectId: remoteAccountProjectId() || codeProjectId, codeProjectId };
 }
 
 /** 声音线程起在哪一台:双舞台实例 B(后台舞台,线程跟实例走),单舞台只有 A */
@@ -420,6 +430,8 @@ export function Preview(props: { variant?: "mobile" } = {}) {
   /** 把此刻的包发给一台(或两台)舞台。本页不能执行时发空表(舞台把已载入的撤下)。声音线程只在一台起(双舞台实例 B,单舞台 A):线程跟实例走,不跟角色走 */
   const pushCardBundles = useCallback((only?: StageId) => {
     if (!ONLINE) return;
+    // 先按此刻打开的项目重算作用域:项目换了而素材连接还没换过来(或路径号要换)时,隔离会话当场改判不执行,下面就发空表
+    pageStageIsolation(() => onlineStageState().cardExec).setScope(stageSidScope());
     const list: CardBundle[] = cardExecAvailable() ? cardBundlesRef.current.filter((b): b is Extract<BundleResult, { ok: true }> => b.ok).map((b) => b.bundle) : [];
     for (const id of STAGE_IDS) {
       if (only && only !== id) continue;
@@ -475,6 +487,7 @@ export function Preview(props: { variant?: "mobile" } = {}) {
      */
     const iso = pageStageIsolation(() => onlineStageState().cardExec);
     iso.setStages(mountedStageIds());
+    iso.setScope(stageSidScope());
     const origins = stageOrigins();
     const stageBase = base ? stageAssetBase(base, location.origin) : null;
     await Promise.all(STAGE_IDS.map(async (id) => {
@@ -488,6 +501,15 @@ export function Preview(props: { variant?: "mobile" } = {}) {
           : { mode: "legacy" as const, base: null, ticket, cardExec: false };
         // 等自检与交接的时候这一台换了、或者又发起了一次更新的:这一次作废
         if (rpcRef.current[id] !== c || policySeqRef.current[id] !== seq) return;
+        if (plan.reload) {
+          const frame = (id === "A" ? frameARef : frameBRef).current;
+          releaseStageClient(c);
+          c.dispose();
+          rpcRef.current[id] = null;
+          hostCapsRef.current[id] = null;
+          if (frame) frame.src = frame.src;
+          return;
+        }
         stagePolicy = plan.mode === "cookie"
           ? { smallOnly: policy.smallOnly, decodeMaxPixels: policy.decodeMaxPixels, remote: { base: plan.base!, ticket: null }, cardExec: plan.cardExec }
           : { smallOnly: policy.smallOnly, decodeMaxPixels: policy.decodeMaxPixels, remote: { base: stageBase, ticket: plan.ticket } };
@@ -1983,7 +2005,7 @@ export function Preview(props: { variant?: "mobile" } = {}) {
       // C10:在线双舞台、按拍换快照、后台活开关、探针帧的可转移字节
       dual: dualRef.current,
       onlineStages: onlineStageState(),
-      // 在线执行用户卡与素材效果卡:本页此刻能不能执行、为什么不能、会话号(不是秘密;票据不在这里)
+      // 在线执行用户卡与素材效果卡:本页此刻能不能执行、为什么不能、路径号(按账号加项目固定,对其它项目的舞台保密;票据不在这里)
       cardExec: ONLINE ? { ...onlineCardExec(), sid: pageStageIsolation().sid } : null,
       // 首次握手过渡期之后换回双舞台那一下(盖板因为什么、多久撤下)
       handover: { ...handoverInfoRef.current },
