@@ -7,7 +7,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { FRAME_TAGS, htmlHasFrame, isFrameName, denyPersistentStorage, STAGE_STORAGE_PASSTHROUGH_KEY } from "./harden.ts";
-import { judgeIsolation, ISOLATION_CHECK_BASE_PATH } from "./isolationCheck.ts";
+import { judgeIsolation, criticalHardenErrors, ISOLATION_CHECK_BASE_PATH } from "./isolationCheck.ts";
 import { cardExecGate, subscribeCardExecGate, markIsolatedStageDocument, setIsolationReport, noteMediaPolicy, noteBreach, resetExecGateForTest } from "./execGate.ts";
 import { bootStageGuard, isStageEntryPath, announceStageIsolation, STAGE_ENTRY_FILE, resetStageGuardForTest } from "./stageGuard.ts";
 
@@ -46,8 +46,25 @@ test("OCS-H-03 无出口白名单/Trusted Types/WebRTC guard仍通过，分源�
     [{crossOrigin:true,csp:'meta',harden:HARDENED},['meta-only']],
     [{crossOrigin:true,csp:'header',harden:null},['not-hardened']],
     [{crossOrigin:true,csp:'header',harden:{...HARDENED,installed:false}},['not-hardened']],
+    // 关键项没装上(审查 P3):装了也不算
+    [{crossOrigin:true,csp:'header',harden:{...HARDENED,errors:['storage:localStorage:Cannot redefine property']}},['not-hardened']],
+    [{crossOrigin:true,csp:'header',harden:{...HARDENED,errors:['storage:sessionStorage:x']}},['not-hardened']],
+    [{crossOrigin:true,csp:'header',harden:{...HARDENED,errors:['storage:indexedDB:x']}},['not-hardened']],
+    [{crossOrigin:true,csp:'header',harden:{...HARDENED,errors:['storage:caches:x']}},['not-hardened']],
+    [{crossOrigin:true,csp:'header',harden:{...HARDENED,errors:['scope:Worker:x']}},['not-hardened']],
+    [{crossOrigin:true,csp:'header',harden:{...HARDENED,errors:['scope:BroadcastChannel:x']}},['not-hardened']],
+    [{crossOrigin:true,csp:'header',harden:{...HARDENED,errors:['scope:SharedWorker:x']}},['not-hardened']],
+    [{crossOrigin:true,csp:'header',harden:{...HARDENED,errors:['scope:indexedDB:x']}},['not-hardened']],
+    [{crossOrigin:true,csp:'header',harden:{...HARDENED,errors:['scope:locks:x']}},['not-hardened']],
+    [{crossOrigin:true,csp:'header',harden:{...HARDENED,errors:['scope:integrity:内置对象或平台接口在守卫之前被改过(JSON)']}},['not-hardened']],
   ];
   for(const [facts,reasons] of cases){const r=judgeIsolation(facts);assert.equal(r.ok,false);assert.deepEqual(r.reasons,reasons);}
+  // 非关键项(纵深防御那几层、旧式文件系统入口等)没装上不挡执行;名字只是前缀相近的也不算
+  for (const e of ['storage:webkitRequestFileSystem:x', 'scope:IDBFactory.open:x', 'window:name:x', 'MutationObserver:x', 'storage:localStorageX:x', 'scope:WorkerX:x']) {
+    assert.equal(judgeIsolation({crossOrigin:true,csp:'header',harden:{...HARDENED,errors:[e]}}).ok, true, e);
+  }
+  assert.deepEqual(criticalHardenErrors(['scope:Worker:a', 'x', 'storage:caches:b']), ['scope:Worker:a', 'storage:caches:b']);
+  assert.deepEqual(criticalHardenErrors(undefined), []);
   assert.ok(ISOLATION_CHECK_BASE_PATH.startsWith('/'));
 });
 

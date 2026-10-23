@@ -478,7 +478,11 @@ export function Preview(props: { variant?: "mobile" } = {}) {
     if (!ONLINE) return;
     const base = remoteAssetBase();
     let ticket: string | null = null;
+    // 等票据时素材连接或打开的项目换了(A → B):A 的票据不能交到按 B 算的路径号下,这一次作废(换连接、换作用域都会再推一次)
+    const scopeKey = () => JSON.stringify([remoteAssetBase(), stageSidScope()]);
+    const scopeBefore = scopeKey();
     if (base) { try { ticket = await remoteAssetTicket(); } catch { ticket = null; } }
+    if (scopeKey() !== scopeBefore) return;
     const policy: MediaTierPolicy = { ...mediaGatePolicy(lowestRef.current), online: true, remote: base ? { base, ticket } : null };
     setMediaTierPolicy(policy);
     /*

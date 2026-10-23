@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
-import { guardStageScope, installScopeGuard, newLockPrefix } from "./scopeGuard.ts";
+import { guardStageScope, installScopeGuard, newLockPrefix, SCOPE_GUARD_CRITICAL } from "./scopeGuard.ts";
 import { denyPersistentStorage, isolateWindowState } from "./harden.ts";
 
 const PREFIX = "pc-0123456789abcdef0123456789abcdef:";
@@ -45,9 +45,13 @@ function fakeScope() {
     request(...args) { lockCalls.push(args[0]); const cb = args[args.length - 1]; return Promise.resolve(cb(new Lock(args[0]))); }
     async query() { return { held: [{ name: `${PREFIX}mine`, mode: "exclusive", clientId: "c1" }, { name: "pc-other:theirs", mode: "exclusive", clientId: "c2" }, { name: "raw", mode: "shared", clientId: "c3" }], pending: [{ name: `${PREFIX}waiting`, mode: "exclusive", clientId: "c1" }] }; }
   }
-  Object.assign(scope, {
+  // 接口对象和浏览器里一样不可枚举(守卫据「可枚举」认出被顶层函数声明换过的接口对象)
+  const ifaces = {
     Blob, URL, Worker, IDBFactory, IDBDatabase, CacheStorage, Cache, StorageManager, StorageBucketManager, FileSystemHandle, FileSystemDirectoryHandle,
     FileSystemFileHandle, ServiceWorkerContainer, BroadcastChannel, SharedWorker, CookieStore, Lock, LockManager,
+  };
+  for (const [k, v] of Object.entries(ifaces)) Object.defineProperty(scope, k, { value: v, writable: true, configurable: true, enumerable: false });
+  Object.assign(scope, {
     indexedDB: new IDBFactory(), caches: new CacheStorage(), webkitRequestFileSystem: () => {}, sharedStorage: {},
     navigator: { storage: new StorageManager(), storageBuckets: new StorageBucketManager(), locks: new LockManager(), serviceWorker: new ServiceWorkerContainer() },
     cookieStore: new CookieStore(),
@@ -91,7 +95,8 @@ test("OCS-H-12 卡片起的线程:只认本页建的 blob 地址;经典脚本前
   assert.ok(s.blob.parts[0].includes("function guardStageScope") && s.blob.parts[0].includes(JSON.stringify(PREFIX)), "第一段是守卫源码与本文档的锁名前缀");
   // 守卫源码在新环境里能跑(线程里第一句)
   const inner = fakeScope();
-  vm.runInContext(s.blob.parts[0], vm.createContext({ self: inner.scope }));
+  // 引导装在顶层的 `this` 上:线程的全局对象就是仿全局对象本身
+  vm.runInContext(s.blob.parts[0], vm.createContext(inner.scope));
   assert.equal(inner.scope.indexedDB, undefined);
   assert.equal(typeof inner.scope.BroadcastChannel, "undefined");
   assert.notEqual(inner.scope.Worker, undefined, "线程里的 Worker 也包过(再起的线程同样装守卫)");
@@ -137,6 +142,116 @@ test("OCS-H-12 卡片起的线程:只认本页建的 blob 地址;经典脚本前
   try { new scope.Worker(url); } finally { Array.prototype[Symbol.iterator] = origIter; }
   assert.equal(spawned.at(-1).blob.parts.length, 2);
   assert.ok(spawned.at(-1).blob.parts[0].includes("function guardStageScope"));
+});
+
+/**
+ * 经典脚本线程的引导是拼在卡片脚本前面的同一段脚本:卡片的顶层 `function` 声明在守卫之前就绑到全局上。
+ * 这里在「全局对象就是仿全局对象」的 vm 环境里跑「引导 + 卡片脚本」,和线程里一模一样(2026-10-23 审查 P1)。
+ */
+function classicPrelude() {
+  const { scope, spawned } = fakeScope();
+  install(scope);
+  const url = scope.URL.createObjectURL(new scope.Blob(["1"]));
+  new scope.Worker(url);
+  return spawned.at(-1).blob.parts[0];
+}
+/**
+ * 在一个新的仿线程里跑「引导 + 卡片脚本」。回 { scope, error }:error 是整段脚本抛出的错(没抛为 null)。
+ * `declare`:按规范(CreateGlobalFunctionBinding)先把这些名字绑成「可枚举、不可配置」的函数,模拟卡片的顶层 `function` 声明。
+ * Node 的 vm 对已有的全局属性不按规范改属性特征(实测仍可配置,原来不可枚举的还是不可枚举),所以接口对象这一类在这里显式模拟;
+ * 真实浏览器里的行为由 `scopeGuard.browser-check.mjs` 用真的顶层声明核。
+ */
+function runThread(prelude, card, declare = []) {
+  const t = fakeScope();
+  for (const name of declare) Object.defineProperty(t.scope, name, { value: function () {}, writable: true, enumerable: true, configurable: false });
+  const ctx = vm.createContext(t.scope);
+  let error = null;
+  try { vm.runInContext(prelude + card + "\n;globalThis.__ran = true;", ctx); } catch (e) { error = e; }
+  return { ...t, error, ran: t.scope.__ran === true };
+}
+
+test("OCS-H-17 经典脚本线程:顶层声明遮住 self、JSON、平台接口都绕不过守卫;核对不过整段不执行;线程里再起的线程同样", () => {
+  const prelude = classicPrelude();
+  assert.match(prelude, /\)\(this, \{/, "引导装在顶层的 this 上(不从 self 取)");
+  assert.ok(!/\)\(self, /.test(prelude));
+
+  // 对照:不遮,守卫装上、卡片照常跑
+  const ok = runThread(prelude, "var probe = typeof indexedDB;");
+  assert.equal(ok.error, null, String(ok.error));
+  assert.equal(ok.ran, true);
+  assert.equal(ok.scope.indexedDB, undefined);
+  assert.equal(ok.scope.BroadcastChannel, undefined);
+
+  // ① 遮住 self:守卫不读 self,照样装在真全局上
+  const s = runThread(prelude, "function self() {}\nvar probe = typeof indexedDB;");
+  assert.equal(s.error, null, String(s.error));
+  assert.equal(s.ran, true);
+  assert.equal(s.scope.indexedDB, undefined, "遮住 self 也收走了 indexedDB");
+  assert.equal(s.scope.caches, undefined);
+  assert.equal(s.scope.BroadcastChannel, undefined);
+
+  // ② 遮住 JSON(以前:第一层收住、包 Worker 那段报错被咽下,再起的线程是原生的):核对不过,整段不执行
+  const j = runThread(prelude, "function JSON() {}\nvar probe = 1;");
+  assert.ok(j.error, "遮住 JSON:整段脚本抛错");
+  assert.match(String(j.error && j.error.message), /PromptCut 舞台:integrity:.*JSON/);
+  assert.equal(j.ran, false, "卡片脚本一句也没跑");
+  for (const name of ["Reflect", "Blob", "URL", "Worker", "IDBFactory", "indexedDB", "BroadcastChannel", "LockManager"]) {
+    const r = runThread(prelude, `function ${name}() {}\n`, name === "Reflect" ? [] : [name]);
+    assert.ok(r.error && /integrity/.test(r.error.message), `遮住 ${name}:整段不执行(${r.error && r.error.message})`);
+    assert.equal(r.ran, false, name);
+  }
+  // 顶层 let/const/class 同名:守卫一读就是暂时死区的 ReferenceError,同样整段不执行
+  for (const decl of ["let Reflect = {};", "const JSON = {};"]) {
+    const r = runThread(prelude, decl + "\n");
+    assert.ok(r.error instanceof ReferenceError || r.error?.name === "ReferenceError", decl);
+    assert.equal(r.ran, false, decl);
+  }
+  // 守卫不按名字读 Object(从字面量取):卡片顶层 `class Object {}` 不影响守卫,卡片照常跑
+  const cls = runThread(prelude, "class Object {}\n");
+  assert.equal(cls.error, null, String(cls.error));
+  assert.equal(cls.ran, true);
+  assert.equal(cls.scope.indexedDB, undefined);
+  // 遮住 Object、String、Symbol、Promise、TypeError、Array、Map:守卫从字面量取,不受影响,照样装上
+  const lit = runThread(prelude, "function Object() {}\nfunction String() {}\nfunction Symbol() {}\nfunction Promise() {}\nfunction TypeError() {}\nfunction Array() {}\nfunction Map() {}\n");
+  assert.equal(lit.error, null, String(lit.error));
+  assert.equal(lit.scope.indexedDB, undefined);
+  assert.equal(lit.scope.BroadcastChannel, undefined);
+
+  // ③ 线程里再起的线程:同样拼守卫(装在 this 上),它自己的顶层声明同样绕不过
+  const outer = runThread(prelude, "var u = URL.createObjectURL(new Blob(['function JSON(){}'])); new Worker(u);");
+  assert.equal(outer.error, null, String(outer.error));
+  const nested = outer.spawned.at(-1);
+  assert.ok(nested && nested.blob.parts[0].includes("function guardStageScope"), "再起的线程先装守卫");
+  assert.match(nested.blob.parts[0], /\)\(this, \{/);
+  const inner = runThread(nested.blob.parts[0], "function JSON() {}\n");
+  assert.ok(inner.error && /integrity/.test(inner.error.message));
+  assert.equal(inner.ran, false);
+  const inner2 = runThread(nested.blob.parts[0], "function self() {}\n");
+  assert.equal(inner2.error, null, String(inner2.error));
+  assert.equal(inner2.scope.indexedDB, undefined);
+
+  // 关键项清单:守卫里自带的一份与导出的一份一致
+  const src = guardStageScope.toString();
+  const m = /const CRITICAL = (\[[^\]]*\])/.exec(src);
+  assert.ok(m, "守卫里有关键项清单");
+  assert.deepEqual(JSON.parse(m[1]), [...SCOPE_GUARD_CRITICAL]);
+});
+
+test("OCS-H-18 包 Worker 失败:不咽下去,把 Worker 收走;线程里(strict)整段不执行;舞台文档里只记错(由自检判不执行)", () => {
+  // 原型锁死:包 Worker 那段的 defineProperty(prototype.constructor) 抛错
+  const a = fakeScope();
+  Object.freeze(a.scope.Worker.prototype);
+  const r = install(a.scope);
+  assert.ok(r.errors.some((e) => e.startsWith("Worker:")), r.errors.join("; "));
+  assert.equal(a.scope.Worker, undefined, "Worker 收走了");
+  const b = fakeScope();
+  Object.freeze(b.scope.Worker.prototype);
+  assert.throws(() => guardStageScope(b.scope, { lockPrefix: PREFIX, source: guardStageScope.toString(), strict: true }), /关键项没装上\(Worker:/);
+  // 舞台文档里(不 strict)核对不过:记一条 integrity,什么都不装
+  const c = fakeScope();
+  Object.defineProperty(c.scope, "Blob", { value: function Blob() {}, enumerable: true, configurable: false, writable: true });
+  const rc = install(c.scope);
+  assert.ok(rc.errors.some((e) => e.startsWith("integrity:")), rc.errors.join("; "));
 });
 
 test("OCS-H-13 持久存储与同源通道:全局入口没有,先拿到的对象也用不了;cookieStore 写拒绝;persist 回 false;装两次、再调 denyPersistentStorage 都不报错", async () => {

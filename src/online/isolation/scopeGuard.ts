@@ -11,6 +11,12 @@
  *   起线程时拼一个新 blob:经典脚本是「本守卫的源码 + 调用」拼在原脚本前面;模块是第一句 `import` 一个只含守卫的 blob 模块
  *   (模块按静态 import 在源码里的先后深度优先求值,守卫模块排第一,先于原脚本引的一切)。所以每个线程(含线程里再起的线程)
  *   第一句就装本守卫。认不出的地址(别处建的 blob、撤销了的 blob、`data:`、同源脚本地址)直接抛错;
+ *   **经典脚本的顶层声明比守卫还早**(整段脚本开跑之前,顶层 `function` 声明就绑到全局上、顶层 `let`/`const`/`class` 进暂时死区),
+ *   所以守卫:① 装在顶层的 `this` 上(它遮不住),不从 `self`、`globalThis` 取;② 内置对象尽量从字面量取(`({}).constructor` 等),
+ *   取不到字面量的 `Reflect`、`JSON` 核 `typeof`(函数声明只能造出函数);③ 要用的平台接口核一遍有没有被顶层函数声明改掉
+ *   (函数声明留下的是「可枚举、不可配置」的自有属性,浏览器原装的接口对象不可枚举、可配置);
+ *   ④ 线程里(`strict`)核对不过、或关键项(存储、通道、`Worker`)没装上,就抛错,整段脚本不执行;包 `Worker` 失败时把 `Worker` 收走。
+ *   顶层 `let`/`const`/`class` 同名的,守卫一读就是 ReferenceError,同样整段不执行。
  *   舞台的内容安全策略本来就只许 `worker-src blob:`。`SharedWorker` 不给(多个文档共用一个线程,本身就是跨文档通道)。
  * - **持久存储**(线程里同样有):IndexedDB、Cache Storage、旧式文件系统、`openDatabase`、`sharedStorage` 的全局入口沿原型链改成 `undefined`;
  *   另外把这些接口原型上的读写方法一律改成抛错或拒绝(纵深防御:万一有代码先于守卫拿到了 `indexedDB`、`caches`、
@@ -37,7 +43,15 @@ export interface ScopeGuardConfig {
   lockPrefix: string;
   /** `guardStageScope` 自己的源码(拼线程的引导脚本用) */
   source: string;
+  /**
+   * 线程里为真(引导脚本里写死):守卫核对不过、或关键项没装上,就抛错,整段脚本不执行。
+   * 舞台文档里不设:核对不过、关键项没装上记进 `errors`,由舞台自检(`isolationCheck.ts`)判「加固没装上」、不执行用户卡。
+   */
+  strict?: boolean;
 }
+
+/** 关键项:这些没装上,线程不执行、舞台自检判「加固没装上」(`errors` 里以「名字:」开头的项) */
+export const SCOPE_GUARD_CRITICAL = ["integrity", "indexedDB", "caches", "BroadcastChannel", "SharedWorker", "Worker", "locks"] as const;
 
 export interface ScopeGuardResult {
   /** 收走或改掉的入口(诊断) */
@@ -55,33 +69,68 @@ export function guardStageScope(scope: object, config: ScopeGuardConfig): ScopeG
   const denied: string[] = [];
   const errors: string[] = [];
   const g = scope as Record<string, any>;
-  const O = Object;
+  /*
+   * 0. 内置对象。经典脚本线程里守卫是拼在卡片脚本前面的,卡片的顶层 `function Object(){}` 之类在守卫之前就把同名全局换掉了;
+   * 字面量的原型链换不掉(守卫之前没有任何代码运行,原型都是原装的),所以能从字面量取的一律从字面量取,不读全局名字。
+   */
+  const O = ({}).constructor as ObjectConstructor;
   const defineProperty = O.defineProperty;
   const getOwnPropertyDescriptor = O.getOwnPropertyDescriptor;
   const getPrototypeOf = O.getPrototypeOf;
   const hasOwn = O.prototype.hasOwnProperty;
-  const apply = Reflect.apply;
-  const construct = Reflect.construct;
-  const Str = String;
-  const TypeErr = TypeError;
-  const P = Promise;
+  const ArrayC = ([] as unknown[]).constructor as ArrayConstructor;
+  const Str = "".constructor as StringConstructor;
+  let TypeErr = undefined as unknown as TypeErrorConstructor;
+  try { defineProperty(1 as unknown as object, "x", {}); } catch (e) { TypeErr = (e as { constructor: TypeErrorConstructor }).constructor; }
+  const P = (async () => undefined)().constructor as PromiseConstructor;
+  const Sym = O(O.getOwnPropertySymbols(ArrayC.prototype)[0]).constructor as SymbolConstructor;
+  // 没有字面量的两个:函数声明只能造出函数,还是对象就是原装的
+  const shadowed: string[] = [];
+  const R = typeof Reflect === "object" && Reflect !== null ? Reflect : null;
+  const J = typeof JSON === "object" && JSON !== null ? JSON : null;
+  if (!R) shadowed[shadowed.length] = "Reflect";
+  if (!J) shadowed[shadowed.length] = "JSON";
+  /*
+   * 要读的平台接口:顶层函数声明把它换掉之后,全局上留下的是「可枚举、不可配置」的自有属性(规范 CreateGlobalFunctionBinding)。
+   * 接口对象(构造函数)浏览器原装的一律不可枚举,所以接口对象只要可枚举就算被换过;全局属性与方法(`indexedDB` 等)原装的可枚举、可配置。
+   * 本守卫与舞台加固自己锁的都不可枚举。
+   */
+  const IFACES = ["URL", "Blob", "Worker", "SharedWorker", "BroadcastChannel", "IDBFactory", "IDBDatabase", "CacheStorage", "Cache",
+    "StorageManager", "StorageBucketManager", "FileSystemHandle", "FileSystemDirectoryHandle", "FileSystemFileHandle", "ServiceWorkerContainer",
+    "CookieStore", "LockManager", "Lock"];
+  const ATTRS = ["indexedDB", "caches", "webkitRequestFileSystem", "webkitRequestFileSystemSync", "webkitResolveLocalFileSystemURL",
+    "webkitResolveLocalFileSystemSyncURL", "openDatabase", "openDatabaseSync", "sharedStorage"];
+  for (let i = 0; i < IFACES.length + ATTRS.length; i++) {
+    const iface = i < IFACES.length;
+    const name = iface ? IFACES[i] : ATTRS[i - IFACES.length];
+    const d = getOwnPropertyDescriptor(scope, name);
+    if (d && d.enumerable && (iface || !d.configurable)) shadowed[shadowed.length] = name;
+  }
+  if (shadowed.length) {
+    let names = "";
+    for (let i = 0; i < shadowed.length; i++) names += (i ? "," : "") + shadowed[i];
+    const what = "integrity:内置对象或平台接口在守卫之前被改过(" + names + ")";
+    if (config.strict) throw new TypeErr("PromptCut 舞台:" + what);
+    errors[errors.length] = what;
+    return { denied, errors };
+  }
+  const apply = R!.apply;
+  const construct = R!.construct;
   const promiseReject = P.reject;
   const promiseResolve = P.resolve;
   const promiseThen = P.prototype.then;
-  const stringify = JSON.stringify;
+  const stringify = J!.stringify;
   const strIndexOf = Str.prototype.indexOf;
   const strSlice = Str.prototype.slice;
-  const arraySlice = Array.prototype.slice;
-  const arrayPush = Array.prototype.push;
-  const MapC = Map;
-  const mapGet = MapC.prototype.get;
-  const mapSet = MapC.prototype.set;
-  const mapDelete = MapC.prototype.delete;
-  const MARK = Symbol.for("promptcut.stageGuard");
-  const ITER = Symbol.iterator;
+  const arraySlice = ArrayC.prototype.slice;
+  const arrayPush = ArrayC.prototype.push;
+  const MARK = Sym.for("promptcut.stageGuard");
+  const ITER = Sym.iterator;
   const prefix = Str(config.lockPrefix);
   const source = Str(config.source);
 
+  // 与 `SCOPE_GUARD_CRITICAL` 同一份(守卫自足,不能引用外面的名字;单测核两边一致)
+  const CRITICAL = ["integrity", "indexedDB", "caches", "BroadcastChannel", "SharedWorker", "Worker", "locks"];
   const fail = (what: string, e: unknown) => { errors.push(what + ":" + (e && (e as Error).message)); };
   const message = (what: string) => "PromptCut 舞台:" + what;
   const thrower = (what: string) => function () { throw new TypeErr(message(what)); };
@@ -221,7 +270,7 @@ export function guardStageScope(scope: object, config: ScopeGuardConfig): ScopeG
         // 包不了就不给起线程
         removeGlobal("Worker");
       } else {
-        const blobs = new MapC<string, Blob>();
+        const blobs = O.create(null) as Record<string, Blob | undefined>;
         const keyOf = (url: unknown) => {
           const s = typeof url === "string" ? url : Str(url);
           const i = apply(strIndexOf, s, ["#"]) as number;
@@ -234,16 +283,22 @@ export function guardStageScope(scope: object, config: ScopeGuardConfig): ScopeG
         };
         replace(URLC, "createObjectURL", function createObjectURL(obj: unknown) {
           const url = apply(origCreate, URLC, [obj]) as string;
-          if (isBlob(obj)) apply(mapSet, blobs, [url, obj]);
+          if (isBlob(obj)) blobs[url] = obj as Blob;
           return url;
         }, "URL.createObjectURL");
         replace(URLC, "revokeObjectURL", function revokeObjectURL(url: unknown) {
           const key = keyOf(url);
           if (preludeUrl && key === preludeUrl) return undefined; // 守卫模块的地址不让撤
-          apply(mapDelete, blobs, [key]);
+          delete blobs[key];
           return apply(origRevoke, URLC, [url]);
         }, "URL.revokeObjectURL");
-        const prelude = ";(" + source + ")(self, " + stringify({ lockPrefix: prefix, source }) + ");\n";
+        /*
+         * 经典脚本的引导装在顶层的 `this` 上:它就是全局对象,卡片的顶层声明遮不住(`self`、`globalThis` 遮得住)。
+         * 模块里顶层 `this` 是 undefined,守卫模块用 `globalThis`:守卫模块排在整个模块图的第一个求值,别的模块的顶层声明只在各自模块里,改不到全局。
+         */
+        const cfg = stringify({ lockPrefix: prefix, source, strict: true });
+        const prelude = ";(" + source + ")(this, " + cfg + ");\n";
+        const preludeModuleSource = "(" + source + ")(globalThis, " + cfg + ");\n";
         /*
          * 模块线程不能把守卫源码拼在前面就完事:模块里的静态 import 先于模块本体求值。舞台的 `worker-src blob:` 让模块线程的
          * 静态 import 只能引 blob 地址(外链模块整个图都按 worker 目的地核,`http:` 不在 `worker-src` 里,实测拦下),
@@ -253,7 +308,7 @@ export function guardStageScope(scope: object, config: ScopeGuardConfig): ScopeG
          */
         let preludeUrl = "";
         const preludeModule = () => {
-          if (!preludeUrl) preludeUrl = apply(origCreate, URLC, [construct(BlobC, [partsOf(prelude, ""), { type: "text/javascript" }])]) as string;
+          if (!preludeUrl) preludeUrl = apply(origCreate, URLC, [construct(BlobC, [partsOf(preludeModuleSource, ""), { type: "text/javascript" }])]) as string;
           return preludeUrl;
         };
         /*
@@ -282,7 +337,7 @@ export function guardStageScope(scope: object, config: ScopeGuardConfig): ScopeG
         };
         const GuardedWorker = function Worker(this: unknown, url: unknown, options?: unknown) {
           if (new.target === undefined) throw new TypeErr("Failed to construct 'Worker': Please use the 'new' operator, this DOM object constructor cannot be called as a function.");
-          const blob = apply(mapGet, blobs, [keyOf(url)]);
+          const blob = blobs[keyOf(url)];
           if (!blob) throw new TypeErr(message("只能从本页用 URL.createObjectURL 建的 blob 地址起后台线程"));
           // 选项只读一遍、抄成新对象(读第二遍可能变);守卫源码作为经典脚本、模块都能跑,类型怎么变都先装守卫
           const o = options !== null && typeof options === "object" ? options as { type?: unknown; name?: unknown; credentials?: unknown } : null;
@@ -316,8 +371,19 @@ export function guardStageScope(scope: object, config: ScopeGuardConfig): ScopeG
         if (hit) denied.push("Worker");
       }
     }
-  } catch (e) { fail("Worker", e); }
+  } catch (e) {
+    // 包不上就不给起线程(不能把错咽下去、留着原生的 Worker:线程里再起的线程就没有守卫了)
+    fail("Worker", e);
+    removeGlobal("Worker");
+  }
 
+  if (config.strict) {
+    for (let i = 0; i < errors.length; i++) {
+      for (let k = 0; k < CRITICAL.length; k++) {
+        if (apply(strIndexOf, errors[i], [CRITICAL[k] + ":"]) === 0) throw new TypeErr(message("关键项没装上(" + errors[i] + ")"));
+      }
+    }
+  }
   return { denied, errors };
 }
 

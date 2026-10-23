@@ -491,4 +491,12 @@ test("(g) 页面原地换项目、素材连接还没换过来:卡片代码的项
   const scoped = preview.indexOf(".setScope(stageSidScope());", push);
   const decided = preview.indexOf("cardExecAvailable()", push);
   assert.ok(push > 0 && scoped > push && scoped < decided, "pushCardBundles 先 setScope 再判 cardExecAvailable");
+  // 2026-10-23 审查 P2:取票据要等;等的时候素材连接或打开的项目换了,这张票据作废,不交到按新作用域算的路径号下
+  const media = preview.indexOf("const pushMediaPolicy = useCallback(");
+  const captured = preview.indexOf("const scopeBefore = scopeKey();", media);
+  const awaited = preview.indexOf("await remoteAssetTicket()", media);
+  const recheck = preview.indexOf("if (scopeKey() !== scopeBefore) return;", media);
+  const mediaScoped = preview.indexOf("iso.setScope(stageSidScope());", media);
+  assert.ok(media > 0 && captured > media && awaited > captured && recheck > awaited && mediaScoped > recheck, "pushMediaPolicy:等票据前后各读一次作用域,不一致就放弃,再定路径号");
+  assert.match(preview, /const scopeKey = \(\) => JSON\.stringify\(\[remoteAssetBase\(\), stageSidScope\(\)\]\);/, "作用域含素材连接与打开的项目");
 });
