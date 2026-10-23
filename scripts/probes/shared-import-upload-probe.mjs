@@ -1,8 +1,8 @@
 /**
- * 共享项目里新导入的图片、音频经素材服务到达其它成员的端到端探针(`docs/reports/AGENT-maint-4.md` 第 2 项;
+ * 共享项目里新导入的图片、音频经素材服务到达其它成员的端到端探针(`docs/archive/agent-reports/AGENT-maint-4.md` 第 2 项;
  * 语义 `docs/semantics/product/asset-service.md`「职责」「上传」:共享项目的素材都经素材服务入库、上传,成员凭票据取)。
  * 缺陷:`server/media-tiers.mjs` 的 `prepareImport` 原先只把视频交给上传队列,放云端之后新导入的图片、音频只在导入方本机。
- * 缺陷二(`docs/reports/AGENT-upload-timing.md`):打开共享项目后、上传目标(远程素材服务的地址与 rw 票据)设好之前导入的素材,
+ * 缺陷二(`docs/archive/agent-reports/AGENT-upload-timing.md`):打开共享项目后、上传目标(远程素材服务的地址与 rw 票据)设好之前导入的素材,
  * 编辑器进程的上传队列看到的是本机目标、当空操作丢掉;页面应记下、就绪后补交。
  *
  *   node scripts/probes/shared-import-upload-probe.mjs [--doc-port 6120] [--asset-port 6121] [--port-a 6110] [--port-b 6115]

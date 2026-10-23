@@ -1,5 +1,5 @@
 /**
- * 压测「新开的页面打开在线页 `<站点>/editor` 等 DOMContentLoaded」(TODO「偶发:探针里新开的页面打不开在线页」;报告 `docs/reports/AGENT-nav-hang.md`)。
+ * 压测「新开的页面打开在线页 `<站点>/editor` 等 DOMContentLoaded」(TODO「偶发:探针里新开的页面打不开在线页」;报告 `docs/archive/agent-reports/AGENT-nav-hang.md`)。
  * 照在线探针的写法起本机站点(托管组合 + 仿 nginx 的前缀代理三个源,都带 OAC,在线构建当页面),反复「开新页面 → goto → 等 DOMContentLoaded」,
  * 每次记耗时;超时当场取证,取完再多等一段看它是「慢」还是「挂死」。
  *

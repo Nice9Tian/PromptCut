@@ -1,5 +1,5 @@
 /**
- * `bake_card` 的卡片快照经素材服务存取的端到端探针(报告 `docs/reports/AGENT-bake-asset.md`;
+ * `bake_card` 的卡片快照经素材服务存取的端到端探针(报告 `docs/archive/agent-reports/AGENT-bake-asset.md`;
  * 语义 `docs/semantics/product/asset-service.md`「预渲染的产物」「职责」、`product/agent.md`「素材与产物」)。
  *
  *   node scripts/probes/bake-asset-probe.mjs [--port 5970] [--keep]

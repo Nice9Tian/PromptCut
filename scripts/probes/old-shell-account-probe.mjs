@@ -1,5 +1,5 @@
 /**
- * 老外壳（0.2.8 以前的桌面外壳打了更新补丁）上账号入口的真浏览器探针（报告 `docs/reports/AGENT-claude-old-shell-account.md`）。
+ * 老外壳（0.2.8 以前的桌面外壳打了更新补丁）上账号入口的真浏览器探针（报告 `docs/archive/agent-reports/AGENT-claude-old-shell-account.md`）。
  *
  *   node scripts/probes/old-shell-account-probe.mjs [--port 5910] [--out out]
  *

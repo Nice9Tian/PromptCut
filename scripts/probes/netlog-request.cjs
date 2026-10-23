@@ -1,6 +1,6 @@
 /**
  * 读 Chrome 网络日志(`--log-net-log=<文件>`),列出 URL 含某段文字的请求在网络层的经过。浏览器还开着、文件没收尾时也能读。
- * 用于探针页面「等不到 DOMContentLoaded」一类的取证(`docs/reports/AGENT-nav-hang.md`):看请求是没发出去、没收完,还是网络层已收完而页面一直没收下。
+ * 用于探针页面「等不到 DOMContentLoaded」一类的取证(`docs/archive/agent-reports/AGENT-nav-hang.md`):看请求是没发出去、没收完,还是网络层已收完而页面一直没收下。
  *
  *   node scripts/probes/netlog-request.cjs <网络日志> <URL 片段> [--all] [--events]
  *

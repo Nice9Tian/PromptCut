@@ -1,7 +1,7 @@
 /**
  * 队列模式认领闸的端到端探针(`docs/semantics/mechanism/rendering.md`「Agent 优先只是插队」;
  * 认领闸见 `server/queue-agent-spare.mjs`,报告 `docs/archive/agent-reports/AGENT-query-render-2.md` 第 4 节、第 7 节「没跑的」;
- * 本探针出自 `docs/reports/AGENT-maint-3.md` 第 4 项)。
+ * 本探针出自 `docs/archive/agent-reports/AGENT-maint-3.md` 第 4 项)。
  *
  * 前后两趟,各起一个独立的文档服务(临时数据目录,只绑回环)和一台队列模式的编辑器(`PROMPTCUT_QUEUE_NODE=1`,
  * 它拉起自己的预渲染进程、本机节点),各用一个空帧库、同一个探针项目(6 秒、三张卡,切出十来个快照细任务):

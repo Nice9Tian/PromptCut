@@ -1,6 +1,6 @@
 /**
  * 同屏轨道流的预算(数像素)、流平面共用一个 WebGL 上下文、超出预算的层的占位符 —— 探针(任务书「己三乙」;
- * 口径与数字在 `src/render/streamBudget.mjs`,依据是 `docs/reports/AGENT-rr-merged-eval.md`)。
+ * 口径与数字在 `src/render/streamBudget.mjs`,依据是 `docs/archive/agent-reports/AGENT-rr-merged-eval.md`)。
  *
  *   node scripts/probes/stream-budget-probe.mjs --port 27340 [--host-port 27345] [--seconds 4] [--no-before] [--only-play] [--out <dir>] [--json <file>]
  *

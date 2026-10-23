@@ -1,6 +1,6 @@
 /**
  * 申请加入与「任何知道链接的人都可加入」勾选的端到端探针:桌面、在线、手机三处各走一遍并截图
- * (2026-10-22 用户定,`docs/semantics/workflow/project.md`「多用户协作」第 26、27 条;报告 `docs/reports/AGENT-claude-join-requests.md`)。
+ * (2026-10-22 用户定,`docs/semantics/workflow/project.md`「多用户协作」第 26、27 条;报告 `docs/archive/agent-reports/AGENT-claude-join-requests.md`)。
  *
  * 真的服务组合:账号后端、文档服务、独立的素材服务进程、TLS 入口(`server/test/fixtures/cloud-queue-user-path.mjs`),
  * 探针另在账号后端注册几个账号。三处:

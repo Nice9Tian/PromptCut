@@ -1,6 +1,6 @@
 /**
  * `CardFrameCache.plan` 出的键的改前改后比对:同一份输入(一个项目摊出来的卡片图、源码版本、环境),在基准提交和当前工作区各跑一遍
- * `plan`,逐片段比每个键(报告 `docs/reports/AGENT-rr-emphasis-key.md`)。
+ * `plan`,逐片段比每个键(报告 `docs/archive/agent-reports/AGENT-rr-emphasis-key.md`)。
  *
  * 项目里两类片段:
  *   plain-*  输出节点没有上游(普通卡、带框和不透明度的卡、画布卡、依赖下层的卡、remotion 式的卡、素材效果卡、素材段)——

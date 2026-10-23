@@ -1,5 +1,5 @@
 /**
- * 自定义测量(measure_audio_js)的端到端探针(计划 `docs/plan/agent-workflow-plan.md` A6;报告 `docs/reports/AGENT-custom-measure.md`)。
+ * 自定义测量(measure_audio_js)的端到端探针(计划 `docs/plan/agent-workflow-plan.md` A6;报告 `docs/archive/agent-reports/AGENT-custom-measure.md`)。
  *
  *   node scripts/probes/custom-measure-probe.mjs [--port 5860] [--keep]   (端口段由派活的一方分,例如 5860、5920)
  *

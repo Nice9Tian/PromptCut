@@ -13,7 +13,7 @@
  *          两张 WebGL 卡(scene-3d、terminal-3d)和 growth-curve、rank-bars、chapter-bar、punch-pill。
  *          粒子卡与三维卡都是 stateful(每帧要从头推的那类)，是预渲染与导出里最贵的几张。
  *          只放一张粒子卡：同一份项目里放两张粒子卡(哪怕 seed、数量不同)，桌面导出在预热帧上永远等不到「就绪」，
- *          20 秒后报「控件、字体或图片在 20 秒内未就绪」(2026-10-12 实测，见 docs/reports/AGENT-rr-export-measure.md)。
+ *          20 秒后报「控件、字体或图片在 20 秒内未就绪」(2026-10-12 实测，见 docs/archive/agent-reports/AGENT-rr-export-measure.md)。
  *
  * 配方的 layers 从下往上叠(先写的在下)。`params` 只写要覆盖的键，其余用卡片缺省。
  */

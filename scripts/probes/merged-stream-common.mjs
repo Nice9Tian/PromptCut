@@ -1,4 +1,4 @@
-// 「合并流」评估探针的共用件（docs/reports/AGENT-rr-merged-eval.md）。
+// 「合并流」评估探针的共用件（docs/archive/agent-reports/AGENT-rr-merged-eval.md）。
 // 合并流：一条视频里拼多格、每张重卡一格（格内上半颜色、下半不透明度），一个解码器解出来再按格分给各层。
 //
 // 这里只有探针用的东西：用产品里的编码参数造测试流、切 fMP4、取 Annex-B 码流、起无头浏览器、起本机静态服务。
