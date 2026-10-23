@@ -228,18 +228,11 @@ export const BELOW_STREAM_VERSION = 2;
  *
  * 算不出某个下层的键时不许拿残缺的一列出键:调用方改传 `below.scene`(整个项目的键 `entry.key`),摘要里就只有目标卡加这一个键 ——
  * 更粗(项目里任何改动都作废),但不会错。`layers` 与 `scene` 都没有、或哪一项缺键就抛。
- *
- * `below.within`(剪辑段里的卡,〔裁〕R01):这条流只算哪个嵌套场景里的下层 —— 目标卡所在那一层剪辑段的虚拟片段前缀
- * (`<段 id>~`,多层一路接下去;`src/kernel/cutFlatten.mjs` 的 `flatScenePrefix`)。嵌套场景是毛玻璃的采样边界,流按嵌套场景自己的
- * 坐标产、贴在嵌套舞台里,和顶层「按舞台坐标、下层是整个舞台」的那一种不是同一样东西,所以进摘要:同样的成员和下层,带与不带它键不同。
- * 顶层的流不带这一项,摘要里也就没有它 —— 顶层的键一个字不变。
  */
 function belowStreamIdentity({ members = [], fps, stage = {}, codeVersion = '', below = null } = {}) {
   if (members.length !== 1) throw new Error('依赖下层的流只有目标卡一个成员');
   const scene = below?.scene;
   const layers = below?.layers;
-  const within = below?.within;
-  if (within !== undefined && within !== null && (typeof within !== 'string' || !within)) throw new Error('依赖下层的流:嵌套场景的前缀不对');
   if (scene !== undefined && scene !== null && (typeof scene !== 'string' || !scene)) throw new Error('依赖下层的流:整个项目的键不对');
   if (!scene && !Array.isArray(layers)) throw new Error('依赖下层的流:要给下层的键,或者整个项目的键');
   const item = m => {
@@ -257,6 +250,5 @@ function belowStreamIdentity({ members = [], fps, stage = {}, codeVersion = '', 
     stage: { width: stage.width, height: stage.height, camera3dFov: stage.camera3dFov },
     members: members.map(item),
     ...(scene ? { scene } : { layers: layers.map(item) }),
-    ...(within ? { within } : {}),
   });
 }

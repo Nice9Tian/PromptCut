@@ -197,35 +197,3 @@ test("占解码器预算:和别的流一起数;超出的那一张抑制着、落
   assert.equal(f.picks.size, 0, "快照退役");
   assert.equal(f.overPlanes.some((x) => x.clipIds[0] === "glass"), true);
 });
-
-test("剪辑段里依赖下层(没审阅过)的卡(〔裁〕R01):和顶层一样判重、抑制、发它的流平面(plane: stage,舞台挂在嵌套舞台里)", () => {
-  // 激活剪辑上一个剪辑段 S(1～6 秒,偏移 0)引用剪辑 B;B 里一张毛玻璃(没审阅过的卡按依赖下层算)压在一张卡上面
-  const p = {
-    version: 1, name: "p", width: 1920, height: 1080, fps: FPS, duration: 20, media: [], activeCutId: "A",
-    tracks: [{ id: "segs", name: "segs", clips: [{ id: "S", cardId: "", cutId: "B", start: 1, end: 6, cutOffset: 0, params: {} }] }],
-    cuts: [
-      { id: "A", name: "主" },
-      { id: "B", name: "里", duration: 10, tracks: [
-        { id: "b-glass", name: "g", clips: [card("glass", 0, 10, { frame: { x: 100, y: 100, w: 600, h: 300 } })] },
-        { id: "b-low", name: "l", clips: [card("mover", 0, 10)] },
-      ] },
-    ],
-  };
-  const V = "S~glass";
-  plan = heavy(V);
-  const sig = streamInputSig(p, { clipIds: [V], kind: "below" });
-  assert.match(sig, /^s1-/);
-  src.push({ type: "layer", clipId: V, kind: "stream", key: "s-cut-glass", ranges: [[0, 9]], originFrame: 30, streamKind: "below", inputSig: sig });
-  for (const playing of [true, false]) {
-    const head = { project: p, t: at(77), playing };
-    const f = planFeed(head);
-    assert.deepEqual(f.heavy, [V], `playing=${playing}:剪辑段里的毛玻璃判重`);
-    assert.deepEqual(f.streamPlanes, [{ clipIds: [V], key: "s-cut-glass", ranges: [[0, 9]], originFrame: 30, plane: "stage" }]);
-    assert.deepEqual(suppressedAt(head), [V]);
-  }
-  // 段里它下面那张卡改了:签名对不上,旧流不贴
-  const edited = structuredClone(p);
-  edited.cuts[1].tracks[1].clips[0].params = { speed: 2 };
-  assert.deepEqual(planFeed({ project: edited, t: at(77), playing: true }).streamPlanes, []);
-  assert.deepEqual(snapshotFeedDebug({ project: edited, t: at(77), playing: true }).staleBelow, [V]);
-});
