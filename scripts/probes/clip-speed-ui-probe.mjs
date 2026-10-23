@@ -157,10 +157,14 @@ try {
   check(!!audioBefore && !audioAfter, 'P4 变速后预览不出原声(声音层没了)', { before: !!audioBefore, after: !!audioAfter });
 
   /* ---------- P5 播放中舞台视频按 2 倍放 ---------- */
-  // 等到舞台里有视频在放(起播有延迟);播过这一段还没等到就从头再放,最多三遍
+  // 等到舞台里有视频在放(起播有延迟);**播放头跑出这一段就回到段首重放**。
+  // 原先每 12 次迭代才回 seek 一次:提速之后这一段在时间轴上只占「原时长 ÷ 倍率」,
+  // 一次迭代要 200 ms 加上跨 frame 的 evaluate,12 次很容易整段错过 —— P5 偶发翻就是这么来的,
+  // 而且偏偏倍率越大越容易翻(可观察窗口被倍率除了一次)。改成按播放头实际位置判。
   let rates = [];
-  for (let k = 0; k < 36 && !rates.length; k++) {
-    if (k % 12 === 0) { await store(A, 'S.actions.pause(); S.actions.seek(args[0]); S.actions.play(); return true;', placed.start + 0.1); }
+  for (let k = 0; k < 60 && !rates.length; k++) {
+    const inSeg = await store(A, 'const s = S.getState(); const c = s.project.tracks.flatMap((t) => t.clips).find((x) => x.id === args[0]); return !!c && s.playing && s.t >= c.start && s.t < c.end - 0.05;', placed.id).catch(() => false);
+    if (!inSeg) { await store(A, 'const c = S.getState().project.tracks.flatMap((t) => t.clips).find((x) => x.id === args[0]); S.actions.pause(); S.actions.seek(c.start + 0.05); S.actions.play(); return true;', placed.id); }
     await sleep(200);
     for (const f of A.frames()) {
       const r = await f.evaluate(() => [...document.querySelectorAll('video')].filter((v) => !v.paused).map((v) => ({ rate: v.playbackRate, t: +v.currentTime.toFixed(2) }))).catch(() => []);
