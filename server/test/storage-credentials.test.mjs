@@ -279,8 +279,11 @@ test('disconnect:Google 那边没撤成,本地那份照样删,并说明原因', 
 
 import {
   storageConfig, connectionScope, credentialDir, parseImportBody, callbackHtml,
-  handleConnect, handleConnections, handleDisconnect, handleStorageImport,
+  handleConnect, handleConnections, handleDisconnect, handleStorageImport, oauthConfig,
 } from '../storage-connectors/route.mjs';
+import { fileURLToPath } from 'node:url';
+
+const ROOT_DIR = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 
 const FULL_ENV = {
   PROMPTCUT_GOOGLE_CLIENT_ID: 'cid', PROMPTCUT_GOOGLE_API_KEY: 'key', PROMPTCUT_GOOGLE_PROJECT_NUMBER: '123',
@@ -417,4 +420,87 @@ test('回调页:只发给同源开启方,页面上不显示授权码', () => {
   assert.ok(!html.includes("postMessage(msg, '*')") && !html.includes('postMessage(msg, "*")'));
   assert.ok(!/textContent\s*=\s*[^;]*\bcode\b/.test(html), '不要把授权码写进页面文字');
   assert.match(html, /promptcut-oauth/, '要带来源标记，页面才分得清是谁发的');
+});
+
+// ───────────────────────── 客户端密钥怎么放 ─────────────────────────
+
+test('密钥优先从文件读(部署时该走的那条路)', () => {
+  const dir = freshDir();
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'client-secret');
+  fs.writeFileSync(file, 'FROM-FILE\n');          // 带换行,读的时候要 trim 掉
+  const got = oauthConfig({ PROMPTCUT_GOOGLE_CLIENT_SECRET_FILE: file }, null);
+  assert.equal(got.clientSecret, 'FROM-FILE');
+});
+
+test('两个都配时文件赢', () => {
+  const dir = freshDir();
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'client-secret');
+  fs.writeFileSync(file, 'FROM-FILE');
+  const got = oauthConfig({
+    PROMPTCUT_GOOGLE_CLIENT_SECRET_FILE: file,
+    PROMPTCUT_GOOGLE_CLIENT_SECRET: 'FROM-ENV',
+  }, null);
+  assert.equal(got.clientSecret, 'FROM-FILE');
+});
+
+test('只给值也能用,但会提示一句「开发期写法」', () => {
+  const lines = [];
+  const got = oauthConfig({ PROMPTCUT_GOOGLE_CLIENT_SECRET: 'FROM-ENV' }, (e, f) => lines.push([e, f]));
+  assert.equal(got.clientSecret, 'FROM-ENV');
+  // 提示只打一次:这里可能已经被前面的用例打过了,所以只断言「要么没打、要么打的是这一条」
+  for (const [event, fields] of lines) {
+    assert.equal(event, 'storage.secret-inline');
+    assert.match(fields.hint, /PROMPTCUT_GOOGLE_CLIENT_SECRET_FILE/);
+    assert.ok(!JSON.stringify(fields).includes('FROM-ENV'), '提示里不许带密钥本身');
+  }
+});
+
+test('文件读不到:回空串不抛,日志里不带文件内容', () => {
+  const lines = [];
+  const got = oauthConfig({ PROMPTCUT_GOOGLE_CLIENT_SECRET_FILE: path.join(TMP, 'nope', 'client-secret') }, (e, f) => lines.push([e, f]));
+  assert.equal(got.clientSecret, '', '读不到就当没配,A3 照常可用');
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0][0], 'storage.secret-file-unreadable');
+  assert.equal(lines[0][1].code, 'ENOENT');
+});
+
+test('配了文件路径就不回退到给值的那个(免得以为用了新的、其实用的旧的)', () => {
+  const got = oauthConfig({
+    PROMPTCUT_GOOGLE_CLIENT_SECRET_FILE: path.join(TMP, 'nope', 'client-secret'),
+    PROMPTCUT_GOOGLE_CLIENT_SECRET: 'FROM-ENV',
+  }, null);
+  assert.equal(got.clientSecret, '');
+});
+
+test('空文件当没配', () => {
+  const dir = freshDir();
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'client-secret');
+  fs.writeFileSync(file, '   \n');
+  const lines = [];
+  assert.equal(oauthConfig({ PROMPTCUT_GOOGLE_CLIENT_SECRET_FILE: file }, (e, f) => lines.push([e, f])).clientSecret, '');
+  assert.equal(lines[0][0], 'storage.secret-file-empty');
+});
+
+test('canManage 跟着文件走', () => {
+  const dir = freshDir();
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'client-secret');
+  fs.writeFileSync(file, 'S');
+  const base = {
+    PROMPTCUT_GOOGLE_CLIENT_ID: 'cid', PROMPTCUT_GOOGLE_API_KEY: 'key', PROMPTCUT_GOOGLE_PROJECT_NUMBER: '1',
+    PROMPTCUT_GOOGLE_REDIRECT_URI: 'http://localhost:5321/oauth2callback',
+  };
+  assert.equal(driveOf(storageConfig({ ...base, PROMPTCUT_GOOGLE_CLIENT_SECRET_FILE: file })).canManage, true);
+  assert.equal(driveOf(storageConfig(base)).canManage, false);
+  // 下发给页面的配置里仍然不许出现密钥
+  assert.ok(!JSON.stringify(storageConfig({ ...base, PROMPTCUT_GOOGLE_CLIENT_SECRET_FILE: file })).includes('S"'));
+});
+
+test('部署样例里只写路径,不写密钥值', () => {
+  const sample = fs.readFileSync(path.join(ROOT_DIR, 'server', 'hosted', 'deploy', 'agent-account.env.example'), 'utf8');
+  assert.match(sample, /PROMPTCUT_GOOGLE_CLIENT_SECRET_FILE=/, '样例要给出只写路径的那个变量');
+  assert.ok(!/^PROMPTCUT_GOOGLE_CLIENT_SECRET=/m.test(sample), '样例里不许出现直接给值的那个变量');
 });
