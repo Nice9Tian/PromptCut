@@ -12,6 +12,7 @@
  */
 import type { CardDef } from "../../kernel/types.ts";
 import { projectCardGraph } from "../../kernel/cardGraph.mjs";
+import { withMediaRates } from "../../kernel/clipTime.mjs";
 import { evaluateCardAudio, type AudioSourceContext } from "../../render/cards/audioSources.ts";
 
 export interface SoundRenderRequest {
@@ -67,7 +68,8 @@ export function createSoundEngine(getCard: (id: string) => CardDef<any> | undefi
       if (!req || typeof req.nodeId !== "string" || !Number.isSafeInteger(req.start) || !Number.isSafeInteger(req.count) || req.count < 1 || req.count > SOUND_MAX_BLOCK_FRAMES
         || !Number.isFinite(req.sampleRate) || req.sampleRate < 8000 || req.sampleRate > 192_000) throw new Error("声音请求的范围不对");
       if (!last || last.project !== req.project) {
-        const graph = projectCardGraph(req.project, getCard);
+        // 与编辑页面同一份图(`audio/cardAudio.ts` 的 audioGraphOf):变速素材段上的声画一体卡按卡片时钟走(kernel/clipTime.mjs 的 cardClockOffset)
+        const graph = withMediaRates(req.project, projectCardGraph(req.project, getCard));
         last = { project: req.project, ctx: { graph, project: req.project as AudioSourceContext["project"], getCard, sampleRate: req.sampleRate } };
       }
       const ctx: AudioSourceContext = { ...last.ctx, sampleRate: req.sampleRate, signal };

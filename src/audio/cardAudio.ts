@@ -10,7 +10,7 @@ import { ONLINE_CARD_AUDIO_BLOCKED, onlineCardAudioRunnable } from "../online/so
 import { projectCardGraph, cardJson } from "../kernel/cardGraph.mjs";
 import { clipHasEmbeddedAudio, cardAudioIdentity, resolveCardAudioRendition, assertAudiovisualCardKind } from "../kernel/cardAudioRendition.mjs";
 import { audioProjectOf } from "../kernel/cutAudio.mjs";
-import { speedMutesSource } from "../kernel/clipTime.mjs";
+import { speedMutesSource, withMediaRates } from "../kernel/clipTime.mjs";
 
 export const CARD_AUDIO_SAMPLE_RATE = 48000 as const;
 export const CARD_AUDIO_MAX_BLOCK_FRAMES = 1_048_576;
@@ -196,9 +196,18 @@ export function cardAudioBlockRenderer(project: unknown, nodeId: string, signal?
   }
   let context: AudioSourceContext | null = null;
   return (start, count) => {
-    context ??= { graph: projectCardGraph(project, ready.getCard), project: project as Pick<Project, "tracks" | "media">, getCard: ready.getCard, sampleRate: CARD_AUDIO_SAMPLE_RATE, signal };
+    context ??= { graph: audioGraphOf(project, ready.getCard), project: project as Pick<Project, "tracks" | "media">, getCard: ready.getCard, sampleRate: CARD_AUDIO_SAMPLE_RATE, signal };
     return evaluateCardAudio(context, nodeId, { start, count, sampleRate: CARD_AUDIO_SAMPLE_RATE });
   };
+}
+
+/**
+ * 求声音用的图:和画面同一份(`projectCardGraph` 之后接 `withMediaRates`)。挂在变速素材段上的声画一体卡,
+ * 卡片时钟在这里换成 mediaOffset ÷ speed(`kernel/clipTime.mjs` 的 `cardClockOffset`),和画面、已生成声音的对位同一个口径。
+ * 没有变速段时 `withMediaRates` 回同一个对象,图一个字节不变。
+ */
+function audioGraphOf(project: unknown, getCard: (id: string) => CardDef<any> | undefined) {
+  return withMediaRates(project, projectCardGraph(project, getCard));
 }
 
 const projectBlocks = new WeakMap<object, Map<string, Promise<CardAudioReply>>>();
@@ -230,7 +239,7 @@ function versionKeyOf(project: unknown, nodeId: string): string {
   return cyrb53([...cardIds].sort().map((id) => `${id}\u0000${audioVersionOfCard(id)}`).join("\u0001"));
 }
 
-const key = (x: CardAudioRequest) => `${versionKeyOf(x.project, x.nodeId)}:${cyrb53(cardJson(projectCardGraph(x.project, cardAudioGraphCard)))}:${x.nodeId}:${x.start}:${x.count}:${x.sampleRate}`;
+const key = (x: CardAudioRequest) => `${versionKeyOf(x.project, x.nodeId)}:${cyrb53(cardJson(audioGraphOf(x.project, cardAudioGraphCard)))}:${x.nodeId}:${x.start}:${x.count}:${x.sampleRate}`;
 const ownerOf = (project: unknown): object => {
   if (!project || (typeof project !== "object" && typeof project !== "function")) throw new CardAudioError("invalid-reply", "card audio project must be an object");
   return project as object;
@@ -263,16 +272,6 @@ export function onlineCardAudioBlocker(project: unknown, nodeId: string): string
   return routed.route === null ? routed.reason : null;
 }
 
-/**
- * 变速的视频段上挂的卡片声音出不出。**音频素材效果卡**(纯声音的卡,`kind: "audio"`)照常出:它读这一段素材的声音
- * 当输入,随倍率变速变调(`render/cards/audioSources.ts` 的 `varispeedBlock`;2026-10-23 用户定「放开。」)。
- * **声画一体卡**的声音仍按「变速的视频段不出原声」不出(〔裁〕第一版,`kernel/clipTime.mjs`)。导出那一路是
- * `server/bakery/mux-audio.mjs` 的 `buildAudioPlan`(只收音频素材效果卡节点,所以那里直接不看速度)。
- */
-export function speedMutesCardAudio(project: Project, clip: TrackClip): boolean {
-  return speedMutesSource(clip, project) && clipHasEmbeddedAudio(project, clip, hooks?.getCard);
-}
-
 /** A generated node owns a video-backed clip's audio too; callers must mute that native media element. */
 export function shouldMuteNativeAudio(project: Project, clip: TrackClip, globallyMuted = false) {
   // 变速的素材段不出原声(〔裁〕第一版,kernel/clipTime.mjs)
@@ -282,10 +281,12 @@ export function shouldMuteNativeAudio(project: Project, clip: TrackClip, globall
 /** Active generated audio is independent of whether its source happened to be an audio asset, video, or no media asset. */
 export function generatedCardAudioClipsAt(project: Project, t: number): { clip: TrackClip; media?: MediaAsset; volume: number }[] {
   const out: { clip: TrackClip; media?: MediaAsset; volume: number }[] = [];
+  // 变速的视频段上挂的卡片声音照常出:音频素材效果卡(2026-10-23 用户定「放开。」)与声画一体卡(同日用户定「出声。」)
+  // 读这一段素材时随倍率变速变调(`render/cards/audioSources.ts` 的 `varispeedBlock`),声画一体卡的卡片时钟见 `kernel/clipTime.mjs` 的 `cardClockOffset`
   // 在线浏览器模式:素材效果卡(含音频素材效果卡)在这台设备上渲染不了(C10 契约第 9 节,由渲染节点出),
   // 不求值、不发 `/@media/<hash>/pcm` 请求;这一段的原生声音照旧被 `shouldMuteNativeAudio` 静掉,不拿素材声音顶上
   for (const track of project.tracks) for (const clip of track.clips) {
-    if (track.hidden || track.muted || clip.audioMuted || speedMutesCardAudio(project, clip) || !cardAudioNodeOf(project, clip) || t < clip.start || t >= clip.end) continue;
+    if (track.hidden || track.muted || clip.audioMuted || !cardAudioNodeOf(project, clip) || t < clip.start || t >= clip.end) continue;
     out.push({ clip, media: clip.mediaId ? project.media.find(m => m.id === clip.mediaId) : undefined, volume: opacityAt(clip, t) * (clip.audioVolume ?? 1) });
   }
   return out;
@@ -312,7 +313,7 @@ export async function requestCardAudio(x: CardAudioRequest, signal?: AbortSignal
   let pending = blocks.get(k);
   if (!pending) {
     const context: AudioSourceContext = {
-      graph: projectCardGraph(x.project, ready.getCard),
+      graph: audioGraphOf(x.project, ready.getCard),
       project: x.project as Pick<Project, "tracks" | "media">,
       getCard: ready.getCard,
       sampleRate: x.sampleRate,
@@ -407,10 +408,11 @@ export function persistentCardAudio(project: Project, clip: TrackClip) {
       ? syncedUserCards().get(id)!.audioSourceVersion
       : hooks?.getCard(id) ? hooks.sourceVersionOf(id) : syncedUserCards().get(id)?.audioSourceVersion });
 }
-/** 导出前核一遍:剪辑段按混音同一份展开(`audioProjectOf`)走进被引用的剪辑,里面出声的有声卡缺了、过期了同样当场报出原片段 */
+/** 导出前核一遍:剪辑段按混音同一份展开(`audioProjectOf`)走进被引用的剪辑,里面出声的有声卡缺了、过期了同样当场报出原片段。
+ * 变速段上的声画一体卡同样要核(2026-10-23 用户定「出声。」) */
 export function assertProjectCardAudio(project: Project) {
   for (const track of audioProjectOf(project).tracks) for (const clip of track.clips) {
-    if (track.hidden || track.muted || clip.audioMuted || speedMutesSource(clip, project) || !(clipHasEmbeddedAudio(project, clip, hooks?.getCard) || syncedUserCards().get(clip.cardId)?.embeddedAudio)) continue;
+    if (track.hidden || track.muted || clip.audioMuted || !(clipHasEmbeddedAudio(project, clip, hooks?.getCard) || syncedUserCards().get(clip.cardId)?.embeddedAudio)) continue;
     persistentCardAudio(project, clip);
   }
 }

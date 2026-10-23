@@ -2,7 +2,7 @@
  * 片段速度(`TrackClip.speed`,`src/kernel/clipTime.mjs`)横跨各处的口径:
  *   - 缺省 1(没有字段)时各处身份键逐字不变:下面的固定值是开工提交 5a8f375a 上同一份样例算出来的(`out/speed/golden.mjs`);
  *   - 变速段的画面各处按「素材时刻 = mediaOffset + (t − start) × speed」取;
- *   - 〔裁〕第一版变速段的原声不出(导出混音、预览声音层同一条 `speedMutesSource`);
+ *   - 〔裁〕第一版变速段的原声不出(导出混音、预览声音层同一条 `speedMutesSource`);挂在上面的声画一体卡照常出声(2026-10-23 用户定「出声。」);
  *   - store 改速度保住入点、按新速度重算终点,改回 1 删掉字段。
  * 跑:npm test -- server/test/clip-speed.test.mjs
  */
@@ -408,4 +408,83 @@ test('变速的视频段上挂的音频素材效果卡:导出清单照收(原声
   const plain = cardAudioIdentity(projectWith(1), owner, hooks).inputs.source;
   assert.deepEqual(plain, { media: 'h-v1', offset: 1.5, rate: 1 }, '1 倍:和以前逐字相同,没有 speed 一项');
   assert.deepEqual(cardAudioIdentity(projectWith(2), owner, hooks).inputs.source, { ...plain, speed: 2 });
+});
+
+/* ---------- 变速段上的声画一体卡照常出声(2026-10-23 用户定「出声。」,推翻〔裁〕V21-28) ---------- */
+
+const AV_WAV = { id: 'wav', kind: 'audio', url: `/@media/${'c'.repeat(64)}`, hash: 'c'.repeat(64) };
+const AV_HOOKS = { getCard: (id) => (id === 'av' ? { defaults: {} } : DEFS[id]), sourceVersionOf: () => 'v1' };
+/** v-plain(mediaOffset 1.5,0～4 秒)上挂一张声画一体卡(节点 avn,读自己这段素材),带一份按当时源时钟生成、覆盖整段的声音 */
+async function withAvCard(speed) {
+  const { cardAudioIdentity, cardAudioSourceOffset } = await import('../../src/kernel/cardAudioRendition.mjs');
+  const p0 = fixture();
+  p0.media = [...p0.media, AV_WAV];
+  p0.cardNodes = [...p0.cardNodes, { id: 'avn', adapter: 'card', cardId: 'av', kind: 'animation', embeddedAudio: true, params: {}, inputs: { source: { nodeId: '@clip/v-plain/source' } } }];
+  const p = withClip(p0, 'v-plain', { cardId: 'av', nodeId: 'avn', embeddedAudio: true, ...(speed === 1 ? {} : { speed }) });
+  const clip = p.tracks[1].clips[0];
+  const cardAudio = { version: 1, cardId: 'av', mediaId: 'wav', sampleRate: 48000, frames: 4 * 48000, channels: 2,
+    sourceOffset: cardAudioSourceOffset(p, clip), identity: cardAudioIdentity(p, clip, AV_HOOKS) };
+  return withClip(p, 'v-plain', { cardAudio });
+}
+
+test('导出混音清单:变速段上的声画一体卡照常进清单(已生成的 WAV 照 1 倍摆位,不带 speed);普通变速视频段仍不出原声', async () => {
+  const one = audioPlanOf(await withAvCard(1));
+  const av1 = one.find((e) => e.clipId === 'v-plain');
+  assert.deepEqual(av1, { clipId: 'v-plain', trackId: 't2', mediaId: 'wav', start: 0, dur: 4, offset: 0, volume: 1, fadeIn: 0, fadeOut: 0, fx: null }, '1 倍:和以前同一条');
+  for (const speed of [2, 0.5]) {
+    const plan = audioPlanOf(await withAvCard(speed));
+    assert.deepEqual(plan.find((e) => e.clipId === 'v-plain'), av1, `${speed} 倍:同样一条(WAV 已是时间轴长度,不再变速)`);
+    assert.deepEqual(plan.filter((e) => e.clipId !== 'v-plain'), one.filter((e) => e.clipId !== 'v-plain'), '别的条目不变');
+    // ffmpeg 那条老路(mux-audio)用同一份清单
+    assert.ok(buildAudioPlan(await withAvCard(speed), 'out', () => true, (m) => `/x/${m.id}`).some((e) => e.clipId === 'v-plain' && !e.speed));
+  }
+  // 没挂卡的变速视频段照旧不出原声(〔裁〕第一版)
+  assert.equal(audioPlanOf(withClip(fixture(), 'v-plain', { speed: 2 })).some((e) => e.clipId === 'v-plain'), false);
+});
+
+test('声画一体卡的卡片时钟(cardClockOffset / withMediaRates / flattenOverlay):1 倍逐位不变;变速段 = mediaOffset ÷ 倍率,读素材的边补同样的差', async () => {
+  const { cardClockOffset } = await import('../../src/kernel/clipTime.mjs');
+  const { cardAudioSourceOffset } = await import('../../src/kernel/cardAudioRendition.mjs');
+  const { flattenOverlay } = await import(srcUrl('kernel/project.ts'));
+  assert.equal(cardClockOffset({ mediaOffset: 0.1 + 0.2 }), 0.1 + 0.2, '1 倍:原值');
+  assert.equal(cardClockOffset({ mediaOffset: 3, speed: 2 }), 1.5);
+  assert.equal(cardClockOffset({ speed: 2 }), undefined, 'mediaOffset 没写:交给调用方退到节点 timeOffset');
+  const one = await withAvCard(1);
+  const raw1 = projectCardGraph(one, (id) => AV_HOOKS.getCard(id));
+  assert.equal(withMediaRates(one, raw1), raw1, '1 倍:同一个对象');
+  assert.equal(flattenOverlay(one).clips.find((c) => c.id === 'v-plain').sourceOffset, 1.5);
+  for (const speed of [2, 0.5]) {
+    const p = await withAvCard(speed);
+    const raw = projectCardGraph(p, (id) => AV_HOOKS.getCard(id));
+    const before = raw.nodes.find((n) => n.id === 'avn'), after = withMediaRates(p, raw).nodes.find((n) => n.id === 'avn');
+    assert.equal(before.timeOffset, 1.5, 'projectCardGraph 写的是 mediaOffset(素材秒)');
+    assert.equal(after.timeOffset, 1.5 / speed, `${speed} 倍:卡片时钟 = mediaOffset ÷ 倍率`);
+    // 读自己素材的位置不变:卡片时刻 + 边的偏移 一样
+    assert.ok(Math.abs((after.timeOffset + after.inputs.source.offset) - (before.timeOffset + before.inputs.source.offset)) < 1e-12);
+    const clip = p.tracks[1].clips[0];
+    assert.equal(cardAudioSourceOffset(p, clip), 1.5 / speed, '已生成声音的源时钟同一个口径');
+    assert.equal(flattenOverlay(p).clips.find((c) => c.id === 'v-plain').sourceOffset, 1.5 / speed, '舞台给卡片组件的 t 同一个口径');
+  }
+});
+
+test('store.splitClip:变速段上的声画一体卡切开后,两半的卡片时钟接得上,已生成的声音两半都还覆盖、不判过期', async () => {
+  const { actions, getState } = await import(srcUrl('store/project.ts'));
+  const { flattenOverlay } = await import(srcUrl('kernel/project.ts'));
+  const { resolveCardAudioRendition } = await import('../../src/kernel/cardAudioRendition.mjs');
+  for (const speed of [2, 0.5]) {
+    const p = await withAvCard(speed);
+    actions.loadProject({ version: 1, name: 't', ...p });
+    const right = actions.splitClip('v-plain', 1.5);
+    assert.ok(right, `${speed} 倍:切得开`);
+    const q = getState().project;
+    const left = q.tracks[1].clips.find((c) => c.id === 'v-plain');
+    assert.equal(right.mediaOffset, 1.5 + 1.5 * speed, '后半段的素材起点按倍率推进');
+    const flat = flattenOverlay(q).clips;
+    const clockAt = (c, local) => flat.find((x) => x.id === c.id).sourceOffset + local;
+    assert.ok(Math.abs(clockAt(right, 0) - clockAt(left, 1.5)) < 1e-9, `${speed} 倍:切点两侧卡片时钟相同(以前后半段会跳 ${1.5 * (speed - 1)} 秒)`);
+    const graph = withMediaRates(q, projectCardGraph(q, (id) => AV_HOOKS.getCard(id)));
+    assert.ok(Math.abs(graph.nodes.find((n) => n.id === right.nodeId).timeOffset - clockAt(left, 1.5)) < 1e-9, '画面、声音拿的图同一个时钟');
+    assert.equal(resolveCardAudioRendition(q, left, AV_HOOKS).offset, 0);
+    assert.ok(Math.abs(resolveCardAudioRendition(q, right, AV_HOOKS).offset - 1.5) < 1e-9, '后半段从 WAV 第 1.5 秒放');
+  }
 });
