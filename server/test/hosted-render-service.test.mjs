@@ -626,6 +626,21 @@ test('HR19 配置与代码版本：环境变量读成配置，写错的报 bad-c
   assert.equal(compareCodeVersions({ self, editorDir: path.join(dir, 'missing') }).match, null, '都取不到：不知道，不乱报');
   assert.equal(compareCodeVersions({ self, expect: other }).match, false, '直接给了应该一致的版本');
   assert.equal(compareCodeVersions({ self: null }).match, null);
+
+  // 换代保留前 3 代后，assets/ 里还有旧代的脚本：有本代的 version.json 就只认它，不被旧代骗过
+  fs.writeFileSync(path.join(dir, 'assets', 'index-old.js'), `const V="${self}";`);
+  fs.writeFileSync(path.join(dir, 'assets', 'index-abc.js'), `const V="${other}";`);
+  fs.writeFileSync(path.join(dir, 'version.json'), JSON.stringify({ codeVersion: other }));
+  assert.equal(editorHasCodeVersion(dir, self), false, '本代是 other，旧代脚本里的 self 不算');
+  assert.deepEqual(compareCodeVersions({ self, editorDir: dir }), { self, editor: 'different', agent: 'unknown', expect: null, match: false });
+  assert.equal(editorHasCodeVersion(dir, other), true);
+  // version.json 读出来不像代码版本（坏了、空的）：退回扫描，照旧
+  for (const bad of ['not json', JSON.stringify({ codeVersion: '' }), JSON.stringify({})]) {
+    fs.writeFileSync(path.join(dir, 'version.json'), bad);
+    assert.equal(editorHasCodeVersion(dir, self), true, `version.json=${bad}：退回扫描`);
+  }
+  fs.rmSync(path.join(dir, 'version.json'));
+  assert.equal(editorHasCodeVersion(dir, self), true, '没有 version.json（旧的在线构建）：退回扫描');
 });
 
 /* ================================================================== HR20 */

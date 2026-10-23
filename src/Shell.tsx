@@ -59,10 +59,11 @@ export function Shell(): JSX.Element {
   // 顶栏的「回到首页」在 window 上派发这个事件,免得给 Editor 加一层 props
   useEffect(() => {
     const back = () => {
-      // 回开始页之后再刷新就留在开始页
+      // 回开始页之后再刷新就留在开始页;在线页面的地址从项目直达地址换回 `/editor/`(`product/platforms.md`「项目直达地址」)
       forgetSharedResume();
       const url = new URL(location.href);
-      for (const key of ["editor", "open", "draft", "join"]) url.searchParams.delete(key);
+      if (ONLINE_BUILD) url.pathname = import.meta.env.BASE_URL;
+      for (const key of ["editor", "open", "draft", "join", "project", "token", "linkToken"]) url.searchParams.delete(key);
       history.replaceState(null, "", url);
       setInEditor(false);
     };
