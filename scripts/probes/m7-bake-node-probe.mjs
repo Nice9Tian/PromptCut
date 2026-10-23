@@ -1,6 +1,9 @@
 /**
- * `m7-bake-probe.mjs`(分支 `claude/m7-probe`,M7 契约第 8 节 P1～P3)的页面节点分支版:`browser` 子命令改为驱动**产品的**
- * 生成快照 RPC(`claude/rq-m7-node` 的 `bakeFrame` + `bake-frame` 事件,契约第 4.3 节),不再要实验分支的 `render(…, { bake })`。
+ * M7 契约第 8 节 P1～P3 的生成快照探针:`browser` 子命令驱动**产品的**
+ * 生成快照 RPC(`bakeFrame` + `bake-frame` 事件,契约第 4.3 节)。
+ * 原先还有一支 `m7-bake-probe.mjs`,`browser` 走实验分支 `claude/m7-probe-exp` 的 `render(…, { bake })`;那个分支 2026-10-16 经用户授权清掉,
+ * 产品代码里没有那个选项,所以它再也跑不起来,2026-10-23 的探针总审把它删了(报告 `docs/reports/AGENT-claude-probe-audit.md`)。
+ * 它独有的一项对照(`--ready` 传给舞台、出「不过就绪闸」的对照组)随之没有了:产品的 `bakeFrame` 每帧都过就绪闸,这里的 `--ready` 只给输出目录名加后缀。
  * 其余(`desktop` 出桌面预渲染参照、`compare` 逐帧比 HTML 与像素、`small`)与原脚本相同;`browser` 另把舞台产的小尺寸 WebP
  * 存成 `<帧>.small.webp`,`compare` 顺带与桌面 CDP 的小位图比像素(`--small`)。
  * 主会话 2026-09-28 裁定第 4 条:在线构建关掉 CSS 压缩之后,用它比「在线构建 vs 桌面」一次。
@@ -9,12 +12,12 @@
  *
  * 子命令(按顺序跑;`--out` 同一个目录):
  *
- *   node scripts/probes/m7-bake-probe.mjs desktop --origin http://127.0.0.1:5714 --out <dir>
+ *   node scripts/probes/m7-bake-node-probe.mjs desktop --origin http://127.0.0.1:5714 --out <dir>
  *       本进程里起 `FramePipeline`(与预渲染进程同一份代码)对探针项目预渲染到每张卡的共享档快照全齐(含小尺寸),
  *       把每张卡的 control、隔离单卡工程(`isolatedCardProject`)、`<帧>.html`、`<帧>.small.webp` 拷到 <dir>/desktop/<clipId>/。
  *       `--origin` 是开发服务器(实验分支的检出起的,它另占 +1、+2 两个舞台端口)。
  *
- *   node scripts/probes/m7-bake-probe.mjs browser --dist <实验分支>/dist-online --out <dir>
+ *   node scripts/probes/m7-bake-node-probe.mjs browser --dist <实验分支>/dist-online --out <dir>
  *        [--port-base 5710] [--heads headless|headful|both] [--rounds 2] [--layouts cross-oac,same] [--modes seq,batch4]
  *        [--dev-stage http://127.0.0.1:5715]   另跑一遍开发服务器的舞台(非在线构建)只做 seq,给 P2 分辨构建差异
  *        [--catalog]                            另把 server/catalog 挂在 /catalog/(在线构建没有它,Lottie 素材卡取不到动画 JSON)
@@ -25,11 +28,11 @@
  *       父页里 DecompressionStream 解开、WebCrypto 算 sha256(契约 4.3 的做法,只是这里在父页算),记主文档 longtask 与 rAF 间隔。
  *       seq = 一趟从挂载帧顺推到末帧;batch4 = 照桌面 4 帧一批、每批从头推;probe = 产品现有的测量快照趟(`probe: 'snapshot'`,受一拍预算截断)。每帧 HTML 写到 <dir>/browser-<layout>-<mode>/<clipId>/。
  *
- *   node scripts/probes/m7-bake-probe.mjs compare --out <dir>
+ *   node scripts/probes/m7-bake-node-probe.mjs compare --out <dir>
  *       P2:每张卡逐帧比 desktop 与 browser-cross-oac-seq、seq 与 batch4、在线与开发舞台:逐字节(sha256)相同几帧;不同的用
  *       `compareSnapshotHtml`(样式数值 1e-6 容差)再判,记第一处差别;另把两边 HTML 各按桌面 `capture-snapshot` 的挂法截图比像素。
  *
- *   node scripts/probes/m7-bake-probe.mjs small --out <dir> [--frames 0,15,30,59] [--variant browser-cross-oac-seq] [--css <在线构建目录>]
+ *   node scripts/probes/m7-bake-node-probe.mjs small --out <dir> [--frames 0,15,30,59] [--variant browser-cross-oac-seq] [--css <在线构建目录>]
  *       P3:在舞台源的页面里把浏览器生成的每帧 HTML 按 `smallScale` 包进 SVG `foreignObject`、以 `data:` 地址画上画布、出 WebP(质量 0.8),
  *       记每帧耗时、`getImageData` / `toDataURL` 是否抛 SecurityError(画布污染);与桌面 CDP 截的 `<帧>.small.webp` 解码后逐像素比
  *       (平均绝对差、PSNR、差 > 16 的像素占比、alpha 差)。差图写到 <dir>/small/。
