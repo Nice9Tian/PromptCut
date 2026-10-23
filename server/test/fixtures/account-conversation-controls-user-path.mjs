@@ -127,11 +127,16 @@ export async function runAccountConversationControlsUserPath({ ports = [6620, 66
   providerRoot = process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT,
   passwordOrderModule = process.env.PROMPTCUT_PASSWORD_ORDER_MODULE,
   publicHandler = null,
+  // Optional third-party (Google) login for probes that exercise it: { identity, providers }.
+  // identity.verify(provider, token) stands in for the separate identity service; leaving this null
+  // keeps third-party login off, which is what every existing caller gets.
+  thirdParty = null,
   diagnostic = () => {} } = {}) {
   assert.equal(ports.length, 7);
   // 6620～6639 是这个夹具原来的探针端口段；5320～5329 是 agent-panel-smooth 探针的端口段；28180～29199 是 0.7.18 的探针端口段(块五的探针缺省 28180～28189，验收运行器按 --v18-port-base 换)；
   // 6500～6519 是 Vibe 开始页探针(`scripts/probes/vibe-start-probe.mjs`)的端口段
-  assert.ok(Number.isInteger(agentPort) && ((agentPort >= 6620 && agentPort <= 6639) || (agentPort >= 28180 && agentPort <= 29199) || (agentPort >= 5320 && agentPort <= 5329) || (agentPort >= 6500 && agentPort <= 6519)) &&
+  // 6530～6539 是编辑器 Google 登录探针(`scripts/probes/google-login-wire-probe.mjs`)的端口段
+  assert.ok(Number.isInteger(agentPort) && ((agentPort >= 6620 && agentPort <= 6639) || (agentPort >= 28180 && agentPort <= 29199) || (agentPort >= 5320 && agentPort <= 5329) || (agentPort >= 6500 && agentPort <= 6519) || (agentPort >= 6530 && agentPort <= 6539)) &&
     !ports.includes(agentPort), 'agentPort must be a free probe-owned port');
   assert.ok(path.isAbsolute(providerRoot ?? '') && fs.existsSync(path.join(providerRoot, 'account/internal.mjs')),
     'real v2 account provider root is required');
@@ -213,7 +218,8 @@ export async function runAccountConversationControlsUserPath({ ports = [6620, 66
     await listen(accountServer, accountPort);
     docAuthorityClient = internalModule.createDocAuthorityClient({ origin: `https://127.0.0.1:${docInternalPort}`, tls: pki.account, serverFingerprint256: pki.doc.fingerprint256 });
     siteServer = http.createServer(appModule.createApp({ store, credentials,
-      origins: [edgeOrigin], cookieSecure: true, docAuthority: docAuthorityClient }));
+      origins: [edgeOrigin], cookieSecure: true, docAuthority: docAuthorityClient,
+      ...(thirdParty ? { identity: thirdParty.identity, identityProviders: thirdParty.providers ?? [] } : {}) }));
     await listen(siteServer, sitePort);
     edgeServer = https.createServer({ key: pki.wrong.key, cert: pki.wrong.cert, minVersion: 'TLSv1.3' }, (req, res) => {
       const incoming = new URL(req.url, edgeOrigin), route = incoming.pathname;
@@ -451,7 +457,7 @@ export async function runAccountConversationControlsUserPath({ ports = [6620, 66
     if (keepOpen) {
       handedOff = true;
       return { origin: edgeOrigin, leafFingerprint256: pki.wrong.fingerprint256,
-        caFile: path.join(dir, 'ca.crt'), projectId, fixtureDir: dir, assetPid,
+        caFile: path.join(dir, 'ca.crt'), projectId, fixtureDir: dir, assetPid, store,
         accounts: [{ name: 'dualUser0', password: 'temporary-dual-password-0' },
           { name: 'dualUser1', password: 'temporary-dual-password-1' },
           { name: 'dualUser2', password: 'temporary-dual-password-2' }],

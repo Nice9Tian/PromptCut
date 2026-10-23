@@ -87,7 +87,15 @@ type GoogleState =
   | { kind: "ready" }
   | { kind: "unavailable"; message: string };
 
-export function OnlineLogin(props: { onDone: () => void }): JSX.Element {
+/**
+ * `onThirdPartyDone` 是 Google 这条路**专用**的出口：它和 `onDone()` 走的不是同一件事。
+ * `onDone()` 由外层（`VibeLogin.tsx`）拿去问「刚才按的是哪一颗键、表单里填了什么」，
+ * 而 Google 的按钮是 Google 自己在跨源 iframe 里画的，外层根本收不到那次点击，
+ * 于是第三方登录成功后走 `onDone()` 会被外层当成「没有出口」丢掉 ——
+ * 用户 2026-10-24 报的「授权以后没有反应」就是这个。给它一条自己的出口，外层据此去认会话。
+ * 没传这个属性时退回 `onDone()`（桌面与别处原样）。
+ */
+export function OnlineLogin(props: { onDone: () => void; onThirdPartyDone?: () => void }): JSX.Element {
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(true);
@@ -107,6 +115,9 @@ export function OnlineLogin(props: { onDone: () => void }): JSX.Element {
   // 回调是在 effect 里注册给 Google 的，闭包会把这两样钉死在首次渲染的值上，所以用 ref 取当下的
   const rememberRef = useRef(remember); rememberRef.current = remember;
   const onDoneRef = useRef(props.onDone); onDoneRef.current = props.onDone;
+  const thirdPartyRef = useRef(props.onThirdPartyDone); thirdPartyRef.current = props.onThirdPartyDone;
+  /** 第三方登录成功后往哪儿走：有专用出口就走它，没有就退回 `onDone()` */
+  const thirdPartyDone = () => { (thirdPartyRef.current ?? onDoneRef.current)(); };
 
   useEffect(() => {
     let alive = true;
@@ -141,7 +152,7 @@ export function OnlineLogin(props: { onDone: () => void }): JSX.Element {
             const result = await client.current.loginWithThirdParty("google", response.credential, rememberRef.current);
             if (!alive) return;
             if (result.kind === "need-name") { setNeedName({ ticket: result.ticket, email: result.email }); return; }
-            onDoneRef.current();
+            thirdPartyDone();
           } catch (e) {
             if (alive) setGoogleError(e instanceof Error ? e.message : "Google 登录失败，请再试一次。");
           } finally { if (alive) setGoogleBusy(false); }
@@ -168,7 +179,7 @@ export function OnlineLogin(props: { onDone: () => void }): JSX.Element {
     setGoogleError(""); setGoogleBusy(true);
     try {
       await client.current.registerWithThirdParty(needName.ticket, googleName.trim(), rememberRef.current);
-      onDoneRef.current();
+      thirdPartyDone();
     } catch (e) {
       setGoogleError(e instanceof Error ? e.message : "建账号失败，请再试一次。");
     } finally { setGoogleBusy(false); }

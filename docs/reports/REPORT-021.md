@@ -217,6 +217,89 @@
 
 部署完在 `https://visuhive.com/editor/` 上复验登录页，**用的是用户自己 Chrome 的系统截图**，不是浏览器自己的截图：左栏画布上的青／琥珀烟雾**向背景平滑淡出**，没有整块不透明；标题「打开浏览器就能剪片子」和副标题在遮罩上清晰可读；右栏登录框、「通过 Google 继续操作」、「以游客身份进入」都在。截图留在本次会话的 scratchpad（`shots/login-0724-chrome-system.jpg`）。
 
+### 三条验收项在生产上的当场读数（2026-10-24 02:0x，内置浏览器，游客身份）
+
+用户那三条验收失败里的 ① 和 ③ 这次量了数字，不只是看截图：
+
+**① 「左侧列表栏、中间输入框、右侧拓展栏」** —— 在 `https://visuhive.com/editor/` 以游客进入、点开项目
+「未命名 2」、展开拓展栏之后，三栏的实际位置（`getBoundingClientRect`，视口 1024 宽）：
+
+| 栏 | `data-pc` | x | 宽 |
+|---|---|---|---|
+| 左侧列表栏 | `start-side` | 0 | 248 |
+| 中间（对话与输入框） | `start-chat` / `start-chat-input` | 248 | 776 |
+| 右侧拓展栏 | `start-ext` | 704 | 320 |
+
+拓展栏里是真东西，不是占位：`start-ext-sec-play`（播放段）、`start-ext-stage`（舞台）、`start-ext-play`、
+`start-ext-scrub`、`start-ext-detail`（详细编辑）、`start-ext-sec-diff`（改动段）。左栏里是真数据：分组「介绍」、
+项目「未命名 2」、它下面的 Agent 对话与「新对话」。**所以这一版界面已经接上业务层，并且就是线上的缺省。**
+
+**③ 点击项目进不去** —— 从左栏点项目，地址变成直达地址 `/editor/p/sp_c6xafcqr…`，页面进到对话页，
+整页文本里搜不到「项目会话暂时不可用」。
+
+**② 登录页** —— 见上面「线上复验：这一次用系统截图」。左栏是预渲染出来的渲染器动画、右栏是登录框，
+「通过 Google 继续操作」与「以游客身份进入」都在。**但「通过 Google 继续操作」点下去没有反应**，
+那是另一条缺陷，根因与修法见下一节。
+
+## 0.7.24 发出去当天：Google 登录进不去（2026-10-24 用户报）
+
+用户原话：「编辑器界面实际上用Google账号登录进不去，授权以后没有反应。」
+
+### 生产上的证据：服务端每次都登成功了，页面没动
+
+节点日志（`journalctl`）把这件事说得很清楚 —— 用户点的那几下，**每一下服务端都登成功了**：
+
+| 时刻（UTC） | 身份服务 `visuhive-identity` | 账号服务 `promptcut-account-v2` |
+|---|---|---|
+| 16:38:10 | `verified provider=google subject=105710…` | `third-party-login id=acc_f17cf0ab… provider=google` |
+| 16:38:21 | 同上 | 同上 |
+| 16:38:39 | 同上 | 同上 |
+| 16:41:53 | 同上 | 同上 |
+
+Google 验签过了、账号认出来了、网站会话建起来了，**四次都是**。用户在 30 秒里点了三下、过三分钟又点一下，
+正是因为屏幕上什么都没发生。
+
+### 根因：两条线各做一半，接缝上把「登成功了」这件事丢了
+
+登录页这一页是两个会话分着做的：
+
+- `src/start/OnlineLogin.tsx` 管 Google 那一块（真发请求、真建会话、真换编辑器令牌），做完调 `onDone()`；
+- `src/start/VibeLogin.tsx` 在外面一层把这一页接到业务层，它的 `onDone()` 是用来问**「刚才按的是哪一颗键、表单里填了什么」**的：
+  它在捕获阶段认 `start-login-guest`、`start-login-skip` 这些 `data-pc`，认出来才记下一个 `intent`。
+
+**Google 的按钮是 Google 自己在跨源 iframe 里画的**，那次点击根本到不了外层的 `onClickCapture`，所以 `intent` 一直是 `null`，
+`onDone()` 里第一行 `if (!it) return;` 就把整件事丢掉了 —— 会话其实建好了，页面却一动不动。
+这两半各自都没错，错在接缝；而接缝上**一条测试都没有**，所以只能等用户在生产上撞到。
+
+### 改法（分支 `claude/google-login-wire`）
+
+- `OnlineLogin` 多一条第三方**专用**出口 `onThirdPartyDone`（没传就退回 `onDone()`，桌面与别处原样）；Google 登录成功、以及「起账号名建号」两处都走它。
+- `VibeLogin` 把它译成新的 `third-party` 出口交给上层，不再和「按了哪颗键」混在一起。
+- `useAccountProjects` 多一个 `adoptSession()`：第三方那一段跑在登录页自己那个客户端实例上，本 hook 手里是**另一个实例**，
+  所以重新 `restore()` 一次，后面拉项目列表、从直达地址自动进项目，与密码登录走完之后完全一样。
+
+### 证据：同一支探针，修前红、修后绿
+
+新探针 `scripts/probes/google-login-wire-probe.mjs`（已登记进验收台账，新建 `v24-manifest.mjs` 的 `V24-google-login`）。
+真账号服务、真文档服务、真素材服务进程、在线构建当 `/editor/`；**只有两样是桩**：身份服务（不验签、照令牌字面认人，
+和 VisuHive 自己的 `account/test/third-party.test.mjs` 同一个办法）与 Google 的 `gsi/client` 脚本（按 GIS 的约定收下回调、
+画一颗真按钮，点它＝用户在 Google 弹窗里点了同意）。不需要任何真的 Google 账号，也不连生产。
+
+| | 修之前（main `e01463f4` 的那四个文件） | 修之后 |
+|---|---|---|
+| ① 已关联过的账号点 Google | `third-party/login 200`、`editor/session 200` **都发生了**，但 `started:false`、`stillLogin:true`、账号名 `null` | `started:true`、`stillLogin:false`、顶上显示 `dualUser0` |
+| ② 没关联过的身份 | 「起一个账号名」那一步出得来，`register 200` 也发生了，但建完 `started:false`、`stillLogin:true` | `started:true`、`stillLogin:false` |
+| 整支 | `ok:false`，5 条失败 | **`ok:true`，0 条失败** |
+
+两次跑的页面脚本错误都是 0 —— 这正是「没有反应」的样子：没有报错，只是什么都不做。
+
+**G0-2 在清静机器上补跑掉了**（上一版欠的那一项，2026-10-24 02:07～02:10，提交 `1104aeee`）：经验收运行器跑 `G0-2 全量测试`，**8053 条、8038 过、0 失败、15 跳过**，201 秒，**过**；15 条跳过逐条对上 `G0_2_SKIPS` 名单（这一项连名单也一起判）。
+第一轮曾红 7 条，全是 `account-v2-install-plan` 的 `vh-source` —— 起跑时 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT` 写成了正斜杠，`absolute()` 要求 `path.normalize(v) === v`。这个坑 `docs/local.md`「Windows 路径分隔符今天坑了三次」第 1 条早写着，这回没照着用；换成反斜杠重跑即全绿。**不是代码问题**。
+另记一条：`TODO.md` 里「全量测试每轮随机红一条」这一条，这一轮**没有复现**（0 失败）。
+
+其它验证：类型检查零错误；影响范围的测试 **132 条零失败**（`src/start/` 七支、`src/account/` 三支、
+`four-stage-acceptance.test.mjs`、`c10-ui-gates.test.mjs`）；验收台账守门 `--check-coverage` 通过。
+
 ## 没做的与待用户的
 
 ### 没做的（都写明了原因）
@@ -238,6 +321,8 @@
 4. **`docs/plan/guest-identity-semantics-dryrun.md` 删不删**：那份文件自己写着「用户点头之后删掉它」，用户还没点过这个头，所以留着。
 5. **0.7.19、0.7.20 的补丁**：已补传官网（本来是待用户项，2026-10-23 做掉了）。
 6. **网盘导入在生产上还没开**（0.7.24 新增）：代码已上线，但节点上没配那三个环境变量，所以素材页点「从网盘导入」会显示「未配置」并列出要配什么。要开它得先做两件只有用户能做的事：① 在 Google 控制台把 `https://<主站域名>/oauth2callback` 登记成已授权的重定向 URI（A2 那条路要用）；② 决定 `PROMPTCUT_GOOGLE_CLIENT_SECRET_FILE` 这个密钥文件放在节点的哪个路径下、由谁拥有（现在的规矩是 0600、属主为服务用户，和 `PROMPTCUT_AGENT_CLIENT_KEY_FILE` 同待遇）。只配 A3（一次性令牌）那条路的话不需要密钥文件。
+   **2026-10-24 补（`claude/drive-connector` 那个会话查出来并自测过，我复核了端口与清单）**：要开的不止那两样。OAuth 客户端的 JavaScript 来源、重定向 URI，以及 API 密钥 `PromptCut Picker (localhost 5321)` 的网站限制，**三处登记的全是 `localhost:5321`** —— 那是当初给可行性探针随手挑的端口。而开发服务器是 **5190**（`.claude/launch.json`）、桌面版是 **5210**（`desktop/src-tauri/src/lib.rs` 的 `EDITOR_PORT`，我都核过）。在这两个端口上点「从网盘导入」会三样各撞一堵墙：Picker 被 API 密钥的网站限制挡、A3 的令牌弹窗被 JavaScript 来源挡、A2 换令牌被重定向 URI 挡。补登记要用户本人在 Google 控制台点保存。
+8. **在线产物里那三条网盘路径本来就不该在**（0.7.24 的 `storagePaths` 是治标）：0.7.24 合进来时 `C10A-API-03` 报「在线产物里多了 `/api/media/storage/connect|disconnect|import`」，我当时的做法是在棘轮里**单开一桶登记**这三条（照样只许精确三条）。`claude/drive-connector` 后来给了治本的改法：`src/editor/io/storageImport.ts` 三个函数开头内联一句 `if (!storageImportSupported) throw …`，`storageImportSupported` 在在线构建里是编译期常量 `false`，打包器据此把后面的代码连同字面量一并剪掉（**必须内联写**，抽成辅助函数就静态判不出不可达，字面量照旧留着）；剪掉之后 `c10a-online-api-paths.json` 里那三条也要删（这道门两个方向都判）。我在本分支的在线产物里复核过：**这三条字面量现在各出现 1 处，确实在包里**。那条分支还没合，三个文件的净差是 `storageImport.ts`、`c10a-online-api-paths.json` 与任务书。
 7. **发版前全量「红的那条单独复跑算不算绿」**（0.7.24 新增）：0.7.24 发版前有两轮全量各随机红一条、两条不是同一条、单独跑都绿（已记 `TODO.md`）。把通过条件放宽成「复跑绿了也算」是改基线门槛，按原则 3「基线始终全绿」要你定，所以**没有自行改 `verification.md`**，那里仍写「零失败」。（0.7.24 最后那一轮全量本身是干净的，8053 条零失败，没有用到这条放宽。）
 
 ### 之前那一版的待用户项（已了结的）
