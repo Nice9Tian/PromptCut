@@ -30,6 +30,7 @@ import { useAccountProjects } from "../account/useAccountProjects";
 import { GUEST_LIMITS, GUEST_LIMITS_TEXT } from "../account/guest";
 import { currentDocProjectId, forgetSharedResume, useSync } from "../editor/sync/syncManager";
 import { importMediaFiles, MEDIA_ACCEPT } from "../editor/left/importAssets";
+import { SyncOverlays } from "../editor/sync/SyncOverlays";
 import { actions } from "../store/project";
 import { ChatView } from "./ChatView";
 import { JoinPanel } from "./JoinPanel";
@@ -411,6 +412,9 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
           )
         }
       />
+
+      {/* 连着项目时:同步那一套浮层(进项目的气泡、被移出等阻断弹窗、断网未发出的提示),和编辑界面挂的同一套 */}
+      {openId && <SyncOverlays />}
 
       {join && (
         <JoinPanel
