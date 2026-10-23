@@ -119,7 +119,7 @@ export const V18_ITEMS = [
   T('V18-conv-access', '对话访问、已读回执、运行权威(撤销、崩溃)、任务进程生命周期、退出确认、改密用户路径', ['2.1-3', '2.1-4', '2.1-5'],
     ['server/test/agent-access-conversation.test.mjs', 'server/test/agent-access-http.test.mjs', 'server/test/agent-read-control.test.mjs', 'server/test/run-authority-core.test.mjs',
       'server/test/run-authority-crash.test.mjs', 'server/test/account-worker-lifecycle.test.mjs', 'server/test/account-logout-confirmation.test.mjs', 'server/test/account-password-user-path.test.mjs'], { account: true, timeoutMin: 30, known: 'account-password-user-path 写死 6680 段端口、account-logout-confirmation 写死 66xx;机器忙时偶发撞端口,单独重跑' }),
-  PR('V18-conv-password-probe', '改密选退出:真浏览器看页面「已退出」与四个服务的真实确认一致', ['2.1-5'], 'accept-018-conv-password-probe',
+  PR('V18-conv-password-probe', '改密选退出:真浏览器看页面「已退出」与四个服务的真实确认一致', ['2.1-5'], 'account-password-user-path-probe',
     ['--dist', DIST, '--site-root', `${VISU}/site`, '--out', '{item}', '--base-port', port(0)], {
       account: true, needs: ['online-build'], prereq: ['G0-4'], timeoutMin: 20, must: ['"passed":\\s*47', '"completed":\\s*true'],
     }),
@@ -316,7 +316,6 @@ export const V18_ITEMS = [
 const RENDER_REFACTOR = '渲染 / 轨道流 / 卡片键一带的探针,属渲染重构那一块(现在不碰),不是 0.7.18 38 行的依据;渲染重构合入后另议';
 export const V18_EXCLUDED = {
   'account-dual-user-path-probe.mjs': '账号双用户路径夹具的公开入口(导出 runAccountDualUserPath),被 server/test/account-dual-user-path.test.mjs 直接导入,不单独跑',
-  'account-password-user-path-probe.mjs': '改密选退出的原始探针(端口写死 6680～6689);V18-conv-password-probe 是它按 0.7.18 端口段改的同一套断言(47 项)的副本,以后者为准',
   'account-public-user-pages-probe.test.mjs': '公网网页探针自己的单测,由 npm test 扫(放在探针目录里)',
   'cloud-tools-c1-site.mjs': '网页采集探针 cloud-tools-c1-probe 的本机站点夹具,不单独跑',
   'below-diff-measure-probe.mjs': RENDER_REFACTOR, 'below-stream-common.mjs': RENDER_REFACTOR, 'browser-stream-e2e-probe.mjs': RENDER_REFACTOR, 'browser-stream-node-probe.mjs': RENDER_REFACTOR,
