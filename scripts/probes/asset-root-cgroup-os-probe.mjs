@@ -383,7 +383,9 @@ export async function runAssetCgroupOSProbe({ user, out }) {
     result.afterListeners = await listeners();
     if (result.afterListeners.length) { result.ok = false; result.errors.push('probe-listener-remains'); }
     result.wallMs = Math.round(now() - start);
-    if (result.wallMs > 30000) { result.ok = false; result.errors.push('probe-total-bound-exceeded'); }
+    // 原先这里有一条「整支超过 30 秒就把 ok 翻成 false」：量的是机器快慢，语义里没有这条时间承诺，
+    // 按 verification.md「耗时只记录，不当闸门」（2026-10-07 用户改定）改为只记录 wallMs。
+    // 2026-10-23 探针总审（报告 docs/reports/AGENT-claude-probe-audit.md）。各步自己的等待时限照旧，防卡死那一层不动。
     if (root) try { await durableJSON(root, 'result.json', result); }
     catch (e) { result.ok = false; result.errors.push(safeCode(e), 'probe-result-not-durable'); }
   }
