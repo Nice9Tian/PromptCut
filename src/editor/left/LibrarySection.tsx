@@ -10,6 +10,7 @@ import { GroupBrowser } from "./library/GroupBrowser";
 import { useMediaGroup, useMediaMenu } from "./library/mediaGroups";
 import { useCutsGroup } from "./library/cutsGroup";
 import { IMPORT_OFFLINE_TEXT, useImportOffline } from "../sync/useImportOffline";
+import { StorageImportButton } from "./StorageImportButton";
 import { useReadOnly } from "../readOnly";
 import { useUploadRejectedNotice } from "./uploadRejectedNotice";
 
@@ -87,6 +88,13 @@ export function LibrarySection() {
           <IconImport size={16} />
           <span>{importOffline ? `导入媒体（${IMPORT_OFFLINE_TEXT}）` : "导入媒体"}</span>
         </button>
+        {/* 从用户自己的网盘导入:字节不经过页面,由编辑器进程直接拉(StorageImportButton) */}
+        <StorageImportButton
+          disabled={importOffline || ro.locked}
+          disabledTitle={ro.locked ? ro.why : IMPORT_OFFLINE_TEXT}
+          onImported={(kind) => setOpenGroup(KIND_GROUP[kind])}
+          flash={flash}
+        />
         <SearchBox value={search} onChange={setSearch} placeholder="搜索素材…" dataPc="search" />
       </SectionHead>
 

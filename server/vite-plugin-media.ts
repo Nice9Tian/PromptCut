@@ -11,6 +11,15 @@ import { Transform } from "stream";
 import { pipeline } from "stream/promises";
 import { AsyncLocalStorage } from "node:async_hooks";
 
+/**
+ * 网盘连接器 A2 的授权弹窗落地页。
+ *
+ * 它不在 `/api/media/` 下面,因为这个地址要和 Google 控制台里登记的重定向 URI 逐字一致 ——
+ * 改前缀就得同时改控制台,而控制台改完「可能需要 5 分钟到几小时才会生效」。所以是中间件的总入口
+ * 特意放它过来,见下面 `media()` 里那条前缀过滤。
+ */
+export const OAUTH_CALLBACK_PATH = "/oauth2callback";
+
 const MEDIA_CONTEXT_KEY = Symbol.for("promptcut.asset.media-context.v2");
 const mediaContext: AsyncLocalStorage<any> = (globalThis as any)[MEDIA_CONTEXT_KEY] ??= new AsyncLocalStorage();
 function mediaOwnership(root: string): any {
@@ -889,6 +898,50 @@ export function mediaMiddleware(root: string, options: ProjectMediaOptions = {})
       }
     }
 
+    // GET /api/media/storage/config —— 网盘连接器给页面的公开参数(任务书 docs/plan/drive-connector-task.md 第 5 节)。
+    // 没配环境变量就回 configured: false,界面把入口置灰并说明原因,不报错。
+    if (req.method === "GET" && req.url.split("?")[0] === "/api/media/storage/config") {
+      const { storageConfig }: any = await import("./storage-connectors/route.mjs");
+      res.setHeader("Content-Type", "application/json");
+      return res.end(JSON.stringify(storageConfig()));
+    }
+
+    // GET /oauth2callback —— A2 的授权弹窗落地页:把授权码 postMessage 回开它的页面,然后自己关掉。
+    // 这个地址要和 Google 控制台里登记的重定向 URI 逐字一致;上面那个总入口的前缀过滤也要放它过来。
+    if (req.method === "GET" && req.url.split("?")[0] === OAUTH_CALLBACK_PATH) {
+      const { callbackHtml }: any = await import("./storage-connectors/route.mjs");
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      // 授权码在地址栏里,别让它进任何缓存
+      res.setHeader("Cache-Control", "no-store");
+      return res.end(callbackHtml());
+    }
+
+    // 网盘连接器的四个口(任务书第 5 节)。A3 把一次性令牌随 import 递进来;A2 先 connect 再 import(不带令牌)。
+    // 令牌与授权码只过手:不落盘、不进日志、不进回包。
+    if (req.method && req.url.split("?")[0].startsWith("/api/media/storage/")) {
+      const route = req.url.split("?")[0].slice("/api/media/storage/".length);
+      const mod: any = await import("./storage-connectors/route.mjs");
+      const { assetServiceOrigin }: any = await import("./asset-client");
+      const ctx = { origin: assetServiceOrigin, root, ownership: null };
+      const send = (body: unknown, status = 200) => {
+        res.statusCode = status;
+        res.setHeader("Content-Type", "application/json");
+        return res.end(JSON.stringify(body));
+      };
+      try {
+        if (req.method === "POST" && route === "import") return send({ ok: true, ...(await mod.handleStorageImport(await readJsonBody(req), ctx)) });
+        if (req.method === "POST" && route === "connect") return send({ ok: true, ...(await mod.handleConnect(await readJsonBody(req), ctx)) });
+        if (req.method === "GET" && route === "connections") return send(await mod.handleConnections(ctx));
+        if (req.method === "POST" && route === "disconnect") return send({ ok: true, ...(await mod.handleDisconnect(await readJsonBody(req), ctx)) });
+      } catch (err: any) {
+        return send({
+          ok: false,
+          error: String(err?.code || "error"),
+          message: err instanceof Error ? err.message : String(err),
+        }, mod.statusForCode(err?.code));
+      }
+    }
+
     // POST /api/media/tiers/backfill { items: [{ hash, name? }] } —— 打开项目时补转素材小尺寸(C6.6 设计稿第 9 节第 2 条):
     // 本地内容库里有这份素材原尺寸的视频排进后台转码,回 { ok, items: { [hash]: { state, small? } } };
     // 本地没有素材原尺寸的回 state: 'absent'(不为了转素材小尺寸去拉素材原尺寸)
@@ -1059,7 +1112,10 @@ export function mediaMiddleware(root: string, options: ProjectMediaOptions = {})
   };
   return async function media(req: Connect.IncomingMessage, res: ServerResponse, next: () => void) {
     const pathname = String(req.url ?? "").split("?")[0];
-    if (!pathname.startsWith("/@media/") && !pathname.startsWith("/api/media/")) return next();
+    // `/oauth2callback` 不在前两个前缀里,但必须由这里接:它是网盘连接器 A2 的授权弹窗落地页,
+    // 地址要和 Google 控制台登记的重定向 URI 逐字一致,改不了前缀。漏掉它就被 vite 的 SPA 兜底
+    // 接走、弹窗里渲染出整个编辑器,授权码永远回不到开它的页面(2026-10-24 真这么踩过)。
+    if (!pathname.startsWith("/@media/") && !pathname.startsWith("/api/media/") && pathname !== OAUTH_CALLBACK_PATH) return next();
     let context = (req as any)[Symbol.for("promptcut.asset.request.v2")];
     try {
       if (!context && options.projectAccess) {

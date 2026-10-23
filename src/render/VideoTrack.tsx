@@ -369,9 +369,10 @@ export function VideoTrack({
           // (写了就有两个同 clipId 的包裹层,rects 按 clipId 去重会挑到藏着的那个)。
           <div key={i} data-pc-clip={shown && clip && !missing ? clip.id : undefined} data-pc-media={shown && clip && !missing ? "" : undefined}
             style={{ ...boxOf(clip), visibility: shown && !missing ? "visible" : "hidden" }}>
+            {/* src 为空串时要给 undefined:`<video src="">` 会被浏览器当成「再下载一遍当前页面」,见 FrameScene 的 srcOf */}
             <video
               ref={els[i]}
-              src={plan.load[i]?.url}
+              src={plan.load[i]?.url || undefined}
               muted={muted}
               playsInline
               preload="auto"
@@ -385,7 +386,7 @@ export function VideoTrack({
       </div>}
       {image && (
         <div key={`${image.clip.id}:${awaiting ? "wait" : "ok"}`} data-pc-clip={image.clip.id} data-pc-media="" style={boxOf(image.clip)}>
-          <img src={playbackUrl(image.media, localHashes)} alt="" style={{ display: "block", width: "100%", height: "100%", objectFit: "cover", opacity: image.opacity, filter: filterOf(image.clip, filters, t) }} />
+          <img src={playbackUrl(image.media, localHashes) || undefined} alt="" style={{ display: "block", width: "100%", height: "100%", objectFit: "cover", opacity: image.opacity, filter: filterOf(image.clip, filters, t) }} />
         </div>
       )}
       {uploading && (
