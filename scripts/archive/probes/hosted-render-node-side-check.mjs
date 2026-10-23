@@ -20,7 +20,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { checkSyncedSource } from '../../server/hosted-render/source-gate.mjs';
+import { checkSyncedSource } from '../../../server/hosted-render/source-gate.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-node-side-'));

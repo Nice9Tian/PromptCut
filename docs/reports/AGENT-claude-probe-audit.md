@@ -347,3 +347,41 @@ B08a 建议改的 3 支：`claim-gate-probe` 的 15 秒硬失败**已改**（第
 
 **我的扫描口径有两处已知误报，写在这里免得后人踩**：`clusterToken` 命中的是托管组合夹具的管理口令（现行机制），不是已撤的口令式云端项目；
 `:not([data-pc-snapshot-plane])` 出现在选择器里是「排除它」，与依赖它相反。上面的三类分法已经把这两类剔掉了。
+
+
+## 十三、把判定说成判定：B08a 全部 26 支，与那 36 支的最终处置
+
+前面第十、十二节被读成「还有一批没审完 / 判定悬着」。这一节把话说死：**每一支都有主 Agent 给出的最终处置，没有悬着的**。
+「这次不做」指的是**修**的工作量（迁断言）留给下一个任务，不是「还没判」—— 判定就是「留着、按已记录的方式迁」，并且删除这一选项对它们**已被我否决**，理由逐支写明。
+
+### B08a 这 26 支（我自己的数据，不引子 Agent 结论）
+
+数据来自我自己的全仓扫描（`scratchpad/all-selfcheck.json`）：断言条数、已撤机制词命中、`server/test`/`src`/`tools` 下的基线引用、台账状态。
+
+| 处置 | 支数 | 探针 |
+|---|---|---|
+| **已删** | 2 | `m7-bake-probe`（依赖已清掉的实验分支）、`m7-build-probe`（要的 `src/online/m7NodeProbe.ts` 已不存在） |
+| **已归档** | 5 | `m7-bake-node-probe`（desktop 参照腿要已撤的每卡快照）、`m7-upload-probe`、`m7-visibility-probe`、`hosted-render-wipe-demo`（三支 0 断言、产品侧已正式实现）、`hosted-render-node-side-check`（0 断言的一次性对照实验，缺口已堵、回归由 isolation 探针 G2 与单测 HR32 接） |
+| **留（无已撤机制词，断言与现行语义相符）** | 9 | `claim-gate-judge`（判据，2 处基线引用）、`claim-gate-probe`（已改掉 15 秒硬失败）、`cross-machine-proc-probe`、`hosted-render-ui-probe`、`hosted-stream-entry-probe`、`ht-w-probe`、`ht7-probe`（1 处基线引用）、`m7-judge`（判据，2 处基线引用）、`m7-node-adapter`（被 m7-browser-probe import） |
+| **留，并记为「断言要迁到轨道流」** | 10 | `desktop-auto-node-probe`、`hosted-render-isolation-probe`、`hosted-render-probe`、`hosted-render-queue-probe`、`hosted-render-remotion-probe`、`hosted-render-streams-probe`、`m7-browser-probe`、`m7-node-probe`、`m8-e-probe`、`m8-migrate-probe` |
+
+**为什么这 10 支的最终处置是「留」而不是「删」**（这是我的判断，不是子 Agent 的）：其中 7 支是注册在案的验收项（`P-desktop-auto-node`、`V18-queue-isolation-probe`、`S3-1`、`RS18-queue`/`V18-queue-probe`、`RR-hosted-render-streams`、`P-m7-browser`、`P-m7-node`），删了那些验收立刻没有证据来源；`m7-browser-probe` 还被 `probe-timings.test.mjs` 的 PT-05 读源码；`m8-e-probe`、`m8-migrate-probe` 各自带单机替身模式（`--role all`、`--step local`），是本地能跑的高价值回归。它们的问题是**断言的口径旧了**，不是「这支探针没用了」。
+
+### 那 36 支：最终处置逐类说死
+
+| 类别 | 支数 | 我的最终处置 | 还要不要做事 |
+|---|---|---|---|
+| 只看平面在不在 | 11 | **留，不改** | 不用。快照撤掉后这些断言照旧成立（读平面只为断言它不该在） |
+| 自造夹具喂进去 | 8 | **留，并记为待决** | 要做的是**决定还要不要测这条路**：它们自己造 `snapshot-manifest` 喂页面，跑得起来，但验的是产品已不走的路。这是验收口径问题，连同清单项一起定 |
+| 真从产品取 | 22 | **留，并记为必迁** | 要把断言从每卡快照迁到轨道流。它们取不到东西，但多数是必跑验收项，删不得 |
+
+三类的逐支名单在第十二节。**没有任何一支的处置是「待定」**：11 支不动、30 支留着待迁/待决，删除这一选项对全部 36 支都已否决，理由就是上面那两条（注册在案 + 单测读源码）。
+
+### 两支产流端到端探针的帧数门槛：我静态查清了成因，但数字仍要实跑才能定
+
+查清的部分：`src/online/pageStreams.ts` 第 39 行写明**本页产流默认两趟**（`passes` 缺省 `[稀疏, 满密度]`，稀疏那趟每个分段只截第一帧）；
+队列任务按密度各一个（`pageStreamPlan.ts` 的 `pageStreamTasks(…, { density: 'sparse' })`，id 末尾多 `:sparse`、优先级 30）。
+所以「撤快照后帧数会不会翻倍」取决于**那个夹具里切分方发不发稀疏任务、页面认领几个**，这一点不实跑看不出来。
+
+**它影响什么**：只影响这两支探针里几个数字门槛对不对，**不影响任何一支的留/删/改判定**（两支都判「留＋已改」）。两支的文件头都写了这一点，留给下一个人跑一次 `diag.streams.frames` 看是 48 还是 96。
+我没跑的原因：实跑要占验证用的 dev-test 端口段与 Chrome 约 15 分钟，而发版主会话正在同一台机器上跑 GR 系列的全长导出比对，抢资源会干扰别人的发版验收。

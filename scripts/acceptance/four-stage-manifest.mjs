@@ -131,7 +131,6 @@ export const EXCLUDED_PROBE_FILES = {
   'cloud-agent-isolation-tools.mjs': '第四段隔离探针里「工具」的几组,由 cloud-agent-isolation-probe(S4-2)调,不单独跑',
   'probe-timings.mjs': '探针共用的耗时记录件(耗时只记录,不当闸门),单测在 server/test/probe-timings.test.mjs',
   // 已交付、能在本机独立跑、但还没有进整套清单的验收探针:要不要加成清单项等用户定(见 docs/reports/REPORT-verification-rework.md「看到了但没有自己定的」)
-  'hosted-render-node-side-check.mjs': '第三段同步文件预检的对照实验(回答缺口在不在,故意不经过预检),清单里还没有对应的项,待用户定是否加入',
   'cloud-agent-look-probe.mjs': '第四段云端 Agent「看画面」端到端探针,清单里还没有对应的项,待用户定是否加入',
   'cloud-agent-sound-probe.mjs': '第四段云端 Agent「声音」端到端探针,清单里还没有对应的项,待用户定是否加入',
   'cloud-agent-first-video-probe.mjs': '第四段「首支短片」探针(模拟模型冒烟;--real-model 有费用),清单里只有真实模型的 S4-r6 一行(脚本不跑),待用户定是否加入',

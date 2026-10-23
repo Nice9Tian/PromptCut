@@ -99,3 +99,12 @@ Linux root 下那套「素材根发布者 v2」隔离实验的被测 worker（20
 
 同批**删掉**（不是归档）的是 `m7-build-probe.mjs`：它要 `src/online/m7NodeProbe.ts` 与 `window.__m7CreateNodeSession`，
 两样都已不存在（产品侧改成 `src/online/browserNode.ts` 引 `server/render-node/session.mjs`），整支跑不起来。
+
+## hosted-render-node-side-check.mjs
+
+一次性**对照实验**：同步来的样式与脚本不过预检时，工作进程里的 Vite 与 Tailwind 在 Node 一侧会不会读到工作目录以外的文件、
+会不会把同步来的脚本当构建插件执行（契约 `hosted-render-contract.md` 第 7.5 节要堵的缺口）。它**故意不走预检**，
+所以回答的是「这个缺口在不在」，不能当回归用。0 条断言（只打印发现），不在任何验收项里，`server/test`／`src`／`tools` 下没人引用它。
+
+缺口已经堵上、而且有了正式的回归：预检本身由 `scripts/probes/hosted-render-isolation-probe.mjs` 的 G2 与单测 HR32 验。
+所以这支归档。要重跑它看「缺口今天还在不在」，直接 `node scripts/archive/probes/hosted-render-node-side-check.mjs`（它不依赖仓库里别的探针）。
