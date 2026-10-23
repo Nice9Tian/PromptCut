@@ -146,10 +146,12 @@
  * pan-x 之后横向交给浏览器自己滑(带惯性),竖向手势照样能滚页面;滚动位置换算成当前时间那一段本来就挂在
  * scroll 事件上,原生滑动照样驱动它,不用改。
  *
+ * `overscroll-behavior-x: contain` 是给 iPhone 的:横滑到头之后别把手势接力给 Safari 的「侧滑返回」,
+ * 不然划到最后一段再往左划就退出项目了。
  * 换顺序那一下另说:它要求先选中、再长按拖,所以只给**选中的那一张卡**关掉原生滑动(下一条规则),
  * 免得长按拖动时浏览器把它当成滑动抢走。
  */
-.pcm .strip-scroll { display: flex; align-items: center; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding: 6px 0 10px; min-height: 80px; touch-action: pan-x; user-select: none; -webkit-user-select: none; }
+.pcm .strip-scroll { display: flex; align-items: center; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding: 6px 0 10px; min-height: 80px; touch-action: pan-x; overscroll-behavior-x: contain; user-select: none; -webkit-user-select: none; }
 /* 选中的卡要能长按拖动换顺序:这一张上不许浏览器接管手势,拖动由 ThumbStrip 自己算 */
 .pcm .strip-scroll .mblock.sel { touch-action: none; }
 .pcm .strip-scroll::-webkit-scrollbar { display: none; }
