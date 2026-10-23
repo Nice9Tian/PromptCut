@@ -265,6 +265,7 @@
 
 ## 0.7.21 发版时记下的待办（2026-10-23）
 
+- **S2-8（`card-policy-probe`，入口是 7 行转发壳 `online-card-isolation-feasibility-probe.mjs`）的夹具装不上舞台加固**：0.7.21 验收时报 `TypeError: (0 , scopeGuard_ts_1.installScopeGuard) is not a function`，之后整支连环 FAIL。这支探针把加固模块**经卡片加载器重新编译一遍**当夹具，不是产品路径；同一轮里走真舞台的 **S2-3（素材效果卡在线执行）与 S2-4（声音线程执行用户卡）都过**，`scopeGuard.browser-check.mjs` 也 57/57，所以产品侧没问题。怀疑是 P1 修复新加的 `export const SCOPE_GUARD_CRITICAL = [...] as const` 在那条编译路上没被正确处理、模块求值就抛了（没有逐步确认到底）。要么修夹具的模块互操作，要么照探针审查那条线的计划把这个壳退役、S2-8 直接指向 `card-policy-probe`。
 - **舞台端口的闸会拒掉 2 个正当的 `GET /@media/<hash>`**（`RR-stage-gate` / `stage-port-whitelist-probe`）：0.7.21 验收时发现，拿线上 0.7.20 的提交 `0629bbc9` 的基准树跑**同样翻、同样是 2 个**，所以是**既有问题，不是 0.7.21 引进的**（`server/stage-gate.mjs`、`vite-plugin-stage-ports.ts` 这一版一个提交都没动）。怀疑是媒体哈希白名单登记与舞台请求之间的时序（`setStageMediaHashesGetter`），要查根因：是真有正当请求被拒（舞台上这两次取素材失败、有没有重试兜住），还是探针把早于登记的请求算进来了。
 
 - **手机版导入视频落在当前时刻，可能和同一序列上已有的卡片在时间上重叠**（`claude/mobile-thumbstrip` 的子 Agent 跑探针时撞到，没改）。要不要让它自动避让或另起一条序列，待定。
