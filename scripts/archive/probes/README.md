@@ -1,7 +1,14 @@
 # 归档：已退役的探针
 
-这里的探针**不在验收清单里、不被任何代码引用**，留着只作对账和考古。它们验的行为已经不是产品现在的行为，
-照旧跑必然不过。要验现在的行为，看下面每条写的「接替它的是谁」。
+这里的探针**不在验收清单里、不被任何代码引用**，留着只作对账和考古。两种情形都在这里，查之前先分清：
+
+- **验的行为产品已经改了**——照旧跑必然不过（`lowmem-online-probe`、`snapshot-size-probe` 的判据、
+  `m7-bake-node-probe` 的 `desktop` 那条腿）。要验现在的行为，看下面每条写的「接替它的是谁」。
+- **一次性的可行性或选型实测**——今天还跑得动（它们问的是浏览器或系统怎么表现，不调产品的断言），
+  但**不是通过与不通过的凭据**：结论已经落进实现、契约或任务书。浏览器换了版本想重验某条结论，
+  直接跑归档里的那一支即可（`backdrop-probe`、`videodecoder-probe`、`c10-stage-probe`、
+  `audio-determine-probe`、轨道流那 17 支、`gl-atlas-probe`、`svg-url-serialize-probe`、
+  `hosted-render-node-side-check`）。
 
 验收台账（`scripts/acceptance/four-stage-manifest.mjs` 的 `EXCLUDED_PROBE_FILES`）不收这里的文件：
 守门 `--check-coverage` 只看 `scripts/probes/` 下的，挪进来就不用再写排除原因。
@@ -108,3 +115,32 @@ Linux root 下那套「素材根发布者 v2」隔离实验的被测 worker（20
 
 缺口已经堵上、而且有了正式的回归：预检本身由 `scripts/probes/hosted-render-isolation-probe.mjs` 的 G2 与单测 HR32 验。
 所以这支归档。要重跑它看「缺口今天还在不在」，直接 `node scripts/archive/probes/hosted-render-node-side-check.mjs`（它不依赖仓库里别的探针）。
+
+## c10-stage-probe.mjs
+
+C10 契约的可行性探针（2026-09-27 `opus-dev` 跑，子命令 `p1`～`p4`、`p3q`、`calibrate`），
+排除表原本就标着「历史，结论已落进契约」。归档的三条理由：
+
+1. 结论已经固化成 `docs/plan/c10-contract.md` 第 15 节的结果表，那一节现在指向本归档路径；
+2. 它把 `src/render/createSnapshot.ts` 打成 IIFE 后读 `s.controls[0].html`，也就是**每张卡的 HTML 快照**那个平面。
+   那一层 2026-10-16（己二）撤掉后（`snapshotTier()` 恒回 `'none'`），`snap` / `bakeT` / `bakeRT` / `bake`
+   这几个用例量到的已经不是当年量的东西，重跑也对不上契约里的数；
+3. 没有任何代码、单测或验收项引用它。
+
+挪进来时改了四处路径（`../lib/no-user-dirs.mjs`、两支公共件 `probe-chrome.mjs` / `probe-connect.mjs`、
+`ROOT` 多上一层）和文件头的用法行，断言与量法一字未动。`docs/reports/HANDOFF-2026-09-27-pc.md`、
+`docs/reports/REPORT-C10.md` 里的旧路径是当时的记录，不改。
+
+## videodecoder-probe.mjs
+
+G0-a 准入的三支可行性探针之一（WebCodecs 能不能硬解 `avc1.640028`、上下拼合那个 1920×2176 的几何放不放得下、
+`mediaCapabilities.decodingInfo` 的 `powerEfficient` 怎么说）。同批的 `backdrop-probe.mjs` 已经在这里，
+口径一致：0 条断言、不调产品代码、结论已落进 `docs/plan/r8-streams-task.md`（G0-a 2026-09-19 全过），
+`server/test` / `src` / `tools` 下没人引用。任务书第 224 行的指针已改到本归档路径。
+
+**同批没有一起挪的** `oac-probe.mjs`（还在 `scripts/probes/`）：产品代码
+`server/vite-plugin-stage-ports.ts` 第 39 行引它作 `Origin-Agent-Cluster: ?1` 这个头的实测出处，
+`stage-isolation-probe.mjs`、`playback-probe.mjs` 两支在用的探针照它的做法做。它量的是浏览器的进程隔离，
+换一个 Chrome 版本就可能变，留在原处方便重验。
+
+挪进来时只改了一行 import（`probe-connect.mjs` → `../../probes/`）和文件头的用法行。

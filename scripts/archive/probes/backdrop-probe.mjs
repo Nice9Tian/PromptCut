@@ -1,8 +1,8 @@
 // Probe: what can `backdrop-filter` sample?
 //
-//   node scripts/probes/backdrop-probe.mjs                 -> puppeteer's own Chrome
-//   node scripts/probes/backdrop-probe.mjs --connect        -> the desktop shell's WebView2 on 9333
-//   node scripts/probes/backdrop-probe.mjs --json out.json  -> also dump the raw numbers
+//   node scripts/archive/probes/backdrop-probe.mjs                 -> puppeteer's own Chrome
+//   node scripts/archive/probes/backdrop-probe.mjs --connect        -> the desktop shell's WebView2 on 9333
+//   node scripts/archive/probes/backdrop-probe.mjs --json out.json  -> also dump the raw numbers
 //
 // Cases (every one is a fresh document; the first version of this probe reused one
 // page and reported white for the later cases):

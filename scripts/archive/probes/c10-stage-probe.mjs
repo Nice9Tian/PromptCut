@@ -19,13 +19,13 @@
 //      「去掉 CORS 头的代理」和「舞台自己源下前缀反代 /media」。另起一次 PROMPTCUT_TEST_NO_LOOPBACK_TRUST=1 看 401 读不读得到。
 //
 // 用法：
-//   node scripts/probes/c10-stage-probe.mjs p1 [--rounds 3] [--heads both|headful|headless] [--modes busy,snap,snapidb]
+//   node scripts/archive/probes/c10-stage-probe.mjs p1 [--rounds 3] [--heads both|headful|headless] [--modes busy,snap,snapidb]
 //                                              [--layouts a-same,b-port,...] [--n 500]
-//   node scripts/probes/c10-stage-probe.mjs p2 [--rounds 3] [--heads both] [--places ...] [--hidden-places overlay-opacity0,translate-offscreen]
-//   node scripts/probes/c10-stage-probe.mjs p3 [--heads both] [--total-mib 256]
-//   node scripts/probes/c10-stage-probe.mjs p3q                        真实配额撞 QuotaExceededError（临时占约 10 GiB 磁盘，见 runP3Quota）
-//   node scripts/probes/c10-stage-probe.mjs p4 [--heads headless]
-//   node scripts/probes/c10-stage-probe.mjs calibrate [--n 500]      只量 createSnapshot 的单帧耗时
+//   node scripts/archive/probes/c10-stage-probe.mjs p2 [--rounds 3] [--heads both] [--places ...] [--hidden-places overlay-opacity0,translate-offscreen]
+//   node scripts/archive/probes/c10-stage-probe.mjs p3 [--heads both] [--total-mib 256]
+//   node scripts/archive/probes/c10-stage-probe.mjs p3q                        真实配额撞 QuotaExceededError（临时占约 10 GiB 磁盘，见 runP3Quota）
+//   node scripts/archive/probes/c10-stage-probe.mjs p4 [--heads headless]
+//   node scripts/archive/probes/c10-stage-probe.mjs calibrate [--n 500]      只量 createSnapshot 的单帧耗时
 //   公共：--gpu on（不加 --disable-gpu；本机 GPU 路径下 rAF 只有 ~11 次 / 秒，所以缺省加）、--out <目录>（JSON 与构建的 snap.js，缺省系统临时目录下 c10-stage-probe）、--port-base 5420
 //
 // 说明：
@@ -36,7 +36,7 @@
 //   算安全上下文（线上是 HTTPS）。
 // - 每个 P1 用例都新起一个浏览器，免得「这个源是不是 origin-keyed」的判定在 BrowsingInstance 里沿用（见 oac-probe.mjs）。
 // - 每个用例记系统 CPU 占用（os.cpus() 在测量窗口内的差值）；每轮开头记一次 Win32_Processor LoadPercentage。
-import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
+import '../../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -45,10 +45,10 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer';
-import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
-import { flagArg, serve, closeAll, sleep } from './probe-connect.mjs';
+import { PROBE_CHROME_ARGS } from '../../probes/probe-chrome.mjs';
+import { flagArg, serve, closeAll, sleep } from '../../probes/probe-connect.mjs';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const CMD = process.argv[2] && !process.argv[2].startsWith('--') ? process.argv[2] : 'p1';
 const OUT = path.resolve(flagArg('out', path.join(os.tmpdir(), 'c10-stage-probe')));
 const BASE = Number(flagArg('port-base', '5420'));

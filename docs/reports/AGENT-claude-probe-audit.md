@@ -422,3 +422,81 @@ B08a 建议改的 3 支：`claim-gate-probe` 的 15 秒硬失败**已改**（第
 最后一行是这次的**诚实边界**：那约 190 支「留」的，我没有逐支亲自把 8.6 MB 探针源码读一遍——用户当初授权「分块派出、不要每个探针派一个智能体」正是为了避免这件事。
 我做的是：对全部 301 支跑可复算的机械判据（上表 ①～④），凡机械判据报出异常的、凡子 Agent 建议删或改的、凡涉及已撤销机制的，**逐支由我自己读原行、核语义、下判定**；
 机械判据干净又没人提出异议的，判「留」。这是「最终取舍由我自己判断」的实际含义：**取舍权在我，证据以我自己跑出来的为主、子 Agent 的阅读为印证**，而不是我把 301 支逐行重读一遍。
+
+## 十五、补上那约 190 支的逐支阅读，以及由它得出的两支归档
+
+第十四节把「约 190 支『留』没有逐支亲自读」记成了诚实边界。这一节把它补掉。
+
+### 怎么读的
+
+8.6 MB 源码逐行重读没有意义，一支探针的语义内容集中在两处：**文件头（它声明自己验什么）**和**断言名（它实际判什么）**。
+我写了 `make_digest.py`，对**尚未逐支裁决过的 198 支**（即全部 301 支里，减去已删的 13 支、已归档的 32 支、
+已逐处读过原行的 51 处改动、以及第十一～十三节逐支点过的两块表和那 36 支）各抽出：
+
+- 台账身份（清单项号，或排除表原文，或「未登记」）、断言条数、`server/test`/`src`/`tools` 下的引用数；
+- 文件头里的声明原文（前 24 行的注释，截到 420 字）；
+- 最多 9 条断言名（`check(` / `fails.push(` / `assert*(` 的首个字符串实参）。
+
+分成 5 批（48 + 48 + 48 + 48 + 6），**五批我自己全部读完**。判据是：声明的行为今天是不是产品的行为；断言判的是不是声明的那件事；
+台账身份与断言是否对得上。
+
+### 读出来的 10 支可疑件，核对引用之后的裁决
+
+读完筛出 10 支「像是一次性工具、可以不留在 `scripts/probes/` 里」的。**逐支核对引用关系之后，8 支站得住、2 支归档**：
+
+| 探针 | 读摘要时的印象 | 核对后的裁决 | 决定性证据 |
+|---|---|---|---|
+| `account-dual-user-path-probe.mjs` | 227 字节的再导出壳子，没有消费方 | **留**（我的印象是错的） | 3 支在用的探针引它：`account-card-sync-probe.mjs:42` 静态 import、`account-user-pages-probe.mjs:39` 当 `--fixture-module` 的缺省、`mobile-account-probe.mjs:133` 动态 import；排除表写的 `server/test/account-dual-user-path.test.mjs` 也确实存在 |
+| `canvas-encode-paths-probe.mjs` | 0 断言，一次性跑分 | **留** | 排除理由原文是 `RENDER_REFACTOR`：「属渲染重构那一块(现在不碰)…渲染重构合入后另议」 |
+| `card-plan-key-compare.mjs` | 0 断言，改前改后对账 | **留** | 同上 |
+| `export-paths-measure.mjs` | 只测量 | **留** | 同上；夹具 `scripts/probes/fixtures/export-paths/projects.mjs` 专为它而建 |
+| `lottie-baseline-probe.mjs` | 0 断言，改动前的留底 | **留** | 同上 |
+| `stage-push-before-after-probe.mjs` | 0 断言，改前改后比对 | **留** | 同上 |
+| `lottie-renderer-probe.mjs` | 0 断言，SVG 对画布的实验 | **留** | `docs/plan/TODO.md:218`「研究 Lottie 用画布画为什么会画错」（2026-10-10 用户加，未排期）把跑这支探针写成**唯一的重现办法**，连差得最大的第 31、93、124 帧都记了 |
+| `stateful-seek-cost-probe.mjs` | 0 断言，耗时实验 | **留** | `lottie-browser-bake-probe.mjs:11`、`stateful-seq-vs-jump-probe.mjs:34` 两支在用的探针把它当「做法照它」的参照原型 |
+| `c10-stage-probe.mjs` | 0 断言的可行性实验 | **归档** | 见下 |
+| `videodecoder-probe.mjs` | 0 断言的可行性实验 | **归档** | 见下 |
+
+**五支 `RENDER_REFACTOR` 全部留**，理由同第九节我自纠过的那一条：`docs/plan/TODO.md` 第 27 行写着渲染重构
+「任务书已写，未开工」「不在 0.7.18～0.7.20 里，等三个版本告一段落再动代码」。改前改后的测量件要到那时候才用得上，
+现在归档等于把开工时的基准扔掉。
+
+### 归档的两支，与特意没一起归档的一支
+
+**`c10-stage-probe.mjs`**（59 KB）：排除表本来就标着「C10 可行性探针(历史),结论已落进契约」。三条理由叠起来才动手——
+① 结论已固化成 `docs/plan/c10-contract.md` 第 15 节的结果表；② 它把 `src/render/createSnapshot.ts` 打成 IIFE 后读
+`s.controls[0].html`，也就是**每张卡的 HTML 快照**那个平面，而那一层 2026-10-16（己二）已撤（`snapshotTier()` 恒回 `'none'`），
+`snap` / `bakeT` / `bakeRT` / `bake` 四个用例今天量到的已不是当年量的东西；③ 没有任何代码、单测或验收项引用它。
+
+**`videodecoder-probe.mjs`**：G0-a 准入的可行性探针，和**已经在归档里的 `backdrop-probe.mjs` 同批、同性质、
+在同一份任务书的同一行上**（`docs/plan/r8-streams-task.md:224`）。0 断言、不调产品代码、结论已落进该任务书
+（G0-a 2026-09-19 全过）、无人引用。先前只归档了 backdrop 而留下它，是口径不一致，这次补齐。
+
+**`oac-probe.mjs` 特意留在 `scripts/probes/`**（同一行上的第三支）：产品代码 `server/vite-plugin-stage-ports.ts:39`
+引它作 `Origin-Agent-Cluster: ?1` 这个头的实测出处，`stage-isolation-probe.mjs:8`、`playback-probe.mjs:30`
+两支在用的探针照它的做法做。它量的是浏览器的进程隔离，换个 Chrome 版本就可能变，留在原处方便重验。
+这一条划清了「可行性探针」归不归档的界：**结论只落在纸上的归档，被产品代码或在用探针当作方法出处的留下**。
+
+### 顺带修掉的两处不准确
+
+1. `docs/plan/r8-streams-task.md:224` 还写着 `scripts/probes/backdrop-probe.mjs`——那是我上一轮归档 backdrop 时
+   漏改的指针（归档 README 里列的三处已改指针不含这份任务书）。现在三支的位置逐支写明。
+2. `scripts/archive/probes/README.md` 开头原来一句话说归档件「验的行为已经不是产品现在的行为，照旧跑必然不过」。
+   这话只对一半：`lowmem-online-probe` 那一类确实跑不过，但 `backdrop-probe`、`videodecoder-probe`、`c10-stage-probe`、
+   轨道流那 17 支这类**一次性可行性或选型实测今天还跑得动**，只是不再是通过与不通过的凭据。README 开头已改成分两类说，
+   并写明浏览器换版本想重验某条结论就直接跑归档里那一支。
+
+### 这一节之后的处置总数与验证
+
+- **删 13 / 归档 34 / 改 58 处**（归档由 32 增至 34）；`scripts/probes/` 顶层从 368 支降到 276 支 `.mjs`。
+- 守门 `node scripts/acceptance/four-stage-acceptance.mjs --check-coverage`：**通过**（①284 个文件都登记或写明排除原因；
+  ②0.7.18 的 38 行每行有项；③清单引用的文件都在；④跳过名单 14 条齐全；⑤0.7.19 的 50 条每条有项）。
+- 台账相关测试：`four-stage-acceptance.test.mjs` 29/29、`four-stage-acceptance-v18.test.mjs` 9/9、
+  `probe-timings.test.mjs` 7/7，**45/45 全过**。本回合没有碰 TypeScript，`tsc` 不需重跑（上一次 `npx tsc -b --force` 退出码 0）。
+
+### 边界说清楚
+
+读的是**声明＋断言**，不是逐行重读 8.6 MB。这两样合起来就是一支探针的语义内容，但它**看不出谁 import 它**——
+`account-dual-user-path-probe` 就是现成的例子：只看摘要它像个没人用的壳子，一查引用有 3 支在用的探针靠它起夹具。
+所以最终取舍不是「读完就定」，而是**读出可疑 → 逐支核引用、核台账、核语义 → 才下判定**。第十四节表格最后一行
+那约 190 支，现在都过了这一遍阅读；其中 10 支被读出可疑，核完 8 留 2 归档，没有一支是只凭子 Agent 的阅读定下的。

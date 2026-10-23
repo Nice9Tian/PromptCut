@@ -1,8 +1,8 @@
 // Probe: WebCodecs H.264 decoding, for 目标 G 的 G0-a(1).
 //
-//   node scripts/probes/videodecoder-probe.mjs                -> puppeteer's own Chrome
-//   node scripts/probes/videodecoder-probe.mjs --connect       -> the desktop shell's WebView2 on 9333
-//   node scripts/probes/videodecoder-probe.mjs --json out.json
+//   node scripts/archive/probes/videodecoder-probe.mjs                -> puppeteer's own Chrome
+//   node scripts/archive/probes/videodecoder-probe.mjs --connect       -> the desktop shell's WebView2 on 9333
+//   node scripts/archive/probes/videodecoder-probe.mjs --json out.json
 //
 // Two halves:
 //   (a) `VideoDecoder.isConfigSupported` for `avc1.640028` (High@L4.0) with
@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { connectArg, flagArg, openBrowser, pageFactory, serve, closeAll, sleep } from './probe-connect.mjs';
+import { connectArg, flagArg, openBrowser, pageFactory, serve, closeAll, sleep } from '../../probes/probe-connect.mjs';
 
 const connect = connectArg();
 const jsonOut = flagArg('json');
