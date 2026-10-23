@@ -82,3 +82,20 @@ Linux root 下那套「素材根发布者 v2」隔离实验的被测 worker（20
 
 要恢复它的用法，连带看那份归档报告第 352、360 行，以及 `server/hosted/run-assets-current-registry-v2.mjs` 的
 `readRootAssetReservationV2`（这个函数现在还在）。
+
+## M7 的零断言实测件与一个演示（4 支，2026-09～10）
+
+`m7-bake-node-probe.mjs`、`m7-upload-probe.mjs`、`m7-visibility-probe.mjs`、`hosted-render-wipe-demo.mjs`。
+
+四支都**没有一条断言**（`check` / `fails.push` / `assert` / 退出码判定全为 0 处），跑出来只打印数字或现象，也没有任何单测引用、
+不在任何验收项里。各自的产品实现都已正式落地：上传测速那条路在 `src/online/snapUploader.ts`，后台节流那条在
+`src/editor/browserNodeHost.ts` 与 `src/online/browserNode.ts`（并由 `m7-browser-probe.mjs` 的 A6 覆盖），文件锁演示的那件事由
+`server/test/hosted-render-isolation.test.mjs` 与清单项 `S3-render-iso` 覆盖。
+
+`m7-bake-node-probe.mjs` 多说一句：主 Agent 先前判它「留」，当作被删掉的 `m7-bake-probe.mjs` 的后继；
+**后来自己核查推翻了这个判断** —— 它的 `desktop` 子命令要从桌面预渲染拷「每张卡的 `<帧>.html` 与 `<帧>.small.webp`」当参照，
+而每卡快照 2026-10-16 已撤（`snapshotTier()` 恒回 `'none'`），这条参照腿产不出来，`compare` 也就无从比起。
+它的 `browser` 子命令驱动产品真实的 `bakeFrame`，那一半仍有效，所以归档留着，等渲染重构真回到 M7 P1～P3 时再用。
+
+同批**删掉**（不是归档）的是 `m7-build-probe.mjs`：它要 `src/online/m7NodeProbe.ts` 与 `window.__m7CreateNodeSession`，
+两样都已不存在（产品侧改成 `src/online/browserNode.ts` 引 `server/render-node/session.mjs`），整支跑不起来。

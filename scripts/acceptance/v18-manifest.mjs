@@ -324,7 +324,7 @@ export const V18_EXCLUDED = {
   'merged-stream-common.mjs': RENDER_REFACTOR, // 合并流探针的公共件;本体已归档,但 stream-budget-probe 仍 import 它(2026-10-23 探针总审)
   'card-source-version-compare.mjs': RENDER_REFACTOR, 'card-table-digest-compare.mjs': RENDER_REFACTOR, 'emphasis-key-probe.mjs': RENDER_REFACTOR, 'export-paths-measure.mjs': RENDER_REFACTOR,
   'framework-card-pipeline-probe.mjs': RENDER_REFACTOR, 'guide-blind-check.mjs': '建卡指南的盲写验收(派不带上下文的子 Agent),渲染重构「丙」的验收,不是 0.7.18 的依据',
-  'hosted-render-remotion-probe.mjs': RENDER_REFACTOR, 'hosted-render-wipe-demo.mjs': RENDER_REFACTOR, 'hosted-stream-entry-probe.mjs': RENDER_REFACTOR,
+  'hosted-render-remotion-probe.mjs': RENDER_REFACTOR, 'hosted-stream-entry-probe.mjs': RENDER_REFACTOR,
   'online-remotion-card-probe.mjs': RENDER_REFACTOR, 'online-runtime-harness.html': RENDER_REFACTOR + '(页面夹具)',
   'preview-3d-stream-probe.mjs': RENDER_REFACTOR,
   'preview-stop-lib.mjs': 'seek-back-exact-probe、framework-card-pipeline-probe、lottie-* 共用的搭法,不单独运行', 'remotion-style-harness.html': RENDER_REFACTOR + '(页面夹具)', 'remotion-style-probe.mjs': RENDER_REFACTOR,

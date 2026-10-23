@@ -25,9 +25,9 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import puppeteer from 'puppeteer';
-import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
-import { acceptUpgrade } from '../../server/docservice/ws.mjs';
-import { flagArg, sleep } from './probe-connect.mjs';
+import { PROBE_CHROME_ARGS } from '../../probes/probe-chrome.mjs';
+import { acceptUpgrade } from '../../../server/docservice/ws.mjs';
+import { flagArg, sleep } from '../../probes/probe-connect.mjs';
 
 const PORT = Number(flagArg('port', '5717'));
 const CHROME = flagArg('chrome', 'installed');

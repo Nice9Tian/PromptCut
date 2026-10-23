@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
-import { wipeDir, ISO_MARKER } from '../../server/hosted-render/isolation.mjs';
+import { wipeDir, ISO_MARKER } from '../../../server/hosted-render/isolation.mjs';
 
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-wipe-demo-'));
 const iso = path.join(base, 'iso');

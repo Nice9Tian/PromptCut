@@ -21,8 +21,8 @@ import path from 'node:path';
 import http from 'node:http';
 import { execFileSync } from 'node:child_process';
 import puppeteer from 'puppeteer';
-import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
-import { flagArg, sleep } from './probe-connect.mjs';
+import { PROBE_CHROME_ARGS } from '../../probes/probe-chrome.mjs';
+import { flagArg, sleep } from '../../probes/probe-connect.mjs';
 
 const PORT = Number(flagArg('port', '5713'));
 const DOC = Number(flagArg('doc-port', '5718'));
@@ -79,7 +79,7 @@ window.__run = async (conc) => {
 
 const q = (xs, p) => { const s = [...xs].sort((a, b) => a - b); return s.length ? +s[Math.min(s.length - 1, Math.floor(p * s.length))].toFixed(1) : null; };
 const results = [];
-const { startHostedCombo } = await import('../../server/hosted/combo.mjs');
+const { startHostedCombo } = await import('../../../server/hosted/combo.mjs');
 for (let r = 1; r <= ROUNDS; r++) for (const conc of CONC) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'm7-upload-'));
   const combo = await startHostedCombo({ dataDir, docPort: DOC, assetPort: ASSET, host: '127.0.0.1', assetPublicUrl: `http://127.0.0.1:${PORT}/media/api/asset`, docPublicUrl: `ws://127.0.0.1:${PORT}/hosted/`, log: () => {} });

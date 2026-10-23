@@ -39,7 +39,7 @@
  *
  * 输出:过程写 stderr;每个子命令最后一行 stdout 是一行 JSON,原始数据写 <dir>/*.json。
  */
-import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
+import '../../probes/lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
@@ -48,8 +48,8 @@ import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer';
-import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
-import { flagArg, serve, closeAll, sleep } from './probe-connect.mjs';
+import { PROBE_CHROME_ARGS } from '../../probes/probe-chrome.mjs';
+import { flagArg, serve, closeAll, sleep } from '../../probes/probe-connect.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const CMD = process.argv[2] && !process.argv[2].startsWith('--') ? process.argv[2] : 'desktop';
@@ -118,8 +118,8 @@ async function runDesktop() {
   const root = path.join(OUT, 'pipeline');
   await fsp.rm(root, { recursive: true, force: true });
   await fsp.mkdir(root, { recursive: true });
-  const { FramePipeline } = await import('../../server/frame-pipeline.mjs');
-  const { createPushQueue } = await import('../../server/artifact-push.mjs');
+  const { FramePipeline } = await import('../../../server/frame-pipeline.mjs');
+  const { createPushQueue } = await import('../../../server/artifact-push.mjs');
   const pipeline = new FramePipeline({ root, origin: () => origin, interactive: false, dataRoot: root });
   // 小尺寸只在挂了推送队列时生成(frame-pipeline 的 smallTierEnabled):素材服务、内容库用内存替身(同 small-tier-probe.mjs)
   const blobs = new Map(), items = new Map();
@@ -519,7 +519,7 @@ async function runSmall() {
   const css = cssDist ? fs.readdirSync(path.join(cssDist, 'assets')).filter((n) => n.endsWith('.css')).map((n) => fs.readFileSync(path.join(cssDist, 'assets', n), 'utf8')).join('\n') : '';
   const tag = css ? '-css' : '';
   const frames = (flagArg('frames') || '0,15,30,59').split(',').map(Number);
-  const { smallSize } = await import('../../server/bakery/small-bitmap.mjs');
+  const { smallSize } = await import('../../../server/bakery/small-bitmap.mjs');
   const handler = makeStaticHandler(path.join(ROOT, 'dist-online'));
   const servers = await Promise.all([serve(BASE, handler, '127.0.0.1'), serve(BASE + 2, handler, '127.0.0.1')]);
   const browser = await launch('headless');
