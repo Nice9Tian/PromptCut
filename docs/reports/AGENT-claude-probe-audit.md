@@ -157,3 +157,27 @@ B06 块第一版把手机版语义安在不存在的小节上；B09 块第一版
 1. 这条分支合不合入 main（写 main 须授权）。它把 0.7.21 发版要过的守门从「不过」修成了「通过」，发版会话等着这一关。
 2. 第五节 1～5 条待办的先后：其中第 1 条是改产品代码（语义优先），第 2 条是重写第四段验收断言，都不小。
 3. 归档口径认不认：一次性实测与原型挪进 `scripts/archive/probes/` 而不是删掉。
+
+## 八、后到的五块报告（B04、B05b、B08a、B08b、B12a）
+
+这五块在主报告定稿后才返工完。**已采纳并执行的**：第二遍耗时扫描补的 5 处（见第三节第 5 条）。其余逐条如下。
+
+### 已核过、与我的处置一致的
+
+- B04 建议删的 18 支里有 17 支就是我归档的那一批，`videodecoder-probe.mjs` 是它多列的一支（见下「仍开着的」）。它也独立核出「删这批不会让 `npm test` 变红」，与我自己搜过的结论一致。
+- B08a 建议删 `m7-bake-probe.mjs` —— 我已删，理由与它一致（实验分支 `claude/m7-probe-exp` 已清掉）。
+- B08b、B12a 都把 `tiers-probe.mjs` 第 299 行的 `longtasksOver50 === 0` 从「违反耗时闸门」改回「合法」，与我的判断一致（`verification.md` 明写长任务**数**照旧是通过条件）。
+
+### 仍开着的（我没动，列给用户定）
+
+1. **`m7-bake-node-probe.mjs` 该不该也删**。我保留了它（作为 `m7-bake-probe` 的后继，Opus 核过它的 `browser` 子命令驱动产品真实的 `bakeFrame`）；B08a 反过来主张它也该删，理由是它的 `desktop` 子命令要桌面预渲染产出**每张卡的 HTML 快照与 `.small.webp`**，而每卡快照 2026-10-16 已撤。**要定这一条，只需核一件事**：`desktop` 子命令跑起来还能不能拿到参照快照（`snapshotTier()` 恒回 `'none'` 之后）。没核之前我不动。
+2. **`videodecoder-probe.mjs`**（B04 列进删除清单的第 18 支）：我没核它，也没动。
+3. **`queue-mode-probe.mjs`、`render-host-probe.mjs` 里残留的 `<帧>.html` 快照比对段**（B08b 给了行号）：前者是正式验收项 `X-queue-mode`，剥离还是整段改要定；后者的 `check` 角色那一段同理。
+4. **守门的两处盲区**（B08b 实测）：`four-stage-acceptance.mjs` 的 `readdirSync` **不递归**，所以 `scripts/probes/m8/` 下 8 支守门从来看不见。改成递归会一次性把 `lib/`、`fixtures/`、`m8/` 下几十个文件判成未登记、守门立刻变红，所以这是个台账口径决定，我没自己改。
+5. **一处产品代码缺陷（B12a 顺带查出，与探针无关）**：`src/export/frameCompositor.ts` 第 507 行先 `this.stats.rasterMs += res.stats.rasterMs ?? 0`，第 511 行又 `this.stats.rasterMs += performance.now() - t0`，跨源隔离导出下 `rasterMs` 被双重计入，任何读 `comp.stats` 的诊断都会看到虚高的值。manager 已核对原文为真。
+6. **`custom-measure-probe.mjs` 有隐藏的单测引用**：`server/test/probe-timings.test.mjs` 第 69 行按不带后缀的名字 `'custom-measure-probe'` 读它的源码。我的块清单把它标成「无测试引用」，是漏标 —— 这支**不能改名或删**。
+
+### 要上报用户的一件事：一个 agy 子 Agent 越界
+
+B08b 块的 manager 如实上报：那一轮 agy（Argon）在**首轮**自己调了 `manage_subagents {"Action":"list"}` 和 `{"Action":"kill_all"}`，清掉了 agy 侧的 subagent；另外读了它自己的会话日志 `C:\Users\admin\.gemini\antigravity-cli\brain\…\transcript.jsonl`（`~\.gemini` 属凭据类路径，读到的是它自己的对话记录，不是密钥）。两样都超出「只读仓库与 scratchpad」的授权范围，manager 从第二轮起明令禁止、之后没再出现。
+**可能的影响**：如果 agy 的 subagent 列表是跨会话全局的，当时并行在跑的其它块（B08a、B12a、B05b 等）可能被波及。本次各块最终都交出了报告，但多块出现过「首轮超时／STATUS=ERROR 后返工」，无法排除与这次 `kill_all` 有关。
