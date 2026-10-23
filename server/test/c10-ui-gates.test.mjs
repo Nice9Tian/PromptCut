@@ -8,7 +8,7 @@
  *   C10-UI-03 本页运行不了的用户卡、素材效果卡（内容库同步来的没载入成功的；素材效果卡；2026-10-21 起不按档另挡本页能运行的用户卡）在线时与内置重卡一样：一律按重卡（分派表判轻也一样）、
  *             选帧、报缺口、取字节；暂停态整台「已精确」时它们的快照照挂（停下不追）——2026-09-29 用户改语义，撤销原豁免；
  *   C10-UI-04 桌面（在线开关关着）用户卡、素材效果卡照常选帧，同步表不影响桌面；
- *   C10-RA-01 旧本机 `/api` 清单只减不增；已批准账号入口固定11条字面量（含 2026-10-23 的三条第三方登录），不重复、不接受未知账号路径。
+ *   C10-RA-01 旧本机 `/api` 清单只减不增；已批准账号入口固定11条字面量（含 2026-10-23 的三条第三方登录），网盘导入另固定三条（2026-10-24），两桶都逐条精确、不按前缀放行，不重复。
  *
  * 置灰入口「点了不发请求、不露报错」要在真页面里点，归探针与验收 C10-A7（主会话），这里只核文案。
  * 假设见 `c10-kit.mjs` 的 K7、K8、K9。门不开时整组 skip。
@@ -183,6 +183,16 @@ itUi('C10-UI-05 双舞台同步卡变更为 ready 后自动重投 pumpFeed 与 l
 const ratchet = ratchetGate();
 // account-binding-task.md / account-binding-contract.md：独立固定官网同源账号入口，
 // editor/ 是动态拼接的产物字面量，不能使其它 editor 子路径获得许可。
+/*
+ * 2026-10-24 网盘导入（`claude/drive-connector`）：在线产物里新出现的三条。
+ * **单开一桶，不塞进旧本机那一份**——旧基线的规矩是「只许删、不许扩」，往里加会把这条规矩废掉。
+ * 照账号入口的先例：逐条精确登记、不按前缀放行。源码里另有 `storage/config`、`storage/connections`，
+ * 在线产物里扫不到字面量，故意不登记；哪天扫到了这道门会红，再有意登记。
+ */
+const STORAGE_PATHS = [
+  '/api/media/storage/connect', '/api/media/storage/disconnect', '/api/media/storage/import',
+];
+
 const ACCOUNT_PATHS = [
   '/api/account/cloud-agent-consent',
   '/api/account/editor/', '/api/account/editor/renew', '/api/account/editor/session',
@@ -203,12 +213,17 @@ test('C10-RA-03 project members has one separate exact hosted path without enlar
 function assertRatchet(paths, baseline) {
   assert.ok(Array.isArray(paths), `${RATCHET_FILE} 应有 paths 数组`);
   assert.deepEqual(baseline.accountPaths, ACCOUNT_PATHS, '账号许可必须是固定8条，不能扩为前缀');
+  assert.deepEqual(baseline.storagePaths, STORAGE_PATHS, '网盘导入许可必须逐条精确，不能扩为前缀');
   assert.equal(new Set(paths).size, paths.length, '清单里有重复');
   const legacy = new Set(baseline.paths);
   assert.ok(baseline.paths.every((p) => !p.startsWith('/api/account/')), '旧基线不能夹带账号许可');
-  const added = paths.filter((p) => p.startsWith('/api/account/') ? !ACCOUNT_PATHS.includes(p) : !legacy.has(p));
+  assert.ok(baseline.paths.every((p) => !p.startsWith('/api/media/storage/')), '旧基线不能夹带网盘许可');
+  const added = paths.filter((p) => p.startsWith('/api/account/') ? !ACCOUNT_PATHS.includes(p)
+    : p.startsWith('/api/media/storage/') ? !STORAGE_PATHS.includes(p)
+    : !legacy.has(p));
   assert.deepEqual(added, [], `棘轮清单多出了未许可的路径：${added.join(', ')}`);
   assert.deepEqual(paths.filter((p) => p.startsWith('/api/account/')), ACCOUNT_PATHS, '账号产物清单逐条精确登记');
+  assert.deepEqual(paths.filter((p) => p.startsWith('/api/media/storage/')), STORAGE_PATHS, '网盘产物清单逐条精确登记');
 }
 test('C10-RA-01 旧本机 /api 只减不增、账号入口固定11条、不重复', { skip: ratchet.ok ? false : ratchet.reason }, () => {
   const list = JSON.parse(fs.readFileSync(repoPath(RATCHET_FILE), 'utf8'));
@@ -218,7 +233,7 @@ test('C10-RA-01 旧本机 /api 只减不增、账号入口固定11条、不重�
 test('C10-RA-02 未知账号、恢复桌面账号入口、旧本机增项和重复仍拒绝', { skip: ratchet.ok ? false : ratchet.reason }, () => {
   const list = JSON.parse(fs.readFileSync(repoPath(RATCHET_FILE), 'utf8'));
   const baseline = JSON.parse(fs.readFileSync(repoPath(RATCHET_BASELINE), 'utf8'));
-  for (const extra of ['/api/account/unknown', '/api/account/editor/login', '/api/account/editor/recover', '/api/ai/chat', '/api/new-local']) {
+  for (const extra of ['/api/account/unknown', '/api/account/editor/login', '/api/account/editor/recover', '/api/ai/chat', '/api/new-local', '/api/media/storage/unknown', '/api/media/storage/config']) {
     assert.throws(() => assertRatchet([...list.paths, extra], baseline), { code: 'ERR_ASSERTION' });
   }
   assert.throws(() => assertRatchet([...list.paths, list.paths[0]], baseline), { code: 'ERR_ASSERTION' });

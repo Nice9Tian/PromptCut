@@ -38,5 +38,11 @@
   "/api/account/third-party/config",
   "/api/account/third-party/login",
   "/api/account/third-party/register"
- ]
+ ],
+ "storagePaths": [
+  "/api/media/storage/connect",
+  "/api/media/storage/disconnect",
+  "/api/media/storage/import"
+ ],
+ "storageSource": "2026-10-24 网盘导入（claude/drive-connector，用户当日授权整支合入）。单开一桶，不并进上面的 paths——paths 的规矩是「只许删、不许扩」。这三条逐条精确登记、不按前缀放行；源码里另有 media/storage/config 与 media/storage/connections，在线产物里扫不到字面量，故意不登记。"
 }
