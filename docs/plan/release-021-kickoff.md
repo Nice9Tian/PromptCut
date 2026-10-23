@@ -40,7 +40,7 @@
 | F | `claude/browser-start-ui` | 浏览器版开始页与登录页重构（含手机版游客键） | 收尾中，41 提交 | 浏览器版开始页与登录页重构 |
 | G | `claude/guest-identity` | 游客身份；**已含** `claude/guest-readonly-ui`（祖先）与 `claude/guest-asset-quota`（祖先），合它一条即三条全进 | 收尾中，32 提交、108 文件 | 游客身份随机分配 |
 | H | `claude/clip-speed` | 「速度」功能 | 在做，集成测试还红 | 0.7.19/0.7.20 发布计划 |
-| I | `claude/drive-connector` | Google Drive 接入（按钮与分组） | 刚开跑，目前只有任务书与一支探针 | 云端素材流式传输与断点续传 |
+| I | `claude/drive-connector` | Google Drive 接入 | **〔裁〕V21-18：功能不随 0.7.21 发**（归属会话 2026-10-23 更正：跑通的是账号登录，不是网盘；按任务书是一周量级）。这一版只合它已完成的服务端层（`server/storage-connectors/`，死代码、不影响线上） | 云端素材流式传输与断点续传 |
 | J | `claude/mobile-thumbstrip` | 手机版传统式的缩略时间轴有时一个块都不显示（只有卡片段的项目），要有「主要内容」的精简匹配算法；跑通即可，两端都有缩略图 | 2026-10-23 用户当场加派，任务书 `mobile-thumbstrip-task.md`；**不挡发版**，没做完就留在分支 | 主会话派的 `opus-dev` 子 Agent |
 
 开工第一步复核这张表：分支是否还在、是否新增了分支、有没有谁动了 `desktop/`。
