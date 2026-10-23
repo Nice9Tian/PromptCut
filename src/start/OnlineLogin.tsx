@@ -5,7 +5,13 @@
  * 挤在一起。这里把它拆成独立的一页:没登录先看到它,登录成功才进开始页 —— 在线浏览器里项目一律是
  * 放云端的多用户协作项目(`product/platforms.md`「能新建放云端的项目」),所以账号是进门的前提。
  *
- * 这一版只跑界面:提交不发请求,直接当登录成功。
+ * **只有「用 Google 继续」这一条是真的**(2026-10-23 接上):它真向账号服务发请求、真建立会话、
+ * 真换到编辑器令牌。账号名加密码那条、游客那条、项目链接那条仍然只跑界面,提交不发请求。
+ * 这是两个会话分工的结果 —— 这一页的界面和其余几条路归别人,第三方登录这一条归
+ * `claude/editor-google-login`,它只改这一页里 Google 那一块,不动其余部分。
+ *
+ * Google 这条路后半段和密码登录是同一套:先建立网站会话(cookie),再由 `client.ensureLogin()`
+ * 去换编辑器令牌(`/api/account/editor/session`)。所以账号服务没为编辑器另开接口。
  *
  * 待办(业务层):
  * - 接 `src/account/useAccountProjects.ts` 的 `login`(账号服务在 VisuHive 仓库,见 `architecture.md` 的角色表);
@@ -15,10 +21,50 @@
  *   都摆上)。**按钮只是入口,随机 ID 和头像那套逻辑仍归另一个会话**(`游客身份随机分配`);
  *   在它接上之前,这颗键和这一页的其余部分一样走 `onDone()` —— 这一页现在整体是界面桩,登录也不发请求。
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { JSX } from "react";
 import { Logo } from "../ui/Logo";
 import { BrandCanvas } from "./BrandCanvas";
+import { createAccountClient, type CloudAccountClient } from "../account/client";
+import { ensureDevice } from "../editor/sync/syncManager";
+
+/**
+ * Google 自己的脚本。`hl` 要带上：不带的话按钮文案跟浏览器语言走，中文界面上会冒出日文
+ * （2026-10-23 在官网那边实测到）。按钮由它自己画，不自制，免得违反它的品牌规范。
+ */
+const GSI_SRC = "https://accounts.google.com/gsi/client?hl=zh-CN";
+/** 来源没授权时 Google 不给画按钮（`gsi/button` 回 403），等这么久还没画出来就当它不可用 */
+const BUTTON_WAIT_MS = 2500;
+
+declare global {
+  interface Window { google?: { accounts?: { id?: {
+    initialize(config: Record<string, unknown>): void;
+    renderButton(parent: HTMLElement, options: Record<string, unknown>): void;
+  } } } }
+}
+
+function loadGsi(): Promise<void> {
+  if (window.google?.accounts?.id) return Promise.resolve();
+  const existing = document.querySelector<HTMLScriptElement>(`script[src="${GSI_SRC}"]`);
+  if (existing) return new Promise((resolve, reject) => {
+    existing.addEventListener("load", () => resolve());
+    existing.addEventListener("error", () => reject(new Error("gsi")));
+  });
+  return new Promise((resolve, reject) => {
+    const el = document.createElement("script");
+    el.src = GSI_SRC; el.async = true; el.defer = true;
+    el.addEventListener("load", () => resolve());
+    el.addEventListener("error", () => reject(new Error("gsi")));
+    document.head.append(el);
+  });
+}
+
+/** Google 这一块的状态：后端没开就整块不显示，连不上或来源没授权就显示一句说明 */
+type GoogleState =
+  | { kind: "loading" }
+  | { kind: "off" }
+  | { kind: "ready" }
+  | { kind: "unavailable"; message: string };
 
 export function OnlineLogin(props: { onDone: () => void }): JSX.Element {
   const [name, setName] = useState("");
@@ -27,6 +73,85 @@ export function OnlineLogin(props: { onDone: () => void }): JSX.Element {
   const [link, setLink] = useState("");
   const [byLink, setByLink] = useState(false);
   const origin = typeof location !== "undefined" ? location.origin : "";
+
+  // —— Google 登录 ——
+  const [google, setGoogle] = useState<GoogleState>({ kind: "loading" });
+  /** 第一次用这个 Google 账号：Google 不给账号名，要用户自己起一个 */
+  const [needName, setNeedName] = useState<{ ticket: string; email: string | null } | null>(null);
+  const [googleName, setGoogleName] = useState("");
+  const [googleBusy, setGoogleBusy] = useState(false);
+  const [googleError, setGoogleError] = useState("");
+  const slot = useRef<HTMLDivElement>(null);
+  const client = useRef<CloudAccountClient | null>(null);
+  // 回调是在 effect 里注册给 Google 的，闭包会把这两样钉死在首次渲染的值上，所以用 ref 取当下的
+  const rememberRef = useRef(remember); rememberRef.current = remember;
+  const onDoneRef = useRef(props.onDone); onDoneRef.current = props.onDone;
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      const device = await ensureDevice();
+      if (!alive) return;
+      if (!device) return setGoogle({ kind: "off" });
+      const c = createAccountClient({ online: true, origin: location.origin, device });
+      client.current = c;
+      // 后端没开（没配客户端 ID），或者后端还是旧版没有这条接口，都回空数组 —— 整块不显示
+      const providers = await c.thirdPartyProviders();
+      if (!alive) return;
+      const google = providers.find((p) => p.provider === "google");
+      if (!google) return setGoogle({ kind: "off" });
+
+      try { await loadGsi(); } catch {
+        // 连不上 Google（断网、被挡、脚本被拦）不该把人堵在这一页：说一句，账号密码和游客照常可用
+        if (alive) setGoogle({ kind: "unavailable", message: "连不上 Google，请用账号名和密码，或以游客身份进入。" });
+        return;
+      }
+      if (!alive) return;
+      const api = window.google?.accounts?.id;
+      if (!api || !slot.current) return setGoogle({ kind: "unavailable", message: "Google 登录没能装载，请用账号名和密码。" });
+
+      api.initialize({
+        client_id: google.clientId,
+        ux_mode: "popup",
+        callback: async (response: { credential?: string }) => {
+          if (!response?.credential || !client.current) return;
+          setGoogleError(""); setGoogleBusy(true);
+          try {
+            const result = await client.current.loginWithThirdParty("google", response.credential, rememberRef.current);
+            if (!alive) return;
+            if (result.kind === "need-name") { setNeedName({ ticket: result.ticket, email: result.email }); return; }
+            onDoneRef.current();
+          } catch (e) {
+            if (alive) setGoogleError(e instanceof Error ? e.message : "Google 登录失败，请再试一次。");
+          } finally { if (alive) setGoogleBusy(false); }
+        },
+      });
+      api.renderButton(slot.current, {
+        theme: "filled_black", size: "large", shape: "rectangular", text: "continue_with",
+        locale: document.documentElement.lang || "zh-CN", width: 320,
+      });
+      setGoogle({ kind: "ready" });
+      // 来源没授权时 Google 不给画按钮，槽位会是空的。这种情况不能只留一个点不动的空白
+      window.setTimeout(() => {
+        if (!alive) return;
+        if ((slot.current?.getBoundingClientRect().height ?? 0) < 20) {
+          setGoogle({ kind: "unavailable", message: "Google 登录在这个地址上没开通（控制台还没加这条来源），请用账号名和密码。" });
+        }
+      }, BUTTON_WAIT_MS);
+    })().catch(() => { if (alive) setGoogle({ kind: "off" }); });
+    return () => { alive = false; };
+  }, []);
+
+  async function createWithGoogle() {
+    if (!needName || !client.current || !googleName.trim()) return;
+    setGoogleError(""); setGoogleBusy(true);
+    try {
+      await client.current.registerWithThirdParty(needName.ticket, googleName.trim(), rememberRef.current);
+      onDoneRef.current();
+    } catch (e) {
+      setGoogleError(e instanceof Error ? e.message : "建账号失败，请再试一次。");
+    } finally { setGoogleBusy(false); }
+  }
 
   return (
     <div className="ps-login" data-pc="start-login">
@@ -83,27 +208,52 @@ export function OnlineLogin(props: { onDone: () => void }): JSX.Element {
           <div className="ps-login-sep">或</div>
 
           {/*
-            第三方登录的位置。逻辑归「接通 Google 账号登录」那个会话(OAuth、账号服务接口、会话都在
-            VisuHive 仓库的 account/、site/ 下),它只改这里这几行,不动这一页其余部分。
+            第三方登录。语义那条冲突已经解了:`product/document-service.md` 第 66 行 2026-10-23 改成
+            「云端网站账号除账号名加密码外,还支持用 Google 账号登录」(main 的 ef68582b)。
 
-            **这里和现有语义冲突,合入前要先裁**:`product/document-service.md` 第 66 行写的是
-            「云端网站账号已有邮箱重设密码,不另做第三方登录。」真要做第三方登录,得按
-            `guide_files/suggested_agent_behavior.md`「对齐」先把这条二级语义以「修改前 / 修改后」
-            dry run 给用户过目、改掉,再把按钮接上。在那之前这个按钮不接任何逻辑。
+            按钮由 Google 自己的脚本画进下面这个槽,我们不自制:它的品牌规范对图形、文案、配色都有规定。
+            后端没开这一块时整段不显示(`thirdPartyProviders()` 回空),连不上或来源没授权时显示一句说明 ——
+            不留白、也不静默失败,账号密码和游客那两条路都不受影响。
 
-            标记用的是一个普通的「G」字,不是 Google 的官方商标:真接上去时按它的品牌规范换成官方图形。
+            后端在 VisuHive 仓库:`account/app.mjs` 的 `/third-party/*`,令牌的验签在它的 `identity/` 服务里。
           */}
           <div className="ps-login-oauth" data-pc="start-login-oauth">
-            <button
-              type="button"
-              className="ps-oauth-btn"
-              data-pc="start-login-google"
-              aria-label="用 Google 继续"
-              title="待办：OAuth 流程在 VisuHive 仓库，这里只留位置"
-            >
-              <span className="ps-oauth-mark" aria-hidden="true">G</span>
-              用 Google 继续
-            </button>
+            {needName ? (
+              // 第一次用这个 Google 账号:Google 不给账号名,网站账号名又全站唯一,所以要用户自己起一个
+              <div className="ps-field" data-pc="start-login-google-name">
+                <span className="ps-muted">
+                  {needName.email ? `用 ${needName.email} 登录。` : "就快好了。"}起一个账号名，全站唯一，之后不能改。
+                </span>
+                <input
+                  autoComplete="username"
+                  placeholder="账号名"
+                  value={googleName}
+                  disabled={googleBusy}
+                  onChange={(e) => setGoogleName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void createWithGoogle(); } }}
+                />
+                <button
+                  type="button"
+                  className="ps-primary-btn"
+                  data-pc="start-login-google-create"
+                  disabled={googleBusy || !googleName.trim()}
+                  onClick={() => void createWithGoogle()}
+                >
+                  {googleBusy ? "正在建账号…" : "用这个名字建账号"}
+                </button>
+              </div>
+            ) : (
+              <>
+                {/* Google 把按钮画进这里。来源没授权时它什么都不画,所以下面那句说明要顶上 */}
+                <div ref={slot} data-pc="start-login-google" aria-busy={googleBusy} />
+                {google.kind === "unavailable" ? (
+                  <span className="ps-muted" data-pc="start-login-google-off">{google.message}</span>
+                ) : null}
+              </>
+            )}
+            {googleError ? (
+              <span className="ps-muted" role="alert" data-pc="start-login-google-error">{googleError}</span>
+            ) : null}
           </div>
 
           {/* 游客身份的入口(用户 2026-10-23)。和上面那颗用同一套长相,两行对齐 */}
