@@ -48,6 +48,18 @@ const out = { ok: false, out: OUT, steps: {} };
 const step = (k, v) => { out.steps[k] = v; console.error(`[step] ${k} ${JSON.stringify(v).slice(0, 400)}`); };
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ' :: ' + JSON.stringify(extra).slice(0, 400))); return !!cond; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** 等不到也不算失败的等待:用在「有更好,没有就换个办法」的地方 */
+async function soft(fn, ms, every = 500) {
+  const t0 = Date.now();
+  for (;;) {
+    let v = null;
+    try { v = await fn(); } catch { v = null; }
+    if (v) return v;
+    if (Date.now() - t0 > ms) return null;
+    await sleep(every);
+  }
+}
+
 async function until(what, fn, ms = 30_000, every = 300, pass) {
   const t0 = Date.now();
   for (;;) {
@@ -243,13 +255,71 @@ try {
   await clickPc(page, 'start-ext-detail');
   const detail = await until('详细编辑', () => page.$('[data-pc="start-detail"]'));
   check(!!detail, '详细编辑该打得开(里面是真舞台真时间轴)');
+  // 挂的得是编辑界面那条**真**时间轴,不是自己画的一条只读轨道
+  const realTl = await until('真时间轴', () => page.$('[data-pc="start-detail-tl"] [data-pc="timeline"]'), 20_000);
+  check(!!realTl, '详细编辑里该挂编辑界面那条真时间轴(`src/editor/timeline/`)');
   // 舞台那一格的宽高比就是项目的宽高(`VibeStage` 用 store 的 width/height):验开始页上点的 9:16 真落下去了
   const ratio = await page.evaluate(() => {
     const el = document.querySelector('.ps-stage');
     return el ? getComputedStyle(el).aspectRatio : null;
   });
   check(ratio === '1080 / 1920' || ratio === '1080/1920', '项目该按开始页上点的 9:16 建', ratio);
-  step('detail', { ratio, ...(await snapshot(page)), shot: await shot(page, 'detail-edit') });
+  step('detail', { ratio, realTimeline: !!realTl, ...(await snapshot(page)), shot: await shot(page, 'detail-edit') });
+
+  /* ---------------- 6b. 时间轴真的可调:拖一段,它的起点真的变了 ---------------- */
+  // `user-workflow.md`「工作方式」:氛围式里「从右侧拓展栏的「画面」进详细编辑，那里的时间轴可调」。
+  // 只看 DOM 不算数 —— 要拖一下,再从 store 里读这一段的起点,变了才算可调
+  const pickClip = () => page.evaluate(() => {
+    const st = window.__pcStore?.getState?.();
+    const c = st?.project?.tracks?.flatMap((t) => t.clips)?.[0];
+    return c ? { id: c.id, start: c.start, end: c.end } : null;
+  });
+  // `__pcStore` 是时间轴模块挂的(`src/editor/timeline/index.tsx`);挂得上就说明那条真时间轴真的载进来了
+  const hasStore = await until('__pcStore', () => page.evaluate(() => !!window.__pcStore), 20_000);
+  check(!!hasStore, '真时间轴的调试口子该在(它是时间轴模块挂的)');
+  // 先等 Agent 自己往里放东西;它这一轮慢的话就自己放一段,这一步验的是「拖得动」,不该卡在等模型
+  let seeded = false;
+  let beforeDrag = await soft(pickClip, 30_000);
+  if (!beforeDrag && hasStore) {
+    seeded = true;
+    await page.evaluate(() => { window.__pcStore.actions.addCardClip('av-pulse', 1, { duration: 2 }); });
+    beforeDrag = await until('自己放的那一段', pickClip, 10_000);
+  }
+  let dragged = null;
+  const diag = {};
+  if (beforeDrag) {
+    const box = await page.$eval(`[data-clip-id="${beforeDrag.id}"]`, (el) => {
+      const r = el.getBoundingClientRect();
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    });
+    // 从片段中间按下、往右挪一截再松开(useDrag 挂的是原生 pointer 事件,分几步移动才有中间态)
+    diag.at = await page.evaluate((b) => document.elementsFromPoint(b.x, b.y).slice(0, 4).map((el) => `${el.tagName}.${el.className}`.slice(0, 60)), box);
+    await page.mouse.move(box.x, box.y);
+    await page.mouse.down();
+    diag.selAfterDown = await page.evaluate(() => window.__pcStore?.getState?.().selection ?? null);
+    await page.mouse.move(box.x + 60, box.y + 4, { steps: 6 });
+    diag.leftDuring = await page.$eval(`[data-clip-id="${beforeDrag.id}"]`, (el) => el.style.left);
+    await page.mouse.move(box.x + 120, box.y + 4, { steps: 6 });
+    await page.mouse.up();
+    dragged = await until('起点真的变了', async () => {
+      const now = await pickClip();
+      return now && Math.abs(now.start - beforeDrag.start) > 1e-6 ? now : null;
+    }, 10_000);
+  }
+  check(!!dragged, '拖一段之后它的起点该变(时间轴可调)', { beforeDrag, dragged });
+  step('drag', { seeded, beforeDrag, afterDrag: dragged, ...diag, shot: await shot(page, 'timeline-dragged') });
+
+  /* ---------------- 6c. 右键菜单里有这一页独有的「引用到输入框」 ---------------- */
+  let menuItems = [];
+  if (beforeDrag) {
+    await page.click(`[data-clip-id="${beforeDrag.id}"]`, { button: 'right' });
+    await until('右键菜单', () => page.$('[data-pc="tl-ctxmenu"]'), 10_000);
+    menuItems = await page.$$eval('[data-pc="tl-ctxmenu"] .pc-tl-ctxmenu-item', (a) => a.map((el) => el.textContent.trim()));
+    await page.keyboard.press('Escape');
+  }
+  check(menuItems.includes('引用到输入框'), '右键菜单该有这一页独有的「引用到输入框」', menuItems);
+  check(menuItems.some((m) => m === '删除' || m.startsWith('在播放头处分割')), '右键菜单该是真时间轴那一套(有删除、分割)', menuItems);
+  step('ctxmenu', { items: menuItems });
 
   /* ---------------- 7. 「进入传统式」→ 编辑界面 ---------------- */
   await clickPc(page, 'start-enter-traditional');

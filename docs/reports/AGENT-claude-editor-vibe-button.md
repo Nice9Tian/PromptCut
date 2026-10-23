@@ -98,25 +98,44 @@
 - 受影响的测试 43 项全过：`src/layering.test.mjs`（分层守门）、`src/pageNodeImports.test.mjs`、`src/start/treeState.test.mjs`、`src/start/vibeOrg.test.mjs`、`src/editor/io/localWrites.test.mjs`、`src/editor/io/procWrite.test.mjs`、`src/editor/saveLock.test.mjs`。
 - `server/test/c10a-online-build.test.mjs` 11 项全过——其中 C10A-API-03（在线产物的 `/api/` 路径棘轮）和 C10A-API-07（在线产物里没有桌面专用标识）说明 `DesktopStart` 确实被在线构建剪掉了，没有混进在线包。
 
-## 发现的语义冲突（要用户定）
+### 五、详细编辑的时间轴做成可调（同日补）
 
-**详细编辑里的时间轴现在改不了，和语义对不上。**
+本报告上一版把「详细编辑的时间轴改不了」列成语义冲突交给用户。用户 2026-10-23 的裁定是：**把时间轴做成可调，在这一支里做**。做完之后那条冲突就没有了，语义里那句话（`user-workflow.md`「工作方式」的「那里的时间轴可调」）不用改。
 
-- 语义（`user-workflow.md`「工作方式」，这一句是用户 2026-10-23 口述、我写进去的）：「用户也能自己调——从右侧拓展栏的「画面」进详细编辑，那里的时间轴可调」。
-- 代码（`src/start/DetailEdit.tsx`，`claude/vibe-wire` 那一支写的）：文件头和界面上都写着「只看不改」，片段拖不动、改不了，要动手就「进入传统式」。
+做法是**不另画一条**，直接挂编辑界面那条真时间轴（`src/editor/timeline/` 的 `TimelineView`）：
 
-按 `suggested_agent_behavior.md` 原则 2 该以语义为准，但「把时间轴做成可调」是一块实打实的活、而且在 `claude/vibe-wire` 的文件里，没有在这一支里动。请用户定：是把详细编辑的时间轴做成可调（新开一项），还是语义那句话按现状改回去。
+- 原来的 `DetailEdit.tsx` 自己画了一套只读轨道（序列名一列 + 色块，拖不动）。现在整段换掉，行高、缩放、剪辑标签都用它自带的那一条工具栏，这一页不再另给一套。拖动、裁剪、跨序列、吸附、分割、复制、静音、置顶置底、删除、「拖到这里新建一条序列」全都跟着来了。
+- `TimelineView` 新增一个可选 prop `quoteClip`：**右键菜单顶上多一项「引用到输入框」**。这是详细编辑独有的（编辑界面没有那个输入框，不传就不出现）。它只读不写，所以只读成员（游客）也给。
+  串下去的路：`TimelineView` → `TimelineProvider` → `useTimelineContext` → `ClipView` 的右键菜单。
+- `start.css` 里 `.ps-detail-tl` 从 `flex: 0 0 auto` 改成定高（真时间轴是 `h-full`，框没高度会塌），顺手删掉只给那版只读轨道用的约 2 KB 样式。
+- 一并改掉另外两处还写着「只看不改」的说明：`src/start/OnlineStart.tsx` 的文件头、`docs/plan/user-decisions-2026-10-23.md` 的更正那一节（加一句「代码同日跟上」）。
+
+**在线那一屏也跟着变了**：`DetailEdit.tsx` 是两边共用的，所以在线浏览器的详细编辑同样换成了真时间轴。只读成员照旧拖不动（`ClipView` 的 `frozen` 认 `useReadOnly()`）。
+
+## 验证（时间轴那一段）
+
+探针加了两步，都在真壳窗口里：
+
+| 步 | 验到什么 | 结果 |
+|---|---|---|
+| detail | 详细编辑里挂的是 `[data-pc="start-detail-tl"] [data-pc="timeline"]`，也就是编辑界面那条真时间轴 | `realTimeline: true` |
+| drag | 按住一段往右拖，再从 store 里读它的起点 | `start 1 → 2.2`（`selAfterDown` 证明按下那一刻它被选中了，`at` 证明指针落在 `.pc-clip` 上） |
+| ctxmenu | 右键菜单的全部项 | `["引用到输入框","复制","静音片段","调整声音音量…","音画分离","在播放头处分割","置顶","置底","删除"]` —— 真时间轴那一套，加上这一页独有的第一项 |
+
+拖的那一段由探针自己放（`addCardClip`），不等模型：这一步验的是「拖得动」，不该卡在等 Agent 干活。
+
+全套十二步 `{"ok":true,"fails":[]}`；`tsc -b --force` 零错误；受影响测试 68 项全过（在上一轮基础上加了 `src/editor/timeline/*.test.mjs`、`src/editor/readOnly*.test.mjs`、`src/editor/userEditingCore.test.mjs`）。
 
 ## 待用户项
 
 1. **桌面版的缺省界面**。现在缺省仍是传统开始页，氛围式要点一下。用户说过「以后 vibe 式是默认状态」，但那句话的上下文是在线浏览器；桌面版改缺省是一级改动，等用户明说。
 2. **合并顺序**。这一支基于 `claude/vibe-wire`，要等它先合进 main，再合这一支。
-3. 上面那条语义冲突。
+3. `scripts/probes/vibe-start-probe.mjs`（在线那条探针，`claude/vibe-wire` 写的）里记录详细编辑时还在读 `.ps-detail-lane` / `[data-pc="start-detail-clip"]` 这两个已经不存在的选择器。它只是**记录**，不参与判定，所以探针不会因此变红；没去改它是为了少跟那一支抢同一个文件。合并之后顺手改掉即可。
 
 ## 这一支动过的文件
 
 新增：`src/start/vibeAgent.ts`、`src/start/useVibeLocal.ts`、`src/start/DesktopStart.tsx`、`scripts/probes/vibe-desktop-probe.mjs`、本报告与 `docs/reports/AGENT-claude-editor-vibe-button-shots/`。
 
-改动：`src/StartPage.tsx`、`src/editor/ModeSwitch.tsx`、`src/editor/ModeSwitch.css`、`src/editor/TopBar.tsx`、`src/start/ChatView.tsx`、`src/start/TopBar.tsx`、`src/start/useVibeCloud.ts`、`docs/semantics/glossary.md`、`docs/semantics/user-workflow.md`、`docs/plan/user-decisions-2026-10-23.md`、`docs/plan/release-021-rulings.md`。
+改动：`src/StartPage.tsx`、`src/editor/ModeSwitch.tsx`、`src/editor/ModeSwitch.css`、`src/editor/TopBar.tsx`、`src/editor/timeline/index.tsx`、`src/editor/timeline/TimelineContext.tsx`、`src/editor/timeline/ClipView.tsx`、`src/start/ChatView.tsx`、`src/start/DetailEdit.tsx`、`src/start/OnlineStart.tsx`、`src/start/TopBar.tsx`、`src/start/start.css`、`src/start/useVibeCloud.ts`、`docs/semantics/glossary.md`、`docs/semantics/user-workflow.md`、`docs/plan/user-decisions-2026-10-23.md`、`docs/plan/release-021-rulings.md`。
 
-和 `claude/vibe-wire` 的重叠：`ChatView.tsx`（换了 prop 的类型，两行）、`start/TopBar.tsx`（账号那一块改成可选）、`useVibeCloud.ts`（`VibeCloud` 改成继承 `VibeAgent`，加三个字段）。其余都是新文件或这一支自己的文件。
+和 `claude/vibe-wire` 的重叠：`ChatView.tsx`（换了 prop 的类型，两行）、`start/TopBar.tsx`（账号那一块改成可选）、`useVibeCloud.ts`（`VibeCloud` 改成继承 `VibeAgent`，加三个字段）、`DetailEdit.tsx`（时间轴整段换成真时间轴）、`start.css`（`.ps-detail-tl` 改定高，删掉只读轨道的样式）、`OnlineStart.tsx`（文件头一句话）。`src/editor/timeline/` 那三个文件只加了一个可选 prop，编辑界面不传就和原来一模一样。

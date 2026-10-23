@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useRef, useEffect, useCallback, type ReactNode } from "react";
 import type React from "react";
 import { useStore } from "../../store/project";
+import type { TrackClip } from "../../kernel/project";
 import { useDragPayload } from "../dnd";
 import { HEADER_W_DEFAULT, HEADER_W_MIN, HEADER_W_MAX, type RowSize, DEFAULT_ROW_SIZE, ROW_SIZE_H, timeOfX, xOfTime } from "./utils";
 import type { DropPlan } from "./dropPlan";
@@ -29,11 +30,16 @@ interface TimelineContextState {
   rowSize: RowSize;
   setRowSize: (val: RowSize) => void;
   trackH: number;
+  /**
+   * 右键一段时多给一项「引用到输入框」。氛围式的详细编辑挂的就是这条时间轴
+   * (`src/start/DetailEdit.tsx`),在那儿右键一张卡要能把它引用给 Agent;编辑界面没有这个输入框,不传。
+   */
+  quoteClip?: (clip: TrackClip, label: string) => void;
 }
 
 const TimelineContext = createContext<TimelineContextState | null>(null);
 
-export function TimelineProvider({ children }: { children: ReactNode }) {
+export function TimelineProvider({ children, quoteClip }: { children: ReactNode; quoteClip?: (clip: TrackClip, label: string) => void }) {
   const [pxPerSec, setPxPerSec] = useState(100);
   const scrollRef = useRef<HTMLDivElement>(null);
   const trackAreaRef = useRef<HTMLDivElement>(null);
@@ -207,7 +213,7 @@ export function TimelineProvider({ children }: { children: ReactNode }) {
   }, [t, playing, pxPerSec]);
 
   return (
-    <TimelineContext.Provider value={{ pxPerSec, setPxPerSec, scrollRef, trackAreaRef, draggingClipId, setDraggingClipId, draggingTrackId, setDraggingTrackId, dropPlan, setDropPlan, reorder, setReorder, headerW, setHeaderW, commitHeaderW, resetHeaderW, rowSize, setRowSize, trackH }}>
+    <TimelineContext.Provider value={{ pxPerSec, setPxPerSec, scrollRef, trackAreaRef, draggingClipId, setDraggingClipId, draggingTrackId, setDraggingTrackId, dropPlan, setDropPlan, reorder, setReorder, headerW, setHeaderW, commitHeaderW, resetHeaderW, rowSize, setRowSize, trackH, quoteClip }}>
       {children}
     </TimelineContext.Provider>
   );

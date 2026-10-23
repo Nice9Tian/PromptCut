@@ -31,7 +31,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   // 这个项目只给了只读权限(游客):拖、改时长、右键里改项目的项都不给,和锁定的序列一个待遇(但还能选中、看参数、打开剪辑)
   const ro = useReadOnly();
   const frozen = track.locked || ro.locked;
-  const { pxPerSec, trackAreaRef, setDraggingClipId, setDraggingTrackId, rowSize } = useTimelineContext();
+  const { pxPerSec, trackAreaRef, setDraggingClipId, setDraggingTrackId, rowSize, quoteClip } = useTimelineContext();
   const media = useStore((s) => s.project.media.find((m) => m.id === clip.mediaId));
   const selection = useStore((s) => s.selection);
   const isSelected = selection.includes(clip.id);
@@ -344,7 +344,14 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
           x={contextMenu.x}
           y={contextMenu.y}
           onClose={() => setContextMenu(null)}
-          items={ro.locked ? readOnlyItems : [
+          items={[
+            /*
+             * 「引用到输入框」只在氛围式的详细编辑里出现(调用方传了 quoteClip,见 TimelineView)。
+             * 放最上面,而且**只读也给** —— 它不改任何东西,只是把这一段说给 Agent 听,
+             * 恰恰是只读成员唯一能做的事。
+             */
+            ...(quoteClip ? [{ label: "引用到输入框", action: () => quoteClip(clip, label || "片段") }] : []),
+            ...(ro.locked ? readOnlyItems : [
             // 转场在最上面:被绑住的时候用户第一件想做的事就是解开它
             ...myTransitions.map((tr) => ({
               label: `删除转场:${describeTransition(getState().project, tr)}`,
@@ -395,6 +402,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
               }
             },
             { label: "删除", action: () => actions.removeClip(clip.id) },
+            ]),
           ]}
         />
       )}
