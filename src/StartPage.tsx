@@ -82,33 +82,40 @@ function JoinSection(props: { onEnterEditor: () => void }): JSX.Element {
   );
 }
 
-/** 地址里显式要看新开始页(`?ui=vibe`);读不到地址(非浏览器环境)按没要 */
-function vibePreviewAsked(): boolean {
-  try { return new URLSearchParams(location.search).get("ui") === "vibe"; } catch { return false; }
+/** 地址里有没有点名要 Vibe 模式那一套新界面。`home` / `login` 是它自己的预览入口,一并认 */
+function wantsVibe(): boolean {
+  try {
+    const ui = new URLSearchParams(location.search).get("ui");
+    return ui === "vibe" || ui === "home" || ui === "login";
+  } catch {
+    return false;
+  }
 }
 
 /**
  * 在线浏览器(电脑身份)的首屏。
  *
- * 两套并存(〔裁〕:主会话 2026-10-23,二级,0.7.21 发版时定,记在 `docs/plan/release-021-rulings.md` V21-12):
- *   - **缺省**:账号表单那一块(`AccountProjects`)—— 真实的项目列表、游客入口、加入别人的项目。线上就是这一套。
- *   - **`?ui=vibe`**:`src/start/` 那一整套新界面(Vibe 模式的登录页、开始页、聊天页、详细编辑)。它这一版
- *     **只跑界面**:项目、聊天、时间轴都是 `src/start/mock*.ts` 里的假数据(`claude/browser-start-ui` 的任务范围,
- *     用户 2026-10-23 边看边定的界面取舍记在 `docs/plan/user-decisions-2026-10-23.md`)。接上业务层之后把缺省换成它。
+ * **缺省仍是原来那一页**:一块账号表单(`AccountProjects`)—— 真的账号登录、真的云端项目列表、
+ * 凭链接加入。Vibe 模式(`user-workflow.md`「工作方式」)那一套新界面(`src/start/`)**还在跑界面、
+ * 用的是假数据**,所以只有地址里点名要(`?ui=vibe`)时才进。这样它能进 main、随时打开看,
+ * 线上的真开始页不受影响。
  *
- * 桌面开始页仍用 `AccountProjects`,那个组件不动。
+ * 〔裁:发版会话 V21-12,2026-10-23 —— 0.7.21 要部署到生产,不能把线上的开始页默认换成原型〕
+ * 等 `src/start/` 接上业务层(真实项目列表、真实对话)之后,把这道门去掉、缺省换成新界面。
  */
 function OnlineStartPage(props: { onEnterEditor: () => void }): JSX.Element {
-  if (vibePreviewAsked()) return <OnlineStart onEnterEditor={props.onEnterEditor} />;
-  return (
-    <div className="sp">
-      <header className="sp-bar">
-        <Logo size={22} />
-        <span className="sp-bar-spacer" />
-      </header>
-      <main className="sp-main"><AccountProjects online onEnterEditor={props.onEnterEditor} /></main>
-    </div>
-  );
+  if (!wantsVibe()) {
+    return (
+      <div className="sp">
+        <header className="sp-bar">
+          <Logo size={22} />
+          <span className="sp-bar-spacer" />
+        </header>
+        <main className="sp-main"><AccountProjects online onEnterEditor={props.onEnterEditor} /></main>
+      </div>
+    );
+  }
+  return <OnlineStart onEnterEditor={props.onEnterEditor} />;
 }
 
 export const StartPage: (props: { onEnterEditor: () => void }) => JSX.Element = ONLINE_BUILD ? OnlineStartPage : DesktopStartPage;
