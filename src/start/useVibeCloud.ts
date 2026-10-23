@@ -16,6 +16,7 @@ import { CloudError, cloudConversationControlPolicy, cloudErrorText } from "../a
 import { cloudTicket } from "../ai/cloud/identity";
 import { acceptCloudConsent, cloudConsentState, refreshCloudConsent, subscribeCloudConsent } from "../ai/cloud/consent";
 import { OUTBOX_RESEND_EVENT } from "../ai/cloud/outbox";
+import { isIdleHead } from "../ai/cloud/events";
 import { useSync } from "../editor/sync/syncManager";
 import { useReadOnly } from "../editor/readOnly";
 import { setCloudVisualScope } from "../editor/right/ToolVisual";
@@ -39,6 +40,8 @@ export interface VibeCloud {
   canStop: boolean;
   /** 排在后面等着的消息条数 */
   queued: number;
+  /** 云端的执行服务此刻没在接活(账号模式、`info.executorMounted` 不为真):消息会持久排着,等执行服务来了再跑 */
+  waitingExecutor: boolean;
   /** 告知框 */
   consent: { open: boolean; pending: boolean; error: string | null; accept: () => void; reject: () => void };
   send: (text: string) => Promise<boolean>;
@@ -203,7 +206,9 @@ export function useVibeCloud(o: { connected: boolean; shown: boolean }): VibeClo
     cloud, chat, chats, current,
     canSend: !whyNot, whyNot,
     streaming: policy.streaming, canStop: policy.canStop,
-    queued: view.queue?.items.filter((i) => i.state === "queued").length ?? 0,
+    // 和编辑器右栏同一个数法(`QueueList.tsx`):执行服务在问时,对话空闲时排第一的那条马上就开始,不算排队
+    queued: view.queue?.items.filter((i) => i.state === "queued" && !(chat.info?.executorMounted === true && isIdleHead(view.queue, i))).length ?? 0,
+    waitingExecutor: cloud.accountMode && !!chat.info && chat.info.executorMounted !== true,
     consent: {
       open: o.shown && consentOpen && Boolean(consent.accountId) && consent.accountId === cloud.accountId,
       pending: consent.pending, error: consentError,

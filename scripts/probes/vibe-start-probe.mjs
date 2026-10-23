@@ -110,7 +110,7 @@ async function newPage(browser, label) {
   page.on('response', (r) => {
     const u = new URL(r.url());
     if (r.status() >= 500) page.bad.push(`${r.status()} ${u.pathname}`);
-    if (u.pathname.startsWith('/agent/')) page.agentNet.push(`${r.request().method()} ${u.pathname.replace(/\/conversations\/[^/]+/, '/conversations/:id')} ${r.status()}`);
+    if (u.pathname.startsWith('/agent/') && r.request().method() !== 'GET') page.agentNet.push(`${r.request().method()} ${u.pathname.replace(/\/conversations\/[^/]+/, '/conversations/:id')} ${r.status()}`);
   });
   await page.setViewport({ width: 1440, height: 900 });
   page.setDefaultTimeout(T);
@@ -125,6 +125,11 @@ async function typeInto(page, sel, value) {
   await input.click({ clickCount: 3 });
   await page.keyboard.press('Backspace');
   await input.type(value);
+}
+/** 进项目时右上角那条「已进入云端项目」的气泡会压住拓展栏的段头:先关掉(用户也是点 ✕ 关) */
+async function closeToasts(page) {
+  for (const b of await page.$$('.pc-toast button[aria-label="关闭"]')) await b.click().catch(() => {});
+  await sleep(300);
 }
 const text = (page, sel) => page.evaluate((s) => document.querySelector(s)?.textContent?.trim() ?? null, sel);
 const exists = (page, sel) => page.evaluate((s) => !!document.querySelector(s), sel);
@@ -154,6 +159,10 @@ async function waitOutcome(page, sentence) {
     if (agent.length) return { kind: 'agent', text: agent[agent.length - 1].textContent.trim().slice(0, 300), error: err?.textContent?.trim() ?? null };
     if (err) return { kind: 'error', text: err.textContent.trim().slice(0, 300) };
     if (banner) return { kind: 'banner', text: banner.textContent.trim().slice(0, 300) };
+    // 云端已收下(202)、执行服务没在接活:气泡写「已发出，等待云端开始处理…」,底下一行写「消息会持久排队，等待执行服务」(和编辑器右栏同一句)
+    const accepted = [...document.querySelectorAll('[data-pc="start-chat-msg"][data-from="me"][data-send="accepted"]')].length > 0;
+    const note = document.querySelector('[data-pc="start-chat-note"]')?.textContent?.trim() ?? '';
+    if (accepted && /等待执行服务/.test(note)) return { kind: 'queued-waiting-executor', text: note };
     return null;
   }), 120_000, 500);
   return { mine: !!mine, outcome };
@@ -222,6 +231,7 @@ try {
   await shot(P, '03-chat-sent');
 
   /* ================ 5. 拓展栏:真画面;详细编辑:真时间轴 ================ */
+  await closeToasts(P);
   await P.click('[data-pc="start-chat-ext-toggle"]');
   const stage = await until('拓展栏的画面挂上舞台', () => P.$('[data-pc="start-ext-stage"] [data-pc="preview"]'), 30_000);
   await sleep(3000);
@@ -235,6 +245,19 @@ try {
   await shot(P, '05-detail-edit');
   await P.click('[data-pc="start-detail-close"]');
 
+  /* ================ 5b. 另一位成员进同一个项目:共有的时候看得到这条对话 ================ */
+  const Q = await newPage(browser, 'member');
+  await login(Q, B);
+  await until('成员侧栏列出共享项目', async () => (await sideProjects(Q)).some((p) => p.id === sharedId), 30_000);
+  await Q.click(`[data-pc="start-side-project"][data-project="${sharedId}"]`);
+  await until('成员进聊天页', () => Q.$('[data-pc="start-chat"]'), 90_000);
+  await acceptConsent(Q);
+  const seenShared = await until('成员侧栏里有 dualUser0 的共有对话', async () => (await sideAgents(Q)).some((c) => c.id === convId), 30_000);
+  step('5b-member-shared', { seenShared: !!seenShared, memberAgents: await sideAgents(Q) });
+  check(!!seenShared, '共有对话:同项目的另一位成员在侧栏里看得到');
+  await closeToasts(Q);
+  await shot(Q, '05b-member-sees-shared');
+
   /* ================ 6. 切成私有(开对话的人才能切) ================ */
   const visBtn = await until('共有 / 私有键可用', () => P.$('[data-pc="start-chat-visibility"]:not([disabled])'), 30_000);
   if (visBtn) { await visBtn.click(); }
@@ -242,6 +265,7 @@ try {
   step('6-private', { private: !!priv, convId });
   check(!!priv, '自己开的对话能切成私有');
 
+  await closeToasts(P);
   /* ================ 7. 回首页 → 说一句话(带一张图、9:16)建新项目 ================ */
   await P.click('[data-pc="start-home"]');
   await P.waitForSelector('[data-pc="start-prompt-input"]', { visible: true });
@@ -261,7 +285,8 @@ try {
   await P.evaluate(() => { if (!document.querySelector('[data-pc="start-ext"]')) document.querySelector('[data-pc="start-chat-ext-toggle"]')?.click(); });
   const aspect = await until('新项目的画面比例', () => P.evaluate(() => document.querySelector('[data-pc="start-ext-stage"]')?.style.aspectRatio || null), 20_000);
   const sideNow = await sideProjects(P);
-  step('7-prompt', { homeAddr, chip, chat2: !!chat2, consentAgain: consent2, ...r2, aspect, sideNow });
+  const importNote = await text(P, '[data-pc="start-chat-note"]');
+  step('7-prompt', { homeAddr, chip, importNote, chat2: !!chat2, consentAgain: consent2, ...r2, aspect, sideNow });
   check(homeAddr === '/editor/', '回首页时地址换回 /editor/', homeAddr);
   check(!!chat2 && r2.mine && !!r2.outcome, '开始页说一句话:建好新项目、进聊天页、这句话自动发给云端 Agent', r2);
   check(/1080\s*\/\s*1920/.test(aspect ?? ''), '新项目按选的 9:16 定了尺寸', aspect);
@@ -278,17 +303,11 @@ try {
   check(!!thumb, '打开过、有素材的项目,开始页那一格是真画面;别的项目是色块', thumbs);
   await shot(P, '08-home-thumbs');
 
-  /* ================ 9. 另一位成员:看不到 dualUser0 的私有对话 ================ */
-  const Q = await newPage(browser, 'member');
-  await login(Q, B);
-  await until('成员侧栏列出共享项目', async () => (await sideProjects(Q)).some((p) => p.id === sharedId), 30_000);
-  await Q.click(`[data-pc="start-side-project"][data-project="${sharedId}"]`);
-  await until('成员进聊天页', () => Q.$('[data-pc="start-chat"]'), 90_000);
-  await acceptConsent(Q);
-  await sleep(4000); // 等对话列表读回来(3 秒一轮)
+  /* ================ 9. 另一位成员:切成私有之后看不到了 ================ */
+  const gone = await until('成员侧栏里那条对话消失', async () => !(await sideAgents(Q)).some((c) => c.id === convId), 30_000);
   const memberAgents = await sideAgents(Q);
   const creatorAgents = await sideAgents(P).catch(() => []);
-  step('9-member', { memberAgents, convId });
+  step('9-member', { gone: !!gone, memberAgents, convId });
   check(!memberAgents.some((c) => c.id === convId), '另一位成员的侧栏里没有 dualUser0 的私有对话', memberAgents);
   await shot(Q, '09-member-no-private');
   void creatorAgents;

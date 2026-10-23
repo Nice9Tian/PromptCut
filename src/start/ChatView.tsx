@@ -21,12 +21,15 @@ import { activityText, outcomeText, runningTool } from "../editor/right/chat/Age
 import { START_PRESET } from "../editor/right/chat/StartHero";
 import { CloudAgentConsentDialog } from "../editor/right/CloudAgentConsentDialog";
 import { isUserBubble, ordinals, partsOf, roundView, splitQuotes } from "../mobile/agentView";
+import { selectionPresenceStatus } from "../editor/sync/selectionPresence";
 import { ChatSidePanel } from "./ChatSidePanel";
 import { DetailEdit } from "./DetailEdit";
 import type { VibeCloud } from "./useVibeCloud";
 
 /** 和 `.ps-chat-input` 的 max-height 对齐 */
 const MAX_H = 200;
+/** 开始页那句话自动发出之前,选区连上之后再等多久(毫秒):给文档服务登记这张页面留的余量 */
+const PENDING_SETTLE_MS = 2000;
 
 const MARK: Record<string, string> = { done: "✓", run: "…", todo: "·", err: "!", ask: "!" };
 
@@ -163,13 +166,28 @@ export function ChatView(props: {
   };
 
   // 开始页上说的那句话:对话就绪(能发了)就发一次
+  // 还要等这张页面的选区在文档服务那边登记上:账号模式发消息带的是这张页面的选区快照,刚进项目那一下文档服务还没有这张页面,
+  // 立刻发会被拒(`selection-page-unavailable`)。手动发不会撞上(人打字比它慢),自动发的这一条等选区连上之后再等一小会儿
   const pendingSent = useRef<string | null>(null);
   useEffect(() => {
     const p = props.pending;
     if (!p || pendingSent.current === p || !vibe.canSend || !vibe.chat.history.loaded) return;
-    pendingSent.current = p;
-    props.onPendingSent();
-    void send(p);
+    let dead = false;
+    let timer = 0;
+    const t0 = Date.now();
+    const tick = () => {
+      if (dead) return;
+      const presence = selectionPresenceStatus();
+      if (!(presence.linked && presence.pageId) && Date.now() - t0 < 15_000) { timer = window.setTimeout(tick, 300); return; }
+      timer = window.setTimeout(() => {
+        if (dead || pendingSent.current === p) return;
+        pendingSent.current = p;
+        props.onPendingSent();
+        void send(p);
+      }, PENDING_SETTLE_MS);
+    };
+    tick();
+    return () => { dead = true; window.clearTimeout(timer); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.pending, vibe.canSend, vibe.chat.history.loaded]);
 
@@ -181,6 +199,8 @@ export function ChatView(props: {
 
   const footNote = note
     || (vibe.whyNot && vibe.cloud.projectId ? vibe.whyNot : "")
+    // 云端的执行服务没在接活:和编辑器右栏同一句(`CloudAiPanel.tsx` 的 cloud-note)
+    || (vibe.waitingExecutor ? "消息会持久排队，等待执行服务；重新打开可接着看。" : "")
     || (vibe.queued > 0 ? `前面还有 ${vibe.queued} 条在排队，一轮一轮跑。` : "")
     || "在云端运行，关闭后继续；重新打开可接着看。";
 
