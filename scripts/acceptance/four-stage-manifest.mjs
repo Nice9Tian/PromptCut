@@ -47,7 +47,6 @@ export const EXCLUDED_PROBE_FILES = {
   ...V19_EXCLUDED,
   // 公共件与工具,不单独跑
   'asset-lan-discover.mjs': '公共件(局域网发现),单测在 server/test',
-  'claim-gate-judge.mjs': '认领闸探针的判定函数,单测直接测',
   'codex-auth-fixture-loader.mjs': '测试进程加载器,被 codex-auth-state-probe 用',
   'm7-judge.mjs': 'M7 探针的纯判据,单测直接测',
   'm7-node-adapter.mjs': 'M7 探针读页面节点诊断的适配处,不单独跑',
@@ -74,7 +73,6 @@ export const EXCLUDED_PROBE_FILES = {
   'asset-lan-probe.mjs': '局域网素材服务探针,要第二台机器',
   'shared-project-lan.mjs': '共享项目局域网模式,要第二台机器',
   'shared-project-probe.mjs': '共享项目探针(互联网 / 局域网两种),要手工起托管端与协调口并分角色,不在整套里',
-  'render-host-probe.mjs': '独立渲染主机探针(分角色、要协调口与第二台机器)',
   'c10-stage-probe.mjs': 'C10 可行性探针(历史),结论已落进契约',
   'oac-probe.mjs': 'Origin-Agent-Cluster 可行性探针(历史)',
   'backdrop-probe.mjs': '毛玻璃采样可行性探针(历史)',
@@ -783,7 +781,7 @@ const OLD_ITEMS = [
   },
   {
     id: 'S3-r4', name: '新节点实测:用户卡与素材效果卡的任务它能渲,越权探测卡在隔离工作进程里读不到', category: '第三段', level: 'network', taskRef: '任务书一 第 23 条第 3 点(「关掉软件照常运转」的一部分,不因缺夹具而退掉)',
-    tasks: ['R23'], remoteOnly: '只能在新节点上验:把越权探测卡(scripts/probes/fixtures/online-card-attacks/)放进测试项目,发清单计划让渲染服务渲,断言读不到别的项目的内容与素材、节点上的凭证与令牌、工作进程自己的本机接口、工作目录以外的文件',
+    tasks: ['R23'], remoteOnly: '只能在新节点上验:把越权探测卡(scripts/probes/fixtures/render-isolation/)放进测试项目,发清单计划让渲染服务渲,断言读不到别的项目的内容与素材、节点上的凭证与令牌、工作进程自己的本机接口、工作目录以外的文件',
   },
   {
     id: 'S3-r5', name: '新节点实测:新建项目自动接活、关开关后不接、删项目后断开;身份改项目内容被拒', category: '第三段', level: 'network', taskRef: '任务书一 第 23 条第 4、5 点',

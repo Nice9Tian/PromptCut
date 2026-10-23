@@ -401,6 +401,10 @@ async function main() {
     console.log(`① scripts/probes 下 ${names.length} 个文件`);
     console.log(rep.unlisted.length ? `清单没登记也没写排除原因(${rep.unlisted.length}):\n  ${rep.unlisted.join('\n  ')}` : '都登记了或写明了排除原因');
     if (rep.unlisted.length) bad++;
+    if (rep.bothListedAndExcluded.length) {
+      console.log(`既被清单项点名、又写在排除表里的(台账自相矛盾,该删排除表那一行):\n  ${rep.bothListedAndExcluded.join('\n  ')}`);
+      bad++;
+    }
     if (rep.staleExcluded.length) console.log(`排除表里有、本检出没有的(多半在后三段分支上):${rep.staleExcluded.join(', ')}`);
     if (rep.staleCovers.length) console.log(`清单 covers 里有、本检出没有的(多半在后三段分支上):${rep.staleCovers.join(', ')}`);
     if (ROWS.length) {
