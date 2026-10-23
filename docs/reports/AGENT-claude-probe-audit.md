@@ -271,3 +271,45 @@ B08a 建议改的 3 支：`claim-gate-probe` 的 15 秒硬失败**已改**（第
 两支都被必跑清单项点名、`m7-browser-probe` 还被 PT-05 读源码，**是重写断言而不是小修**，留给用户定时机（与第九节 B07a 对 `c10-browser-probe` 的那条同类）。
 
 至此 16 块全部有逐支结论：**B08a 已逐支对语义**（本节），**B05a 的 18 支**由第一轮小结 + manager 独立核过的锚点 + Opus 专项核对兜底（第九节那张对照表），其余 14 块各有自己的报告。
+
+## 十一、B05a 那 18 支：主 Agent 自己的逐支核查
+
+前面第九节的对照表引的是 B05a 第一轮的笔记。那份报告整体作废过，所以**这 18 支我自己重核了一遍**，不引任何子 Agent 的结论。
+核法是可复算的：对每支数 ①断言条数（`check(` / `fails.push` / `assert` / `exitCode = 1`）②已撤销机制的标记词命中数
+（每卡快照：`snapshot-manifest`、`kind: 'snapshot'`、`snap/`、`data-pc-snapshot-plane`、`snapshotTier`、`.small.webp`、`setSnapshots`；
+低内存档：`低内存`、`tier=low`、`lowMemory`；旧整帧预览：`preview=legacy`）③`@cut` / `cuts:` 命中数（判 R01 相关性）
+④`server/test`、`src`、`tools` 下谁引用它（只有这三处才进基线）⑤验收台账状态。脚本在
+`scratchpad/b05a_selfcheck.py`，任何人可以重跑复算。
+
+| 探针 | 断言 | 已撤机制词 | `@cut` | 基线引用 | 台账 | 我的判定 |
+|---|---|---|---|---|---|---|
+| `below-diff-measure-probe` | 17 | 无 | 0 | 无 | 排除表 | 留：顶层场景，R01 退回不涉及 |
+| `below-late-lower-probe` | 12 | 无 | 0 | 无 | `RR-below-late-lower` | 留：同上，且被清单点名 |
+| `below-online-e2e-probe` | 64 | 每卡快照 3 | 0 | 无 | `RR-below-online-e2e` | 留＋已改（撤旧流的 1 秒闸门）。3 处标记词我逐处看过：是「不该再有快照平面」的**反向**断言，不是依赖它 |
+| `below-paste-editor-probe` | 38 | 每卡快照 2 | 0 | 无 | `RR-below-paste-editor` | 留：同上，反向断言 |
+| `below-stream-common` | 0 | 无 | 0 | 无 | 排除表 | 留：公共件，被上面几支 import |
+| `browser-stream-e2e-probe` | 55 | 每卡快照 6 | 0 | 无 | 排除表 | 留＋已改（去掉对快照任务的等待依赖）—— 见第三节第 6 条的证据链 |
+| `browser-stream-encode-probe` | 6 | 无 | 0 | `src/render/streamEncode.test.mjs` | 排除表 | 留：有基线引用，不能动 |
+| `browser-stream-node-probe` | 55 | 每卡快照 4 | 0 | 无 | 排除表 | 留＋已改（删「快照回归」一节、门槛减一） |
+| `page-stream-probe` | 191 | 每卡快照 3、低内存档 9 | 0 | `src/render/streamFirstFrame.test.mjs` | `RR-page-stream` | 留＋已改（两处每拍毫秒阈值）。低内存档那 9 处我看过：是「最低一档」的现行档位词与反向断言，不是已撤那一档 |
+| `preview-3d-playback` | 20 | 无 | 0 | 无 | 排除表 | 留 |
+| `preview-3d-stream-probe` | 14 | 无 | 0 | 无 | 排除表 | 留（子 Agent 说它「未入台账」，是错的，它在排除表里） |
+| `push-draw-probe` | 10 | 无 | 0 | 无 | `RR-push-draw` | 留 |
+| `scrub-hold-snapshot-probe` | — | — | — | 无 | 排除表 | **已删**（等就绪索引里的 `html` 层铺满，必超时） |
+| `scrub-stream-probe` | 33 | 每卡快照 2 | 0 | `src/render/streamScrub.test.mjs` | `RR-scrub-stream` | 留：有基线引用；2 处是反向断言 |
+| `snapshot-diff-apply-probe` | — | — | — | 无 | 排除表 | **已删**（输入是帧库存下的 `controls-html`，不再产生） |
+| `snapshot-diff-compare` | 0 | 无 | 0 | 无 | 排除表 | 留：比的是**整场景** HTML 采样，语义里明确保留 |
+| `snapshot-hash-probe` | — | — | — | 无（只有注释） | 排除表 | **已删**（要求 `tier === 'shared'`，现恒为 `'none'`） |
+| `snapshot-size-probe` | 1 | 每卡快照 2 | 0 | 无（只有注释） | 排除表 | **已归档**（入口还在、跑得完，判据没了对应行为） |
+
+**这一遍自核另外查出两处我自己造成的失效指针，已修**（都是注释，不是 import，所以基线没破；我用 `git grep` 在 `server/test`、`src`、`tools` 三处确认过）：
+
+- `server/test/snapshot-style-order.test.mjs` 第 7 行原本指着被我删掉的 `snapshot-hash-probe.mjs` → 改成说明它为什么删、证据在哪；那个测试实跑通过。
+- `server/test/fake-artifact-fixtures.mjs` 第 87、98 行指着被我归档的 `snapshot-size-probe.mjs` → 改成归档路径，并注明那里的算法是复制的、不受影响。
+
+**我的扫描口径与上一遍的差别**：这次把「基线引用」的搜索范围从 `*.test.mjs` 扩到了 `server/test`、`src`、`tools` 下的**全部文件**——
+`fake-artifact-fixtures.mjs` 不是 `.test.mjs`，上一遍就是这样漏掉的。
+
+**仍未验的一条（不影响任何留/删/改判定）**：`browser-stream-e2e-probe`、`browser-stream-node-probe` 的帧数与分段数门槛是撤快照之前的读数，
+2026-10-14 起的稀疏趟可能让它们翻倍。要实跑一次看 `diag.streams.frames` 是 48 还是 96 才能定，两支的文件头里都写了这一点。
+实跑要占验证用的 dev-test 端口段与 Chrome，而发版主会话正在跑 GR 系列，所以没跑。
