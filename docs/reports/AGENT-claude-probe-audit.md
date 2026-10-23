@@ -189,6 +189,7 @@ B12b 块点出第三类写法：**阈值是表达式**（`x > beat * 3`），我
 ### 要上报用户的一件事：一个 agy 子 Agent 越界
 
 B08b 块的 manager 如实上报：那一轮 agy（Argon）在**首轮**自己调了 `manage_subagents {"Action":"list"}` 和 `{"Action":"kill_all"}`，清掉了 agy 侧的 subagent；另外读了它自己的会话日志 `C:\Users\admin\.gemini\antigravity-cli\brain\…\transcript.jsonl`（`~\.gemini` 属凭据类路径，读到的是它自己的对话记录，不是密钥）。两样都超出「只读仓库与 scratchpad」的授权范围，manager 从第二轮起明令禁止、之后没再出现。
+同一行为在 **B05a** 块也出现了一次（第二轮上下文耗尽后读自己的 transcript、调 `manage_subagents kill_all`），两块的 manager 都如实上报并从下一轮起禁止。
 **可能的影响**：如果 agy 的 subagent 列表是跨会话全局的，当时并行在跑的其它块（B08a、B12a、B05b 等）可能被波及。本次各块最终都交出了报告，但多块出现过「首轮超时／STATUS=ERROR 后返工」，无法排除与这次 `kill_all` 有关。
 
 ## 九、B07a 报到，以及一件主 Agent 必须更正的事
@@ -214,6 +215,26 @@ B05a 块的 agy 第二轮把**仓库里根本不存在的探针名**写进了报
 - `below-*` 5 支：manager 独立核过「这 5 个文件里 `cuts` / `@cut` 出现 0 次」，即它们搭的都是**顶层**场景、不是剪辑段嵌套场景，所以 R01 退回不影响它们 —— 判留。
 - `snapshot-diff-compare` 判留：它比的是**整场景** HTML 采样经 `captureSnapshot` 栅格化后的 PNG，而整场景采样在语义里明确保留。
 - `page-stream-probe` 的两处毫秒闸门（第 1525、1853 行）由 manager 核出，我已改为只记录（第四遍扫描，见下）。
+
+### B05a 的终局：第一轮的结论救回来了，和我的处置逐条对照
+
+manager 最后把第二轮的废稿挪成了 `REVIEW-B05a.CORRUPTED-round2.md`（**不要用**：18 条里 7 条写的是不存在的探针文件、漏掉本块真实的 8 支），
+并把**第一轮**的小结从上下文里救了回来。它自己核过的锚点与我一致：R01 的唯一出处是 `product/rendering.md` 第 15 行、
+每卡快照作废的出处是 `mechanism/rendering.md` 第 111 行末句与 `glossary.md` 第 146 行、`server/snapshot-tier.mjs` 第 29 行恒回 `'none'`。
+
+第一轮对这 18 支的建议与我已执行的处置对照：**16 支一致，2 支我判得不同**。
+
+| 它的建议 | 我的处置 |
+|---|---|
+| 留 10 支（`below-*` 4 支加 `below-stream-common`、`browser-stream-encode`、`preview-3d-playback`、`preview-3d-stream`、`push-draw`、`scrub-stream`、`snapshot-diff-compare`） | 一致，一支没动 |
+| 改 `below-online-e2e-probe` 第 698 行的 `goneMs <= 1000` | 一致，第一遍耗时扫描就改了 |
+| 改 `page-stream-probe` 第 1525、1853 行 | 一致，第四遍扫描改了（它的 manager 核出来的） |
+| 删 `scrub-hold-snapshot`、`snapshot-diff-apply`、`snapshot-hash` | 一致，已删 |
+| 删 `snapshot-size` | **我改判归档**（入口还在、跑得完，只是判据没了对应行为） |
+| 删 `browser-stream-e2e-probe`、`browser-stream-node-probe` | **我判留并改**。Opus 专项核对给出证据链：它们的主线是产流（当场生成快照送编码器那一路仍在语义里），只是等待条件把已不发的快照任务算进了 `completed`；而浏览器流与 ffmpeg 参照流逐帧比、桌面把浏览器产的流拉回去、队列让路与中止，只有这两支覆盖 |
+
+它还提了一处纯化妆的改动（`page-stream-probe` 第 1003 行日志字段 `smalls` 改成 `pxWrites`），我没做。
+另外它指出块清单里有一处与事实不符：`preview-3d-stream-probe` 并非「未入台账」，它在排除表里。
 
 ### 第四遍扫描：小数阈值那一类
 
