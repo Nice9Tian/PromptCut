@@ -192,6 +192,32 @@
 
 **加了守门测试** `src/render/emptyMediaSrc.test.mjs`：扫这两份文件里所有 `src={…}`，凡是表达式里有 `playbackUrl(` / `previewMediaUrl(` / `originalMediaUrl(` / `plan.load` 的，必须以 `|| undefined` 收尾。写规则时自己先踩了两个坑，都记在注释里了——`\bsrc` 会从 `data-pc-media-src=` 里匹配出来（data 属性空串无害，要用否定回顾排掉），以及外面已经有 `url ? … : null` 守着的不算风险。
 
+### 6.6 A2 真机跑通（2026-10-24，通过）
+
+用户在面板上点「连接」，走完 Google 的离线授权。四项逐个核过：
+
+| 核什么 | 结果 |
+|---|---|
+| 界面 | `Google Drive · 连接于 2026/10/24 · 断开` |
+| `GET …/connections` | 有那一行（`projectId: local`、`grantedScope: …/auth/drive.file`），**回包里没有任何令牌样的字段** |
+| 落盘的凭据 | `out/storage-credentials/connectors/<哈希>.json`：明文只有 `v / projectId / userId / provider / grantedScope / createdAt / updatedAt`，令牌在 `iv + tag + data` 里；整份文件里**没有 Google refresh token 的特征串 `1//`**。密钥另存 `connector-key`。`out/` 本来就在 `.gitignore` 里 |
+| **不带令牌导入** | `POST …/storage/import {"kind":"google-drive","fileId":"1yTC…"}`（**请求体里没有 token**）→ 成功 |
+
+最后一项是 A2 真正要证明的东西，结果：
+
+- `pulled: { bytes: 18719209, total: 18719209, resumedFrom: 0, segments: 3 }` —— 18.7 MB 分 **3 段**取回来，分段拉取对着真 Drive 成立
+- 落库哈希 `a1391c41…` 与之前走 A3 那次**完全相同**，`deduped: true`
+- 两档都在（原尺寸 + 小尺寸）
+- 回包里没有令牌
+
+能成只有一条路径：请求里没有令牌 → 用存着的 refresh token 向 Google 换了一张 access token → 用它取字节。没有凭据时这条路会当场报 `no-credential`（单测覆盖过）。
+
+#### 顺带修掉的缺陷：Picker 取消后卡在「从网盘导入中…」
+
+用户报「什么也没导入、点取消，会卡在等待导入」。原因是 `pickDriveFiles` 只在回调里的 `CANCELLED` / `PICKED` 两种 action 上收尾，而 Picker **只在点「取消」按钮时才保证发 `CANCELLED`**；用右上角的 × 关掉、按 Esc、点到对话框外面都可能不发。那样这个 Promise 永远不落地，调用方的 `finally` 轮不到，按钮就一直显示「从网盘导入中…」。
+
+修法：留住 `builder.build()` 回来的对话框对象，每 400 ms 看一次 `isVisible()`，**先看见它开过**、之后变成不可见就当取消（不加这个前提，第一次轮询会把还没开出来的对话框当成取消）。`isVisible()` 调不动（对象已销毁）同样当取消。
+
 ### 6.3 D4 的 A2 业务层（2026-10-23）
 
 三个文件，仍是只用 Node 内置模块：

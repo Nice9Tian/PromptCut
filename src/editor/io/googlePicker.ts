@@ -217,6 +217,15 @@ export async function pickDriveFiles(cfg: StorageProviderConfig, token: string):
   const picker = await ensurePicker();
 
   return new Promise<PickedFile[] | null>((resolve, reject) => {
+    let settled = false;
+    let watch: ReturnType<typeof setInterval> | undefined;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(watch);
+      fn();
+    };
+
     try {
       const views = [
         new picker.DocsView(picker.ViewId.DOCS_VIDEOS).setIncludeFolders(true),
@@ -229,20 +238,43 @@ export async function pickDriveFiles(cfg: StorageProviderConfig, token: string):
         .setAppId(cfg.appId)
         .enableFeature(picker.Feature.MULTISELECT_ENABLED)
         .setCallback((data: any) => {
-          if (data.action === picker.Action.CANCELLED) return resolve(null);
+          if (data.action === picker.Action.CANCELLED) return finish(() => resolve(null));
           if (data.action !== picker.Action.PICKED) return;
           const docs = Array.isArray(data.docs) ? data.docs : [];
-          resolve(docs.map((d: any): PickedFile => ({
+          finish(() => resolve(docs.map((d: any): PickedFile => ({
             id: String(d.id),
             name: String(d.name || d.id),
             mimeType: d.mimeType ? String(d.mimeType) : undefined,
             sizeBytes: Number(d.sizeBytes) || undefined,
-          })));
+          }))));
         });
       for (const v of views) builder.addView(v);
-      builder.build().setVisible(true);
+
+      const dialog = builder.build();
+      dialog.setVisible(true);
+
+      // 兜底:对话框没了就当取消。
+      //
+      // 不能只靠回调 —— Picker 只在点「取消」按钮时才保证发 CANCELLED;用右上角的 × 关掉、
+      // 按 Esc、或者点到对话框外面,回调都可能不来。那样这个 Promise 永远不落地,调用方的
+      // `finally` 也就轮不到,按钮就一直卡在「从网盘导入中…」。
+      // (2026-10-24 用户报:什么都没导入、点取消,卡在等待导入。)
+      // `setVisible(true)` 之后对话框不是立刻就可见的,所以要先看见它开过,再把「不可见」当取消 ——
+      // 否则第一次轮询就可能把还没开出来的对话框当成用户取消了。
+      let sawOpen = false;
+      watch = setInterval(() => {
+        let visible: boolean;
+        try {
+          visible = !!dialog.isVisible();
+        } catch {
+          // 对话框已经被销毁,isVisible 都调不动了,同样当取消
+          return finish(() => resolve(null));
+        }
+        if (visible) sawOpen = true;
+        else if (sawOpen) finish(() => resolve(null));
+      }, 400);
     } catch (e) {
-      reject(e instanceof Error ? e : new Error(String(e)));
+      finish(() => reject(e instanceof Error ? e : new Error(String(e))));
     }
   });
 }
