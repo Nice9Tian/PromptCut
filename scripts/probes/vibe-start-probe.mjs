@@ -198,7 +198,8 @@ try {
   const previewNote = await P.evaluate(() => { const n = document.querySelector('.ps-login-note'); return n ? getComputedStyle(n).display : null; });
   step('1-login-page', { vibeLogin: !!loginShown, oldAccountForm: oldPage, previewNoteDisplay: previewNote });
   check(!!loginShown && !oldPage, '/editor/ 缺省进 Vibe 登录页(没有老账号表单)');
-  check(previewNote === 'none', '登录页上「界面预览阶段」那行不显示');
+  // 2026-10-23 接业务层之后，那行「界面预览阶段：登录不会真的发请求」已经从 OnlineLogin.tsx 里**删掉**（原先是用样式藏着）
+  check(previewNote === null, '登录页上没有「界面预览阶段」那行（已删除，不是藏起来）');
   await shot(P, '01-login');
 
   /* ================ 2. 账号登录 → 开始页列出真云端项目 ================ */
@@ -328,8 +329,12 @@ try {
     await G.click('[data-pc="start-prompt-send"]');
     const gchat = await until('游客项目的聊天页', () => G.$('[data-pc="start-chat"]'), 120_000, 500);
     const gerr = gchat ? null : await text(G, '[data-pc="start-notice"]');
-    if (gchat) { if (await until('游客告知框', () => G.$('[data-pc="cloud-agent-consent"]'), 20_000)) await acceptConsent(G); }
-    const gr = gchat ? await waitOutcome(G, '游客试一下') : null;
+    // 游客暂时用不了云端 Agent（`claude/guest-enter` 的二级〔裁〕：告知记在网站账号上，游客没有地方记）。
+    // 所以这里等的是那句说明，不是告知框与回复 —— 2026-10-23 之前这里等告知框，产品改口径之后探针跟着改
+    // **游客能不能用云端 Agent 还没定**（`claude/guest-enter` 列为待用户项：告知记在网站账号上，游客没有地方记）。
+    // 所以这里**只记录不判定**：把聊天页上看到的头 160 个字记进步骤数据，等用户定了再改成断言。
+    const gsay = gchat ? await G.evaluate(() => (document.querySelector('[data-pc="start-chat"]')?.textContent ?? '').slice(0, 160)).catch(() => null) : null;
+    const gr = { guestChatText: gsay };
     step('11-guest-prompt', { chat: !!gchat, notice: gerr, ...(gr ?? {}) });
     check(!!gchat, '游客说一句话建出自己那一个项目并进聊天页', gerr);
     await shot(G, '11-guest-chat');
