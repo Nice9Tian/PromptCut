@@ -489,6 +489,7 @@ function peekBody(req: IncomingMessage, n: number): Promise<Buffer> {
       settled = true;
       req.off("readable", onReadable);
       req.off("error", finish);
+      req.off("close", onClose);
       if (err) return reject(err);
       const buf = Buffer.concat(parts);
       if (buf.length) req.unshift(buf);
@@ -499,8 +500,11 @@ function peekBody(req: IncomingMessage, n: number): Promise<Buffer> {
       while (got < n && (chunk = req.read()) !== null) { parts.push(chunk); got += chunk.length; }
       if (got >= n || state?.ended || req.readableEnded) finish();
     };
+    // 对面在开头那几十个字节到之前就断了:不留一个永远不落地的等待
+    const onClose = () => finish(Object.assign(new Error("aborted"), { status: 400, code: "request-aborted" }));
     req.on("readable", onReadable);
     req.once("error", finish);
+    req.once("close", onClose);
   });
 }
 
@@ -790,6 +794,9 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
       } catch { ext = ""; }
       verdict = await guestQuota.whole({ accountId, bytes, ext, peek: () => peekBody(req, SNIFF_BYTES), store: opts.projectStores.project(lease.projectId).stores.media, key: `project:${lease.projectId}`, needsLength: upload });
       }
+    } catch (err: any) {
+      // 读开头时对面断了、数据层出错:照错误回,不往下放
+      verdict = { ok: false, status: err?.status ?? 500, error: err?.code ?? "media-failed" };
     } finally { void lease.release(); }
     if (!verdict.ok) return reject(req, res, verdict.status as 403, { ok: false, error: verdict.error });
     const release = verdict.release;
