@@ -44,7 +44,8 @@ export function TopBar(props: {
         type="button"
         className="ps-top-collapse"
         data-pc="start-side-collapse"
-        aria-pressed={props.collapsed}
+        /* 点亮(强调色)=列表栏开着,灰=关着(2026-10-23 用户定:原先反了,收起来时才亮) */
+        aria-pressed={!props.collapsed}
         aria-label={props.collapsed ? "展开侧栏" : "收起侧栏"}
         title={props.collapsed ? "展开侧栏" : "收起侧栏"}
         onClick={props.onToggleSide}
