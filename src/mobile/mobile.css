@@ -163,7 +163,7 @@
  * 用户 2026-10-25 在 iPhone（iOS 18.1.1）上拿五种写法逐一实测，只有这一种能滚：
  *   占位 div 百分比 → 可滚 0；占位 div 固定 px → 0；内层包 max-content → 0；内层包 inline-flex → 0；
  *   容器 padding → 可滚 126 px、JS 设得动、手指划得动。
- * 读数留在 docs/reports/AGENT-claude-strip-snapback.md。
+ * 读数留在 docs/archive/agent-reports/AGENT-claude-strip-snapback.md。
  *
  * 左边是 calc(50% - 46px) 而不是 50%：前面还有一颗 40px 宽、右外边距 6px 的「＋」，
  * 减掉它首卡的左缘才正对正中那条线（和改之前的几何完全一致，offsetLeft 不变，
