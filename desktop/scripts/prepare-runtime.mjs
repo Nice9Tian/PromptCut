@@ -130,7 +130,7 @@ const SKIP_DIRS = new Set([
   ".pc-work",          // 会话附件 / 打开 .proc 时的副本
   ".pc-projects-headless",
   ".claude",           // 本机的 agent 配置和权限
-  ".wrangler",         // wrangler dev 的本地缓存(诊断 Worker 那套)
+  ".wrangler",         // wrangler dev 的本地缓存(诊断 Worker 那套)
   /*
    * 各任务的 git worktree。少这一条就是把**每一条分支的整份源码**打进安装包发给用户 ——
    * 2026-10-24 出 0.7.25 时撞上:`runtime/app` 从 378 MB 涨到 11 GB(光 `_export-baseline`
