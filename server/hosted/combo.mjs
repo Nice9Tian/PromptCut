@@ -347,10 +347,11 @@ export async function startHostedCombo({
   if (account) {
     try {
       const [{ createAccountClient }, { openAccountLedger }, { createAccountHostedRuntime },
-        { mountAccountProjects }, { openGuestKey }] = await Promise.all([
+        { mountAccountProjects }, { openGuestKey }, { createFileStore }, { createAccountOrgStore }] = await Promise.all([
         import('../account/client.mjs'), import('../account/ledger.mjs'),
         import('../docservice/account-hosted.mjs'), import('../docservice/modules/account-projects.mjs'),
-        import('../account/guest-key.mjs'),
+        import('../account/guest-key.mjs'), import('../docservice/store/index.mjs'),
+        import('../docservice/modules/account-org.mjs'),
       ]);
       const ledger = openAccountLedger({ file: account.ledgerFile || path.join(paths.docservice, 'account-v2.sqlite'), authorityId: account.authorityId });
       const client = createAccountClient({ origin: account.origin, tls: account.clientTls,
@@ -445,7 +446,9 @@ export async function startHostedCombo({
       accountProjects = mountAccountProjects({ authority: accountRuntime.authority,
         membersSnapshot: (actor, body) => accountRuntime.membersSnapshot(actor, body),
         issueSession: input => accountRuntime.issueSession(input),
-        resolveAssetTicket: ticket => accountRuntime.resolveAssetTicket(ticket) });
+        resolveAssetTicket: ticket => accountRuntime.resolveAssetTicket(ticket),
+        // 账号级整理信息(云端分组):文档服务数据目录下的独立文件,不进授权账本
+        orgStore: createAccountOrgStore({ store: createFileStore({ dir: paths.docservice, log: () => {} }), now }) });
       const internalProjects = mountAccountProjects({
         authority: accountRuntime.authority, services: account.services,
         resolveAssetTicket: ticket => accountRuntime.resolveAssetTicket(ticket) });

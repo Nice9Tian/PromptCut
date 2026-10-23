@@ -2,6 +2,7 @@ import https from 'node:https';
 import { accountError, certificateFingerprint } from '../../account/client.mjs';
 import { requireRequestId } from '../../account/protocol.mjs';
 import { clientKeyOf, createGuestRateLimit } from '../../account/guest-rate.mjs';
+import { OrgRefused, ORG_WRITE_RATE } from './account-org.mjs';
 
 const INTERNAL = '/internal/v2/';
 const PUBLIC = '/hosted/shared/account';
@@ -42,7 +43,8 @@ const send = (res, status, value, cors = false, extra = {}) => {
  * No cookies, legacy LAN tickets, runGrant body exemptions or automatic logout-complete ACKs.
  */
 export function mountAccountProjects({ authority, services = [], issueSession, resolveAssetTicket, membersSnapshot,
-  guestRateLimit = createGuestRateLimit() }) {
+  guestRateLimit = createGuestRateLimit(), orgStore = null,
+  orgWriteLimit = createGuestRateLimit({ max: ORG_WRITE_RATE.max, windowMs: ORG_WRITE_RATE.windowMs }) }) {
   const registry = new Map();
   for (const entry of services) {
     const fingerprint = certificateFingerprint(entry.fingerprint256);
@@ -151,6 +153,33 @@ export function mountAccountProjects({ authority, services = [], issueSession, r
           // 创建者「通过」「拒绝」申请也走 `/admin`(同上,不另开路由);只核点名的那一条申请,不核访问版本号(`authority.decideJoinRequest`)
           else if (url.pathname === `${PUBLIC}/admin`) result = ['approve-join', 'reject-join'].includes(body.op)
             ? await authority.decideJoinRequest(actor, body) : await authority.adminProject(actor, body);
+          else if (url.pathname === `${PUBLIC}/start-org`) {
+            // 账号级整理信息(云端分组,`./account-org.mjs`):`{ op: 'get' }` / `{ op: 'put', baseVersion, org }`。
+            // 身份只取令牌解出来的账号;游客一律拒;冲突回 409 并带回云端当前那一份,页面三方合并后重传
+            if (!orgStore || typeof authority.identify !== 'function') bad(503, 'org-unavailable');
+            const who = await authority.identify(actor);
+            if (who.guest) bad(403, 'guest-org-unavailable');
+            let out;
+            try {
+              if (body.op === 'get') out = { ...orgStore.get(who.accountId), conflict: false };
+              else if (body.op === 'put') {
+                // 写入按账号限流(V22-10,数与理由在 `ORG_WRITE_RATE`);get 不限。被拒的这一次不算数,页面稍后自动重试
+                const verdict = orgWriteLimit.take(who.accountId);
+                if (!verdict.ok) throw Object.assign(accountError(429, 'org-rate-limited'), { retryAfterSec: verdict.retryAfterSec });
+                out = orgStore.put(who.accountId, body.baseVersion, body.org);
+              }
+              else bad(400, 'bad-org');
+            } catch (error) {
+              if (error instanceof OrgRefused) bad(error.status, error.code);
+              throw error;
+            }
+            if (out.conflict) {
+              send(res, 409, { ok: false, error: 'org-version-mismatch', code: 'org-version-mismatch', message: 'org-version-mismatch',
+                version: out.version, org: out.org, updatedAt: out.updatedAt }, cors);
+              return true;
+            }
+            result = { version: out.version, org: out.org, updatedAt: out.updatedAt };
+          }
           else if (url.pathname === `${PUBLIC}/members`) {
             if (typeof membersSnapshot !== 'function') bad(503, 'members-unavailable');
             result = await membersSnapshot(actor, body);

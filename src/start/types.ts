@@ -7,10 +7,14 @@
  *   画幅、时长、缩略图是这台浏览器打开过这个项目时记下的(`thumbCache.ts`),没打开过就没有,界面退回色块。
  * - **项目 Agent**:此刻连着的那个项目里、当前账号看得到的云端 Agent 对话(`src/ai/cloud/useCloud.ts` 的历史列表,
  *   服务端按 `product/agent.md` 的共有 / 私有规则过滤,页面再按同一条规则复核一遍,见 `vibeOrg.ts` 的 `viewableChats`)。
- * - **分组**:语义里还没有(「用户怎么组织项目」属一级)。这一版只记在这台浏览器里(`vibeOrg.ts`),不进服务端、不跨设备。
+ * - **分组**(用户 2026-10-23 定:分本地分组和云端分组,互相放不进):本地分组装本机草稿项目、存本机;
+ *   云端分组装云端项目、存云端。两套各管各的项目,这里用 `OrgRealm` 标出一个东西属于哪一套(`vibeOrg.ts`)。
  *
- * 置顶、归档、手排的顺序同样只记在本机(`vibeOrg.ts`),和分组一起。
+ * 置顶、归档、手排的顺序跟着分组走:本地项目记在本机,云端项目记在云端那一份。
  */
+
+/** 分组、项目属于哪一套:本地(桌面版,本机草稿项目)或云端(云端文档服务的项目)。两套互不混放 */
+export type OrgRealm = "local" | "cloud";
 
 /** 三种东西都能右键、能拖着排序,所以都带这两个标记(规则在 `treeState.ts`:只在自己同级里生效) */
 export interface TreeFlags {
@@ -21,6 +25,8 @@ export interface TreeFlags {
 export interface VibeGroup extends TreeFlags {
   id: string;
   name: string;
+  /** 这个分组属于哪一套;只能装同一套的项目 */
+  realm: OrgRealm;
 }
 
 export type Ratio = "16:9" | "9:16" | "1:1";
@@ -28,7 +34,9 @@ export type Ratio = "16:9" | "9:16" | "1:1";
 export interface VibeProject extends TreeFlags {
   id: string;
   name: string;
-  /** 所属分组(本机分组);null 是没放进分组的 */
+  /** 项目属于哪一套:本机草稿是 local,云端项目是 cloud。只能放进同一套的分组 */
+  realm: OrgRealm;
+  /** 所属分组(同一套里的分组);null 是没放进分组的 */
   groupId: string | null;
   /** 我创建的 / 我加入的 / 游客自己的那一个 */
   role: "owned" | "joined" | "guest";
