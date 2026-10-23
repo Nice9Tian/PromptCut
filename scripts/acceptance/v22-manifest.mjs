@@ -38,7 +38,17 @@ export const V22_EXCLUDED = {
   'vibe-desktop-probe.mjs': '桌面版氛围式的探针（`claude/editor-vibe-button`）：它跑在**真的 Tauri 壳窗口**里——要先在工作区起一个 vite dev server，再启动 promptcut.exe，然后把 WebView2 的调试端口用 `--cdp` 交给它。整套验收跑的是在线产物（`--dist`），起不了壳、也拿不到那个端口，所以不进整套；跑法写在探针文件头。作者 2026-10-23 在真壳里跑过十二步 `{"ok":true,"fails":[]}`（本机 Claude Code 真接上并跑出 10 个片段、拖一段 start 1→2.2、右键菜单九项），证据与截图在 docs/archive/agent-reports/AGENT-claude-editor-vibe-button.md',
 };
 
+/** 一组测试文件,外加这一项自己要的环境变量 */
+function E22(id, name, files, env, o = {}) {
+  const it = T22(id, name, files, o);
+  return { ...it, cmd: it.cmd, env, requiresEnv: ['PROMPTCUT_ACCOUNT_PROVIDER_ROOT', 'PROMPTCUT_PASSWORD_ORDER_MODULE'] };
+}
+
 export const V22_ITEMS = [
+  E22('V22-ar10-real-render', '账号模式预渲染重试的端到端（AR-10：「生成轨道流」关着时对话里如实写 off；打开后成员都离线，云端 Agent 改重卡 → 托管方渲染服务认领、产出入库 → 对话里补「云端渲染完成」）',
+    ['server/test/account-render-publish-e2e.test.mjs'], { PROMPTCUT_E2E_REAL_RENDER: '1' },
+    { timeoutMin: 25, known: '真起托管方渲染服务和无头 Chrome 工作进程，慢；端口用 PROMPTCUT_E2E_RENDER_BASE（缺省 5420）起的 7 个。在这一项之前它在全量里一直是条没人跑的跳过（2026-10-23 整套验收 G0-2 报出来）' }),
+
   T22('V22-project-name', '开始页自动取的项目名避开重名（撞了自动换一个再试：原名 → 原名 2…原名 5 → 原名 + 四位随机；只对 name-taken 重试，游客超额/没登录/网络断照原样抛）',
     ['src/start/format.test.mjs'],
     { covers: [], known: '纯单元测试，不起服务、不占端口' }),

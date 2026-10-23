@@ -35,6 +35,7 @@ export const G0_2_SKIPS = [
   { name: 'real chain, a dependency not ready: subjects cannot run (no onnxruntime in this Python) → the flow stops there when not optional, shots stay done, the project gets nothing', file: 'server/test/cloud-tools-p5-real.test.mjs', kind: '缺外部依赖', why: '同上' },
   { name: 'real chain, stopped mid-transcription (host path): the Python process is really gone, the flow never moves on, nothing is committed', file: 'server/test/cloud-tools-p5-real.test.mjs', kind: '缺外部依赖', why: '同上' },
   { name: 'real chain, the service shuts down mid-run, then comes back: "interrupted" at the right stage; a new call finishes the job', file: 'server/test/cloud-tools-p5-real.test.mjs', kind: '缺外部依赖', why: '同上' },
+  { name: 'AR-10 本机隔离托管组合 + 真实渲染服务:关着如实写 off;打开后成员都离线,云端 Agent 改重卡 → 渲染服务产出入库 → 对话里「云端渲染完成」', file: 'server/test/account-render-publish-e2e.test.mjs', kind: '要显式打开(慢)', why: '要 PROMPTCUT_E2E_REAL_RENDER=1 才跑:它真起托管方渲染服务和无头 Chrome 工作进程,单项上限 15 分钟,所以全量里不默认跑。清单里 V22-ar10-real-render 专门设好这个变量把它跑一遍(照 G0-6 对 cards-layout 的办法)。2026-10-23 补登记:在那之前它一直是全量里一条没人管的跳过' },
   { name: 'WIRE-SET 浏览器数据的记号:有删不动的东西时记号留着,下次接着清', file: 'server/test/cloud-tools-wire.test.mjs', platforms: ['win32'], kind: '平台不符', why: '要靠目录权限演「删不动」,Windows 上演不出;Linux 上两个用户之间的真情形由 scripts/probes/account-tools-perms-linux.mjs 验' },
   { name: 'WIRE-USAGE 以前按 0700 / 0600 建的目录和流水:任务进程起来时补成组内可读', file: 'server/test/cloud-tools-wire.test.mjs', platforms: ['win32'], kind: '平台不符', why: 'Windows 没有这一套权限位;Linux 上两个用户之间的真情形由 scripts/probes/account-tools-perms-linux.mjs 验' },
 ];
