@@ -26,6 +26,7 @@
  *
  * 只用 Node 内置模块。
  */
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createStorageProvider, SUPPORTED_KINDS, StorageConnectorError } from './index.mjs';
@@ -61,13 +62,59 @@ const CATALOG = [
   { kind: 'dropbox', label: 'Dropbox', scope: null },
 ];
 
-/** A2 要的三样:客户端 ID、客户端密钥、重定向地址 */
-export function oauthConfig(env = process.env) {
+/** 「开发期写法」那句提示只打一次,别每个请求刷一行 */
+let warnedInlineSecret = false;
+
+/**
+ * 客户端密钥从哪来。
+ *
+ * **优先读文件**(`PROMPTCUT_GOOGLE_CLIENT_SECRET_FILE` 给路径),这是部署时该走的那条路 ——
+ * `../hosted/deploy/agent-account.env.example` 的文件头写明「里面没有任何秘密(私钥只写路径)」,
+ * 密钥文件和 `PROMPTCUT_AGENT_CLIENT_KEY_FILE` 一个待遇:0600、属主是服务用户。
+ *
+ * 直接给值的 `PROMPTCUT_GOOGLE_CLIENT_SECRET` 留着,只为开发期方便(本机起开发服务器时从文件里
+ * 读出来喂进环境变量比较顺手),用到它会在日志里说一句。两个都配时**文件优先**。
+ *
+ * 读不到文件不抛:回空串,等于「这台机器没配好 A2」,界面上「连接」按钮灰着并说明原因,A3 照常可用。
+ */
+function readClientSecret(env, log) {
+  const file = String(env.PROMPTCUT_GOOGLE_CLIENT_SECRET_FILE || '');
+  if (file) {
+    try {
+      const got = fs.readFileSync(file, 'utf8').trim();
+      if (got) return got;
+      log?.('storage.secret-file-empty', { file });
+    } catch (e) {
+      // 路径不对、权限不够、文件不在 —— 都只记一行,不带文件内容
+      log?.('storage.secret-file-unreadable', { file, code: e?.code || String(e?.message || e) });
+    }
+    return '';
+  }
+  const inline = String(env.PROMPTCUT_GOOGLE_CLIENT_SECRET || '');
+  if (inline && !warnedInlineSecret) {
+    warnedInlineSecret = true;
+    log?.('storage.secret-inline', { hint: '开发期写法;生产请改用 PROMPTCUT_GOOGLE_CLIENT_SECRET_FILE 只写路径' });
+  }
+  return inline;
+}
+
+/**
+ * A2 要的三样:客户端 ID、客户端密钥、重定向地址。
+ *
+ * 只有客户端密钥是秘密,另外两样本来就出现在页面里。**这个函数的返回值不要整个往回包里塞**
+ * (`storageConfig` 只取 `redirectUri`)。
+ */
+export function oauthConfig(env = process.env, log = defaultLog) {
   return {
     clientId: String(env.PROMPTCUT_GOOGLE_CLIENT_ID || ''),
-    clientSecret: String(env.PROMPTCUT_GOOGLE_CLIENT_SECRET || ''),
+    clientSecret: readClientSecret(env, log),
     redirectUri: String(env.PROMPTCUT_GOOGLE_REDIRECT_URI || ''),
   };
+}
+
+/** 默认的一行日志。密钥本身永远不进日志,只记「从哪读的、为什么没读到」 */
+function defaultLog(event, fields) {
+  console.log(`[storage] ${event}`, JSON.stringify(fields ?? {}));
 }
 
 /**
@@ -80,7 +127,8 @@ export function storageConfig(env = process.env) {
   const clientId = String(env.PROMPTCUT_GOOGLE_CLIENT_ID || '');
   const apiKey = String(env.PROMPTCUT_GOOGLE_API_KEY || '');
   const appId = String(env.PROMPTCUT_GOOGLE_PROJECT_NUMBER || '');
-  const { clientSecret, redirectUri } = oauthConfig(env);
+  // 这里每次页面加载都会调,日志交给真正要用密钥的那两条路(connect / import)去打
+  const { clientSecret, redirectUri } = oauthConfig(env, null);
   return {
     ok: true,
     providers: CATALOG.map((p) => {
