@@ -6,15 +6,13 @@
  * Add --nsis-patch-upgrade instead to build and run its committed NSIS wrapper silently.
  * The code update preserves the current version number and does not test an NSIS setup bundle.
  * --standalone-smoke verifies the private Explorer environment bootstrap via arguments only.
- * --os-double-click --allow-temporary-open-command requires explicit operator permission;
- * it waits for real ComputerUse double clicks and restores the original open command.
- * --allow-extended-association-lease explicitly permits a bounded 90s lease for
- * slow ComputerUse round trips; the default remains 30s. This is not a speed test.
- * --isolated-default-progid --allow-temporary-default-progid instead creates a
- * unique test ProgID and leases the existing .proc default string for 30s by default
- * (90s only with the explicit extended-lease opt-in).
- * UserChoice is refused; the original ProgID command is never changed in this mode.
- * A native argument/IPC pass is not evidence of an OS default-file-association double click.
+ * 操作系统默认关联的真双击不在这支探针里：在 PC 上临时改写 .proc 打开命令那条路 19 轮都没拿到回执，
+ * 用户 2026-10-05 改定不再改写关联，改为在笔记本真实安装候选包、由安装器登记关联后在资源管理器真双击
+ * （做法见 docs/plan/collaboration-reopen-installed-acceptance.md，探针 reopen-installed.mjs）。
+ * 本探针只验参数与 IPC 两条路，它们不算默认关联双击的证据。
+ * 原先的 --os-double-click / --allow-temporary-open-command / --allow-extended-association-lease /
+ * --isolated-default-progid / --allow-temporary-default-progid 五个开关与配套脚本已于 2026-10-23 的探针总审删除
+ * （报告 docs/reports/AGENT-claude-probe-audit.md）。
  */
 import '../lib/no-user-dirs.mjs';
 import fs from 'node:fs';
@@ -29,14 +27,13 @@ import puppeteer from 'puppeteer';
 import { waitFor } from '../../server/test/fake-ws-kit.mjs';
 import { loadNativeFixture, nativeTestEnv } from './reopen-native-fixture.mjs';
 import { upgradeNativeFixture } from './reopen-native-upgrade.mjs';
-import { explorerNativeLaunch, prepareStandaloneLaunch } from './reopen-native-association.mjs';
+import { prepareStandaloneLaunch } from './reopen-native-association.mjs';
 
 const fixture = loadNativeFixture(process.argv[2]);
 const { port } = fixture;
 const root = fs.mkdtempSync(path.join(fixture.root, 'run-'));
 const nativeMember = process.argv.includes('--member');
-const osDoubleClick = process.argv.includes('--os-double-click');
-const associationLaunches = [];
+
 assert.equal(port, 5203);
 const require = createRequire(import.meta.url);
 const vite = path.join(path.dirname(require.resolve('vite/package.json')), 'bin/vite.js');
@@ -135,10 +132,7 @@ async function native(copy, file = null) {
   const launchEnv = nativeTestEnv({ ...isolatedSettings, PC_REOPEN_NATIVE_ROOT: root, PC_REOPEN_NATIVE_BROWSER_DIR: profile, PROMPTCUT_RUNTIME_DIR: entry.runtime, PROMPTCUT_AGENT_CDP: String(cdpPort),
     PROMPTCUT_PROJECTS_DIR: path.join(root, 'data/drafts'), PROMPTCUT_NO_PORT_FILE: '1', PROMPTCUT_AUTO_RENDER_NODE: '0', PROMPTCUT_PUSH: '0', PROMPTCUT_QUEUE_NODE: '0', PROMPTCUT_LAN_HOST: '0' });
   let child;
-  if (file && osDoubleClick) {
-    const launched = await explorerNativeLaunch(process.argv[2], entry, file, launchEnv);
-    child = launched.child; associationLaunches.push(launched.receipt);
-  } else {
+  {
     const standaloneSmoke = file && process.argv.includes('--standalone-smoke');
     if (standaloneSmoke) prepareStandaloneLaunch(process.argv[2],entry,file,launchEnv);
     child = spawn(entry.exe, file ? [file] : [], { cwd: path.dirname(entry.exe), windowsHide: true,
@@ -259,13 +253,7 @@ try {
     window.nativeOpenEvents = 0; window.nativeIpcOriginalLink = window.probe.sync.currentSharedLink();
     await window.__TAURI__.event.listen('pc-open-file', ev => { if (ev.payload === target) window.nativeOpenEvents++; });
   }, filePath);
-  if (osDoubleClick) {
-    const launched = await explorerNativeLaunch(process.argv[2], second.entry, filePath, { ...isolatedSettings,
-      PC_REOPEN_NATIVE_ROOT: root, PC_REOPEN_NATIVE_BROWSER_DIR: second.profile, PROMPTCUT_RUNTIME_DIR: second.entry.runtime,
-      PROMPTCUT_AGENT_CDP: String(second.cdpPort), PROMPTCUT_PROJECTS_DIR: path.join(root,'data/drafts'),
-      PROMPTCUT_NO_PORT_FILE:'1',PROMPTCUT_AUTO_RENDER_NODE:'0',PROMPTCUT_PUSH:'0',PROMPTCUT_QUEUE_NODE:'0',PROMPTCUT_LAN_HOST:'0'}, {secondary:true});
-    associationLaunches.push(launched.receipt);
-  } else {
+  {
     const ipc = spawn(second.entry.exe, [filePath], { cwd: path.dirname(second.entry.exe), windowsHide: true, env: nativeTestEnv({ ...isolatedSettings, PC_REOPEN_NATIVE_ROOT: root, PC_REOPEN_NATIVE_BROWSER_DIR: second.profile, PROMPTCUT_RUNTIME_DIR: second.entry.runtime }), stdio: 'ignore' });
     children.add(ipc); assert.equal(await new Promise(resolve => ipc.once('exit', resolve)), 0); children.delete(ipc);
   }
@@ -298,9 +286,8 @@ try {
     hostPidBefore: nativeMember ? peerBefore.pid : first.pid, hostPidAfter: nativeMember ? peerAfter.pid : second.pid,
     memberPidBefore: nativeMember ? first.pid : peerBefore.pid, memberPidAfter: nativeMember ? second.pid : peerAfter.pid,
     bidirectionalEdits: 4, binding, asset, originalFileUnchanged: true, recoveryCreateRequests: createRequests,
-    nativeOsDoubleClick: osDoubleClick, standaloneBootstrapTested:process.argv.includes('--standalone-smoke'),
-    associationLaunches, installerUpgrade: !!runtimeUpgrade, runtimeUpgrade, actualComputerRestart: false,
-    fileAssociationsChanged: osDoubleClick, fileAssociationsRestored: osDoubleClick ? associationLaunches.every(x=>x.association.restored) : undefined,
+    nativeOsDoubleClick: false, standaloneBootstrapTested:process.argv.includes('--standalone-smoke'),
+    installerUpgrade: !!runtimeUpgrade, runtimeUpgrade, actualComputerRestart: false,
     isolatedProviderConfiguration: true, evidenceDirectory: root };
   fs.writeFileSync(path.join(root, 'native-evidence.json'), JSON.stringify(evidence, null, 2)); console.log(JSON.stringify(evidence));
 } catch (e) {
