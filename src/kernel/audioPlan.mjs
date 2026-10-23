@@ -30,7 +30,8 @@ export function audioPlanOf(source) {
     for (const c of tr.clips || []) {
       if (c.audioMuted) continue;
       // 〔裁〕第一版变速段的原声不出(kernel/clipTime.mjs 文件头):浏览器离线混音与 ffmpeg 做不出一样的变速声音,
-      // 只有「不出」两边一致。挂在它上面的音频效果、卡片声音同样不出(声音来源就是这段原声)。
+      // 只有「不出」两边一致。挂在它上面的音频效果、声画一体卡的声音同样不出(声音来源就是这段原声)。
+      // 音频素材效果卡不走这份清单(mux-audio 的 buildAudioPlan 另收),变速段当它的输入时随倍率变速变调(2026-10-23 用户定「放开。」)。
       if (speedMutesSource(c, project)) continue;
       const embedded = clipHasEmbeddedAudio(project, c);
       const rendition = embedded ? resolveCardAudioRendition(project, c) : null;

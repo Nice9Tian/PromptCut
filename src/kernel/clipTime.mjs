@@ -51,7 +51,8 @@ export function isSpeedChanged(clip) {
  * **声音段**(素材是 audio,比如音画分离出来的那一条)变速时照常出声,随倍率变速变调(`ffmpegVarispeed` / `resampleVarispeed`,
  * 2026-10-23 用户定「可以分离,失真问题记待办」)。
  * `project` 给了就按素材的种类判;没给(拿不到项目的地方)按视频办。
- * 预览的声音层、导出混音(`audioPlanOf` 与 `mux-audio` 的卡片声音那一路)、测响度都用这一条。
+ * 预览的声音层、导出混音(`audioPlanOf`)、测响度都用这一条。挂在变速视频段上的**音频素材效果卡**不受它管:卡读这段素材当输入,
+ * 随倍率变速变调(`render/cards/audioSources.ts` 的 `varispeedBlock`,2026-10-23 用户定「放开。」);声画一体卡的声音仍不出。
  */
 export function speedMutesSource(clip, project) {
   if (!clip?.mediaId || !isSpeedChanged(clip)) return false;
