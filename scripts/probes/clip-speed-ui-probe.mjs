@@ -108,8 +108,11 @@ try {
   check(tools.indexOf('sub-mute') < tools.indexOf('sub-speed') && tools.indexOf('sub-speed') < tools.indexOf('sub-adjust'), 'P1 顺序同演示稿:静音、速度、调整', tools);
 
   /* ---------- P2 速度面板 ---------- */
-  await tap(A, '[data-pcm="sub-speed"]');
+  // 直接点元素(按坐标点时子导航栏可能刚好在重排,会点到别的项)
+  await closeSheet(A);
+  await A.$eval('[data-pcm="sub-speed"]', (b) => b.click());
   await A.waitForSelector('[data-pcm="speed-presets"]', { visible: true, timeout: 10_000 });
+  await sleep(700); // 面板滑入动画走完再点
   const note = await A.$eval('[data-pcm="speed-note"]', (e) => e.textContent);
   const presets = await A.$$eval('[data-pcm="speed-preset"]', (bs) => bs.map((b) => [b.dataset.speed, b.getAttribute('aria-pressed')]));
   await shot(A, 'P2-sheet-before');
@@ -154,17 +157,18 @@ try {
   check(!!audioBefore && !audioAfter, 'P4 变速后预览不出原声(声音层没了)', { before: !!audioBefore, after: !!audioAfter });
 
   /* ---------- P5 播放中舞台视频按 2 倍放 ---------- */
-  await store(A, 'S.actions.seek(args[0]); S.actions.play(); return true;', placed.start + 0.1);
-  // 等到舞台里有视频在放(起播有延迟),最多 8 秒
+  // 等到舞台里有视频在放(起播有延迟);播过这一段还没等到就从头再放,最多三遍
   let rates = [];
-  for (let k = 0; k < 32 && !rates.length; k++) {
-    await sleep(250);
+  for (let k = 0; k < 36 && !rates.length; k++) {
+    if (k % 12 === 0) { await store(A, 'S.actions.pause(); S.actions.seek(args[0]); S.actions.play(); return true;', placed.start + 0.1); }
+    await sleep(200);
     for (const f of A.frames()) {
       const r = await f.evaluate(() => [...document.querySelectorAll('video')].filter((v) => !v.paused).map((v) => ({ rate: v.playbackRate, t: +v.currentTime.toFixed(2) }))).catch(() => []);
       if (r.length) rates.push({ url: f.url().slice(0, 60), r });
     }
   }
-  const playState = await store(A, 'const s = S.getState(); return { playing: s.playing, t: s.t };');
+  await shot(A, 'P5-playing');
+  const playState = await store(A, 'const s = S.getState(); return { playing: s.playing, t: s.t, front: document.querySelector("iframe[data-front], iframe.front")?.src?.slice(0, 60) ?? null };');
   const allVideos = [];
   for (const f of A.frames()) {
     const r = await f.evaluate(() => [...document.querySelectorAll('video')].map((v) => ({ paused: v.paused, rate: v.playbackRate, t: +v.currentTime.toFixed(2), src: (v.currentSrc || '').slice(-24) }))).catch((e) => [{ err: String(e).slice(0, 80) }]);
@@ -175,18 +179,24 @@ try {
   const playing = rates.flatMap((x) => x.r);
   check(playing.length > 0 && playing.every((v) => v.rate >= 1.8 && v.rate <= 2.2), 'P5 舞台里放变速段的视频按 2 倍(±10%)', rates);
 
-  /* ---------- P6 撤销 ---------- */
+  /* ---------- P6 撤销:一步只退一次改动;退到底回到 1×、不留 speed 字段 ---------- */
+  // 这之前改过三次速度:1→2(P2)、2→1.5、1.5→2(P2b;输入 5 被拒绝,不算一步)
   await store(A, 'S.actions.undo(); return true;');
+  const undo1 = await clipOf(A, placed.id);
+  await store(A, 'S.actions.undo(); S.actions.undo(); return true;');
   const undone = await clipOf(A, placed.id);
-  step('P6', { speedField: undone && 'speed' in undone, end: undone?.end });
-  check(!!undone && !('speed' in undone) && undone.end === placed.end, 'P6 撤销一步回到 1×、不留 speed 字段', undone);
+  step('P6', { afterOneUndo: undo1 && [undo1.speed, undo1.end], speedField: undone && 'speed' in undone, end: undone?.end });
+  check(undo1?.speed === 1.5 && Math.abs(undo1.end - 4) < 1e-6, 'P6 撤销一步只退回上一次(1.5×)', undo1 && [undo1.speed, undo1.end]);
+  check(!!undone && !('speed' in undone) && undone.end === placed.end, 'P6 退到底回到 1×、不留 speed 字段', undone);
 
   /* ---------- P7 挂着转场改速度:装不下时转场跟着缩短,弹气泡说清楚(用户 2026-10-23 定) ---------- */
   const added = await store(A, 'return S.actions.addTransition({ kind: "fadeOut", clipId: args[0], dur: 2.5 }).ok;', placed.id);
   await store(A, 'S.actions.select([args[0]]); return true;', placed.id);
   await until('子导航栏有速度', async () => (await A.$('[data-pcm="sub-speed"]')) ? true : null, 10_000);
-  await tap(A, '[data-pcm="sub-speed"]');
+  await closeSheet(A);
+  await A.$eval('[data-pcm="sub-speed"]', (b) => b.click());
   await A.waitForSelector('[data-pcm="speed-presets"]', { visible: true, timeout: 10_000 });
+  await sleep(700);
   await tap(A, '[data-pcm="speed-preset"][data-speed="4"]');
   const bubble = await until('转场缩短的气泡', () => A.evaluate(() => { const t = document.body.innerText; const i = t.indexOf('淡出跟着缩短'); return i >= 0 ? t.slice(Math.max(0, i - 30), i + 60) : null; }), 5000);
   await shot(A, 'P7-transition-bubble');
