@@ -327,3 +327,133 @@ test('入库失败时临时文件留着,下次接着拉', async () => {
   await discardPartial({ kind: 'google-drive', fileId: id, tmpDir: TMP });
   assert.ok(!fs.existsSync(part));
 });
+
+// ───────────────────────── HTTP 层(route.mjs)─────────────────────────
+
+import { storageConfig, parseImportBody, statusForCode, handleStorageImport, pullTmpDir } from '../storage-connectors/route.mjs';
+
+test('storageConfig:没配环境变量就 configured:false 并说明原因', () => {
+  const cfg = storageConfig({});
+  const drive = cfg.providers.find((p) => p.kind === 'google-drive');
+  assert.equal(drive.configured, false);
+  assert.match(drive.reason, /PROMPTCUT_GOOGLE_CLIENT_ID/);
+  // 没配好时连空的 clientId 都不下发,省得页面以为有
+  assert.equal(drive.clientId, undefined);
+});
+
+test('storageConfig:配齐三样才算 configured,且只下发这三样', () => {
+  const cfg = storageConfig({
+    PROMPTCUT_GOOGLE_CLIENT_ID: 'cid.apps.googleusercontent.com',
+    PROMPTCUT_GOOGLE_API_KEY: 'AIzaKEY',
+    PROMPTCUT_GOOGLE_PROJECT_NUMBER: '727415172612',
+  });
+  const drive = cfg.providers.find((p) => p.kind === 'google-drive');
+  assert.equal(drive.configured, true);
+  assert.equal(drive.clientId, 'cid.apps.googleusercontent.com');
+  assert.equal(drive.appId, '727415172612');
+  assert.equal(drive.scope, 'https://www.googleapis.com/auth/drive.file');
+  assert.equal(drive.reason, undefined);
+  // 客户端密钥永远不下发给页面:整份配置里不许出现 secret 字样
+  assert.ok(!/secret/i.test(JSON.stringify(cfg)));
+});
+
+test('storageConfig:缺一样就不算配好', () => {
+  for (const missing of ['PROMPTCUT_GOOGLE_CLIENT_ID', 'PROMPTCUT_GOOGLE_API_KEY', 'PROMPTCUT_GOOGLE_PROJECT_NUMBER']) {
+    const env = {
+      PROMPTCUT_GOOGLE_CLIENT_ID: 'a', PROMPTCUT_GOOGLE_API_KEY: 'b', PROMPTCUT_GOOGLE_PROJECT_NUMBER: 'c',
+    };
+    delete env[missing];
+    const drive = storageConfig(env).providers.find((p) => p.kind === 'google-drive');
+    assert.equal(drive.configured, false, `缺 ${missing} 时不该算配好`);
+  }
+});
+
+test('storageConfig:Dropbox 只占位,标明还没做', () => {
+  const box = storageConfig({}).providers.find((p) => p.kind === 'dropbox');
+  assert.equal(box.configured, false);
+  assert.match(box.reason, /还没做/);
+});
+
+test('parseImportBody:形状不对一律 bad-request', () => {
+  const bad = [
+    {},
+    { kind: 'onedrive', token: 't', fileId: 'f' },
+    { kind: 'google-drive', fileId: 'f' },
+    { kind: 'google-drive', token: '', fileId: 'f' },
+    { kind: 'google-drive', token: 'x'.repeat(5000), fileId: 'f' },
+    { kind: 'google-drive', token: 't' },
+  ];
+  for (const body of bad) {
+    assert.throws(() => parseImportBody(body), (e) => e.code === 'bad-request', JSON.stringify(body));
+  }
+  assert.deepEqual(
+    parseImportBody({ kind: 'google-drive', token: 't', fileId: 'f', name: 'a.mp4' }),
+    { kind: 'google-drive', token: 't', fileId: 'f', name: 'a.mp4' },
+  );
+});
+
+test('statusForCode:页面据此分辨重试、重新授权还是认错', () => {
+  assert.equal(statusForCode('bad-request'), 400);
+  assert.equal(statusForCode('token-expired'), 401);
+  assert.equal(statusForCode('forbidden'), 403);
+  assert.equal(statusForCode('not-found'), 404);
+  assert.equal(statusForCode('quota'), 429);
+  assert.equal(statusForCode('network'), 502);
+  assert.equal(statusForCode('whatever'), 500);
+});
+
+test('pullTmpDir:固定一个目录,断点续传才认得上', () => {
+  assert.equal(pullTmpDir({}), pullTmpDir({}));
+  assert.equal(pullTmpDir({ PROMPTCUT_STORAGE_PULL_DIR: '/x/y' }), '/x/y');
+});
+
+test('handleStorageImport:从假 Drive 一路拉到入库', async () => {
+  const buf = crypto.randomBytes(3000);
+  const posted = [];
+  const asset = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      posted.push(Buffer.concat(chunks));
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ ok: true, hash: 'b'.repeat(64), ext: 'mp4', name: 'v.mp4', bytes: 3000 }));
+    });
+  });
+  await new Promise((r) => asset.listen(0, '127.0.0.1', r));
+  after(() => asset.close());
+
+  // 假的 Google:元信息一条,字节按 Range 切
+  const driveFetch = async (url, init = {}) => {
+    if (!String(url).includes('alt=media')) {
+      return new Response(JSON.stringify({ id: FILE_ID, name: 'v.mp4', size: String(buf.length), mimeType: 'video/mp4' }),
+        { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    const m = /bytes=(\d+)-(\d*)/.exec(init.headers?.Range || '');
+    const start = Number(m?.[1] ?? 0);
+    const end = m?.[2] ? Number(m[2]) : buf.length - 1;
+    return new Response(buf.subarray(start, end + 1), { status: 206 });
+  };
+
+  const tmpDir = path.join(TMP, 'route-pull');
+  const out = await handleStorageImport(
+    { kind: 'google-drive', token: 'tok', fileId: FILE_ID, name: 'v.mp4' },
+    { origin: () => `http://127.0.0.1:${asset.address().port}`, tmpDir, fetchImpl: driveFetch },
+  );
+
+  assert.equal(out.hash, 'b'.repeat(64));
+  assert.equal(out.source.kind, 'google-drive');
+  assert.equal(out.pulled.total, 3000);
+  assert.equal(posted.length, 1);
+  assert.ok(posted[0].equals(buf), '送进素材服务的字节要和网盘上的逐字节一致');
+});
+
+test('handleStorageImport:网盘回 401 时错误带得出 token-expired', async () => {
+  const driveFetch = async () => new Response('', { status: 401 });
+  await assert.rejects(
+    () => handleStorageImport(
+      { kind: 'google-drive', token: 'tok', fileId: FILE_ID },
+      { origin: () => 'http://127.0.0.1:1', tmpDir: path.join(TMP, 'route-401'), fetchImpl: driveFetch },
+    ),
+    (e) => e.code === 'token-expired' && statusForCode(e.code) === 401,
+  );
+});

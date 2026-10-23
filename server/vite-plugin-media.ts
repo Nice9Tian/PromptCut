@@ -889,6 +889,36 @@ export function mediaMiddleware(root: string, options: ProjectMediaOptions = {})
       }
     }
 
+    // GET /api/media/storage/config —— 网盘连接器给页面的公开参数(任务书 docs/plan/drive-connector-task.md 第 5 节)。
+    // 没配环境变量就回 configured: false,界面把入口置灰并说明原因,不报错。
+    if (req.method === "GET" && req.url.split("?")[0] === "/api/media/storage/config") {
+      const { storageConfig }: any = await import("./storage-connectors/route.mjs");
+      res.setHeader("Content-Type", "application/json");
+      return res.end(JSON.stringify(storageConfig()));
+    }
+
+    // POST /api/media/storage/import { kind, token, fileId, name? } —— 从用户的网盘拉一份进素材库。
+    // 回包形状和 /api/media/upload/<名> 一样,页面照 applyUploadedMedia 那条路登记。
+    // 页面交来的 access token 只在这一次请求里用:不落盘、不进日志、不进回包。
+    if (req.method === "POST" && req.url.split("?")[0] === "/api/media/storage/import") {
+      const { handleStorageImport, statusForCode }: any = await import("./storage-connectors/route.mjs");
+      const { assetServiceOrigin }: any = await import("./asset-client");
+      try {
+        const body = await readJsonBody(req);
+        const out = await handleStorageImport(body, { origin: assetServiceOrigin });
+        res.setHeader("Content-Type", "application/json");
+        return res.end(JSON.stringify({ ok: true, ...out }));
+      } catch (err: any) {
+        res.statusCode = statusForCode(err?.code);
+        res.setHeader("Content-Type", "application/json");
+        return res.end(JSON.stringify({
+          ok: false,
+          error: String(err?.code || "error"),
+          message: err instanceof Error ? err.message : String(err),
+        }));
+      }
+    }
+
     // POST /api/media/tiers/backfill { items: [{ hash, name? }] } —— 打开项目时补转素材小尺寸(C6.6 设计稿第 9 节第 2 条):
     // 本地内容库里有这份素材原尺寸的视频排进后台转码,回 { ok, items: { [hash]: { state, small? } } };
     // 本地没有素材原尺寸的回 state: 'absent'(不为了转素材小尺寸去拉素材原尺寸)
