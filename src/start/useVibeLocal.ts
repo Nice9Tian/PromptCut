@@ -69,11 +69,18 @@ export function useVibeLocal(o: { projectId: string | null }): VibeLocal {
   }, [o.projectId, tabs.tabs]);
   const current = chats.find((c) => c.id === tabId) ?? null;
 
+  /**
+   * 发不了的原因。**「还在找」和「一个都没有」要分开说** —— 刚进来那一两秒 `useAiChat` 正在问服务端有哪些驱动
+   * (`providers` 还是空的,`provider` 还是 null),这时候写「还没选 Agent」是冤枉人:过一会儿它自己就选上了。
+   */
+  const looking = ai.providers.length === 0;
   const whyNot = !o.projectId
     ? "先在左边打开一个项目，再和它的 Agent 说话。"
     : ai.provider
       ? null
-      : "还没选 Agent：点上面的「配置 Agent」挑一个本机的命令行 Agent，或填一个 API 密钥。";
+      : looking
+        ? "正在找这台机器上的 Agent…"
+        : "还没选 Agent：点上面的「配置 Agent」挑一个本机的命令行 Agent，或填一个 API 密钥。";
 
   /** 发送。这一页在跑就排队(不打断它),空闲就直发 —— 和 AI 栏的 `handleSend` 同一条路 */
   const send = useCallback(async (text: string): Promise<boolean> => {

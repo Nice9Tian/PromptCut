@@ -20,7 +20,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { JSX } from "react";
-import { actions } from "../store/project";
+import { actions, useStore } from "../store/project";
 import type { DraftInfo } from "../editor/io/drafts";
 import { deleteDraft, listDrafts, newDraftId, openDraft, saveDraft, setActiveDraftId } from "../editor/io/drafts";
 import { newProject } from "../editor/io/proc";
@@ -45,6 +45,15 @@ import "./start.css";
  * 固定用 `desktop` —— 和在线的那几格互不相干,两边不会串。
  */
 const ORG_SCOPE = "desktop";
+
+/**
+ * 改动落定之后隔多久存一次草稿。
+ *
+ * 氛围式里动手的是 Agent,用户手边没有编辑界面那颗「保存项目」—— 不自动存,这一屏里 Agent 做的东西
+ * 一回首页就没了。语义里本来就是这么说的:`workflow/project.md`「草稿自动保存在本机」。
+ * 等这一轮跑完再存(`streaming` 落下来),不在流式过程中一遍遍写盘。
+ */
+const AUTOSAVE_MS = 2500;
 
 /** 同级的键:和 `ProjectSidebar` 里判能不能拖到一起用的是同一套 */
 const projectSib = (p: VibeProject) => `project:${p.groupId ?? "loose"}`;
@@ -120,6 +129,25 @@ export function DesktopStart(props: {
   const chats = useMemo(() => (openId ? mergeChats(org, openId, vibe.chats) : []), [org, openId, vibe.chats]);
   const openChat: VibeChat | null = chatPage && openId ? (chats.find((c) => c.id === vibe.tabId) ?? vibe.current) : null;
 
+  /* ---------------- 自动保存 ---------------- */
+  const dirty = useStore((s) => s.dirty);
+  /** 存一次当前项目。存不下去(只读、盘满)如实说,不吞掉 */
+  const save = useCallback(async (id: string) => {
+    try {
+      await saveDraft(id);
+      await refresh();
+      return true;
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : "这次没存上，改动还在，过一会儿会再试。");
+      return false;
+    }
+  }, [refresh]);
+  useEffect(() => {
+    if (!openId || !dirty || vibe.streaming || busy) return;
+    const timer = window.setTimeout(() => { void save(openId); }, AUTOSAVE_MS);
+    return () => window.clearTimeout(timer);
+  }, [openId, dirty, vibe.streaming, busy, save]);
+
   /* ---------------- 动作 ---------------- */
 
   /** 点进一个项目:读那份草稿载进 store,再进它的聊天页。已经开着就直接回聊天页 */
@@ -127,7 +155,9 @@ export function DesktopStart(props: {
     if (openId === id) { setChatPage(true); return; }
     setNotice("");
     setBusy(true);
-    void openDraft(id)
+    // 换项目之前先把手上这个存了 —— 换完 store 就是另一个项目,没存的就找不回来了
+    const prior = openId && dirty ? save(openId) : Promise.resolve(true);
+    void prior.then(() => openDraft(id))
       .then(() => {
         setActiveDraftId(id);
         setOpenId(id);
@@ -135,6 +165,12 @@ export function DesktopStart(props: {
       })
       .catch((e: unknown) => setNotice(e instanceof Error ? e.message : "这个项目打不开。"))
       .finally(() => setBusy(false));
+  };
+
+  /** 进传统式之前先存一次:编辑界面那边是手动存,带着没存的改动过去,顶栏会一直标着「*」 */
+  const enterEditor = () => {
+    if (openId && dirty) void save(openId).then(props.onEnterEditor);
+    else props.onEnterEditor();
   };
 
   /**
@@ -150,6 +186,7 @@ export function DesktopStart(props: {
     setChatPage(true);
     await refresh();
     return id;
+    // 之后这个项目的改动由上面那段自动保存管,用户不用自己按「保存项目」
   };
 
   const createBlank = () => {
@@ -166,14 +203,17 @@ export function DesktopStart(props: {
     setNotice("正在新建项目…");
     const picked = files;
     try {
-      if (ratio !== "16:9") actions.setProjectMeta({ ...RATIO_SIZE[ratio] });
+      // 顺序不能反:`createLocal` 里的 `newProject` 会把 store 里的项目整个换掉,
+      // 先设画幅的话会被它冲掉(建完再设才留得住)
       const id = await createLocal(projectNameFromPrompt(text));
+      if (ratio !== "16:9") actions.setProjectMeta({ ...RATIO_SIZE[ratio] });
       if (picked.length) {
         const r = await importMediaFiles(picked);
         const n = r.counts.video + r.counts.audio + r.counts.image;
         setNotice(n ? `已把 ${n} 个素材放进项目。` : (r.rejected[0] ?? "挑的文件里没有能导入的素材。"));
-        await saveDraft(id);
       } else setNotice("");
+      // 画幅和素材一起落盘,免得等自动保存那几秒里关掉就白设了
+      if (ratio !== "16:9" || picked.length) await saveDraft(id);
       setFiles([]);
       setPending({ projectId: id, text });
     } catch (e) {
@@ -371,7 +411,7 @@ export function DesktopStart(props: {
             pending={pending && pending.projectId === openId ? pending.text : null}
             onPendingSent={() => setPending(null)}
             panel={panel}
-            onPro={props.onEnterEditor}
+            onPro={enterEditor}
             ext={{
               width: extWidth,
               onWidth: setExtWidth,
