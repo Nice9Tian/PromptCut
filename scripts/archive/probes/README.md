@@ -67,7 +67,12 @@
 | `svg-url-serialize-probe.mjs` | SVG 里 `url(...)` 怎么序列化的一次性观测（2026-09-17，Chrome 152） | 全文 0 条断言、恒以 0 退出；结论已固化进 `src/render/snapshotRename.ts` 的文件头与 `snapshotRename.test.mjs` |
 | `stream-editor-e2e.mjs` | R8 轨道流在真编辑台里的端到端探针 | 文件头自己写明「只对打过 `r8-glue.patch` 的 dev server 有意义」，那个补丁在仓库和任何分支上都不存在，没打补丁时它会卡在「等流生产完」超时；R8 已合入 main，现在这条链由 `scrub-stream-probe.mjs` 等守门 |
 
-指向它们的散文指针已改到归档路径：`src/render/snapshotRename.ts`、`scripts/probes/preview-fallback-probe.mjs`、`scripts/probes/probe-connect.mjs`。
+指向它们的散文指针已改到归档路径：`scripts/probes/preview-fallback-probe.mjs`、`scripts/probes/probe-connect.mjs`。
+
+**`src/render/snapshotRename.ts` 的文件头故意不改**（2026-10-23〔裁〕V21-30）：那个文件在 `server/frame-code.mjs` 的 `SNAPSHOT_FILES` 里，
+代码版本按文件原文哈希（`frame-code.mjs` 的 `textOf`，只统一换行），改一个字（注释也算）就换一个 `snapshotCode`，
+已有的快照键和卡片缓存键全部作废、下次部署整站重渲。它里面写的 `scripts/probes/svg-url-serialize-probe.mjs` 现在在
+`scripts/archive/probes/` 下（见上表），按文件名就能找到。以后想顺手把它改成归档路径的，先看这一段。
 
 ## snapshot-size-probe.mjs
 
