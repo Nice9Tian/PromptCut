@@ -217,6 +217,61 @@
 
 部署完在 `https://visuhive.com/editor/` 上复验登录页，**用的是用户自己 Chrome 的系统截图**，不是浏览器自己的截图：左栏画布上的青／琥珀烟雾**向背景平滑淡出**，没有整块不透明；标题「打开浏览器就能剪片子」和副标题在遮罩上清晰可读；右栏登录框、「通过 Google 继续操作」、「以游客身份进入」都在。截图留在本次会话的 scratchpad（`shots/login-0724-chrome-system.jpg`）。
 
+## 0.7.24 发出去当天：Google 登录进不去（2026-10-24 用户报）
+
+用户原话：「编辑器界面实际上用Google账号登录进不去，授权以后没有反应。」
+
+### 生产上的证据：服务端每次都登成功了，页面没动
+
+节点日志（`journalctl`）把这件事说得很清楚 —— 用户点的那几下，**每一下服务端都登成功了**：
+
+| 时刻（UTC） | 身份服务 `visuhive-identity` | 账号服务 `promptcut-account-v2` |
+|---|---|---|
+| 16:38:10 | `verified provider=google subject=105710…` | `third-party-login id=acc_f17cf0ab… provider=google` |
+| 16:38:21 | 同上 | 同上 |
+| 16:38:39 | 同上 | 同上 |
+| 16:41:53 | 同上 | 同上 |
+
+Google 验签过了、账号认出来了、网站会话建起来了，**四次都是**。用户在 30 秒里点了三下、过三分钟又点一下，
+正是因为屏幕上什么都没发生。
+
+### 根因：两条线各做一半，接缝上把「登成功了」这件事丢了
+
+登录页这一页是两个会话分着做的：
+
+- `src/start/OnlineLogin.tsx` 管 Google 那一块（真发请求、真建会话、真换编辑器令牌），做完调 `onDone()`；
+- `src/start/VibeLogin.tsx` 在外面一层把这一页接到业务层，它的 `onDone()` 是用来问**「刚才按的是哪一颗键、表单里填了什么」**的：
+  它在捕获阶段认 `start-login-guest`、`start-login-skip` 这些 `data-pc`，认出来才记下一个 `intent`。
+
+**Google 的按钮是 Google 自己在跨源 iframe 里画的**，那次点击根本到不了外层的 `onClickCapture`，所以 `intent` 一直是 `null`，
+`onDone()` 里第一行 `if (!it) return;` 就把整件事丢掉了 —— 会话其实建好了，页面却一动不动。
+这两半各自都没错，错在接缝；而接缝上**一条测试都没有**，所以只能等用户在生产上撞到。
+
+### 改法（分支 `claude/google-login-wire`）
+
+- `OnlineLogin` 多一条第三方**专用**出口 `onThirdPartyDone`（没传就退回 `onDone()`，桌面与别处原样）；Google 登录成功、以及「起账号名建号」两处都走它。
+- `VibeLogin` 把它译成新的 `third-party` 出口交给上层，不再和「按了哪颗键」混在一起。
+- `useAccountProjects` 多一个 `adoptSession()`：第三方那一段跑在登录页自己那个客户端实例上，本 hook 手里是**另一个实例**，
+  所以重新 `restore()` 一次，后面拉项目列表、从直达地址自动进项目，与密码登录走完之后完全一样。
+
+### 证据：同一支探针，修前红、修后绿
+
+新探针 `scripts/probes/google-login-wire-probe.mjs`（已登记进验收台账，新建 `v24-manifest.mjs` 的 `V24-google-login`）。
+真账号服务、真文档服务、真素材服务进程、在线构建当 `/editor/`；**只有两样是桩**：身份服务（不验签、照令牌字面认人，
+和 VisuHive 自己的 `account/test/third-party.test.mjs` 同一个办法）与 Google 的 `gsi/client` 脚本（按 GIS 的约定收下回调、
+画一颗真按钮，点它＝用户在 Google 弹窗里点了同意）。不需要任何真的 Google 账号，也不连生产。
+
+| | 修之前（main `e01463f4` 的那四个文件） | 修之后 |
+|---|---|---|
+| ① 已关联过的账号点 Google | `third-party/login 200`、`editor/session 200` **都发生了**，但 `started:false`、`stillLogin:true`、账号名 `null` | `started:true`、`stillLogin:false`、顶上显示 `dualUser0` |
+| ② 没关联过的身份 | 「起一个账号名」那一步出得来，`register 200` 也发生了，但建完 `started:false`、`stillLogin:true` | `started:true`、`stillLogin:false` |
+| 整支 | `ok:false`，5 条失败 | **`ok:true`，0 条失败** |
+
+两次跑的页面脚本错误都是 0 —— 这正是「没有反应」的样子：没有报错，只是什么都不做。
+
+其它验证：类型检查零错误；影响范围的测试 **132 条零失败**（`src/start/` 七支、`src/account/` 三支、
+`four-stage-acceptance.test.mjs`、`c10-ui-gates.test.mjs`）；验收台账守门 `--check-coverage` 通过。
+
 ## 没做的与待用户的
 
 ### 没做的（都写明了原因）
