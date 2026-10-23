@@ -22,13 +22,15 @@ import type { PickedFile, StorageProviderConfig } from "./storageImport";
  * `accounts.google.com/gsi/client` 管授权,`apis.google.com/js/api.js` 管 Picker。两个都按需注入、只注入一次。
  */
 
-/** Google 的全局对象,没有类型声明,统一用 any 接 */
-declare global {
-  interface Window {
-    google?: any;
-    gapi?: any;
-  }
-}
+/**
+ * Google 的全局对象没有类型声明,这里局部取、统一用 any 接。
+ *
+ * **不要用 `declare global` 扩 `Window`**:登录页(`src/start/OnlineLogin.tsx`)也声明了 `window.google`,
+ * 而且它那份是具体形状(`accounts.id` 的两个方法)。同一个属性被两处 `declare global` 声明时,
+ * TypeScript 要求类型一字不差,否则报 TS2717。各管各的,就不用去统一一个谁都不合适的类型。
+ * (2026-10-24 合 main 时撞上过。)
+ */
+const G = () => window as unknown as { google?: any; gapi?: any };
 
 const GIS_SRC = "https://accounts.google.com/gsi/client";
 const GAPI_SRC = "https://apis.google.com/js/api.js";
@@ -70,19 +72,19 @@ function waitFor<T>(get: () => T | undefined, what: string): Promise<T> {
 
 async function ensureGis(): Promise<any> {
   await loadScript(GIS_SRC);
-  return waitFor(() => window.google?.accounts?.oauth2, "Google 授权脚本");
+  return waitFor(() => G().google?.accounts?.oauth2, "Google 授权脚本");
 }
 
 async function ensurePicker(): Promise<any> {
   await loadScript(GAPI_SRC);
-  const gapi = await waitFor(() => window.gapi, "Google API 脚本");
-  if (!window.google?.picker) {
+  const gapi = await waitFor(() => G().gapi, "Google API 脚本");
+  if (!G().google?.picker) {
     await new Promise<void>((resolve, reject) => {
       try { gapi.load("picker", { callback: () => resolve(), onerror: () => reject(new Error("Picker 模块没载入")) }); }
       catch (e) { reject(e); }
     });
   }
-  return waitFor(() => window.google?.picker, "Google Picker");
+  return waitFor(() => G().google?.picker, "Google Picker");
 }
 
 /** 一张短命票。`expiresAt` 是本地时钟的毫秒时间戳,只用来判断要不要重新要一张 */
