@@ -31,6 +31,7 @@
 - 改完后核一遍：`curl -sI https://s1.{{DOMAIN}}/editor/stage.html` 有 `Content-Security-Policy`（含 `frame-ancestors https://{{DOMAIN}}`）与 `Connection-Allowlist`；`curl -sI https://s1.{{DOMAIN}}/editor/_iso/ok` 是 204、`/editor/_iso/redirect` 是 302；`curl -s -o /dev/null -w '%{http_code}' -X POST https://s1.{{DOMAIN}}/media-s/0123456789abcdef0123456789abcdef/_grant` 是 403（没有主站的 `Origin`）；`curl -sI https://{{DOMAIN}}/editor` 有 `frame-src`。
 - **托管方的总开关**：`/opt/promptcut-hosted/editor/runtime-config.json` 里加一项 `"onlineCardExec": false`（例如 `{ "v": 1, "stageOrigins": [...], "onlineCardExec": false }`），在线页面就整体退回原来的做法，不执行用户卡与素材效果卡；删掉这一项或写 `true` 就是开（缺省）。页面每次打开时读，不用重启任何服务。`deploy-hosted --stage-origins` 会重写这个文件，重新部署后要把这一项加回去。
 - WebRTC 由 `Connection-Allowlist` 在浏览器里拦下（Chrome 152、154 实测）；不认这个响应头的浏览器靠页面里的脚本加固，那不是浏览器的保证。
+- **换在线页面（`/editor`）**：手工换在线构建也必须走这套换代步骤（`deploy-hosted --editor`，即 `server/hosted/deploy.mjs` 的 `editorSwapLines` 那几行），不要直接整目录覆盖 `editor/`——旧页面在刷新之前还要按需加载前几代的打包文件，换代时保留前 3 代的 `assets/`（以及 `runtime-config.json`）。
 
 证书：先装好站点配置里不含 ssl 的部分或用发行版默认站点占住 80 端口，再 `certbot certonly --nginx -d {{DOMAIN}} -d s1.{{DOMAIN}} -d s2.{{DOMAIN}}` 签一张三个名字的证书，路径与模板里的 `/etc/letsencrypt/live/{{DOMAIN}}/` 一致。删掉发行版的 `sites-enabled/default`。
 

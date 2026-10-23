@@ -21,6 +21,7 @@ import {
 import { clipOfEntity, entityLabel, writerLabel } from "./labels";
 import { ONLINE } from "../../online/mode";
 import { offlineUnsent, offlineUnsentText, unsentAtRisk } from "./onlineStatus";
+import { takeLeaveAllowance } from "./leavePrompt";
 import { foldLine, NOTICE_FOLD_AT, undoNoticeTitle } from "../undoNotice";
 import { ConflictMergeDialog } from "./ConflictMerge";
 import "./sync.css";
@@ -224,6 +225,7 @@ function OfflineUnsentNotice() {
   useEffect(() => {
     if (!atRisk) return;
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (takeLeaveAllowance()) return; // 新版本提示条上已点过「仍要刷新」，不再问第二遍
       e.preventDefault();
       e.returnValue = ""; // 旧浏览器要设它才弹原生的离开确认
     };
