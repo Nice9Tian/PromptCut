@@ -36,7 +36,7 @@ import "./brandGlow.css";
  * 位置 `ax/ay/bx/by` 是视口的比例（0 = 左/上，1 = 右/下，可以是负数），
  * 半径 `arx/ary/brx/bry` 是 CSS 像素——和官网一样是固定像素，不跟着窗口缩放。
  */
-const LOOK = {
+export const LOOK = {
   /**
    * 飘一圈多少秒。`drift` 为 0 时这一项不起作用。
    *
@@ -103,10 +103,10 @@ const LOOK = {
 const BG_FALLBACK: [number, number, number] = [0.067, 0.063, 0.086];
 const ACCENT_FALLBACK: [number, number, number] = [0, 0.859, 0.859];
 
-const VERT = `#version 300 es
+export const VERT = `#version 300 es
 void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position = vec4(p*2.0-1.0,0.0,1.0); }`;
 
-const FRAG = `#version 300 es
+export const FRAG = `#version 300 es
 precision highp float;
 out vec4 fragColor;
 

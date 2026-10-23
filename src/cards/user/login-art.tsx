@@ -2,8 +2,8 @@
  * 要改画面就去改 src/start/BrandCanvas.tsx（屏幕上那一版），再重跑一次生成脚本，
  * 两边画的才是同一段 GLSL。生成时间不写进文件，免得每次重跑都产生无谓的 diff。
  *
- * 这张卡只为一件事存在：让 PromptCut 自己的渲染器把登录页左栏那段极光**预渲染成循环视频**
- * （用户 2026-10-24 定）。画面写成帧时钟 t 的函数，不自己跑帧循环，符合 server/card-authoring-guide.md。
+ * 这张卡只为一件事存在：让 PromptCut 自己的渲染器把它**预渲染成循环视频**（用户 2026-10-24 定）。
+ * 画面写成帧时钟 t 的函数，不自己跑帧循环，符合 server/card-authoring-guide.md。
  * uLoop = (t / 循环秒数) 的小数部分，走满一圈逐字节回到起点，所以第一帧和最后一帧接得上。
  */
 import { useLayoutEffect, useRef } from "react";
@@ -345,6 +345,8 @@ function hexToRgb(hex: string, fallback: [number, number, number]): [number, num
 
 function LoginArt({ params, t = 0 }: CardProps<Params>) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const w = WIDTH;
+  const h = HEIGHT;
   useLayoutEffect(() => {
     const canvas = ref.current;
     if (!canvas) return;
@@ -352,7 +354,7 @@ function LoginArt({ params, t = 0 }: CardProps<Params>) {
     // WebGL2 起不来就画一块底色，别让整张卡炸掉
     if (!gl) {
       const c2 = canvas.getContext("2d");
-      if (c2) { c2.fillStyle = params.bg || "#111016"; c2.fillRect(0, 0, WIDTH, HEIGHT); }
+      if (c2) { c2.fillStyle = params.bg || "#111016"; c2.fillRect(0, 0, w, h); }
       return;
     }
     const make = (type: number, src: string) => {
@@ -403,19 +405,19 @@ function LoginArt({ params, t = 0 }: CardProps<Params>) {
     // 预渲染成视频:压平。底色合进来、alpha 给 1
     gl.uniform1f(at("uFlatten"), 1);
     gl.uniform3f(at("uBg"), ...hexToRgb(params.bg, [0.067, 0.063, 0.086]));
-    gl.uniform2f(at("uRes"), WIDTH, HEIGHT);
+    gl.uniform2f(at("uRes"), w, h);
     gl.uniform1f(at("uPxScale"), 1);
     // 走满一圈回到起点：t 到了 loopSeconds 这一帧和 t = 0 那一帧算出来一样
     const secs = Math.max(0.001, params.loopSeconds);
     gl.uniform1f(at("uLoop"), ((t % secs) + secs) % secs / secs);
 
-    gl.viewport(0, 0, WIDTH, HEIGHT);
+    gl.viewport(0, 0, w, h);
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.deleteProgram(prog);
   }, [t, params.cool, params.warm, params.bg, params.loopSeconds]);
-  return <canvas ref={ref} width={WIDTH} height={HEIGHT} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />;
+  return <canvas ref={ref} width={w} height={h} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />;
 }
 
 export const loginArt: CardDef<Params> = {
