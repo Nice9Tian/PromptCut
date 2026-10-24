@@ -22,9 +22,9 @@
  * 2026-10-23 接业务层:项目来自云端项目列表(桌面版是本机草稿),对话来自云端 Agent 服务(桌面版是本机 Agent)。
  * 分组分两套、互相放不进:本地分组装本机草稿项目、存本机;云端分组装云端项目、存云端(`vibeOrg.ts` 文件头)。
  * 每个分组、每个项目都带 `realm`,右键「移到分组」里另一套的分组置灰并说明。「分组 Agent」语义里没有,这一版不做。
- * 归档的东西收在最下面「已归档」那张卡里,右键能取消归档。
+ * 归档的东西收在最下面「已归档」那一段里,右键能取消归档。
  */
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { JSX } from "react";
 import type { ReactNode } from "react";
 import { RowMenu, type MenuAt, type MenuBlock } from "./RowMenu";
@@ -182,6 +182,24 @@ export function ProjectSidebar(props: {
   const cardOpen = (k: string) => cards[k] !== false;
   const toggleCard = (k: string) => setCards((c) => ({ ...c, [k]: !cardOpen(k) }));
   const [query, setQuery] = useState("");
+  /** 搜索框是不是正被用着(点进去了);打了字的话松开焦点也不收 —— 收回去就看不见自己搜的是什么了 */
+  const [typing, setTyping] = useState(false);
+  /**
+   * 「新建项目」那颗键有多宽。搜索框平时就停在它左边(`right` 给到这个数),展开时 `right` 走到 0 盖住它。
+   * 量出来而不是写死:键上的字、字号、皮肤换了都不用回来改这个数。
+   */
+  const [newW, setNewW] = useState(0);
+  const newBtn = useRef<HTMLButtonElement>(null);
+  const searchBox = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const el = newBtn.current;
+    if (!el) return;
+    const measure = () => setNewW(el.offsetWidth);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const [menu, setMenu] = useState<MenuAt | null>(null);
   const [renaming, setRenaming] = useState<{ kind: TreeKind; id: string; name: string } | null>(null);
   /** 正在拖的那一行;dragover 时读它判同级(dataTransfer 在 dragover 里读不到内容) */
@@ -190,6 +208,8 @@ export function ProjectSidebar(props: {
 
   const q = query.trim().toLowerCase();
   const hit = (text: string) => !q || text.toLowerCase().includes(q);
+  /** 搜索框展开着没有:点进去了,或者里面还有字 */
+  const searchOpen = typing || query !== "";
 
   // 归档的不进树;显示顺序由 ordered 定(置顶的在自己这一段的最前面)
   const groups = ordered(visible(props.groups));
@@ -214,7 +234,10 @@ export function ProjectSidebar(props: {
   const isAt = (s: Scope) =>
     s.kind === current.kind && (s.kind !== "group" || (current.kind === "group" && s.id === current.id));
 
-  /** 一张卡的头:和右边那条拓展栏的段头同一套(`.ps-card-*`),点了收起里面那一截 */
+  /**
+   * 一段的头:和右边那条拓展栏的段头同一套(`.ps-card-*`),点了收起里面那一截。
+   * 整栏是**一张**面板,段与段之间不再各自成卡(issue #5,形状在 `start.css` 的 `.ps-side-scroll`)。
+   */
   const cardHead = (key: string, title: string, count: number): JSX.Element => (
     <div className="ps-card-head">
       <button
@@ -410,24 +433,52 @@ export function ProjectSidebar(props: {
     >
       {/* 里面这一层钉住原来的宽度:收的时候内容整块滑出去,不会先被挤成一条再消失 */}
       <div className="ps-side-inner" style={{ width: `${props.width}px` }}>
-      <button type="button" className="ps-side-new" data-pc="start-side-new" disabled={!!props.createBlocked} title={props.createBlocked ?? undefined} onClick={props.onCreate}>
-        <span aria-hidden="true">＋</span>新建项目
-      </button>
+      {/* 面板只有一张(issue #5):搜索与新建那一行、下面的列表,都在这张里面 */}
+      <div className="ps-side-panel" data-pc="start-side-panel">
+      {/*
+        头一行:左边搜索、右边「新建项目」。点进搜索框,它向右长出去**盖住**新建那颗键(用户 2026-10-24),
+        动画只动一个 `right`(240ms,和侧栏收起同一条缓动),没有位移抖动;收回去时新建键原样露出来 ——
+        它一直在原地,只是被盖着。
+      */}
+      <div className="ps-side-head" data-searching={searchOpen}>
+        <button ref={newBtn} type="button" className="ps-side-new" data-pc="start-side-new" disabled={!!props.createBlocked}
+          title={props.createBlocked ?? undefined} aria-hidden={searchOpen || undefined} tabIndex={searchOpen ? -1 : undefined}
+          onClick={props.onCreate}>
+          <span aria-hidden="true">＋</span>新建项目
+        </button>
 
-      <label className="ps-search">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-          <circle cx="11" cy="11" r="6.5" />
-          <path d="m16 16 4.5 4.5" />
-        </svg>
-        <input
-          type="search"
-          value={query}
-          placeholder="搜项目和对话"
-          aria-label="搜项目和对话"
-          data-pc="start-side-search"
-          onChange={(e) => setQuery(e.target.value)}
-        />
-      </label>
+        <label className="ps-search" style={newW ? { right: searchOpen ? 0 : newW + 6 } : undefined}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="6.5" />
+            <path d="m16 16 4.5 4.5" />
+          </svg>
+          <input
+            ref={searchBox}
+            type="search"
+            value={query}
+            /* 收着的时候只有一小条,长的那句放不下;展开了再写全 */
+            placeholder={searchOpen ? "搜项目和对话" : "搜索"}
+            aria-label="搜项目和对话"
+            data-pc="start-side-search"
+            onFocus={() => setTyping(true)}
+            onBlur={() => setTyping(false)}
+            /* Esc:清空并退出,搜索框收回去,新建键露出来 */
+            onKeyDown={(e) => { if (e.key === "Escape") { setQuery(""); searchBox.current?.blur(); } }}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {/*
+            清空那一颗:搜完了点它,搜索框收回去、新建键露出来。只有有字的时候在。
+            `onMouseDown` 要拦掉 —— 它在 <label> 里,不拦的话按下去会把焦点送进输入框,清完又算「正在用」,收不回去。
+          */}
+          {query && (
+            <button type="button" className="ps-search-clear" data-pc="start-side-search-clear" aria-label="清空搜索"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => { setQuery(""); setTyping(false); }}>
+              ✕
+            </button>
+          )}
+        </label>
+      </div>
 
       <div className="ps-side-scroll">
         {SHOW_SCOPE_ROWS && (
@@ -535,6 +586,7 @@ export function ProjectSidebar(props: {
             </div>}
           </div>
         )}
+      </div>
       </div>
 
       </div>

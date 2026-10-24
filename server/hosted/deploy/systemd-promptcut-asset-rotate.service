@@ -1,0 +1,32 @@
+# 素材服务那条「观察通道」的重建(rotate)。一次性单元,自己起、跑完就退。
+# 模板 server/hosted/deploy/systemd-promptcut-asset-rotate.service;把花括号占位符换成 README「素材服务的观察通道自愈」一节的值,
+# 放在 /etc/systemd/system/promptcut-asset-rotate.service。
+#
+# 为什么要有它:素材服务启动时跟文档服务建**一条**长连接当观察通道,这条通道的身份绑在那一个 TLS socket 上
+# (server/hosted/run-assets-observer-binding.mjs 用 TLS exporter 材料做证明)。文档服务一重启,socket 没了,通道就作废,
+# 云端 Agent 从此读不了项目素材的字节(see_frames 看素材回 project-assets-read-failed)。
+# 重建只能由 root 在素材服务的 cgroup 之外跑 publisher --rotate —— 这是设计约束,不是漏写了重连
+# (asset-root-registry-publisher.mjs 文件头第一句:Never run inside the target service cgroup)。
+# 它是独立单元,自然在素材服务的 cgroup 之外,满足这个约束。
+#
+# 注意:--rotate 会 stop + start 素材服务(publisher 里就是这么做的),所以素材服务会有一次短暂中断。
+# 别把它挂成高频定时器;按需触发的两处是:文档服务的 ExecStartPost(systemd-promptcut-doc-rotate.dropin.conf)
+# 与看门狗(systemd-promptcut-asset-rotate-watch.*,只在 runAssetsReady 为 false 时才触发这个单元)。
+[Unit]
+Description=PromptCut asset run-assets observer rotate
+# 它要连文档服务才能换通道;文档服务没起来就没有意义
+After=promptcut-doc-v2.service
+# 文档服务起来后由它的 ExecStartPost 拉起;这里不写 Requires,免得 rotate 失败连累文档服务
+# 10 分钟内最多试 5 次,之后不再自己重试(剩下的交给看门狗),免得连续 stop/start 素材服务
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory={{DIR}}
+ExecStart={{NODE}} {{DIR}}/server/hosted/deploy/asset-root-registry-publisher.mjs --config {{PUBLISHER_CONFIG}} --rotate
+# 文档服务刚起来时可能还没开始听;隔 10 秒再试
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=180s
