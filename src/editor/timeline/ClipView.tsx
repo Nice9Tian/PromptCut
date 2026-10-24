@@ -10,6 +10,9 @@ import { clipSubtitleOf, paramsCardView } from "../left/paramsView";
 import { clipCardLabel } from "./localPcBadge";
 import { onlinePage, onlineUnsupported } from "../../online/pageFlag";
 import { snapTime, isOccupied, getGap, xOfTime, formatTime, ROW_SIZE_H } from "./utils";
+import { BAND_H, OVERLAY_KIND_NAME, overlayGlyph, overlaysOfClip, planClipLayout, type OverlayItem } from "./overlays";
+import { OverlayBand, OverlayPill } from "./OverlayBand";
+import type { ContextMenuItem } from "./types";
 import { ShotMarkers } from "./ShotMarkers";
 import { TrackClip, Track } from "../../kernel/project";
 import { useDrag } from "./useDrag";
@@ -31,7 +34,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   // 这个项目只给了只读权限(游客):拖、改时长、右键里改项目的项都不给,和锁定的序列一个待遇(但还能选中、看参数、打开剪辑)
   const ro = useReadOnly();
   const frozen = track.locked || ro.locked;
-  const { pxPerSec, trackAreaRef, setDraggingClipId, setDraggingTrackId, rowSize, quoteClip } = useTimelineContext();
+  const { pxPerSec, trackAreaRef, setDraggingClipId, setDraggingTrackId, rowSize, quoteClip, quoteOverlay } = useTimelineContext();
   const media = useStore((s) => s.project.media.find((m) => m.id === clip.mediaId));
   const selection = useStore((s) => s.selection);
   const isSelected = selection.includes(clip.id);
@@ -82,8 +85,20 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   const myTransitions = useMemo(() => transitionsOfClip(getState().project, clip.id), [allTransitions, clip.id]);
   const lock = myTransitions.length > 0 ? timingLock(getState().project, clip.id) : null;
 
+  // 挂在这一段上的东西(滤镜、像素映射、音频效果、素材效果卡)收成一张清单,带和菜单都只认它
+  const filterLib = useStore((s) => s.project.filters);
+  const pixelMapLib = useStore((s) => s.project.pixelMaps);
+  const audioFxLib = useStore((s) => s.project.audioFx);
+  const nodeLib = useStore((s) => s.project.cardNodes);
+  const overlays = useMemo(
+    () => overlaysOfClip(getState().project, clip, { cardName: (id) => knownCardName(id) ?? undefined }),
+    [filterLib, pixelMapLib, audioFxLib, nodeLib, clip.filter, clip.pixelMap, clip.audioFx, clip.nodeId],
+  );
+
   const [dragState, setDragState] = useState<{ start: number; end: number; trackId: string; forbidden: boolean } | null>(null);
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [contextMenu, setContextMenu] = useState<
+    { x: number; y: number; items?: ContextMenuItem[]; head?: { title: string; of?: string; trackKind?: string } } | null
+  >(null);
 
   // 拖动 / 改时长中:告诉 Agent 用户正在编辑这一段(A2;真的动起来才算,只点一下不算)
   useUserEditing(`timeline-clip:${clip.id}`, dragState ? clip.id : null, "drag");
@@ -244,9 +259,60 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
 
   const isCrossTrackDrag = dragState && dragState.trackId !== track.id;
 
+  /* ── 叠加卡:带怎么画、菜单里有什么 ────────────────────────────────── */
+  const widthPx = (displayEnd - displayStart) * pxPerSec;
+  const plan = planClipLayout(widthPx, rowSize, overlays.length);
+
+  /** 摘掉一张。素材效果卡在节点图里摘,这儿只说清去哪摘 */
+  const detachItem = (it: OverlayItem): ContextMenuItem => {
+    if (it.kind === "card") {
+      return { label: "摘掉", danger: true, disabled: true, title: "素材效果卡在编辑分区的节点图里摘", action: () => {} };
+    }
+    return {
+      label: "摘掉",
+      danger: true,
+      disabled: frozen,
+      ...(frozen ? { title: ro.locked ? ro.why : "这条序列锁着" } : null),
+      action: () => {
+        if (it.kind === "filter") actions.setClipFilter(clip.id, null);
+        else if (it.kind === "pixelMap") actions.setClipPixelMap(clip.id, null);
+        else actions.setClipAudioFx(clip.id, null);
+      },
+    };
+  };
+
+  /** 这一张能做的事(菜单最里面那一级) */
+  const overlayActions = (it: OverlayItem): ContextMenuItem[] => [
+    ...(quoteOverlay ? [{ label: "引用到输入框", action: () => quoteOverlay(clip, it) }] : []),
+    { label: "改参数…", hint: it.value, action: () => actions.select([clip.id]) },
+    detachItem(it),
+  ];
+
+  /** 这一段挂的全部(中间那一级) */
+  const overlayList = (): ContextMenuItem[] =>
+    overlays.length
+      ? overlays.map((it) => ({
+          label: `${overlayGlyph(it)} ${it.name}`,
+          hint: it.value,
+          title: OVERLAY_KIND_NAME[it.kind],
+          action: () => {},
+          sub: overlayActions(it),
+          subHead: overlayHead(it),
+        }))
+      : [{ label: "这一段还没有挂东西", disabled: true, action: () => {} }];
+
+  const overlayHead = (it: OverlayItem) => ({ title: it.name, of: label || "片段", trackKind });
+  const openOverlayList = (at: { x: number; y: number }) =>
+    setContextMenu({ ...at, head: { title: `叠加卡 ${overlays.length} 张`, of: label || "片段", trackKind }, items: overlayList() });
+  const openOverlayOne = (index: number, at: { x: number; y: number }) => {
+    const it = overlays[index];
+    if (!it) return;
+    setContextMenu({ ...at, head: overlayHead(it), items: overlayActions(it) });
+  };
+
   const clipClasses = [
     ro.locked ? "is-readonly" : "",
-    "pc-clip absolute top-1 bottom-1 rounded flex items-center px-2 text-xs overflow-hidden select-none border",
+    "pc-clip absolute top-1 bottom-1 rounded flex flex-col text-xs overflow-hidden select-none border",
     frozen ? "" : "cursor-pointer",
     isSelected ? "is-selected z-20" : "z-10",
     muteReason ? "is-audio-muted" : "",
@@ -289,19 +355,32 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
           className={`absolute left-0 top-0 bottom-0 w-2 z-30 ${frozen ? "" : "cursor-col-resize pc-clip-trim"}`}
         />
         
+        {/* 叠加带:这一格每个片段都留着(小行高那一档不画),没挂东西时透明 —— 只给挂了东西的片段留,
+            同一行里的名字会一高一低。见 overlays.ts 文件头 */}
+        {plan.band && (
+          <OverlayBand
+            items={overlays}
+            rowSize={rowSize}
+            avail={plan.bandAvail}
+            countOnly={plan.countOnly}
+            frozen={frozen}
+            onOpenOne={openOverlayOne}
+            onOpenAll={openOverlayList}
+          />
+        )}
         {isCaption && capCount > 0 ? (
           // 字幕卡:色块里画出一条条字幕,点它跳过去、拖它挪时间、双击改字
-          <CaptionLines clip={clip} height={ROW_SIZE_H[rowSize]} />
-        ) : rowSize === "small" ? (
-          <span className="truncate pointer-events-none font-medium drop-shadow-md w-full" data-pc-clip-speed={isSpeedChanged(clip) ? clipSpeed(clip) : undefined}>{shownLabel}</span>
+          <CaptionLines clip={clip} height={ROW_SIZE_H[rowSize] - (plan.band ? BAND_H[rowSize] : 0)} />
         ) : (
-          <div className="flex flex-col items-start justify-center overflow-hidden pointer-events-none min-w-0 w-full leading-tight">
-            <span className="truncate font-medium drop-shadow-md w-full" data-pc-clip-speed={isSpeedChanged(clip) ? clipSpeed(clip) : undefined}>{shownLabel}</span>
-            {subtitle && (
-              <span className={`truncate text-[10px] opacity-70 w-full ${rowSize === 'large' ? 'mt-0.5' : ''}`}>
-                {subtitle}
+          // 名字和时长排同一行:分两行的话,中行高扣掉叠加带只剩 23px,两行放不下、标题会被切掉上半截
+          <div className="pc-clip-body">
+            {plan.name && (
+              <span className="pc-clip-line" data-pc-clip-speed={isSpeedChanged(clip) ? clipSpeed(clip) : undefined}>
+                <span className="nm">{shownLabel}</span>
+                {plan.duration && subtitle ? <span className="du">{` · ${subtitle}`}</span> : null}
               </span>
             )}
+            {plan.pill && overlays.length > 0 && <OverlayPill count={overlays.length} onOpenAll={openOverlayList} />}
           </div>
         )}
         
@@ -343,8 +422,10 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
         <ContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
+          // 带里点出来的菜单自带头和条目(叠加卡那一支);右键片段走下面这份
+          head={contextMenu.head ?? { title: label || "片段" }}
           onClose={() => setContextMenu(null)}
-          items={[
+          items={contextMenu.items ?? [
             /*
              * 「引用到输入框」只在氛围式的详细编辑里出现(调用方传了 quoteClip,见 TimelineView)。
              * 放最上面,而且**只读也给** —— 它不改任何东西,只是把这一段说给 Agent 听,
@@ -361,6 +442,14 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
               ? [{ label: `去掉强调:${describeEmphasis(clip.emphasis)}`, action: () => actions.setClipEmphasis(clip.id, null) }]
               : []),
             ...(clip.cutId && cutName ? [{ label: `打开剪辑「${cutName}」`, action: () => openCutInTimeline(clip.cutId!) }] : []),
+            // 叠加卡在这里只占一项:停上去才列出这一段挂的全部,再停一张才是它能做的事
+            {
+              label: "叠加卡",
+              hint: overlays.length ? `${overlays.length} 张` : "还没有",
+              action: () => {},
+              sub: overlayList(),
+              subHead: { title: `叠加卡 ${overlays.length} 张`, of: label || "片段", trackKind },
+            },
             { label: "复制", action: () => actions.duplicateClip(clip.id) },
             ...(hasAudio ? [
               { label: clip.audioMuted ? "恢复片段声音" : "静音片段", disabled: !!track.locked, action: () => reportAudio(actions.setClipMuted(clip.id, !clip.audioMuted)) },

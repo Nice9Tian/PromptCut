@@ -4,6 +4,7 @@ import { useStore } from "../../store/project";
 import type { TrackClip } from "../../kernel/project";
 import { useDragPayload } from "../dnd";
 import { HEADER_W_DEFAULT, HEADER_W_MIN, HEADER_W_MAX, type RowSize, DEFAULT_ROW_SIZE, ROW_SIZE_H, timeOfX, xOfTime } from "./utils";
+import type { OverlayItem } from "./overlays";
 import type { DropPlan } from "./dropPlan";
 import type { ReorderState } from "./useReorder";
 
@@ -35,11 +36,17 @@ interface TimelineContextState {
    * (`src/start/DetailEdit.tsx`),在那儿右键一张卡要能把它引用给 Agent;编辑界面没有这个输入框,不传。
    */
   quoteClip?: (clip: TrackClip, label: string) => void;
+  /** 引用挂在片段上的某一张叠加卡。和 quoteClip 一样只有氛围式的详细编辑传(见 index.tsx) */
+  quoteOverlay?: (clip: TrackClip, item: OverlayItem) => void;
 }
 
 const TimelineContext = createContext<TimelineContextState | null>(null);
 
-export function TimelineProvider({ children, quoteClip }: { children: ReactNode; quoteClip?: (clip: TrackClip, label: string) => void }) {
+export function TimelineProvider({ children, quoteClip, quoteOverlay }: {
+  children: ReactNode;
+  quoteClip?: (clip: TrackClip, label: string) => void;
+  quoteOverlay?: (clip: TrackClip, item: OverlayItem) => void;
+}) {
   const [pxPerSec, setPxPerSec] = useState(100);
   const scrollRef = useRef<HTMLDivElement>(null);
   const trackAreaRef = useRef<HTMLDivElement>(null);
@@ -213,7 +220,7 @@ export function TimelineProvider({ children, quoteClip }: { children: ReactNode;
   }, [t, playing, pxPerSec]);
 
   return (
-    <TimelineContext.Provider value={{ pxPerSec, setPxPerSec, scrollRef, trackAreaRef, draggingClipId, setDraggingClipId, draggingTrackId, setDraggingTrackId, dropPlan, setDropPlan, reorder, setReorder, headerW, setHeaderW, commitHeaderW, resetHeaderW, rowSize, setRowSize, trackH, quoteClip }}>
+    <TimelineContext.Provider value={{ pxPerSec, setPxPerSec, scrollRef, trackAreaRef, draggingClipId, setDraggingClipId, draggingTrackId, setDraggingTrackId, dropPlan, setDropPlan, reorder, setReorder, headerW, setHeaderW, commitHeaderW, resetHeaderW, rowSize, setRowSize, trackH, quoteClip, quoteOverlay }}>
       {children}
     </TimelineContext.Provider>
   );

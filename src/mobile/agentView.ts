@@ -14,15 +14,20 @@ import { KIND_LABEL, bareToolName, toolKind } from "../editor/right/chat/iconRun
 /* ---------------- 引用 ---------------- */
 
 export interface QuoteRef {
-  /** 被引用的片段 id(转场则是转场 id) */
+  /** 被引用的片段 id(转场则是转场 id;叠加卡是「片段 id#种类:定义 id」) */
   id: string;
   /** 给人看的名字 */
   label: string;
+  /**
+   * 引的是哪一级。缺省「卡片」= 整段,和以前一字不差;
+   * 引单张叠加卡时写「叠加卡」—— 一段上挂两张同名的压暗很常见,不指明哪一张 Agent 只能反问。
+   */
+  kind?: string;
 }
 
 /** 一条引用在正文里的写法:同桌面 AI 栏「引用到 AI」插进输入框的那串 */
 export function quoteToken(q: QuoteRef): string {
-  return `@卡片 ${q.label}(${q.id})`;
+  return `@${q.kind || "卡片"} ${q.label}(${q.id})`;
 }
 
 /** 发送时的正文:引用在前、空格隔开,再接用户写的话 */
