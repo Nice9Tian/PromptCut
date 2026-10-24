@@ -99,8 +99,10 @@
 
 | 术语 | 含义 | 级 | 定义在 |
 |---|---|---|---|
-| 剪辑 | 项目里的一条独立时间轴；同一时刻只有一条激活 | 二 | product/project-model.md |
-| 序列 | 时间轴上的一行，不分种类；靠上的画在上层 | 二 | product/project-model.md |
+| 剪辑 | 项目里的一条独立时间轴；同一时刻只有一条激活；分 2D 剪辑与 3D 剪辑两类 | 二 | product/project-model.md |
+| 2D 剪辑 | 画面在平面上合成的剪辑，遮挡按序列；新建的剪辑都是这一类（2026-10-24 用户定） | 二 | product/project-model.md |
+| 3D 剪辑 | 画面在空间里合成的剪辑，遮挡按深度（2026-10-24 用户定） | 二 | product/project-model.md |
+| 序列 | 时间轴上的一行，不分种类；2D 剪辑里靠上的画在上层，3D 剪辑里只管分组与同深度时的先后 | 二 | product/project-model.md |
 | 片段 | 序列上的一段，分卡片段、素材段和剪辑段 | 二 | product/project-model.md |
 | 剪辑段 | 放在一条剪辑序列里、引用另一条剪辑的片段 | 二 | product/project-model.md |
 | 效果库 | 项目里的滤镜、像素映射、音频效果定义 | 二 | product/project-model.md |
