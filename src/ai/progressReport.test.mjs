@@ -20,6 +20,13 @@ test("解析规则和服务端校验一致:服务端拒收的调用不画成卡�
     { final: true, stage: 3 },
     { final: true, done: "a" },
     { final: true, done: ["a", 1] },
+    // blocked:停下来等用户回话。隐含 final,两边同一套规则
+    { final: true, blocked: true, done: ["a"], todo: ["到电脑上的 PromptCut 里做这一步"] },
+    { blocked: true, todo: ["请扫码登录"] },
+    { final: false, blocked: true, problems: ["读不了素材"] },
+    { final: true, blocked: false, done: ["a"] },
+    { final: true, blocked: null, done: ["a"] },
+    { final: true, blocked: "yes", done: ["a"] },
     [],
     null,
   ];
@@ -28,10 +35,29 @@ test("解析规则和服务端校验一致:服务端拒收的调用不画成卡�
     const client = parseProgressReport(input);
     assert.equal(!!client, server.ok, JSON.stringify(input));
     if (server.ok) {
-      const { final, stage, done, todo, problems } = server.value;
-      assert.deepEqual(client, { final, ...(stage ? { stage } : {}), done, todo, problems }, JSON.stringify(input));
+      const { final, blocked, stage, done, todo, problems } = server.value;
+      assert.deepEqual(client, { final, ...(blocked ? { blocked } : {}), ...(stage ? { stage } : {}), done, todo, problems }, JSON.stringify(input));
     }
   }
+});
+
+test("blocked:隐含 final;false / 缺省时这一位根本不出现", () => {
+  const blocked = parseProgressReport({ blocked: true, todo: ["请扫码登录"] });
+  assert.equal(blocked.blocked, true);
+  assert.equal(blocked.final, true, "停下来等用户就是这一轮结束了");
+  assert.equal(validateProgressReport({ blocked: true, todo: ["请扫码登录"] }).value.final, true);
+
+  for (const input of [{ final: true, done: ["a"] }, { final: true, blocked: false, done: ["a"] }]) {
+    assert.equal("blocked" in parseProgressReport(input), false, JSON.stringify(input));
+    assert.equal("blocked" in validateProgressReport(input).value, false, JSON.stringify(input));
+  }
+});
+
+test("blocked 的前情摘要里要留住「在等用户」,不然换模型之后它会以为可以接着自己做", () => {
+  assert.equal(reportText({ final: true, blocked: true, done: [], todo: ["到电脑上做这一步"], problems: ["云端读不了素材"] }),
+    "待办:到电脑上做这一步;问题:云端读不了素材(停下等用户回话)");
+  assert.equal(reportText({ final: true, done: ["加了字幕"], todo: [], problems: [] }), "已完成:加了字幕");
+  assert.equal(reportText({ final: true, blocked: true, done: [], todo: [], problems: [] }), "", "空报告不要只剩一句括号");
 });
 
 test("工具名:裸名和各家前缀都认,近似名不认", () => {

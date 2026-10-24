@@ -22,6 +22,10 @@ export function validateProgressReport(input) {
     return { ok: false, error: `字段 final 应该是布尔值 (boolean),收到的是 ${kindOf(input.final)}` };
   }
 
+  if (given(input.blocked) && typeof input.blocked !== 'boolean') {
+    return { ok: false, error: `字段 blocked 应该是布尔值 (boolean),收到的是 ${kindOf(input.blocked)}` };
+  }
+
   if (given(input.stage) && typeof input.stage !== 'string') {
     return { ok: false, error: `字段 stage 应该是字符串 (string),收到的是 ${kindOf(input.stage)}` };
   }
@@ -60,8 +64,15 @@ export function validateProgressReport(input) {
     return { ok: false, error: '报告是空的:done / todo / problems 至少填一条,或者给出 final(true 表示整个任务收尾)' };
   }
 
+  /*
+   * blocked:停下来等用户回话。它**隐含** final —— 停在这里就是这一轮结束了,
+   * 所以 blocked 为 true 而 final 漏填(或填了 false)时按 final 算,不为这个拒收:
+   * 拒一次要白费一个往返,而丢掉这一位,用户就不知道球在他那边(界面会画成「已暂停」)。
+   */
+  const blocked = input.blocked === true;
   const value = {
-    final: input.final === true,
+    final: input.final === true || blocked,
+    ...(blocked ? { blocked: true } : {}),
     has_done: done.length > 0,
     has_todo: todo.length > 0,
     has_problem: problems.length > 0,

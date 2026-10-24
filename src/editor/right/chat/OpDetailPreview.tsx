@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { JSX, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import type { ToolCallInfo } from "../../../ai/types";
-import type { ProgressReport } from "../../../ai/progressReport";
+import { reportTitle, type ProgressReport } from "../../../ai/progressReport";
 import type { InboundAgentMessage } from "../../../ai/types";
 import { findTabByConversation } from "../../../ai/agentTabs";
 import { Gif, loadVisualRecord, peekVisualRecord, visualIdOf, type VisualRecord } from "../ToolVisual";
@@ -228,7 +228,7 @@ function fmtDuration(ms: number): string {
   return ms < 10000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms / 1000)}s`;
 }
 
-const reportTitle = (r: ProgressReport) => (r.final ? "本轮小结" : r.stage ? `阶段 · ${r.stage}` : "阶段小结");
+// 标题只写一份,在 src/ai/progressReport.ts
 
 /** 说明行左边那句 */
 function pageCaption(p: DetailPage, item: DetailItem | undefined): string {
