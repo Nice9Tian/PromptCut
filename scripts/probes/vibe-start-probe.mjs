@@ -233,7 +233,8 @@ try {
 
   /* ================ 5. 拓展栏:真画面;详细编辑:真时间轴 ================ */
   await closeToasts(P);
-  await P.click('[data-pc="start-chat-ext-toggle"]');
+  // 进会话之后拓展栏自己就展开了(issue #6):已经开着就别再点,点了反而关上
+  await P.evaluate(() => { if (!document.querySelector('[data-pc="start-ext"]')) document.querySelector('[data-pc="start-chat-ext-toggle"]')?.click(); });
   const stage = await until('拓展栏的画面挂上舞台', () => P.$('[data-pc="start-ext-stage"] [data-pc="preview"]'), 30_000);
   await sleep(3000);
   await shot(P, '04-chat-ext');
