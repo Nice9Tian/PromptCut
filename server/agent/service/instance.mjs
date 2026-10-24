@@ -1545,7 +1545,9 @@ export function createAgentInstance(env) {
       } catch {
         systemPrompt = 'System prompt missing.';
       }
-      systemPrompt += `\n\n${cloudSystemNote({ look: !!prerenderPost, provided: accountProvided, collectDelegate: accountTools?.delegateDownload?.() === true })}`;
+      // mediaFrames 要单独传:`see_frames` 在工具表里没有 provider 字段,`provided` 过滤时会把它丢掉。
+      // 判据和下面真正派活那一处(`isMediaFrames` 那一支)用同一个条件,免得提示词说的和实际能做的不一致
+      systemPrompt += `\n\n${cloudSystemNote({ look: !!prerenderPost, provided: accountProvided, collectDelegate: accountTools?.delegateDownload?.() === true, mediaFrames: !!accountProvided?.has('see_frames') })}`;
       if (typeof o.script === 'string' && o.script.trim()) {
         systemPrompt += `\n\n## 本片剧本(用户写的,每一步都要照它来)\n\n${o.script.trim()}\n\n` +
           '这是这条片子的主线。做任何编排、配字幕、配动效的决定时都要对照它;' +

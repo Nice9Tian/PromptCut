@@ -257,24 +257,38 @@ export function pendingByReason() {
   return out;
 }
 
-const LOOK_NOTE_ON = '- **看画面照常用,但比本机慢。** `see_frames`、`get_gif`、`bake_card`、`inspect_card_dom` 的画面由同一台云节点上的渲染服务出;`get_layout` 的实体框也是。'
+const LOOK_NOTE_ON_HEAD = '- **看画面照常用,但比本机慢。** `see_frames`、`get_gif`、`bake_card`、`inspect_card_dom` 的画面由同一台云节点上的渲染服务出;`get_layout` 的实体框也是。'
   + '项目里有自定义卡片(用 `create_card` / `edit_card` 建过或改过卡)时,画面由一个按项目单开的隔离进程出,第一次要等十来秒,别的项目正在渲时要排队。'
-  + '工具回「这次没看成」时不要反复重试:按 `get_layout` 的规定框和卡片参数继续,做完在汇报里说明哪一步没有看过画面。`see_frames` 只能看时间轴的画面,素材的镜头拼图(`source: "media"`)云端还没有。';
+  + '工具回「这次没看成」时不要反复重试:按 `get_layout` 的规定框和卡片参数继续,做完在汇报里说明哪一步没有看过画面。';
+/*
+ * 素材模式那句话按这个进程里真的接上了没有写(2026-10-24)。
+ *
+ * 原来不管接没接都写「素材的镜头拼图云端还没有」。而账号模式早就把 `mediaFrames` 接上了,
+ * 工具清单里确实有这个工具、`instance.mjs` 也真的派下去执行 —— 模型于是同时收到
+ * 「必须先看素材」「素材模式云端没有」「工具就在清单里」三句打架的话。一次实跑里它试了两轮、
+ * 拿到一串内部错误码,就蒙着眼睛往下做了(docs/plan/agent-blind-stop.md)。
+ */
+const LOOK_NOTE_MEDIA_ON = '`see_frames` 的素材模式(`source: "media"`)也能用:它不经渲染服务,直接读素材的字节在节点上抽帧。'
+  + '素材服务没放行读取时它会明说「重试也没用」,那时按「用不了的能力怎么办」处理,不要原地重试。';
+const LOOK_NOTE_MEDIA_OFF = '`see_frames` 只能看时间轴的画面,素材的镜头拼图(`source: "media"`)云端还没有。';
+const lookNoteOn = (mediaFrames) => LOOK_NOTE_ON_HEAD + (mediaFrames ? LOOK_NOTE_MEDIA_ON : LOOK_NOTE_MEDIA_OFF);
 const LOOK_NOTE_OFF = '- **这台云节点上看不了画面。** `see_frames`、`get_gif`、`bake_card`、`inspect_card_dom` 没有交给你。本提示词里凡是要求「先看一眼画面」「放完再看」的步骤一律跳过,工具结果里的 `look` 提示也不用管;排版按 `get_layout` 给的规定框和卡片参数判断,做完在汇报里说明「没有看过画面」。别的成员看到的是云端渲染服务渲好的画面。';
 
 /**
  * 拼进系统提示词的一段:只写与本机真实的差别(契约第 9.7 节)。
  * 不给 `provided`(旧托管档)时逐字是原来的那一段;给了(账号模式的任务进程)就按这个进程里真的接上了哪些族来写:
  * 接上的不再列进「这一版还没有」,并补上它在云端与本机不一样的地方。
- * @param {{ look?: boolean, provided?: Iterable<string> | null, collectDelegate?: boolean }} [o] `look`:这台节点配没配看画面的口子;
- *   `collectDelegate`:代下(请发起人的电脑带登录态替云端下载)在这个进程里开没开——缺省开启,部署配置显式设为 0 或 false 才关闭
+ * @param {{ look?: boolean, provided?: Iterable<string> | null, collectDelegate?: boolean, mediaFrames?: boolean }} [o] `look`:这台节点配没配看画面的口子;
+ *   `collectDelegate`:代下(请发起人的电脑带登录态替云端下载)在这个进程里开没开——缺省开启,部署配置显式设为 0 或 false 才关闭;
+ *   `mediaFrames`:素材模式(`see_frames({source:"media"})`)在这个进程里接上了没有。`see_frames` 在工具表里没有 `provider` 字段
+ *   (它归 `look`),所以 `provided` 看不见它,只能由调用方照 `accountProvided.has('see_frames')` 传进来
  */
-export function cloudSystemNote({ look = false, provided = null, collectDelegate = true } = {}) {
+export function cloudSystemNote({ look = false, provided = null, collectDelegate = true, mediaFrames = false } = {}) {
   const has = providedTools(provided);
   const family = (name) => (CLOUD_PROVIDER_FAMILIES[name] ?? []).every((tool) => has.has(tool));
   const lines = [];
   for (const line of CLOUD_SYSTEM_NOTE_LINES) {
-    if (line === LOOK_LINE) lines.push(look ? LOOK_NOTE_ON : LOOK_NOTE_OFF);
+    if (line === LOOK_LINE) lines.push(look ? lookNoteOn(mediaFrames) : LOOK_NOTE_OFF);
     else if (line === INITIATOR_LINE) lines.push(initiatorNote({ handoff: family('handoff'), login: family('collect') }));
     else if (line === PENDING_LINE) lines.push(...pendingNotes({ stt: family('stt'), shots: family('shots'), subject: family('subject'), track: family('track') && family('motion'), workflow: family('workflow'), web: family('web'), handoff: family('handoff') }));
     else if (line === COLLECT_LINE) lines.push(!family('collect') ? COLLECT_NOTE_ANONYMOUS : collectDelegate === true ? COLLECT_NOTE_DELEGATE : COLLECT_NOTE_ANONYMOUS + COLLECT_NOTE_LOGIN_ONLY);
