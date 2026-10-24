@@ -1,0 +1,12 @@
+{
+  "statusUrl": "https://127.0.0.1:8794/internal/v2/asset/status",
+  "tls": {
+    "cert": "/etc/promptcut-pki/public/doc.crt",
+    "key": "/var/lib/promptcut-role-keys/doc/doc.key",
+    "ca": "/etc/promptcut-pki/public/ca.crt"
+  },
+  "rotateUnit": "promptcut-asset-rotate.service",
+  "stateFile": "/var/lib/promptcut/asset-root/watchdog-state.json",
+  "minIntervalMs": 600000,
+  "maxRotates": 3
+}

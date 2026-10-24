@@ -1,0 +1,16 @@
+# 观察通道的看门狗:查一次状态,只在确实断了的时候才去 start 上面那个 rotate 单元。
+# 模板 server/hosted/deploy/systemd-promptcut-asset-rotate-watch.service;把花括号占位符换成 README
+# 「素材服务的观察通道自愈」一节的值,放在 /etc/systemd/system/promptcut-asset-rotate-watch.service。
+# 它由同名 .timer 定时拉起,不用 enable 这个 .service 本身。
+[Unit]
+Description=PromptCut asset run-assets observer watchdog
+After=promptcut-doc-v2.service promptcut-asset-v2.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory={{DIR}}
+ExecStart={{NODE}} {{DIR}}/server/hosted/deploy/asset-run-watchdog.mjs --config {{WATCHDOG_CONFIG}}
+# 查不到就查不到,下一次定时再说;这里重试没有意义
+Restart=no
+TimeoutStartSec=240s
