@@ -54,8 +54,8 @@ test('提示词:决策表三条路都在,且「硬前提」有可操作的判据
   assert.match(table, /它是\*\*硬前提\*\*/);
   assert.match(table, /它\*\*不是\*\*硬前提/);
   assert.match(table, /同一个错误连续 2 次/);
-  // 硬前提那条要落到 final 的汇报并停下
-  assert.match(table, /`final: true` 的 `report_progress`/);
+  // 硬前提那条要落到 final + blocked 的汇报并停下:blocked 是界面上「等你回话」那一位
+  assert.match(table, /`final: true`、`blocked: true` 的 `report_progress`/);
   assert.match(table, /然后停下,不要再调工具/);
   // 判据:用户提到画面内容就算硬前提;拿不准就停
   assert.match(table, /谁在哪、避开什么/);
@@ -72,4 +72,16 @@ test('提示词:先落地再打磨,并说明只有交给工具的才算交付', 
   assert.match(ship, /只有真正交给工具的东西才算交付/);
   assert.match(ship, /写在代码块里的卡片源码/);
   assert.match(ship, /还剩一半和只剩四分之一时提醒你一次/, '要和 harness 真发的那两条提示对得上');
+});
+
+test('提示词:停下来等用户的那几处都改成 blocked,并说清不该乱填', () => {
+  // 决策表之外还有三处「停下来等用户」:汇报那一节、网页撞墙交接、指令含糊要澄清
+  for (const anchor of ['要用户做事或回答时也一样', '无法理解时询问', '把窗口挪到用户面前']) {
+    assert.ok(prompt.includes(anchor), anchor);
+  }
+  assert.match(prompt, /都调 `final: true` \*\*且 `blocked: true`\*\* 的 `report_progress`/);
+  assert.match(prompt, /- \*\*无法理解时询问\*\*: [^\n]*`final: true`、`blocked: true`/);
+  // 别乱填:做完了或只是撞上限不算「等你回话」
+  assert.match(prompt, /自己做完了、或者只是撞上轮次上限,不要填 `blocked`/);
+  assert.match(prompt, /`blocked: true` 隐含 `final`/);
 });

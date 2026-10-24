@@ -21,7 +21,7 @@ export const coreTools = [
   },
   {
     name: "report_progress",
-    description: "给用户看的唯一进度汇报渠道。每完成一个小阶段调一次(final: false),整个任务结束前必须调一次(final: true),因为出错或卡住而停下来也算结束;先填三个布尔再填列表;每条一句简洁中文、不超过 40 字、每类不超过 8 条。",
+    description: "给用户看的唯一进度汇报渠道。每完成一个小阶段调一次(final: false),整个任务结束前必须调一次(final: true),因为出错或卡住而停下来也算结束;先填三个布尔再填列表;每条一句简洁中文、不超过 40 字、每类不超过 8 条。要用户回话之后才能继续时(缺了用不了的能力、指令含糊要澄清、候选要他挑)把 blocked 填 true,并把要他做什么写进 todo —— 界面会把这份报告画成「等你回话」而不是「已暂停」,他才知道球在他那边;blocked 为 true 就表示这一轮停在这里,交完不要再调工具。",
     inputSchema: {
       type: "object",
       properties: {
@@ -29,6 +29,7 @@ export const coreTools = [
         has_done: { type: "boolean" },
         has_todo: { type: "boolean" },
         has_problem: { type: "boolean" },
+        blocked: { type: "boolean", description: "true 表示停下来等用户回话(要他做事或答复才能继续);要用户做什么写进 todo。缺省 false" },
         stage: { type: "string" },
         done: { type: "array", items: { type: "string" } },
         todo: { type: "array", items: { type: "string" } },

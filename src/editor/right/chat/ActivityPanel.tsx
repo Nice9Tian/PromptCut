@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { ChatMessage, InboundAgentMessage, ToolCallInfo } from "../../../ai/types";
 import { useInstallJobs } from "../../../ai/sttInstallStore";
-import { isReportTool, parseProgressReport, type ProgressReport } from "../../../ai/progressReport";
+import { isReportTool, parseProgressReport, reportTitle, type ProgressReport } from "../../../ai/progressReport";
 import { isUserMessageCall } from "../../../ai/userMessages";
 import { ToolDetail, ToolIcons, type ExtraIcon } from "./ToolIcons";
 import { bareToolName, iconRuns, type IconRun } from "./iconRuns";
@@ -78,7 +78,7 @@ function RoundActivity(props: {
     report: s.report,
     runs: iconRuns(s.tools),
     // 小结的颜色:这一轮出错收尾(最后一段的小结)是红,报了问题是黄,否则绿
-    tone: s.report ? (si === segments.length - 1 && (m.error || m.outcome === "error") ? "err" : s.report.problems.length ? "warn" : "ok") : null,
+    tone: s.report ? (si === segments.length - 1 && (m.error || m.outcome === "error") ? "err" : s.report.problems.length || s.report.blocked ? "warn" : "ok") : null,
   }));
   const items: DetailItem[] = [];
   if (inbound?.length) items.push({ type: "inbound", key: `${prefix}:in`, messages: inbound });
@@ -108,7 +108,7 @@ function RoundActivity(props: {
   const glowKey = !interacted && live ? focusKey : null;
   const reportIcon = (seg: RowSeg, si: number): ExtraIcon | null => {
     if (!seg.report || !seg.tone) return null;
-    const title = seg.report.final ? "本轮小结" : seg.report.stage ? `阶段 · ${seg.report.stage}` : "阶段小结";
+    const title = reportTitle(seg.report);
     return { key: `${prefix}:i${si}:report`, className: `ai-op--summary tone-${seg.tone}`, label: `${title}:${SUMMARY_TONE_TEXT[seg.tone]}` };
   };
 

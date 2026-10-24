@@ -162,3 +162,37 @@ test('validateProgressReport 布尔与数组不一致被纠正', () => {
   assert.equal(res.value.has_done, true, '被修正为 true');
   assert.equal(res.value.has_todo, false, '被修正为 false');
 });
+
+/*
+ * blocked:停下来等用户回话(2026-10-24 用户定,起因见 docs/plan/agent-blind-stop.md)。
+ * 没有这一位的时候,界面上「撞上轮次上限停了」和「在等你回话」长得一样,用户分不出球在谁那边。
+ */
+test('blocked:新字段不进 required,老调用一个字不改照常收', () => {
+  const tool = tools.find(t => t.name === 'report_progress');
+  assert.equal(tool.inputSchema.properties.blocked.type, 'boolean');
+  assert.equal(tool.inputSchema.required.includes('blocked'), false, '老驱动不填也得照常收');
+  assert.match(tool.description, /blocked/);
+  assert.match(tool.description, /等你回话/);
+});
+
+test('blocked:true 隐含 final;false 与缺省时这一位不出现', () => {
+  const base = { has_done: false, has_todo: true, has_problem: false, done: [], todo: ['请在窗口里扫码登录'], problems: [] };
+  const on = validateProgressReport({ ...base, blocked: true });
+  assert.equal(on.ok, true);
+  assert.equal(on.value.blocked, true);
+  assert.equal(on.value.final, true, 'final 漏填也按收尾算,不为这个拒收');
+  assert.equal(validateProgressReport({ ...base, final: false, blocked: true }).value.final, true);
+
+  for (const input of [{ ...base, final: true }, { ...base, final: true, blocked: false }, { ...base, final: true, blocked: null }]) {
+    const res = validateProgressReport(input);
+    assert.equal(res.ok, true);
+    assert.equal('blocked' in res.value, false, JSON.stringify(input));
+  }
+});
+
+test('blocked:不是布尔就拒收,报错说清收到的是什么', () => {
+  const res = validateProgressReport({ final: true, blocked: 'yes', done: ['a'], todo: [], problems: [] });
+  assert.equal(res.ok, false);
+  assert.match(res.error, /blocked/);
+  assert.match(res.error, /string/);
+});
