@@ -38,5 +38,7 @@
   "/api/account/third-party/config",
   "/api/account/third-party/login",
   "/api/account/third-party/register"
- ]
+ ],
+ "storagePaths": [],
+ "storageSource": "2026-10-24：网盘导入 /api/media/storage/* 在在线产物里一条都不许有，所以这一桶是空的。当天合连接器时它们曾漏进在线产物，我登记过三条把门弄绿（治标）；同日 claude/drive-connector 给了治本的改法（storageImport.ts 三个函数开头内联 storageImportSupported 判断，在线构建里是编译期常量 false，打包器把代码连同字面量一并剪掉），于是撤销登记。空桶比登记更严：任何 /api/media/storage/ 开头的路径再出现都会被判未许可。"
 }

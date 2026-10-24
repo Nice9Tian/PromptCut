@@ -102,7 +102,7 @@ test('FSA-04 validateManifest:逐项抓错', () => {
 });
 
 test('FSA-05 清单自洽:prereq 都在、占位符都认得、端口不踩禁区、命令里的脚本存在或标了 requires', () => {
-  const known = new Set(['node', 'repo', 'out', 'tsc', 'vite', 'dist', 'main', 'mainWorkspace', 'item', 'dev.origin', 'dev.port', 'dev-main.origin', 'dev-main.port', 'visuhive']);
+  const known = new Set(['node', 'repo', 'out', 'tsc', 'vite', 'dist', 'main', 'mainWorkspace', 'item', 'dev.origin', 'dev.port', 'dev-main.origin', 'dev-main.port', 'dev-online.origin', 'dev-online.port', 'visuhive']);
   const forbidden = [[5190, 5192], [5203, 5205], [5210, 5212], [5720, 5839], [8770, 8799]];
   const inForbidden = (n) => forbidden.some(([a, b]) => n >= a && n <= b);
   const ids = new Set(ITEMS.map((i) => i.id));

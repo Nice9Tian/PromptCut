@@ -131,6 +131,14 @@ const SKIP_DIRS = new Set([
   ".pc-projects-headless",
   ".claude",           // 本机的 agent 配置和权限
   ".wrangler",         // wrangler dev 的本地缓存(诊断 Worker 那套)
+  /*
+   * 各任务的 git worktree。少这一条就是把**每一条分支的整份源码**打进安装包发给用户 ——
+   * 2026-10-24 出 0.7.25 时撞上:`runtime/app` 从 378 MB 涨到 11 GB(光 `_export-baseline`
+   * 那份像素基线就 7.9 GB),makensis 直接 `error mmapping datablock` 挂掉,连着两次。
+   * 注意 `out` / `node_modules` 这些是按**名字**挡的、任何层级都挡,所以挡不住 worktree 本身,
+   * 只能单列这一条。
+   */
+  ".worktrees",
   "release",
   // AI harness 的文本工具就往这儿落文件(server/harness/tools/textEditor.mjs、
   // server/vite-plugin-cards.ts)。开发机上跑过 AI 面板就有模型写的 .md/.txt/.json/.png,

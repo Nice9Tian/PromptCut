@@ -36,9 +36,15 @@ import "./brandGlow.css";
  * 位置 `ax/ay/bx/by` 是视口的比例（0 = 左/上，1 = 右/下，可以是负数），
  * 半径 `arx/ary/brx/bry` 是 CSS 像素——和官网一样是固定像素，不跟着窗口缩放。
  */
-const LOOK = {
-  /** 飘动的快慢（每秒转多少圈）。`drift` 为 0 时这一项不起作用 */
-  speed: 0.14,
+export const LOOK = {
+  /**
+   * 飘一圈多少秒。`drift` 为 0 时这一项不起作用。
+   *
+   * 这个数同时是**预渲染出来那段循环视频的长度**：两团光的相位都是 uLoop 的整数倍频，
+   * uLoop 从 0 走到 1 正好回到出发点，所以第一帧和最后一帧算出来一样，循环接得上。
+   * 28 秒 × 24 帧 = 672 帧，整数，不会差半帧。
+   */
+  loopSeconds: 28,
   /** 两团光各自飘多远（CSS 像素）。0 = 完全不动，页面也就不用逐帧重画 */
   drift: 110,
 
@@ -97,16 +103,17 @@ const LOOK = {
 const BG_FALLBACK: [number, number, number] = [0.067, 0.063, 0.086];
 const ACCENT_FALLBACK: [number, number, number] = [0, 0.859, 0.859];
 
-const VERT = `#version 300 es
+export const VERT = `#version 300 es
 void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position = vec4(p*2.0-1.0,0.0,1.0); }`;
 
-const FRAG = `#version 300 es
+export const FRAG = `#version 300 es
 precision highp float;
 out vec4 fragColor;
 
 uniform vec2 uRes;      // 画布的内部像素
 uniform float uPxScale; // 内部像素 / CSS 像素
-uniform float uTime;
+/* 循环相位，0→1 走满一圈回到起点 */
+uniform float uLoop;
 
 uniform vec3 uBg;
 uniform vec3 uColA;
@@ -142,7 +149,14 @@ void main() {
   cssPx.y = hCss - cssPx.y;
 
   // 两团朝相反方向飘，错开一点才看得出是两团；drift = 0 时这一项是 0
-  vec2 d = uDrift * vec2(sin(uTime * 6.2831853), cos(uTime * 4.7123890));
+  /*
+   * 两团朝相反方向飘，错开一点才看得出是两团；drift = 0 时这一项是 0。
+   *
+   * 两个频率取 4 和 3（原来是 1 和 0.75，比值一样是 0.75，但不是整数倍频）：
+   * 整数倍频才保证 uLoop 走满一圈时两项同时回到出发点 —— 预渲染成视频要靠这一条接上循环。
+   * 快慢没变：一圈的秒数由 LOOK.loopSeconds 定。
+   */
+  vec2 d = uDrift * vec2(sin(uLoop * 6.2831853 * 4.0), cos(uLoop * 6.2831853 * 3.0));
 
   /*
    * 以屏幕中心对齐：位置不按当前视口的比例算，而是换算成相对中心的固定像素偏移
@@ -263,7 +277,7 @@ export function BrandGlow(): JSX.Element {
     const at = (n: string) => gl.getUniformLocation(prog, n);
     const uRes = at("uRes");
     const uPxScale = at("uPxScale");
-    const uTime = at("uTime");
+    const uLoop = at("uLoop");
     const uBg = at("uBg");
     const uColA = at("uColA");
     const uColB = at("uColB");
@@ -311,7 +325,9 @@ export function BrandGlow(): JSX.Element {
         gl.uniform3f(uColA, ...(LOOK.colA ? hexToRgb(LOOK.colA, ACCENT_FALLBACK) : readColor("--ui-accent", ACCENT_FALLBACK)));
         gl.uniform3f(uColB, ...(LOOK.colB ? hexToRgb(LOOK.colB, ACCENT_FALLBACK) : readColor("--ui-accent", ACCENT_FALLBACK)));
       }
-      gl.uniform1f(uTime, animated ? ((performance.now() - started) / 1000) * LOOK.speed : 0);
+      // 取小数部分：走满一圈回到 0，屏幕上这一版也就跟着无缝接上了
+      const secs = (performance.now() - started) / 1000;
+      gl.uniform1f(uLoop, animated ? (secs / LOOK.loopSeconds) % 1 : 0);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       frames++;
     };

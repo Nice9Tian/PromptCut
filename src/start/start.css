@@ -1457,6 +1457,10 @@
 }
 .ps-side-hint .ps-link { margin-left: 6px; }
 .ps-side-new:disabled { opacity: 0.5; cursor: default; filter: none; }
+/* 两处都要:`.is-blocked` 是游客开第二条对话时置灰那一行(claude/guest-one-chat),
+   `:disabled` 是游客没有分组时置灰的分组行(claude/groups-local-cloud)。样式相同、来路不同 */
+.ps-row.is-blocked,
+.ps-row:disabled { opacity: 0.5; cursor: default; }
 .ps-row.is-archived .ps-row-icon { opacity: 0.55; }
 .ps-tile:disabled { opacity: 0.5; cursor: default; }
 

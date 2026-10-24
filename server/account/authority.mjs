@@ -963,7 +963,16 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     const state = ledger.read();
     return agentReadClosureComplete(state, eventId, state.accessAcks[`ack:${eventId}:agent`]);
   }
-  return { authorityId: ledger.authorityId, synchronize, applyRevocation, applyRevocationNotification, authorizePrincipal, checkAccess,
+  /**
+   * 令牌是谁(不要求项目):回 `{ accountId, guest }`。账号级的东西(云端分组,`modules/account-org.mjs`)用它认人,
+   * 身份只取令牌解出来的,请求体里写什么都不收。只给出这两项,不把授权引用号交出去,所以验完就把验证时临时记的引用丢掉。
+   */
+  async function identify(input) {
+    const principal = await verify(input);
+    if (!input?.authorizationId && principal.authorizationId) refs.delete(principal.authorizationId);
+    return { accountId: principal.accountId, guest: principal.guest === true };
+  }
+  return { authorityId: ledger.authorityId, synchronize, applyRevocation, applyRevocationNotification, authorizePrincipal, identify, checkAccess,
     issueGuest, revokeGuest, sweepExpiredGuestProjects,
     createProject, joinProject, joinRequest, decideJoinRequest, entryState, adminProject, listProjects, status, statusForPrincipal, legacyGoneStatus, eventsSince, ackAccessEvent, hasAgentReadClosure, revocationStatus, completeLogoutBarrier, recordLogoutTimeout, flushAccountAcknowledgements,
     subscribeProjectChanges(callback) {

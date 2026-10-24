@@ -2,6 +2,7 @@ import type { Clip, Timeline } from "./types";
 import type { SoundEffectRecipe } from "./soundEffects";
 import { cutSegmentRender, CUT_SEGMENT_CARD, type CutRenderProject, type TimelineCutClip } from "./cutSegments.ts";
 import { envelopeAt } from "./cutAudio.mjs";
+import { cardClockOffset, clipSpeed } from "./clipTime.mjs";
 
 /** 可重生成的音效配方。reuseKey 是合成输入身份,不是 WAV 内容哈希。 */
 export interface SoundEffectLink {
@@ -449,8 +450,9 @@ export function flattenOverlay(p: Project, graph?: Timeline["graph"]): Timeline 
       clips.push({
         id: c.id, cardId: c.cardId, start: c.start, end: c.end, params: c.params,
         // 打字的画面与 WAV 共用源事件时间；切开后不能从第一个字重来。
+        // 变速的素材段上按卡片时钟(mediaOffset ÷ speed,kernel/clipTime.mjs 的 cardClockOffset):与卡片声音同一个时钟,切开后接得上
         ...((c.cardId === "mu-typing" || c.embeddedAudio || c.cardAudio || p.cardNodes?.some(n => n.id === c.nodeId && n.embeddedAudio))
-          ? c.mediaOffset !== undefined ? { sourceOffset: c.mediaOffset } : c.nodeId ? { sourceOffset: Number(p.cardNodes?.find(n => n.id === c.nodeId)?.timeOffset) || 0 } : null
+          ? c.mediaOffset !== undefined ? { sourceOffset: clipSpeed(c) === 1 ? c.mediaOffset : cardClockOffset(c) } : c.nodeId ? { sourceOffset: Number(p.cardNodes?.find(n => n.id === c.nodeId)?.timeOffset) || 0 } : null
           : null),
         ...(c.nodeId ? { nodeId: c.nodeId } : null),
         ...(c.motion ? { motion: c.motion } : null),

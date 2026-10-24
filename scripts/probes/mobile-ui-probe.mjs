@@ -210,8 +210,77 @@ try {
     await tap(A, '.mainhead');
     const ids1b = await mainIds();
     const ra = await rect(A, `[data-pcm="mblock"][data-id="${ids1b[1]}"]`);
+    /*
+     * 这一下要同时判两件事,原来只判了后一件:
+     *   ① 手指划过去,缩略时间轴**真的滚动了**;
+     *   ② 没先选中时按住拖只是滚动,不换序。
+     * 只判 ② 的话,一条「手指划了什么都不动」的时间轴照样能过 —— 用户 2026-10-24 报的
+     * 「手机版传统式缩略时间轴用触屏没法滑动查看」就是从这个缝里漏过去的。
+     * `.strip-scroll` 上写着 `touch-action: none`,浏览器原生滑动是关掉的,全靠
+     * `ThumbStrip` 的 onPointerDown 手动改 scrollLeft,所以这条路必须有人盯。
+     */
+    const slBefore = await A.$eval('.strip-scroll', (el) => el.scrollLeft);
     await touch(A, lerp({ x: ra.x + ra.w / 2, y: ra.y + ra.h / 2 }, { x: ra.x - 60, y: ra.y + ra.h / 2 }, 8), { holdMs: 450 });
+    const slAfter = await A.$eval('.strip-scroll', (el) => el.scrollLeft);
+    /*
+     * 本来还想判「松手之后还带惯性继续滑」—— 那正是这次改动的要害(原生横滑有惯性,
+     * 手动推 scrollLeft 那条老路没有)。实测判不了:CDP 的 `Input.dispatchTouchEvent` 是合成触点,
+     * 不触发合成器的抛掷动画,改之后量出来 rest 仍然等于 after。所以这里只判「真的滚动了」,
+     * 惯性那一条**在这套无头环境里证不了**,要真机才算数。
+     */
+    out.T.touchScroll = { before: Math.round(slBefore), after: Math.round(slAfter) };
+    check(slAfter - slBefore > 20, 'T 手指往左划,缩略时间轴跟着滚动', out.T.touchScroll);
     check(JSON.stringify(await mainIds()) === JSON.stringify(ids1b), 'T 没选中时按住拖动只是滚动,不换序');
+    /*
+     * 只剩**一段**时也要能从头滑到尾（用户 2026-10-24 在 iPhone 上报：一段 6 秒的项目，
+     * 手指划缩略条白线一动不动）。原来这支探针一直用三段的项目，这种情形从没测过。
+     * 两件事一起判：划得动，而且**松手之后不会被弹回去** —— 同步「滚动位置 ← 当前时间」
+     * 那个 effect 每次渲染都跑，惯性那一段 dragging 已经是 false，不挡住它就会把人划的距离吃掉。
+     */
+    // 用正经的 removeClip 删掉其余两段（不原地改 store 里的项目对象，那是仓库的硬约束）
+    for (const id of ids1b.slice(1)) await store(A, 'S.actions.removeClip(args[0]); return true;', id).catch(() => null);
+    await sleep(600);
+    const oneIds = await mainIds();
+    out.T.oneClip = { ids: oneIds };
+    if (oneIds.length === 1) {
+      const geo = await A.$eval('.strip-scroll', (el) => ({ client: el.clientWidth, scroll: el.scrollWidth }));
+      out.T.oneClip.geo = geo;
+      check(geo.scroll - geo.client > 20, 'T 只剩一段时缩略条仍有可滚的余量（左右占位要留够）', geo);
+      const r1 = await rect(A, `[data-pcm="mblock"][data-id="${oneIds[0]}"]`);
+      // 先把滚动位置摆到中间，两个方向才都有余量可走（在端点上往外划本来就不该动）
+      await A.$eval('.strip-scroll', (el) => { el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2; });
+      await sleep(500);
+      const mid = await A.$eval('.strip-scroll', (el) => el.scrollLeft);
+      const swipe = async (dx) => {
+        const from = await A.$eval('.strip-scroll', (el) => el.scrollLeft);
+        const cy = r1.y + r1.h / 2, cx = r1.x + r1.w / 2;
+        await touch(A, lerp({ x: cx, y: cy }, { x: cx + dx, y: cy }, 8));
+        const to = await A.$eval('.strip-scroll', (el) => el.scrollLeft);
+        await sleep(900);
+        const rest = await A.$eval('.strip-scroll', (el) => el.scrollLeft);
+        return { from: Math.round(from), to: Math.round(to), rest: Math.round(rest) };
+      };
+      const left = await swipe(-35);
+      await A.$eval('.strip-scroll', (el) => { el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2; });
+      await sleep(500);
+      const right = await swipe(35);
+      out.T.oneClip.scroll = { mid: Math.round(mid), 往左划: left, 往右划: right };
+      check(left.to - left.from > 5, 'T 只剩一段时往左划，缩略条跟着动', left);
+      check(right.from - right.to > 5, 'T 只剩一段时往右划，缩略条跟着动', right);
+      check(Math.abs(left.rest - left.to) < 8 && Math.abs(right.rest - right.to) < 8,
+        'T 松手之后不被弹回去（同步 effect 不跟用户抢）', out.T.oneClip.scroll);
+    } else {
+      check(false, 'T 没能把项目裁成一段，这一组没测到', out.T.oneClip);
+    }
+    // 把删掉的两段撤销回来：后面还要用两段之间的「＋」加转场
+    for (let i = 0; i < 6 && (await mainIds()).length < ids1b.length; i++) {
+      await store(A, 'S.actions.undo(); return true;').catch(() => null);
+      await sleep(250);
+    }
+    out.T.oneClip.restored = (await mainIds()).length;
+    check(out.T.oneClip.restored === ids1b.length, 'T 撤销之后三段都回来了（后面几步要用）', out.T.oneClip.restored);
+    await A.$eval('.strip-scroll', (el) => { el.scrollLeft = 0; });
+    await sleep(300);
     // 加转场:点两段之间的 ＋ → 卡片库转场分类 → 交叉溶解
     await A.evaluate(() => { const sc = document.querySelector('.strip-scroll'); sc.scrollLeft = 0; });
     await sleep(200);

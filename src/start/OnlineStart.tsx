@@ -15,7 +15,10 @@
  *     手机版 `MobileStart.tsx` 共用同一份)。二级密码、不在名单、申请加入照它现有的处理(`JoinPanel.tsx`)。
  *     进项目时它会调 `onEnterEditor`:这里**不进编辑器**,而是留在这一页、打开这个项目的聊天页;
  *     要自己动手时「进入传统式」(详细编辑头上那颗键)才调上层真正的 `onEnterEditor`(Shell 换成编辑界面,项目已经连着)。
- *   - **左侧项目列表**:真云端项目(我创建的 / 我加入的;游客是本机记着的那一个);分组、置顶、归档、顺序只记在本机(`vibeOrg.ts`)。
+ *   - **左侧项目列表**:真云端项目(我创建的 / 我加入的;游客是本机记着的那一个);分组是**云端分组**:只装云端项目,
+ *     本机草稿放不进来(桌面版那一屏的是本地分组,`DesktopStart.tsx`)。云端分组存云端、跟着账号走、换设备能看到
+ *     (`useCloudOrg.ts` 驱动同步,`orgSync.ts` 是同步逻辑,`orgMerge.ts` 是两台设备同时改时的三方合并);
+ *     本机那一份是缓存,打开先用它。老服务端还没有这条接口时安静地退回只记在这台浏览器里。游客没有分组(只有一个项目,身份也不跨设备)。
  *   - **中间输入框**:说一句话 → 新建云端项目(按选的画幅定尺寸、带上挑好的素材)→ 进它的聊天页 → 这句话作为第一条消息发给云端 Agent。
  *   - **聊天页、右侧拓展栏**:真云端 Agent 对话(`useVibeCloud.ts`)、真画面(`VibeStage.tsx`)、真的修改前 / 修改后。
  *   - **详细编辑**:真舞台,以及编辑界面那条**真时间轴**(拖动、裁剪、分割都能做,`DetailEdit.tsx`)。
@@ -27,7 +30,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { JSX } from "react";
 import { useAccountProjects } from "../account/useAccountProjects";
-import { GUEST_LIMITS, GUEST_LIMITS_TEXT } from "../account/guest";
+import { GUEST_CHAT_LIMIT_TEXT, GUEST_LIMITS, GUEST_LIMITS_TEXT } from "../account/guest";
 import { currentDocProjectId, forgetSharedResume, useSync } from "../editor/sync/syncManager";
 import { importMediaFiles, MEDIA_ACCEPT } from "../editor/left/importAssets";
 import { SyncOverlays } from "../editor/sync/SyncOverlays";
@@ -41,7 +44,9 @@ import { TopBar } from "./TopBar";
 import { VibeLogin, type LoginIntent } from "./VibeLogin";
 import { EXT_WIDTH, SIDE_WIDTH, clampWidth, readSideCollapsed, readWidth, writeSideCollapsed, writeWidth } from "./sideWidth";
 import { removeById, rename, reorder, setArchived, togglePin, visible } from "./treeState";
-import { addGroup, loadOrg, mergeChats, mergeProjects, moveProject, saveOrg, withChats, withGroups, withProjects, type CloudEntry, type OrgState } from "./vibeOrg";
+import { CLOUD_ORG_IN_CLOUD, addGroup, cloudOrgScope, groupNoteText, groupsOf, mergeChats, mergeProjects, moveProject, orgWhereText, pruneOrg, withChats, withGroups, withProjects, type OrgEntry } from "./vibeOrg";
+import { accountOrgTransport } from "./orgTransport";
+import { useCloudOrg } from "./useCloudOrg";
 import { seenProjects, subscribeSeen } from "./thumbCache";
 import { useSeenProject } from "./useSeenProject";
 import { useVibeCloud } from "./useVibeCloud";
@@ -63,7 +68,10 @@ function showHomeAddress() {
 }
 
 /** 同级的键:和 `ProjectSidebar` 里判能不能拖到一起用的是同一套 */
-const projectSib = (p: VibeProject) => `project:${p.groupId ?? "loose"}`;
+const projectSib = (p: VibeProject) => `project:${p.realm}:${p.groupId ?? "loose"}`;
+
+/** 游客没有分组、置顶、归档:只有一个项目,身份也不跨设备,没有地方存云端那一份 */
+const GUEST_ORG_TEXT = "游客只有一个项目，没有分组、置顶和归档。注册一个账号后，可以用云端分组整理项目。";
 const chatSib = (c: VibeChat) => `chat:p:${c.projectId}`;
 
 /** 开始页上说的那句话:等项目建好、连上、云端 Agent 就绪之后发出去 */
@@ -78,6 +86,8 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
    * 不进编辑器,在这一页打开这个项目的聊天页。用 ref 转一道,免得进行到一半的异步流程拿着旧的回调
    */
   const entered = useRef<() => void>(() => {});
+  /** 这一次点的是缩略图卡片(要进传统式)时记下项目号;侧栏点进来的是 null */
+  const toClassic = useRef<string | null>(null);
   const ap = useAccountProjects({ online: true, onEnterEditor: () => entered.current() });
   const shared = useSync((s) => s.shared);
   const blocked = useSync((s) => s.blocked);
@@ -120,33 +130,52 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
     setChatPage(true);
     setJoin(null);
     setNotice("");
+    // 缩略图卡片点进来的:连上了就直接切传统式(聊天页的状态留在底下,和点「进入传统式」时一样)
+    if (toClassic.current === id) { toClassic.current = null; props.onEnterEditor(); }
   };
 
   const signedIn = !!(ap.account || ap.guest);
-  const viewer = ap.account ? `acc:${ap.account.id}` : ap.guest ? `guest:${ap.guest.id}` : null;
+  /** 云端分组跟着账号走;游客没有(null:读不到也存不了,整理信息一律空) */
+  const orgScope = ap.account ? cloudOrgScope(ap.account.id) : null;
 
-  /* ---------------- 本机整理(分组、置顶、归档、顺序) ---------------- */
-  const [org, setOrgState] = useState<OrgState>(() => loadOrg(viewer));
-  useEffect(() => { setOrgState(loadOrg(viewer)); }, [viewer]);
-  const setOrg = (next: (o: OrgState) => OrgState) => setOrgState((o) => { const n = next(o); saveOrg(viewer, n); return n; });
+  /* ---------------- 云端整理(云端分组、置顶、归档、顺序):存云端,本机一份是缓存 ---------------- */
+  // 传输对象要稳定:换了就重建同步引擎。登录之前、游客都是 null(不同步)
+  const orgTransport = useMemo(() => (ap.account ? accountOrgTransport(() => ap.orgApi) : null), [ap.account?.id, ap.orgApi]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { org, setOrg, status: orgStatus } = useCloudOrg({ scope: orgScope, transport: orgTransport });
+  /** 此刻云端分组是不是真存在云端:老服务端(没有这条接口)时界面如实说只记在这台浏览器里 */
+  const orgInCloud = CLOUD_ORG_IN_CLOUD && orgStatus !== "unsupported";
+  const orgSyncNote = orgStatus === "pending" ? "云端分组没同步上：改动先记在这台浏览器里，联网后自动补上。" : null;
+  /** 游客动整理信息:不做,说一句为什么。返回 true 表示已拦下 */
+  const guestBlocked = (): boolean => {
+    if (!ap.guest) return false;
+    setNotice(GUEST_ORG_TEXT);
+    return true;
+  };
 
   /* ---------------- 项目清单:云端列表 + 本机整理 + 本机记下的画面 ---------------- */
   const seen = useSyncExternalStore(subscribeSeen, seenProjects, seenProjects);
-  const cloudEntries = useMemo<CloudEntry[]>(() => {
-    if (ap.guest) return ap.guestProject ? [{ id: ap.guestProject.id, name: ap.guestProject.name, role: "guest" }] : [];
+  const cloudEntries = useMemo<OrgEntry[]>(() => {
+    // 这一屏的项目都是云端项目,属云端这一套
+    if (ap.guest) return ap.guestProject ? [{ id: ap.guestProject.id, name: ap.guestProject.name, role: "guest", realm: "cloud" }] : [];
     if (!ap.lists) return [];
     return [
-      ...ap.lists.owned.map((p) => ({ id: p.projectId, name: p.name, role: "owned" as const })),
-      ...ap.lists.joined.map((p) => ({ id: p.projectId, name: p.name, role: "joined" as const })),
+      ...ap.lists.owned.map((p) => ({ id: p.projectId, name: p.name, role: "owned" as const, realm: "cloud" as const })),
+      ...ap.lists.joined.map((p) => ({ id: p.projectId, name: p.name, role: "joined" as const, realm: "cloud" as const })),
     ];
   }, [ap.guest, ap.guestProject, ap.lists]);
   // 刚连上、列表里还没有的项目(凭链接刚加入、直达地址进的):先按同步状态里的名字列上,列表刷新后以列表为准
   const entries = useMemo(() => {
     if (!openId || cloudEntries.some((c) => c.id === openId)) return cloudEntries;
-    return [{ id: openId, name: shared?.name || "云端项目", role: shared?.creator ? ("owned" as const) : ("joined" as const) }, ...cloudEntries];
+    return [{ id: openId, name: shared?.name || "云端项目", role: shared?.creator ? ("owned" as const) : ("joined" as const), realm: "cloud" as const }, ...cloudEntries];
   }, [cloudEntries, openId, shared?.name, shared?.creator]);
   const projects = useMemo(() => mergeProjects(org, entries, seen), [org, entries, seen]);
-  const groups = org.groups;
+  const groups = useMemo(() => groupsOf(org), [org]);
+  // 项目列表取到之后,把整理信息里已经不在列表里的项目清掉(云端那一份不会只增不减);列表没取到不清
+  useEffect(() => {
+    if (ap.guest || !ap.lists) return;
+    const ids = new Set(entries.map((e) => e.id));
+    setOrg((o) => pruneOrg(o, ids));
+  }, [ap.guest, ap.lists, entries]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---------------- 打开着的项目的云端 Agent ---------------- */
   const vibe = useVibeCloud({ connected: !!openId && connectedId === openId, shown: chatPage });
@@ -161,10 +190,18 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
   /* ---------------- 动作 ---------------- */
   const failText = (e: unknown, fallback: string) => (e instanceof Error && e.message ? e.message : fallback);
 
-  /** 点进一个项目。已经连着就直接回它的聊天页;设了二级密码而还没输过:打开「用链接加入」要密码 */
-  const openProject = (id: string) => {
+  /**
+   * 点进一个项目。已经连着就直接回它的聊天页;设了二级密码而还没输过:打开「用链接加入」要密码。
+   *
+   * `intoClassic` 为真时进去之后直接切**传统式**(打开编辑界面)——「最近项目」那一排的缩略图卡片走这条
+   * (2026-10-23 用户定,原话:「红色区域是项目卡片，点击这个位置的卡片会进入传统式」)。
+   * 侧栏的项目条目不带这个开关,仍然停在聊天页:那边是氛围式里管项目、接着上次对话的地方。
+   * 真正切过去在 `entered.current` 里做——要等项目连上(`enterAccountProject` 走完)才算数。
+   */
+  const openProject = (id: string, intoClassic = false) => {
     if (!signedIn) { setNotice("先登录账号或以游客身份进入。"); return; }
-    if (openId === id && connectedId === id) { setChatPage(true); return; }
+    toClassic.current = intoClassic ? id : null;
+    if (openId === id && connectedId === id) { if (intoClassic) props.onEnterEditor(); else setChatPage(true); return; }
     const p = projects.find((x) => x.id === id);
     setNotice("");
     void ap.perform(async () => {
@@ -225,6 +262,8 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
     if (it.kind === "skip") { setSkipped(true); return; }
     void ap.perform(async () => {
       if (it.kind === "guest") await ap.enterAsGuest();
+      // Google 那条路已经在登录页里登成功了,这里只是让业务层这一侧把会话认下来(`useAccountProjects` 的 `adoptSession`)
+      else if (it.kind === "third-party") await ap.adoptSession();
       else await ap.login(it.name, it.password, it.remember);
       if (it.link) setJoin({ askPassword: false });
     });
@@ -246,7 +285,7 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
 
   /* ---------------- 侧栏的改动 ---------------- */
   const writeProjects = (f: (list: VibeProject[]) => VibeProject[]) => setOrg((o) => withProjects(o, f(mergeProjects(o, entries, seen))));
-  const writeGroups = (f: (list: VibeGroup[]) => VibeGroup[]) => setOrg((o) => withGroups(o, f(o.groups)));
+  const writeGroups = (f: (list: VibeGroup[]) => VibeGroup[]) => setOrg((o) => withGroups(o, f(groupsOf(o))));
   const writeChats = (f: (list: VibeChat[]) => VibeChat[]) => { if (openId) setOrg((o) => withChats(o, openId, f(mergeChats(o, openId, vibe.chats)))); };
   const archivedNow = (kind: "group" | "project" | "chat", id: string) =>
     kind === "group" ? !!groups.find((g) => g.id === id)?.archived : kind === "project" ? !!projects.find((p) => p.id === id)?.archived : !!chats.find((c) => c.id === id)?.archived;
@@ -256,17 +295,19 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
       if (kind === "group") writeGroups((a) => rename(a, id, name));
     },
     pin: (kind, id) => {
+      if (guestBlocked()) return;
       if (kind === "group") writeGroups((a) => togglePin(a, id));
       else if (kind === "project") writeProjects((a) => togglePin(a, id));
       else writeChats((a) => togglePin(a, id));
-      setNotice("置顶只在自己同级里生效，并且只记在这台浏览器里。");
+      setNotice(`置顶只在自己同级里生效，${orgWhereText("cloud", orgInCloud)}。`);
     },
     archive: (kind, id) => {
+      if (guestBlocked()) return;
       const next = !archivedNow(kind, id);
       if (kind === "group") writeGroups((a) => setArchived(a, id, next));
       else if (kind === "project") writeProjects((a) => setArchived(a, id, next));
       else writeChats((a) => setArchived(a, id, next));
-      setNotice(next ? "已归档：收进侧栏最下面「已归档」，那里右键能取消归档。只记在这台浏览器里，项目本身不受影响。" : "已取消归档。");
+      setNotice(next ? `已归档：收进侧栏最下面「已归档」，那里右键能取消归档。${orgWhereText("cloud", orgInCloud)}，项目本身不受影响。` : "已取消归档。");
     },
     remove: (kind, id) => {
       if (kind === "group") {
@@ -285,11 +326,20 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
       }
     },
     reorder: (kind, dragId, overId, place) => {
+      if (guestBlocked()) return;
       if (kind === "group") writeGroups((a) => reorder(a, () => "group", dragId, overId, place));
       else if (kind === "project") writeProjects((a) => reorder(a, projectSib, dragId, overId, place));
       else writeChats((a) => reorder(a, chatSib, dragId, overId, place));
     },
-    move: (projectId, groupId) => setOrg((o) => moveProject(withProjects(o, mergeProjects(o, entries, seen)), projectId, groupId)),
+    move: (projectId, groupId) => {
+      if (guestBlocked()) return;
+      const project = projects.find((x) => x.id === projectId);
+      if (!project) return;
+      // 只许同一套(云端项目对云端分组):跨套的整理信息不动,说明给用户
+      const out = moveProject(withProjects(org, projects), project, groupId);
+      if (out.refused) { setNotice(out.refused); return; }
+      setOrg(() => out.org);
+    },
     blocked: (kind, id) => {
       if (kind === "group") return {};
       if (kind === "project") return { rename: "这一版还不能在这里改云端项目的名字。", remove: "这一版不能在这里删除云端项目。" };
@@ -453,14 +503,21 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
             if (chat.id !== vibe.chat.conversationId) vibe.chat.openChat(chat.id);
             setChatPage(true);
           }}
+          newChatBlocked={(projectId) => (projectId === openId && vibe.chat.history.guest && vibe.chat.history.atLimit ? GUEST_CHAT_LIMIT_TEXT : null)}
           onNewChat={(projectId) => {
             if (projectId !== openId) { openProject(projectId); return; }
+            // 游客每个项目只能开一个对话（2026-10-23 用户定）：说为什么、怎么才能多开；服务端另有 `guest-chat-limit` 兜底
+            if (vibe.chat.history.guest && vibe.chat.history.atLimit) { setNotice(GUEST_CHAT_LIMIT_TEXT); return; }
             if (vibe.chat.history.atLimit) { setNotice(`这个项目里你已经有 ${vibe.chat.history.ownedCount} 个云端对话，满了不能再新建。删掉几个再试。`); return; }
             vibe.chat.newChat();
             setChatPage(true);
           }}
+          groupNote={groupNoteText("cloud", orgInCloud)}
+          groupStatus={orgSyncNote}
+          newGroupBlocked={ap.guest ? GUEST_ORG_TEXT : null}
           onNewGroup={() => {
-            const name = prompt("新分组叫什么？（分组只记在这台浏览器里）", "新分组");
+            if (guestBlocked()) return;
+            const name = prompt(`新分组叫什么？（${groupNoteText("cloud", orgInCloud)}）`, "新分组");
             if (name === null) return;
             setOrg((o) => addGroup(o, name).org);
           }}
@@ -519,7 +576,7 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
                   if (list.length) { setFiles((f) => [...f, ...list]); setNotice(`已挑 ${files.length + list.length} 个素材，发出这句话时一起放进新项目。`); }
                 }} />
               <p className={`ps-prompt-note${ap.error ? " is-err" : ""}`} role={ap.error ? "alert" : "status"} data-pc="start-notice">
-                {errorLine || (ap.guest ? GUEST_LIMITS_TEXT : openId && !chatPage ? "项目还开着：点左边它底下的对话回去接着聊。" : "行上右键可以置顶、归档、放进分组（只记在这台浏览器里），按住能拖着排序，侧栏右边那条缝能拖宽窄。")}
+                {errorLine || (ap.guest ? GUEST_LIMITS_TEXT : openId && !chatPage ? "项目还开着：点左边它底下的对话回去接着聊。" : `行上右键可以置顶、归档、放进云端分组（${orgWhereText("cloud", orgInCloud)}），按住能拖着排序，侧栏右边那条缝能拖宽窄。`)}
               </p>
 
               <ProjectRail
@@ -528,7 +585,7 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
                 resetKey={scopeKeyOf(scope)}
                 onCreate={createBlank}
                 createDisabled={createBlocked}
-                onOpen={openProject}
+                onOpen={(id) => openProject(id, true)}
                 empty={railEmpty}
               />
             </div>

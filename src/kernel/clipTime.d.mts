@@ -20,5 +20,6 @@ export function normalizeSpeed(value: unknown): number | null;
 export function withSpeed<T extends { speed?: number }>(clip: T, speed: number): T;
 export function speedKeyPart(clip: { speed?: number } | null | undefined): { speed: number } | null;
 export function speedLabel(speed: number): string;
+export function cardClockOffset(clip: { speed?: number; mediaOffset?: number } | null | undefined): number | undefined;
 export function withMediaRates<G extends { nodes: any[] } | null | undefined>(project: unknown, graph: G): G;
 export function speedChangeNotes(r: { moved?: string[]; pushed?: { clips: number; by: number }; transitions?: { kind: string; from: number; to: number }[] } | null | undefined, clipId: string): string | null;

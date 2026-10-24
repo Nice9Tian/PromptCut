@@ -13,6 +13,16 @@
 }
 
 /*
+ * 预渲染那一版（`GlowLoop.tsx` 的 `<video>`）。`cover` 是必须的：
+ * 竖版是按 560×1290 渲的，手机视口比它矮也比它窄，`cover` 等距放大后居中裁切，
+ * 正好对上这段着色器「以画面中心对齐」的构图（见 `BrandGlow.tsx` 的 refW / refH）。
+ * 用 `contain` 或默认的 `fill` 会出黑边或者把光压扁。
+ */
+video.ps-glow-loop {
+  object-fit: cover;
+}
+
+/*
  * 起不来 WebGL2 时的兜底。底子是官网首页那段 CSS（VisuHive 仓库 `site/assets/home.css` 的 `body`），
  * 数值换成 `BrandGlow.tsx` 里 LOOK 那一组（用户 2026-10-23 调定）。
  *

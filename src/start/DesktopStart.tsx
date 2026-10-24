@@ -33,18 +33,18 @@ import { PromptBox } from "./PromptBox";
 import { TopBar } from "./TopBar";
 import { EXT_WIDTH, SIDE_WIDTH, clampWidth, readSideCollapsed, readWidth, writeSideCollapsed, writeWidth } from "./sideWidth";
 import { removeById, rename, reorder, setArchived, togglePin, visible } from "./treeState";
-import type { CloudEntry, OrgState, SeenMeta } from "./vibeOrg";
-import { addGroup, loadOrg, mergeChats, mergeProjects, moveProject, saveOrg, withChats, withGroups, withProjects } from "./vibeOrg";
+import type { OrgEntry, OrgState, SeenMeta } from "./vibeOrg";
+import { LOCAL_ORG_SCOPE, addGroup, groupNoteText, groupsOf, loadOrg, mergeChats, mergeProjects, moveProject, saveOrg, withChats, withGroups, withProjects } from "./vibeOrg";
 import { useVibeLocal } from "./useVibeLocal";
 import { RATIO_SIZE, projectNameFromPrompt } from "./format";
 import type { Ratio, VibeChat, VibeGroup, VibeProject } from "./types";
 import "./start.css";
 
 /**
- * 分组、置顶、归档、顺序存在哪一格(`vibeOrg.ts` 的 `orgKey`)。在线那边按账号分,桌面版只有一台机器,
- * 固定用 `desktop` —— 和在线的那几格互不相干,两边不会串。
+ * 这一屏的分组是**本地分组**(`vibeOrg.ts` 文件头):只装本机草稿项目、存在本机,键是 `orgKey("local", LOCAL_ORG_SCOPE)`。
+ * 云端分组是在线那一屏(`OnlineStart.tsx`)的,键前缀不同,两边不会串;本地项目也放不进云端分组。
  */
-const ORG_SCOPE = "desktop";
+const ORG_REALM = "local" as const;
 
 /**
  * 改动落定之后隔多久存一次草稿。
@@ -56,7 +56,7 @@ const ORG_SCOPE = "desktop";
 const AUTOSAVE_MS = 2500;
 
 /** 同级的键:和 `ProjectSidebar` 里判能不能拖到一起用的是同一套 */
-const projectSib = (p: VibeProject) => `project:${p.groupId ?? "loose"}`;
+const projectSib = (p: VibeProject) => `project:${p.realm}:${p.groupId ?? "loose"}`;
 const chatSib = (c: VibeChat) => `chat:p:${c.projectId}`;
 
 /** 开始页上说的那句话:等项目建好、Agent 就绪之后发出去 */
@@ -103,13 +103,13 @@ export function DesktopStart(props: {
   useEffect(() => { void refresh(); }, [refresh]);
 
   /* ---------------- 本机整理(分组、置顶、归档、顺序) ---------------- */
-  const [org, setOrgState] = useState<OrgState>(() => loadOrg(ORG_SCOPE));
-  const setOrg = (next: (o: OrgState) => OrgState) => setOrgState((o) => { const n = next(o); saveOrg(ORG_SCOPE, n); return n; });
+  const [org, setOrgState] = useState<OrgState>(() => loadOrg(ORG_REALM, LOCAL_ORG_SCOPE));
+  const setOrg = (next: (o: OrgState) => OrgState) => setOrgState((o) => { const n = next(o); saveOrg(LOCAL_ORG_SCOPE, n); return n; });
 
   /* ---------------- 项目清单:本机草稿 + 本机整理 ---------------- */
-  const entries = useMemo<CloudEntry[]>(
-    // 本机草稿都是自己的,没有「别人的项目」这一类
-    () => drafts.map((d) => ({ id: d.id, name: d.name, role: "owned" as const })),
+  const entries = useMemo<OrgEntry[]>(
+    // 本机草稿都是自己的,没有「别人的项目」这一类;都属本地这一套
+    () => drafts.map((d) => ({ id: d.id, name: d.name, role: "owned" as const, realm: ORG_REALM })),
     [drafts],
   );
   /**
@@ -122,7 +122,7 @@ export function DesktopStart(props: {
     return m;
   }, [drafts]);
   const projects = useMemo(() => mergeProjects(org, entries, meta), [org, entries, meta]);
-  const groups = org.groups;
+  const groups = useMemo(() => groupsOf(org), [org]);
 
   /* ---------------- 打开着的项目的本机 Agent ---------------- */
   const vibe = useVibeLocal({ projectId: openId });
@@ -150,9 +150,15 @@ export function DesktopStart(props: {
 
   /* ---------------- 动作 ---------------- */
 
-  /** 点进一个项目:读那份草稿载进 store,再进它的聊天页。已经开着就直接回聊天页 */
-  const openProject = (id: string) => {
-    if (openId === id) { setChatPage(true); return; }
+  /**
+   * 点进一个项目:读那份草稿载进 store,再进它的聊天页。已经开着就直接回聊天页。
+   *
+   * `intoClassic` 为真时载完直接切**传统式**(打开编辑界面)——「最近项目」那一排的缩略图卡片走这条
+   * (2026-10-23 用户定,原话:「红色区域是项目卡片，点击这个位置的卡片会进入传统式」),
+   * 和在线那一屏(`OnlineStart.tsx`)同一条规矩。侧栏的项目条目不带这个开关,仍然停在聊天页。
+   */
+  const openProject = (id: string, intoClassic = false) => {
+    if (openId === id) { if (intoClassic) enterEditor(); else setChatPage(true); return; }
     setNotice("");
     setBusy(true);
     // 换项目之前先把手上这个存了 —— 换完 store 就是另一个项目,没存的就找不回来了
@@ -162,6 +168,8 @@ export function DesktopStart(props: {
         setActiveDraftId(id);
         setOpenId(id);
         setChatPage(true);
+        // 刚载进来的草稿还没动过,不会有没存的改动,所以这里直接切,不用再存一次
+        if (intoClassic) props.onEnterEditor();
       })
       .catch((e: unknown) => setNotice(e instanceof Error ? e.message : "这个项目打不开。"))
       .finally(() => setBusy(false));
@@ -225,7 +233,7 @@ export function DesktopStart(props: {
 
   /* ---------------- 侧栏的改动 ---------------- */
   const writeProjects = (f: (list: VibeProject[]) => VibeProject[]) => setOrg((o) => withProjects(o, f(mergeProjects(o, entries, meta))));
-  const writeGroups = (f: (list: VibeGroup[]) => VibeGroup[]) => setOrg((o) => withGroups(o, f(o.groups)));
+  const writeGroups = (f: (list: VibeGroup[]) => VibeGroup[]) => setOrg((o) => withGroups(o, f(groupsOf(o))));
   const writeChats = (f: (list: VibeChat[]) => VibeChat[]) => { if (openId) setOrg((o) => withChats(o, openId, f(mergeChats(o, openId, vibe.chats)))); };
   const archivedNow = (kind: "group" | "project" | "chat", id: string) =>
     kind === "group" ? !!groups.find((g) => g.id === id)?.archived : kind === "project" ? !!projects.find((p) => p.id === id)?.archived : !!chats.find((c) => c.id === id)?.archived;
@@ -271,7 +279,14 @@ export function DesktopStart(props: {
       else if (kind === "project") writeProjects((a) => reorder(a, projectSib, dragId, overId, place));
       else writeChats((a) => reorder(a, chatSib, dragId, overId, place));
     },
-    move: (projectId, groupId) => setOrg((o) => moveProject(withProjects(o, mergeProjects(o, entries, meta)), projectId, groupId)),
+    move: (projectId, groupId) => {
+      const project = projects.find((x) => x.id === projectId);
+      if (!project) return;
+      // 只许同一套(本地项目对本地分组):跨套的整理信息不动,说明给用户
+      const out = moveProject(withProjects(org, projects), project, groupId);
+      if (out.refused) { setNotice(out.refused); return; }
+      setOrg(() => out.org);
+    },
     blocked: (kind, id) => {
       if (kind === "group") return {};
       if (kind === "project") return { rename: "这一版改项目名要进传统式，在编辑界面里改。" };
@@ -394,8 +409,9 @@ export function DesktopStart(props: {
             vibe.newChat();
             setChatPage(true);
           }}
+          groupNote={groupNoteText(ORG_REALM)}
           onNewGroup={() => {
-            const name = prompt("新分组叫什么？", "新分组");
+            const name = prompt(`新分组叫什么？（${groupNoteText(ORG_REALM)}）`, "新分组");
             if (name === null) return;
             setOrg((o) => addGroup(o, name).org);
           }}
@@ -459,7 +475,7 @@ export function DesktopStart(props: {
                 projects={shown}
                 resetKey={scopeKeyOf(scope)}
                 onCreate={createBlank}
-                onOpen={openProject}
+                onOpen={(id) => openProject(id, true)}
                 empty={railEmpty}
               />
             </div>

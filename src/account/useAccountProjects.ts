@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createEmptyProject } from '../kernel/project';
 import { setActiveDraftId } from '../editor/io/drafts';
 import { ensureDevice, enterAccountProject } from '../editor/sync/syncManager';
@@ -127,6 +127,24 @@ export function useAccountProjects({ online, onEnterEditor }: { online: boolean;
     setAccount(current); loginAttempt.current = null;
     await enterDirect(await refreshLists());
   }
+  /**
+   * 第三方登录（Google）成功之后，把那条会话认下来。
+   *
+   * 为什么要单独一条：第三方那一段跑在登录页自己那一个 `CloudAccountClient` 实例上
+   * （`src/start/OnlineLogin.tsx` 里建的），它把网站会话（cookie）和编辑器令牌都换好了，
+   * 但本 hook 手里是**另一个实例**，不知道这件事，所以登录页不会退场 —— 这正是
+   * 「授权以后没有反应」那个毛病（2026-10-24 用户报）。这里让本实例重新 `restore()` 一次，
+   * 后面几步（拉项目列表、从直达地址自动进项目）和密码登录走完之后完全一样。
+   */
+  async function adoptSession() {
+    if (!client.current) throw new Error('账号入口尚未就绪。');
+    const current = await client.current.restore();
+    if (!current) throw new Error('登录没有生效，请再试一次。');
+    setAccount(current);
+    // 登录了账号就不再是游客（客户端那一侧 `loginWithThirdParty` 已经清过，这里清界面这一份）
+    setGuest(null); setGuestProject(null); clearRequest();
+    await enterDirect(await refreshLists());
+  }
   async function logout() { await client.current!.logout(); setAccount(null); setLists(null); clearRequest(); }
   /** 以游客身份进来：本机记着的那一张交回去续期（还是同一个人），没有就领一个新身份 */
   async function enterAsGuest() { setGuest(await client.current!.enterAsGuest()); setGuestProject(loadGuest()?.project ?? null);
@@ -215,7 +233,15 @@ export function useAccountProjects({ online, onEnterEditor }: { online: boolean;
   }, [request?.state, request?.entry, request?.projectId]);
   // 读到申请被通过(`member`):马上重取项目列表,这个项目当场出现在「我加入的」里(设了二级密码、还没输的也在,从那里点进去先问密码)
   useEffect(() => { if (request?.state === 'member') void refreshLists(); }, [request?.state, request?.projectId]); // eslint-disable-line react-hooks/exhaustive-deps
-  return { origin, account, busy, error, setError, shellOld, link, setLink, lists, listError, refreshLists, perform, enter, open, login, logout, create, join,
+  /**
+   * 云端分组的网络口(`client.getStartOrg` / `putStartOrg`):取不到客户端(登录前)回 null。
+   * 对象是稳定的(只在这个 hook 的生命周期里建一次),`src/start/useCloudOrg.ts` 要靠它不变才不会反复重建同步引擎
+   */
+  const orgApi = useMemo(() => ({
+    getStartOrg: () => client.current!.getStartOrg(),
+    putStartOrg: (baseVersion: number, org: unknown) => client.current!.putStartOrg(baseVersion, org),
+  }), []);
+  return { origin, account, orgApi, busy, error, setError, shellOld, link, setLink, lists, listError, refreshLists, perform, enter, open, login, adoptSession, logout, create, join,
     guest, guestProject, enterAsGuest, newGuest, leaveGuest, openGuestProject,
     request, sendRequest, clearRequest, directSecondary, clearDirectSecondary: () => setDirectSecondary(null),
     projectLink: (projectId: string) => projectLink(origin, projectId) };

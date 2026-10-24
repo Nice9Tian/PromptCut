@@ -152,3 +152,94 @@ test('virtual AV nodes use current params and source version for repeated block 
   source = 'v2'; await requestCardAudio(req);
   assert.equal(calls, 3);
 }));
+
+/* ------------------------------------------------------------------ *
+ * 声画一体卡挂在变速素材段上(2026-10-23 用户定「出声。」,推翻〔裁〕V21-28)
+ * ------------------------------------------------------------------ */
+
+/** /@media/<hash>/pcm 的假服务端:回一条斜坡,第 k 帧(素材上的绝对帧号)两个声道都是 k(线性插值在斜坡上是精确的) */
+function rampFetch() {
+  globalThis.fetch = async (url) => {
+    const query = new URL(url, "http://local").searchParams;
+    const start = Number(query.get("start")), count = Number(query.get("count"));
+    const samples = new Float32Array(count * 2);
+    for (let i = 0; i < count; i++) samples[2 * i] = samples[2 * i + 1] = start + i;
+    return new Response(samples.buffer, { status: 200 });
+  };
+}
+
+const AV_HASH = "b".repeat(64);
+/** 声画一体卡:左声道交出卡片时钟(audio() 拿到的 range.start 那一格),右声道交出读自己这段素材的那一路 */
+const avProbe = { id: "av-probe", defaults: {}, kind: "animation", Component() {},
+  async audio(sources, range) {
+    const input = await sources.source.block(range.start, range.count);
+    const out = new Float32Array(range.count * 2);
+    for (let i = 0; i < range.count; i++) { out[2 * i] = range.start + i; out[2 * i + 1] = input[2 * i]; }
+    return out;
+  } };
+const avProject = (speed, mediaOffset = 1) => ({
+  media: [{ id: "m", kind: "video", url: `/@media/${AV_HASH}`, hash: AV_HASH }],
+  cardNodes: [{ id: "avn", adapter: "card", cardId: "av-probe", kind: "animation", embeddedAudio: true, params: {}, inputs: { source: { nodeId: "@clip/c/source" } } }],
+  tracks: [{ id: "t", clips: [{ id: "c", cardId: "av-probe", mediaId: "m", nodeId: "avn", embeddedAudio: true, mediaOffset, start: 0, end: 4, params: {}, ...(speed === 1 ? {} : { speed }) }] }],
+});
+/** 和 store 的 splitClip 同一个做法:后半段的素材起点按倍率推进(mediaOffsetAfter),节点按 cloneCardClipInstance 复制 */
+async function splitAt(project, d) {
+  const { mediaOffsetAfter } = await import("../kernel/clipTime.mjs");
+  const { cloneCardClipInstance } = await import("../kernel/cardAuthoring.mjs");
+  const clip = project.tracks[0].clips[0];
+  const cloned = cloneCardClipInstance(project, clip.id, "r", clip.nodeId, d);
+  const left = { ...clip, end: d }, right = { ...clip, id: "r", start: d, mediaOffset: mediaOffsetAfter(clip, d), nodeId: cloned.nodeId };
+  return { ...cloned.project, tracks: [{ id: "t", clips: [left, right] }] };
+}
+const SR = 48000;
+
+test("变速素材段上的声画一体卡:预览照常出声;卡片时钟 = mediaOffset ÷ 倍率 + 片段内时间,读素材随倍率变速", async () => withAudio(async ({ configureCardAudio, cardAudioBlockRenderer, generatedCardAudioClipsAt }) => {
+  rampFetch();
+  configureCardAudio({ getCard: (id) => (id === "av-probe" ? avProbe : undefined), sourceVersionOf: () => "v1" });
+  for (const speed of [1, 2, 0.5]) {
+    const p = avProject(speed);
+    assert.deepEqual(generatedCardAudioClipsAt(p, 1).map((x) => x.clip.id), ["c"], `${speed} 倍:预览的声音层里有这一段`);
+    const block = await cardAudioBlockRenderer(p, "avn")(10, 4);
+    for (let i = 0; i < 4; i++) {
+      assert.equal(block[2 * i], (1 / speed) * SR + 10 + i, `${speed} 倍:卡片时钟`);
+      assert.ok(Math.abs(block[2 * i + 1] - (SR + (10 + i) * speed)) < 1e-3, `${speed} 倍:读的素材 = mediaOffset + 片段内采样 × 倍率`);
+    }
+  }
+}));
+
+test("变速素材段上的声画一体卡:切开后卡片时钟与读素材的位置都和切开前同一时刻接得上(2 倍、0.5 倍)", async () => withAudio(async ({ configureCardAudio, cardAudioBlockRenderer }) => {
+  rampFetch();
+  configureCardAudio({ getCard: (id) => (id === "av-probe" ? avProbe : undefined), sourceVersionOf: () => "v1" });
+  for (const speed of [2, 0.5, 1]) {
+    const whole = avProject(speed);
+    const before = await cardAudioBlockRenderer(whole, "avn")(1.5 * SR, 8);
+    const split = await splitAt(whole, 1.5);
+    const rightNode = split.tracks[0].clips[1].nodeId;
+    const after = await cardAudioBlockRenderer(split, rightNode)(0, 8);
+    for (let i = 0; i < 16; i++) assert.ok(Math.abs(after[i] - before[i]) < 1e-3, `${speed} 倍:第 ${i} 格 ${after[i]} ≠ 切开前 ${before[i]}`);
+  }
+}));
+
+test("变速素材段上的声画一体卡:已生成的声音切开、裁剪后照旧覆盖、不判过期,偏移按时间轴秒推进", async () => withAudio(async ({ configureCardAudio, persistentCardAudio, assertProjectCardAudio }) => {
+  configureCardAudio({ getCard: (id) => (id === "av-probe" ? avProbe : undefined), sourceVersionOf: () => "v1" });
+  const { cardAudioIdentity, cardAudioSourceOffset } = await import("../kernel/cardAudioRendition.mjs");
+  const hooks = { getCard: (id) => (id === "av-probe" ? avProbe : undefined), sourceVersionOf: () => "v1" };
+  for (const speed of [2, 0.5]) {
+    const whole = avProject(speed);
+    const clip = whole.tracks[0].clips[0];
+    // 和 cardAudioGeneration.ts 记的一样:区间起点 = 生成时的源时钟,长度 = 片段的时间轴长度
+    const cardAudio = { version: 1, cardId: "av-probe", mediaId: "wav", sampleRate: SR, frames: 4 * SR, channels: 2,
+      sourceOffset: cardAudioSourceOffset(whole, clip), identity: cardAudioIdentity(whole, clip, hooks) };
+    assert.equal(cardAudio.sourceOffset, 1 / speed, "变速段的源时钟 = mediaOffset ÷ 倍率");
+    const withWav = (p) => ({ ...p, media: [...p.media, { id: "wav", kind: "audio", url: `/@media/${"c".repeat(64)}`, hash: "c".repeat(64) }],
+      tracks: p.tracks.map((t) => ({ ...t, clips: t.clips.map((c) => ({ ...c, cardAudio })) })) });
+    const generated = withWav(whole);
+    assert.equal(persistentCardAudio(generated, generated.tracks[0].clips[0]).offset, 0);
+    assertProjectCardAudio(generated);
+    const split = withWav(await splitAt(whole, 1.5));
+    const [left, right] = split.tracks[0].clips;
+    assert.equal(persistentCardAudio(split, left).offset, 0, `${speed} 倍:前半段从头放`);
+    assert.ok(Math.abs(persistentCardAudio(split, right).offset - 1.5) < 1e-9, `${speed} 倍:后半段从第 1.5 秒放(以前 2 倍时判「未覆盖」、0.5 倍时错放到第 0.75 秒)`);
+    assertProjectCardAudio(split);
+  }
+}));

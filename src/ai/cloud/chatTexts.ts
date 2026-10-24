@@ -5,12 +5,22 @@
  * 下面标「〔草稿〕」的只有移出成员那一组（块五第 5 条新增，等用户事后改）。要改只改这一个文件
  * （服务端那一句满额提示在 `server/agent/service/create-agent-service.mjs` 的 `CONVERSATION_LIMIT_MESSAGE`，要同步改）。
  */
+import { GUEST_CHAT_LIMIT_TEXT, GUEST_LIMITS, isGuestId } from "../../account/guest.ts";
 import type { CloudNotice } from "./types.ts";
 
 /** 同一个项目里同一个人最多这么多个云端对话（服务端的上限在 `server/account/conversation-authority.mjs`） */
 export const CLOUD_CHAT_LIMIT = 50;
 
+/**
+ * 这位账号在一个项目里最多能开几个云端对话：账号 50 个，游客只有 1 个（2026-10-23 用户定）。
+ * 服务端的上限分别在 `conversation-authority.mjs` 的 `MAX_CONVERSATIONS_PER_OWNER` 和 `server/account/guest.mjs` 的 `GUEST_LIMITS.conversations`。
+ */
+export const chatLimitOf = (accountId: string | null | undefined): number =>
+  isGuestId(accountId) ? GUEST_LIMITS.conversations : CLOUD_CHAT_LIMIT;
+
 export const CLOUD_CHAT_TEXT = {
+  /** 游客想开第二个对话：服务端拒了（`guest-chat-limit`），或界面上先拦下时给的那一句 */
+  guestLimit: GUEST_CHAT_LIMIT_TEXT,
   /** 满额时点发送、或新建被服务端拒了，给的提示 */
   limitReached: `你在这个项目里的云端对话已满 ${CLOUD_CHAT_LIMIT} 个。请先删除不用的对话，再新建。`,
   /** 对话历史顶上、当前已满额时的一行提示 */
@@ -42,7 +52,7 @@ export const CLOUD_CHAT_TEXT = {
   /** 〔2026-10-13 新起草〕只有项目创建者能清除别人的私有对话 */
   creatorRequired: "只有项目创建者能清除成员的私有对话。",
   /** 对话历史里「云端」一组标题后面显示这位账号自己开了多少个：随别人新建、删除实时变 */
-  countLabel: (n: number) => `我的 ${n}/${CLOUD_CHAT_LIMIT}`,
+  countLabel: (n: number, limit: number = CLOUD_CHAT_LIMIT) => `我的 ${n}/${limit}`,
 
   /* 〔草稿〕移出成员(项目成员面板里「踢出账号」)时多出来的选项与随后的提示（2026-10-13 用户定：让操作的人选是否同时清除他的私有对话，共有对话缺省保留） */
   clearPrivateOption: "同时清除他的私有对话（他的共有对话会保留）",

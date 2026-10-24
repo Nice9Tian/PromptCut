@@ -6,7 +6,7 @@
  */
 
 /** 清单里允许的类别(显示顺序) */
-export const CATEGORIES = ['G0', 'G0-R', '探针', '第一段', '第二段', '第三段', '第四段', 'V18', 'V19', 'V21', 'V22'];
+export const CATEGORIES = ['G0', 'G0-R', '探针', '第一段', '第二段', '第三段', '第四段', 'V18', 'V19', 'V21', 'V22', 'V23', 'V24'];
 
 /** 一项的最终判定。时间数字不参与判定(只记录),所以没有「参考」一档;remote = 真实网络验证的项,脚本不跑 */
 export const VERDICTS = ['pass', 'fail', 'flaky', 'manual', 'remote', 'missing', 'blocked', 'skipped', 'na', 'waiting'];
@@ -31,19 +31,19 @@ export const LEVEL_LABEL = { local: '本地验证', network: '真实网络验证
 export const levelOf = (item) => item.level || (item.remoteOnly ? 'network' : 'local');
 
 /** 运行器能起的前置服务 */
-export const SERVICES = ['dev', 'dev-main', 'main-worktree', 'online-build'];
+export const SERVICES = ['dev', 'dev-main', 'dev-online', 'main-worktree', 'online-build'];
 
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /**
  * 命令行。返回 { ...选项 } 或抛 Error(带可读的中文原因)。
- * 选项:list, only[], from, resume, out, mainRef, flakyRerun, devPort, devMainPort, json, checkCoverage, help, forceResume, keepMainWorktree,
+ * 选项:list, only[], from, resume, out, mainRef, flakyRerun, devPort, devMainPort, devOnlinePort, json, checkCoverage, help, forceResume, keepMainWorktree,
  *      level(local | network | all;跑的时候缺省 local,--list 缺省 all)、releaseTimings(版本号文字)、timingsFrom(已有的 results.json)
  */
 export function parseArgs(argv) {
   const o = {
     list: false, only: [], from: null, resume: false, forceResume: false, out: null, mainRef: 'main',
-    flakyRerun: 0, devPort: 5690, devMainPort: 5693, json: false, checkCoverage: false, help: false,
+    flakyRerun: 0, devPort: 5690, devMainPort: 5693, devOnlinePort: 5970, json: false, checkCoverage: false, help: false,
     keepMainWorktree: false, includeOptional: false, dryRun: false, matrix: false, portShift: 0,
     level: null, releaseTimings: null, timingsFrom: null, machineName: null,
     rows: false, rowsFrom: null, rowsMap: false, v18PortBase: null, noOptional: false, v19Map: false,
@@ -98,10 +98,12 @@ export function parseArgs(argv) {
         if (!Number.isInteger(n) || Math.abs(n) > 3000) throw new Error('--port-shift 要 -3000～3000 的整数');
         o.portShift = n; i++; break;
       }
-      case '--dev-port': case '--dev-main-port': {
+      case '--dev-port': case '--dev-main-port': case '--dev-online-port': {
         const n = Number(need(i, a));
         if (!Number.isInteger(n) || n < 1024 || n > 65000) throw new Error(`${a} 要端口号`);
-        if (a === '--dev-port') o.devPort = n; else o.devMainPort = n;
+        if (a === '--dev-port') o.devPort = n;
+        else if (a === '--dev-main-port') o.devMainPort = n;
+        else o.devOnlinePort = n;
         i++; break;
       }
       default: throw new Error(`看不懂的参数:${a}`);

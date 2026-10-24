@@ -116,7 +116,13 @@ function PixelMappedMedia({ media, clip, t, project, style, def, live = false, p
    * live(舞台)路正相反 —— 素材是真的在放的,所以这时候才挂 `src` 并 `preload="auto"`。
    */
   // live 的 src 经换档判据(`mediaTier.ts` 的 playbackUrl,T1a 审查 #5);`data-pc-media-src` 仍是 `media.url`(身份、素材原尺寸)
-  const srcOf = (m?: MediaAsset | null) => (live && m ? playbackUrl(m, localHashes) : undefined);
+  //
+  // 拿到空串要回 `undefined`,不能把 "" 挂进 `src`。`playbackUrl` 的文件头写明「调用方拿到 "" 就不挂 src、不发请求」,
+  // 而 `<video src="">` 会被浏览器当成「再下载一遍当前页面」,React 也会报
+  // 「An empty string ("") was passed to the src attribute」。素材正在入库时(`pending`,还没有地址)就是这种情形:
+  // 本地导入的 pending 窗口只有毫秒级,看不出来;从网盘导入要拉几十秒到几分钟,这一段预览就是坏的。
+  // (2026-10-23 跑网盘连接器端到端时发现,用户报「添加的时候预览失败」。)
+  const srcOf = (m?: MediaAsset | null) => (live && m ? playbackUrl(m, localHashes) || undefined : undefined);
   const load = live ? "auto" : "none";
   return <>
     {isImageMedia(media) ? <img ref={source as any} src={srcOf(media)} onLoad={live ? () => draw() : undefined} data-pc-media-src={media.url} data-pc-media-hidden="true" alt="" style={hidden} /> :

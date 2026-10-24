@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { useAccountProjects } from "../account/useAccountProjects";
 import { JOIN_REQUEST_TEXT, autoJoinKey, joinRequestNotice } from "../account/joinRequestText";
 import { LogoMark } from "../ui/Logo";
-import { BrandGlow } from "../start/BrandGlow";
+import { GlowLoop } from "../start/GlowLoop";
 import { Icon } from "./icons";
 import { Sheet } from "./ui";
 import "./mobileLogin.css";
@@ -52,11 +52,13 @@ export function MobileStart({ onEnterEditor }: { onEnterEditor: () => void }) {
   return (
     <div className="editor" data-pcm="home">
       {/*
-        登录这一屏的背景:官网首页那层光的渲染器版(`BrandGlow`,用户 2026-10-23 定,
-        换掉了原来那块流动的极光)。表单直接落在它上面,不做实体方框 —— 同桌面窄屏。
+        登录这一屏的背景:官网首页那层光,用**渲染器预渲染出来的循环视频**(`GlowLoop`,
+        用户 2026-10-24 定「三处都改成渲染器预渲染的循环视频」;2026-10-23 先定的是渲染器版,
+        换掉了原来那块流动的极光)。视频放不出来就退回实时着色器 `BrandGlow`,再退回 CSS 渐变。
+        表单直接落在它上面,不做实体方框 —— 同桌面窄屏。
         进去之后(登录或游客)这一层就不渲染了,项目列表该是什么样还是什么样。
       */}
-      {!account && !asGuest && <div className="ps-m-login-bg" aria-hidden="true"><BrandGlow /></div>}
+      {!account && !asGuest && <div className="ps-m-login-bg" aria-hidden="true"><GlowLoop /></div>}
       <div className="topbar">
         <div className="logo"><LogoMark size={18} /><span>Prompt<b>Cut</b></span></div>
         {account && <span className="chip accent" data-pcm="account-chip"><i className="dot" /> {account.name}</span>}

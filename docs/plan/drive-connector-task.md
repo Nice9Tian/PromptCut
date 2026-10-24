@@ -58,7 +58,7 @@
 
 - **A2 要重定向 URI，A3 不要。** A3 走的是 Google Identity Services 的令牌客户端（弹窗式），只认 JavaScript 来源。A2 的授权码流程要在客户端上登记重定向 URI。开发期先登记 `http://localhost:5321/oauth2callback`；生产的那个等托管域名定下来再加。
 - **客户端密钥存哪**：部署配置，不进代码库。本机这一份的位置记在 `docs/local.md`（该文件不入库）。`.gitignore` 里已加 `client_secret*.json` 兜底。
-- **「Web 应用」与「桌面应用」可能要各一个客户端**（待定）：Web 类型的授权码兑换要带客户端密钥，适合浏览器版加云端节点；桌面版若要在用户机器上直接兑换，带着密钥分发出去等于公开它，那种情形要改用「桌面应用」类型（PKCE，不要密钥）。本轮只建了 Web 类型，桌面版怎么接等业务层打通后再定。
+- ~~**「Web 应用」与「桌面应用」可能要各一个客户端**（待定）~~ **2026-10-24 定了：现在不用各建一个。** 见第 10 节「客户端密钥怎么放」。
 
 ## 4. 数据流
 
@@ -101,11 +101,11 @@
 |---|---|---|
 | ~~D0~~ | 前置：Google Cloud 登记（见第 8 节） | **已完成 2026-10-23** |
 | ~~D1~~ | 探针：Picker + `drive.file` + Range | **已通过 2026-10-23**，结果见下文 6.1 |
-| D2 | `StorageProvider` 接口 + Google Drive 实现 + 分段拉取与入库 | **业务层已完成 2026-10-23**，见下文 6.2。端到端（素材库出现、时间轴能用）要等 D5 的 HTTP 入口与界面 |
-| D3 | 断点续传 | 单测已覆盖（见 6.2）。真机「拉到一半杀进程、重启接着拉完」要等 D5 |
-| D4 | A2 凭据托管与撤销 | 关掉页面后继续拉完；在 Google 账号页撤销后，下次换票报错、凭据被清掉、用户收到提示 |
-| D5 | 素材页界面 | 照第 5 节；给用户过目 |
-| D6 | 隔离验收 | A 成员的凭据 B 成员拉不动；A 项目的凭据 B 项目用不了 |
+| D2 | `StorageProvider` 接口 + Google Drive 实现 + 分段拉取与入库 | **已完成并真机跑通 2026-10-23**，见下文 6.2、6.4 |
+| D3 | 断点续传 | 单测已覆盖（见 6.2）。真机「拉到一半杀进程、重启接着拉完」还没单独验 |
+| D4 | A2 凭据托管与撤销 | **已完成 2026-10-24**：服务端见 6.3，页面与界面见 6.5。真机「连接」那一下要用户本人在 Google 弹窗里点 |
+| D5 | 素材页界面与 HTTP 入口 | **已完成 2026-10-23**，见下文 6.2。界面已在真机上看过 |
+| D6 | 隔离验收 | **单测已覆盖 2026-10-23**（见 6.3）。真机复验等 D4 的页面那一半 |
 
 每一步之后基线要全绿：类型检查零错误、全量测试通过（`verification.md`）。
 
@@ -157,6 +157,115 @@
 
 **踩到并记下的一个坑**：`FileHandle.createWriteStream({ autoClose: false })` 不发 `close` 事件，而 `stream/promises` 的 `pipeline` 要等到 `close` 才算完——五个会落盘的用例全部 15 秒超时。改用 `fs.createWriteStream(dest, { flags: 'r+', start })` 就好了。`pull.mjs` 的 `appendStream` 注释里写了这一条。
 
+### 6.2b D5 的 HTTP 入口与界面（2026-10-23）
+
+服务端两个口，接在 `server/vite-plugin-media.ts` 上（照它原有的惰性 import 惯例，+29 行）：
+
+| 口 | 做什么 |
+|---|---|
+| `GET /api/media/storage/config` | 下发页面要的三样公开参数。没配环境变量就 `configured: false` 带原因，界面置灰、不报错。**客户端密钥永不下发** |
+| `POST /api/media/storage/import` | 拉一份进素材库，回包形状同 `/api/media/upload/<名>`。页面交来的 access token 只过手：不落盘、不进日志、不进回包 |
+
+页面侧四个文件：`io/googlePicker.ts`（取票与选文件）、`io/storageImport.ts`（占位 → 调接口 → 探时长宽高 → `applyUploadedMedia`）、`left/StorageImportButton.tsx`（按钮与网盘菜单）、`left/left.css`（样式，追加在末尾）。`left/LibrarySection.tsx` **只加 7 行**——同期有别的会话在改它，整块逻辑放进单独组件，冲突面压到最小。（事后印证：合 main 时那个文件果然冲突了，但只冲突在一行 import 上，顺手解掉。）
+
+**真机上看过**：按钮在「导入媒体」下面，点开是网盘菜单，Google Drive 可点、Dropbox 灰着标「待开放」。
+
+**一处取舍**：网盘这条路字节不经过页面，所以页面手里没有 `File`，这类素材**暂时不能做语音转写**（`io/stt.ts` 回「素材文件不在内存里」）。这和「打开一个已有项目之后的素材」是同一种情形，不是本条路新引入的，记在第 9 节待办里。
+
+### 6.4 真机端到端（2026-10-23，通过）
+
+用户在 5321 上走完整条路：素材页「从网盘导入 → Google Drive」→ Google 授权 → Picker 选中自己 Drive 里的 `【托业单词神器】墨墨背单词操作.mp4` → 素材进库、片段上时间轴、画面出来。**D2、D5 这条链路算通了。**
+
+过程中暴露出一个缺陷，已修（见下）。
+
+#### 顺带查出并修掉的缺陷：素材入库前预览是坏的
+
+用户的原话是「添加的时候预览失败，但是最终导入成功」。控制台上对应的是
+
+> An empty string ("") was passed to the `src` attribute. This may cause the browser to download the whole page again over the network.
+
+**根因不在网盘这条路，是 `src/render/FrameScene.tsx` 里早就有的。** `mediaTier.ts` 的 `playbackUrl` 在「这份素材还没有可用地址」时回空串，它的文件头写明「调用方拿到 `""` 就不挂 src、不发请求」；而 `FrameScene` 的 `srcOf` 把空串原样传进了 `<video src>`。浏览器把 `src=""` 当成「再下载一遍当前页面」，那一格预览就是坏的。
+
+**为什么以前没人发现**：素材入库前会挂 `pending: true`、`url: ""`，本地导入的这个窗口只有毫秒级，看不出来；从网盘导入要拉几十秒到几分钟，整段都看得见。
+
+**改了三处**，都是把空串转成 `undefined`：`FrameScene.tsx` 的 `srcOf`（根因）、`VideoTrack.tsx` 的 `plan.load[i]?.url` 与 `playbackUrl(image.media, …)`（后两处是写守门测试时顺带查出来的，同一类毛病）。
+
+**加了守门测试** `src/render/emptyMediaSrc.test.mjs`：扫这两份文件里所有 `src={…}`，凡是表达式里有 `playbackUrl(` / `previewMediaUrl(` / `originalMediaUrl(` / `plan.load` 的，必须以 `|| undefined` 收尾。写规则时自己先踩了两个坑，都记在注释里了——`\bsrc` 会从 `data-pc-media-src=` 里匹配出来（data 属性空串无害，要用否定回顾排掉），以及外面已经有 `url ? … : null` 守着的不算风险。
+
+### 6.6 A2 真机跑通（2026-10-24，通过）
+
+用户在面板上点「连接」，走完 Google 的离线授权。四项逐个核过：
+
+| 核什么 | 结果 |
+|---|---|
+| 界面 | `Google Drive · 连接于 2026/10/24 · 断开` |
+| `GET …/connections` | 有那一行（`projectId: local`、`grantedScope: …/auth/drive.file`），**回包里没有任何令牌样的字段** |
+| 落盘的凭据 | `out/storage-credentials/connectors/<哈希>.json`：明文只有 `v / projectId / userId / provider / grantedScope / createdAt / updatedAt`，令牌在 `iv + tag + data` 里；整份文件里**没有 Google refresh token 的特征串 `1//`**。密钥另存 `connector-key`。`out/` 本来就在 `.gitignore` 里 |
+| **不带令牌导入** | `POST …/storage/import {"kind":"google-drive","fileId":"1yTC…"}`（**请求体里没有 token**）→ 成功 |
+
+最后一项是 A2 真正要证明的东西，结果：
+
+- `pulled: { bytes: 18719209, total: 18719209, resumedFrom: 0, segments: 3 }` —— 18.7 MB 分 **3 段**取回来，分段拉取对着真 Drive 成立
+- 落库哈希 `a1391c41…` 与之前走 A3 那次**完全相同**，`deduped: true`
+- 两档都在（原尺寸 + 小尺寸）
+- 回包里没有令牌
+
+能成只有一条路径：请求里没有令牌 → 用存着的 refresh token 向 Google 换了一张 access token → 用它取字节。没有凭据时这条路会当场报 `no-credential`（单测覆盖过）。
+
+#### 顺带修掉的缺陷：Picker 取消后卡在「从网盘导入中…」
+
+用户报「什么也没导入、点取消，会卡在等待导入」。原因是 `pickDriveFiles` 只在回调里的 `CANCELLED` / `PICKED` 两种 action 上收尾，而 Picker **只在点「取消」按钮时才保证发 `CANCELLED`**；用右上角的 × 关掉、按 Esc、点到对话框外面都可能不发。那样这个 Promise 永远不落地，调用方的 `finally` 轮不到，按钮就一直显示「从网盘导入中…」。
+
+修法：留住 `builder.build()` 回来的对话框对象，每 400 ms 看一次 `isVisible()`，**先看见它开过**、之后变成不可见就当取消（不加这个前提，第一次轮询会把还没开出来的对话框当成取消）。`isVisible()` 调不动（对象已销毁）同样当取消。
+
+### 6.3 D4 的 A2 业务层（2026-10-23）
+
+三个文件，仍是只用 Node 内置模块：
+
+| 文件 | 管什么 |
+|---|---|
+| `google-oauth.mjs` | 授权码兑换、换票、撤销。令牌与密钥不进日志、不进错误信息 |
+| `credentials.mjs` | refresh token 加密落盘，按「项目 × 成员 × 提供方」分格 |
+| `managed-token.mjs` | 接上、按需换票、断开，串成给 `createStorageProvider({ token })` 用的那个函数 |
+
+几处定下来的做法：
+
+- **加密落盘，而且和那一格绑死**。AES-256-GCM，密钥是 `<dir>/connector-key` 里的 32 字节（首次用时随机生成，`wx` 开，几个进程同时起也只有一份）。**AAD 取「项目 × 成员 × 提供方」那一格的标识**——把文件挪到另一个项目或另一个成员的格子里，解密直接失败。单测里真做了这个搬运来验。
+- **写入走临时文件加改名**，照 `server/auth/store.mjs` 的做法，中途断电不留半份。
+- **`list` 只回元信息，一个令牌都不带**（给「已连接的网盘」那个管理界面用）。单测里断言了结果 JSON 里不许出现令牌。
+- **`invalid_grant` 当场清掉凭据，不退避重试**。用户在 Google 账号页撤销、改密码、令牌过期都回它，再试一百次也是它。这是四个撤销口子里的第二个。
+- **`disconnect` 撤销失败也删本地那份**。用户点了「断开」，本地就不该再留着能用的凭据；Google 那边没撤成就在回包里说一句，由界面提示用户去账号页再撤一次。
+- **几路同时要票只换一次**（`inflight` 合并），免得并发拉取把 Google 的换票接口打出限流。
+
+测试 `server/test/storage-credentials.test.mjs`，22 个用例，不碰网络。
+
+### 6.5 D4 的页面那一半与管理界面（2026-10-24）
+
+**又加了四个口**（接在 `vite-plugin-media.ts` 上）：
+
+| 口 | 做什么 |
+|---|---|
+| `POST /api/media/storage/connect` | 页面交来授权码与 PKCE verifier，这一侧换出 refresh token 存起来。回包不带任何令牌 |
+| `GET /api/media/storage/connections` | 列出已连接的网盘，只回元信息 |
+| `POST /api/media/storage/disconnect` | 向网盘撤销并删掉存着的那份 |
+| `GET /oauth2callback` | 授权弹窗的落地页，把授权码 `postMessage` 回开它的页面然后自己关掉 |
+
+落地页只发给**同源**的开启方（`postMessage(msg, location.origin)`），授权码不会漏给别的源，页面上也不显示它。
+
+**这里踩过一个坑（2026-10-24）**：素材中间件的总入口有一行前缀过滤 —— `if (!pathname.startsWith("/@media/") && !pathname.startsWith("/api/media/")) return next();`。`/oauth2callback` 两个前缀都不沾，于是被放给了 vite 的 SPA 兜底：**授权弹窗里渲染出整个编辑器**，授权码永远回不到开它的页面，A2 连不上。这个地址不能改前缀（要和 Google 控制台登记的重定向 URI 逐字一致），所以在总入口那一行放它过来，路径抽成常量 `OAUTH_CALLBACK_PATH`。
+
+**为什么第一次没发现**：当时只用 curl 核了状态码与 `content-type`，两样都是 `200 / text/html` —— vite 的 `index.html` 也是这两样。教训是**核正文**。已补 `server/test/storage-oauth-callback.test.mjs`：把中间件架在裸 http server 上、`next()` 回 404 冒充 SPA 兜底，核正文里有没有来源标记、是不是编辑器那张 `index.html`、有没有落到兜底。撤掉修复后这条测试 4 条里红 3 条，装回去全绿（验过）。
+
+**页面侧**：`googlePicker.ts` 加 `requestDriveAuthCode`——自己生成 PKCE verifier 与 S256 challenge、带 `access_type=offline` 与 `prompt=consent` 开弹窗、按 `state` 对上回来的消息。**页面不兑换授权码**，兑换要客户端密钥，那东西只在编辑器进程这一侧。
+
+**界面**：每家网盘名字前面带自己的徽标（内联 SVG，不引外链图片——编辑器要能离线用，素材页也不该为一个图标发网络请求；颜色写死品牌色不跟主题变）。网盘菜单下面多一行「已连接的网盘…」，点进去是管理面板——每家网盘一行，显示「未连接 / 连接于 <日期> / 不支持托管」，右边是「连接」或「断开」。已托管的网盘在菜单里带一个「已托管」标。
+
+**两条路在界面上怎么分**：Picker 本身**总要一张当场的票**（它要在页面里列文件），所以托管与否都会走一次 `getDriveToken`；区别只在「拉字节」那一段——已托管就不把票递下去，拉取方用自己保管的凭据换票，于是几个 G 的大文件拉一小时也不会半路因为票过期而断掉。
+
+**客户端密钥**：从 `PROMPTCUT_GOOGLE_CLIENT_SECRET` 读；没配就 `canManage: false`，界面上「连接」按钮置灰并说明原因，A3 照常可用。另有 `PROMPTCUT_GOOGLE_REDIRECT_URI`，要和 Google 控制台里登记的重定向 URI 逐字一致。
+
+**验证**：`tsc -b` 零错误；`storage-connectors` + `storage-credentials` + 守门测试共 68 条全过，另跑受影响的 9 个文件 136 条全过；真机上配齐五样后 `config` 回 `canManage: true`、`connections` 回空表、`/oauth2callback` 回 200 text/html，管理面板渲染正确（见截图）。**「连接」那一下要用户本人在 Google 弹窗里点**，和 Picker 那一下同理。
+
 ## 7. 排期
 
 本机跑通后分支留着，0.7.20 结束后合入 main。不插队 0.7.19～0.7.20 的连做。
@@ -182,7 +291,8 @@
 - **测试模式下有 100 人上限，与范围无关，而且是终身额度。** 控制台「受众群体」页原话：「当发布状态设置为『测试』时，仅测试用户可以访问应用。在应用验证之前，允许的用户数上限为 100，并且会计入应用的整个生命周期。」开发期不要乱加测试用户。切「正式」之后这个上限是否解除，上线时实测。
 - **要切「正式」，先得把「品牌塑造」页填完。** 控制台里「发布应用」按钮是灰的，旁注「如需发布应用，您必须在品牌页面中完成配置」。那一页要应用首页地址、隐私政策地址、服务条款地址，并要验证域名所有权。
 - **这是产品侧的前置，不是技术活**：三个地址必须是 VisuHive 的真实页面，隐私政策里要写明拿用户的 Drive 数据做什么。排期时要算进去。
-- **开发与探针阶段停在「测试」模式**就够，不影响本任务书任何一步。
+- ~~**开发与探针阶段停在「测试」模式**就够~~ **2026-10-24 已切到「正式版」**（用户亲手点）。范围表复核过仍是「非敏感只有 `drive.file`、敏感与受限两栏空」，所以不触发应用验证。
+- **还没实测的一条**：切正式之后授权页还弹不弹「此应用未经 Google 验证」。按 Google 的说明那是测试模式带来的、不是范围带来的，切完应该就没了；但没人专门去看过。下次有人走授权流程时顺手确认一眼。
 
 ### 8.3 两条不用登记的路，都不够格当主路
 
@@ -201,8 +311,11 @@ VisuHive 的账号登录（Google 登录）和网盘连接器**共用这一个 O
 
   | 来源 | 谁的 |
   |---|---|
-  | `http://localhost:5321`、`http://127.0.0.1:5321` | 网盘连接器的 D1 探针 |
+  | `http://localhost:5321` | 网盘连接器（dev server 与 D1 探针） |
   | `http://localhost:5830`、`http://127.0.0.1:5830` | 账号登录 |
+  | `https://visuhive.com` | 两边共用的生产站 |
+
+  **127.0.0.1 那两条网盘连接器的已经删掉了（2026-10-24，表单里会话删的，用户点的保存）。** 原来 `http://127.0.0.1:5321` 的来源和重定向 URI 各有一条，是开登记时顺手一起填的，从没用过：dev server 起在 `localhost:5321`，`PROMPTCUT_GOOGLE_REDIRECT_URI` 也写的 `http://localhost:5321/oauth2callback`，授权码换令牌时 Google 逐字比对这个串，两边都是 `localhost` 就对得上。`localhost` 和 `127.0.0.1` 在 OAuth 里是两个**不同的来源**，不会互相顶替——真要改用 `127.0.0.1` 开发，得把那两条加回来、环境变量也跟着改。账号登录那条线自己留着 `http://127.0.0.1:5830`，不要动它。
 
 ### 8.5 六步（一次性，由你做）
 
@@ -215,11 +328,48 @@ VisuHive 的账号登录（Google 登录）和网盘连接器**共用这一个 O
 
 ## 9. 待办
 
+### 9.0 待用户项（2026-10-23 整理，都不挡继续开发）
+
+1. ~~**真机端到端还差最后一步**~~ **2026-10-23 已跑通**，见 6.4。
+2. ~~**切「正式」**~~ **2026-10-24 已完成**（用户亲手点的，发版会话在控制台核过：发布状态＝正式版、按钮变成「返回测试版」、「测试用户」那一整块消失）。前置的两样也都齐了：`visuhive.com` 的所有权验证（HTML 文件法）已通过；品牌页三栏填的是 `https://visuhive.com/`、`/privacy`、`/terms`，两页实测 200。
+3. ~~**测试模式 100 人是终身额度**~~ **随上条作废**：切正式之后不再有测试用户名单，那 100 个名额也不再消耗。
+4. ~~**A2 要用客户端密钥**~~ **2026-10-24 全部做完**：方案见第 10 节；生产重定向地址 `https://visuhive.com/oauth2callback` 也已登记进控制台（用户点的保存，重新载入核过）。**9.0 这一节到此清空，没有待用户项了。**
+5. **「连接」那一下要用户本人点**：和 Picker 同理，授权弹窗是独立窗口，会话碰不到。
+
+### 9.1 技术待办
+
 - Dropbox：接口留着，实现以后做。满 50 个链接用户要过生产审批。
 - Google Drive 有个没写进文档的下载配额（社区报 10 TB/天，官方 [Usage limits](https://developers.google.com/workspace/drive/api/guides/limits) 只写了每分钟请求配额）。撞上是 403 `downloadQuotaExceeded`。拉取失败要能退回「让用户自己的电脑下载再上传」这条路。
 - ~~Drive 的 `files.get?alt=media` 支不支持 Range，官方文档没写明，D1 探针验。~~ **2026-10-23 实测支持**，见 6.1。
 - 写拉取代码时不要依赖 `Content-Range` 响应头：跨源读不到，要自己记偏移（6.1）。
 - 云端节点的 ffmpeg 部署配置。
+- **网盘导入的素材暂时不能语音转写**：页面手里没有 `File`，`io/stt.ts` 回「素材文件不在内存里」。和「打开已有项目之后的素材」同一种情形。要修就得让 STT 改成按内容哈希向素材服务取字节，而不是从页面内存里取——那是 `io/stt.ts` 的改动，不属于本任务书。
+- **共享项目里的网盘导入**：现在 `POST /api/media/storage/import` 照 `vite-plugin-collect.ts` 的样子只传 `origin`，没带 `ownership` 与素材票据，所以只在本机项目里管用。共享项目要补这两样。
+- ~~**登记只覆盖 5321 这一个端口，软件真正跑的端口一个都没登记**~~ 〔2026-10-24 发现，**当天即补齐**：会话在控制台的表单里填、用户点的保存；补完刷新页面重新读过，三处都落库了〕。原来三处登记全是 `localhost:5321`，而那是当初为 D1 探针随手挑的端口：
+
+  | 登记在哪 | 现在有什么 |
+  |---|---|
+  | OAuth 客户端 · JavaScript 来源 | `http://localhost:5321` |
+  | OAuth 客户端 · 重定向 URI | `http://localhost:5321/oauth2callback` |
+  | API 密钥 `PromptCut Picker (localhost 5321)` · 网站限制 | `http://localhost:5321/*`、`http://127.0.0.1:5321/*` |
+
+  软件实际跑在别的端口上：`npm run dev` 是 **5190**（`.claude/launch.json`），桌面版是 **5210**（`desktop/src-tauri/src/lib.rs` 的 `EDITOR_URL` 写死 `http://127.0.0.1:5210/`）。补齐之前，在这两个端口上点「从网盘导入」会三样各撞一堵墙——Picker 被 API 密钥的网站限制挡、A3 的令牌弹窗被 JavaScript 来源挡、A2 的授权码换令牌被重定向 URI 挡。
+
+  **2026-10-24 补完之后的样子**（刷新页面重新读出来的，不是填完就算）：
+
+  | 登记在哪 | 现在有什么 |
+  |---|---|
+  | OAuth 客户端 · JavaScript 来源（8 条） | `localhost:5321`、`localhost:5830`、`127.0.0.1:5830`、`https://visuhive.com`，新增 `localhost:5190`、`127.0.0.1:5190`、`127.0.0.1:5210`、`localhost:5210` |
+  | OAuth 客户端 · 重定向 URI（4 条） | `localhost:5321/oauth2callback`、`visuhive.com/oauth2callback`，新增 `localhost:5190/oauth2callback`、`127.0.0.1:5210/oauth2callback` |
+  | API 密钥 · 网站限制（6 条） | `localhost:5321/*`、`127.0.0.1:5321/*`，新增 `localhost:5190/*`、`127.0.0.1:5190/*`、`localhost:5210/*`、`127.0.0.1:5210/*` |
+
+  两处都**没加 `visuhive.com`**：在线产物里连接器整个被剪掉了（`storageImport.ts` 的内联判断），在线页面没有对端，加了只会白白扩大面。
+  **还差的是节点那一侧的三个环境变量**（`PROMPTCUT_GOOGLE_CLIENT_ID` / `..._CLIENT_SECRET_FILE` / `..._REDIRECT_URI`），没配之前素材页点开显示「未配置」。
+
+- **开发用和生产用拆成两个 OAuth 客户端**〔2026-10-24 用户记为待办，当时的原话是「先这样」〕。现在只有一个客户端，`http://localhost:5321`、`http://localhost:5830` 这些开发地址和 `https://visuhive.com` 并排登记在同一张表上。拆开之后，生产那个客户端的来源和重定向 URI 里一条本机地址都没有，开发机上就算泄露了开发客户端的密钥，也打不到生产那个同意屏幕上去。
+  - **为什么现在不拆**：拆要动两样——每台开发机的 `PROMPTCUT_GOOGLE_CLIENT_ID` 和密钥文件要换成开发客户端那一套，生产的部署环境要换成生产客户端那一套；同意屏幕归 Cloud 项目管、不归客户端管，所以不用重填。眼下只有一台开发机、还没真正部署生产，拆了维护两套反而麻烦。
+  - **什么时候该拆**：开始有第二台开发机，或者生产真部署起来并对外开放时。
+  - **这是两条线共同的决定**：客户端是和账号登录共用的（8.4），拆就是两边一起拆、一起换环境变量，不能一边拆一边不拆。动手前先和账号登录那条线对齐。
 
 ## 10. 不做的
 
@@ -227,3 +377,66 @@ VisuHive 的账号登录（Google 登录）和网盘连接器**共用这一个 O
 - 不搜用户整个网盘，只认他当场选中的文件。
 - 不把素材留在节点的临时目录：入库后立刻删（照 `hosted-collect.mjs` 的规矩）。
 - 不改哈希寻址，不做 fMP4，不做「边传边取某一帧」——理由见会话里的探索结论：小尺寸比原尺寸小 1:67，先传完小尺寸这条现有规则已经覆盖了这个窗口。
+
+## 10. 客户端密钥怎么放（2026-10-24 用户让出方案，据此定）
+
+A2 要客户端密钥，这一节定它在三个位置分别怎么办。
+
+### 10.1 三个位置，三种待遇
+
+| 位置 | 拉取方 | 要不要客户端密钥 | 用哪条路 |
+|---|---|---|---|
+| **桌面版**（装到用户机器上） | 本机编辑器进程 | **不要，也不该要** | 只用 A3 |
+| **开发机** | 同上 | 本机文件，不入库 | A3、A2 都能试 |
+| **云端节点**（项目放云端） | 节点 | **要**，只写路径 | A2 |
+
+### 10.2 桌面版不放密钥——而且不需要
+
+不是「为了安全忍痛放弃」，是 **A2 在桌面版上本来就没有用武之地**：A2 的价值是「用户不在，拉取方照样继续」，而桌面版上拉取方就是那个应用本身——应用关了没人在拉，A2 救不了；应用开着时 A3 的票由页面续。唯一的缝隙是「应用开着、单次拉取超过一小时、票过期」，那个用 GIS 的静默续票补，不必动长期凭据。
+
+安全上更要紧的一点：**我们这个客户端是「Web 应用」类型，它的密钥是真机密。** Google 只对「桌面应用」类型的密钥不作机密对待（文档里还建议那种客户端配 PKCE），Web 类型的不是那回事——打进桌面包等于公开发布。
+
+**代码上已经自然成立，不用加开关**：没配密钥时 `canManage` 就是 `false`，「连接」按钮灰着并说明原因。桌面包里不放那几个变量，A2 入口就不存在。
+
+将来桌面版真要 A2，**另建一个「桌面应用」类型的客户端**，不要复用 Web 那个。
+
+### 10.3 云端节点：只写路径，不写值
+
+`server/hosted/deploy/agent-account.env.example` 的文件头写明「里面没有任何秘密（私钥只写路径）」。密钥文件和 `PROMPTCUT_AGENT_CLIENT_KEY_FILE` 一个待遇：**0600、属主是服务用户**。
+
+```
+PROMPTCUT_GOOGLE_CLIENT_ID=<OAuth 客户端 ID>
+PROMPTCUT_GOOGLE_CLIENT_SECRET_FILE=/etc/promptcut/google-oauth/client-secret
+PROMPTCUT_GOOGLE_REDIRECT_URI=https://<主站域名>/oauth2callback
+```
+
+代码上两个变量都认、**文件优先**：`_FILE` 有就读文件；没有才回退到直接给值的 `PROMPTCUT_GOOGLE_CLIENT_SECRET`（只为开发期方便），用到它会在日志里提示一句。
+
+几条刻意定下的行为：
+
+- **配了 `_FILE` 就不回退到给值的那个**。免得文件路径写错时悄悄用了旧密钥，让人以为换成功了。
+- **读不到文件不抛**：回空串，等于「这台机器没配好 A2」，界面上按钮灰着，A3 照常可用。拉取不会因为密钥没配好而整个坏掉。
+- **空文件当没配**，和读不到一样。
+- 密钥本身**永远不进日志**，只记「从哪读的、为什么没读到」（`ENOENT` 这种 code）。
+
+### 10.4 重定向地址
+
+不是秘密，按部署给值即可，但**每个环境一条、三条都要登记进 Google 控制台**：
+
+| 环境 | 值 | 状态 |
+|---|---|---|
+| 开发机 | `http://localhost:5321/oauth2callback` | 已登记 |
+| 生产（主站） | `https://visuhive.com/oauth2callback` | **2026-10-24 已登记**（用户点的保存，重新载入控制台核过） |
+| 桌面版 | 不需要（不走 A2） | — |
+
+控制台改完「可能需要 5 分钟到几小时才生效」，**要赶在部署之前加**，别等部署当天。
+
+**为什么是 `visuhive.com` 而不是 `hosted.visuhive.com`**：在线编辑器是静态产物，由 nginx 从 `/opt/promptcut-hosted` 发在 `https://visuhive.com/editor`；`hosted.visuhive.com/editor` 会 301 到前者。重定向地址必须和页面自己的来源同源，所以取 `visuhive.com`。JavaScript 来源 `https://visuhive.com` 登录那条线已经登记过了，不用再加。
+
+**部署待办：生产上还没有人发 `/oauth2callback`。** `nginx-site-promptcut.conf` 里只有 `/hosted`、`/media`、`/editor`、`/catalog` 这几处。好在**落地页是纯静态 HTML**（只读 `location.search` 再 `postMessage`，没有任何服务端逻辑），所以不需要把请求代理给节点——加一个 location、发一个静态文件就够。真要部署 A2 时一并做。
+
+### 10.5 轮换
+
+控制台支持一个客户端挂多个密钥，所以能平滑换：**加新密钥 → 改文件 → 重启服务 → 删旧密钥**，中间没有空窗。
+
+已经存着的 refresh token 按 OAuth 规范不受影响（它绑的是 `client_id`，不是 secret）——**这一条没有实测**，真要轮换前先拿一份凭据试一次，别直接在生产上验。

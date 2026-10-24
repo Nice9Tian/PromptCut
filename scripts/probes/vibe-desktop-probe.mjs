@@ -35,7 +35,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const argv = process.argv.slice(2);
 const arg = (key, dflt) => { const i = argv.indexOf(key); return i < 0 ? dflt : argv[i + 1]; };
 const CDP = Number(arg('--cdp', ''));
-const OUT = path.resolve(arg('--out', path.join(ROOT, 'docs/reports/AGENT-claude-editor-vibe-button-shots')));
+const OUT = path.resolve(arg('--out', path.join(ROOT, 'docs/archive/agent-reports/AGENT-claude-editor-vibe-button-shots')));
 const EDITOR = arg('--editor', 'http://127.0.0.1:5210');
 if (!Number.isInteger(CDP) || CDP <= 0) {
   console.error('要 --cdp <端口>:桌面壳 WebView2 的调试端口。找法见本文件头。');
