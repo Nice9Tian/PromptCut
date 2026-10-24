@@ -22,7 +22,7 @@
  * 2026-10-23 接业务层:项目来自云端项目列表(桌面版是本机草稿),对话来自云端 Agent 服务(桌面版是本机 Agent)。
  * 分组分两套、互相放不进:本地分组装本机草稿项目、存本机;云端分组装云端项目、存云端(`vibeOrg.ts` 文件头)。
  * 每个分组、每个项目都带 `realm`,右键「移到分组」里另一套的分组置灰并说明。「分组 Agent」语义里没有,这一版不做。
- * 归档的东西收在最下面「已归档」那张卡里,右键能取消归档。
+ * 归档的东西收在最下面「已归档」那一段里,右键能取消归档。
  */
 import { useRef, useState } from "react";
 import type { JSX } from "react";
@@ -214,7 +214,10 @@ export function ProjectSidebar(props: {
   const isAt = (s: Scope) =>
     s.kind === current.kind && (s.kind !== "group" || (current.kind === "group" && s.id === current.id));
 
-  /** 一张卡的头:和右边那条拓展栏的段头同一套(`.ps-card-*`),点了收起里面那一截 */
+  /**
+   * 一段的头:和右边那条拓展栏的段头同一套(`.ps-card-*`),点了收起里面那一截。
+   * 整栏是**一张**面板,段与段之间不再各自成卡(issue #5,形状在 `start.css` 的 `.ps-side-scroll`)。
+   */
   const cardHead = (key: string, title: string, count: number): JSX.Element => (
     <div className="ps-card-head">
       <button

@@ -187,6 +187,35 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
       { id: vibe.chat.conversationId || "pending", name: "新对话", projectId: openId, state: "idle", visibility: "shared", readOnly: false, fresh: true })
     : null;
 
+  /* ---------------- 两栏自己弹开的时机 ---------------- */
+  /**
+   * 登录了、而且手上已经有项目:左侧栏自动展开(issue #11)—— 有东西可列的时候不该让用户先去点一下那颗收起键。
+   * 只弹一次:这一次打开页面里用户自己动过侧栏(`onToggleSide`)之后就听他的,不再自动展开。
+   * 展开这件事照常记在本机(`writeSideCollapsed`),刷新后还是展开的。
+   */
+  const sideAuto = useRef(false);
+  useEffect(() => {
+    if (sideAuto.current || !signedIn || projects.length === 0) return;
+    sideAuto.current = true;
+    setCollapsed((v) => {
+      if (!v) return v;
+      writeSideCollapsed(false);
+      return false;
+    });
+  }, [signedIn, projects.length]);
+
+  /**
+   * 点进一条对话:右侧拓展栏自动展开(issue #6)—— 进了会话就该看得见画面和修改前 / 修改后。
+   * 按对话记:同一条对话里用户自己关掉了就不再弹开,换一条对话才又弹开。
+   */
+  const extAuto = useRef<string | null>(null);
+  useEffect(() => {
+    const id = openChat?.id ?? null;
+    if (!id || extAuto.current === id) return;
+    extAuto.current = id;
+    setPanel(true);
+  }, [openChat?.id]);
+
   /* ---------------- 动作 ---------------- */
   const failText = (e: unknown, fallback: string) => (e instanceof Error && e.message ? e.message : fallback);
 
@@ -402,12 +431,14 @@ export function OnlineStart(props: { onEnterEditor: () => void }): JSX.Element {
           setScope({ kind: "all" });
         }}
         collapsed={collapsed}
-        onToggleSide={() =>
+        onToggleSide={() => {
+          // 用户自己动过了:这一次打开页面里不再替他自动展开(issue #11 那条只弹一次)
+          sideAuto.current = true;
           setCollapsed((v) => {
             writeSideCollapsed(!v);
             return !v;
-          })
-        }
+          });
+        }}
         accountName={accountName}
         onSignOut={signOut}
         center={

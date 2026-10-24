@@ -247,7 +247,8 @@ try {
     await clickPc(page, 'start-side-agent');
     await until('聊天页', () => page.$('[data-pc="start-chat"]'));
   }
-  await clickPc(page, 'start-chat-ext-toggle');
+  // 进会话之后拓展栏自己就展开了(issue #6):已经开着就别再点,点了反而关上
+  await page.evaluate(() => { if (!document.querySelector('[data-pc="start-ext"]')) document.querySelector('[data-pc="start-chat-ext-toggle"]')?.click(); });
   const extOn = await until('右侧拓展栏', () => page.$('[data-pc="start-ext"]'));
   check(!!extOn, '拓展栏该打得开');
   step('ext', { ...(await snapshot(page)), shot: await shot(page, 'ext-panel') });

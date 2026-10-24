@@ -23,7 +23,10 @@ export function ProjectRail(props: {
   /** 新建不可用(游客已经建过一个)时置灰,悬停说为什么 */
   createDisabled?: string | null;
   onOpen: (id: string) => void;
-  /** 列表还在取、取不到时这一排说什么(不显示假数据、不白屏) */
+  /**
+   * 列表还在取、取不到、没登录时这一排说什么(不显示假数据、不白屏)。
+   * 不给就什么都不写 —— 「一个项目都没有」用户自己看得见,不用多一句话(issue #10)。
+   */
   empty?: string;
 }): JSX.Element {
   const strip = useRef<HTMLDivElement>(null);
@@ -83,8 +86,13 @@ export function ProjectRail(props: {
           <ProjectThumb key={p.id} project={p} onOpen={props.onOpen} />
         ))}
       </div>
-      {props.projects.length === 0 && (
-        <p className="ps-empty" data-pc="start-rail-empty">{props.empty ?? "这里还没有项目。点第一格的「Create A New」建一个。"}</p>
+      {/*
+        空着的时候只说**用户不知道的事**(列表还在取、取不到、没登录);一个都没有本身不用再写一句
+        「这里还没有项目。点第一格的『Create A New』建一个。」—— 第一格就在眼前,这句话是冗余的
+        (issue #10:游客首屏上这块被指出来)。
+      */}
+      {props.projects.length === 0 && props.empty && (
+        <p className="ps-empty" data-pc="start-rail-empty">{props.empty}</p>
       )}
     </section>
   );

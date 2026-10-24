@@ -93,7 +93,7 @@
    * 不画常驻的竖线(用户 2026-10-23 定):它和主区平时是连着的一片,
    * 要拖的时候鼠标压到右边那条缝上才亮一条(`.ps-grip`)。
    */
-  /* 底色和主区同一张(用户 2026-10-23:左侧也用模块式),每一段自己是一张浮在上面的卡 */
+  /* 底色和主区同一张;列表那一块是浮在上面的**一张**面板(issue #5,见 `.ps-side-scroll`) */
   background: var(--bg-canvas);
   transition: flex-basis 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
@@ -194,21 +194,30 @@
 }
 .ps-search input::placeholder { color: var(--ink-faint); }
 
+/*
+ * 整栏就是**一张面板**(issue #5,用户原话:「左侧列表栏换成统一的一个面板，不再区分为多个」):
+ * 边框、底色、圆角画在能滚的这一层上,分组 / 项目 / 已归档各段在它里面接着往下排。
+ * 原先是每段各自一张卡(2026-10-23「左侧仿照右侧用模块式」),段与段之间有缝、有各自的边框 —— 那一版已被这条替代。
+ * 右边那条拓展栏(`.ps-ext-sec`)不动,它本来就是分开的几段。
+ */
 .ps-side-scroll {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: 2px 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-/* 一段是一张卡,和右边那条拓展栏的 `.ps-ext-sec` 同一套(用户 2026-10-23:左侧仿照右侧用模块式) */
-.ps-side-group {
+  /* 左右跟「新建项目」「搜项目和对话」对齐(都是 12px),面板不比它们宽也不比它们窄 */
+  margin: 2px 12px 12px;
   padding: 4px;
   border: 1px solid var(--hairline);
   border-radius: 10px;
   background: var(--bg-panel);
+  display: flex;
+  flex-direction: column;
+}
+/* 段不再是卡:没有自己的边框和底色,也不互相拉开 —— 面板只有一张 */
+.ps-side-group {
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 .ps-side-label {
   padding: 6px 8px 4px;
