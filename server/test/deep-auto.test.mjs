@@ -63,7 +63,7 @@ test('深度自主：到上限照样收尾，但那句话里不出现轮数', as
   assert.doesNotMatch(text, /3/, '更不能把具体的上限数字告诉它');
 });
 
-test('深度自主的上限是真放宽了，不是还按 24 轮跑', async () => {
+test('深度自主的上限是真放宽了，不是还按常规 48 轮跑', async () => {
   const { out } = await runTo({ maxIterations: 40, deepAuto: true });
   // 40 轮才触顶：说明 maxIterations 真的被用上了，而不是构造函数的默认值
   assert.equal(out.outcome, 'round_limit');
@@ -92,8 +92,8 @@ test('不限轮次时循环没有终点：模型不收尾就一直跑，只有�
   let rounds = 0;
   const agent = new Agent({
     provider: { name: 'never', async *stream() {
-      // 跑够 30 轮就当作「已经远远越过 24 这个常规上限」，然后模拟用户点停止
-      if (++rounds >= 30) ac.abort();
+      // 跑够 60 轮就当作「已经远远越过 48 这个常规上限」，然后模拟用户点停止
+      if (++rounds >= 60) ac.abort();
       yield { type: 'tool_use', id: `c${rounds}`, name: 'noop', input: { n: rounds } };
       yield { type: 'stop', reason: 'tool_use' };
     } },
@@ -102,7 +102,7 @@ test('不限轮次时循环没有终点：模型不收尾就一直跑，只有�
     onEvent: () => {},
   });
   await assert.rejects(() => agent.run('一直做'), (e) => e.name === 'AbortError');
-  assert.ok(rounds >= 30, `不限轮次下应该一路跑过 24 轮，实际只跑了 ${rounds}`);
+  assert.ok(rounds >= 60, `不限轮次下应该一路跑过常规的 48 轮，实际只跑了 ${rounds}`);
 });
 
 // ── 「自主轮次」这个设置项本身 ──────────────────────────────────

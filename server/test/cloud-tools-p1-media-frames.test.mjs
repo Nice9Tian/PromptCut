@@ -318,3 +318,46 @@ setInterval(() => {}, 1000);
   const leftover = fx.ws.list().filter((f) => f.path.startsWith('media-frames/'));
   assert.deepEqual(leftover, [], '取消后工作区临时目录已清理干净');
 });
+
+test('P1-MF-05 取素材失败时给模型人话，不把 project-assets-read-failed 这种代号原样抛出去', async (t) => {
+  const fx = await makeP1Fixture(t);
+  await fx.addMedia({ id: 'img_err', name: 'plan.png', kind: 'image', bytes: Buffer.from('not-a-real-png') });
+
+  // 只换掉读字节这一步:元数据照常走真 fixture,失败发生在 openRead
+  const providerWith = (error) => createMediaFramesTools({
+    contextAccess: fx.resources.contextAccess,
+    resources: fx.resources,
+    assets: { openRead: async () => { throw error; } },
+    workspace: () => fx.ws,
+    project: fx.project,
+    ffmpeg: FFMPEG,
+    ffprobe: FFPROBE,
+  });
+  const fail = (code, status) => Object.assign(new Error(code), { code, status });
+
+  // 1) 素材服务没放行 Agent 读取(生产上 PROMPTCUT_ASSET_RUN_ENABLED=0 就是这个):
+  //    要明说重试没用,否则模型只会原样再试一遍
+  const shut = providerWith(fail('project-assets-read-failed', 503));
+  t.after(() => shut.close());
+  await assert.rejects(
+    shut.call('see_frames', { source: 'media', mediaId: 'img_err' }, fx.context),
+    (err) => err instanceof MediaFramesToolError && err.code === 'media-fetch-failed' && err.status === 503
+      && /读不了项目素材的字节/.test(err.message) && /重试也没用/.test(err.message),
+  );
+
+  // 2) 字节真的没了:还是原来那句「找不到」,状态 404
+  const gone = providerWith(fail('asset-missing', 404));
+  t.after(() => gone.close());
+  await assert.rejects(
+    gone.call('see_frames', { source: 'media', mediaId: 'img_err' }, fx.context),
+    (err) => err instanceof MediaFramesToolError && err.status === 404 && /找不到/.test(err.message),
+  );
+
+  // 3) 没见过的代号:兜底那句照旧带上代号,别把整条错误对象倒给模型
+  const odd = providerWith(fail('something-else', 500));
+  t.after(() => odd.close());
+  await assert.rejects(
+    odd.call('see_frames', { source: 'media', mediaId: 'img_err' }, fx.context),
+    (err) => err instanceof MediaFramesToolError && /取素材失败\(something-else\)/.test(err.message),
+  );
+});
