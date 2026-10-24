@@ -854,7 +854,7 @@ test('HTTP:丙块追加的接口(对话的取、改标题、删;用量;info 的�
   t.after(async () => { await svc.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
   const info = await (await fetch(`${svc.url}/v1/info`, { headers: auth })).json();
   assert.deepEqual({ ok: info.ok, enabled: info.enabled, mock: info.mock, models: info.models, defaultModel: info.defaultModel, limits: info.limits, usage: info.usage, running: info.running, render: info.render },
-    { ok: true, enabled: true, mock: true, models: ['mock-1'], defaultModel: 'mock-1', limits: { rounds: 24, runMs: 30 * 60_000 }, usage: { tokens: 0, limitTokens: null, window: 'total' }, running: [], render: { enabled: false } });
+    { ok: true, enabled: true, mock: true, models: ['mock-1'], defaultModel: 'mock-1', limits: { rounds: 48, runMs: 60 * 60_000 }, usage: { tokens: 0, limitTokens: null, window: 'total' }, running: [], render: { enabled: false } });
 
   const sent = await fetch(`${svc.url}/v1/conversations/c1/messages`, { method: 'POST', headers: auth, body: JSON.stringify({ prompt: script([{ tool: 'update_clip', input: { clipId: 'c1', end: 6 } }, { say: '好' }]), grant: 'v1.x.y' }) });
   assert.equal(sent.status, 202);
