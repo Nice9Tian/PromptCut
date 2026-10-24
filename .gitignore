@@ -56,7 +56,11 @@ reply_to_users_goal.md
 
 # 本机说明:只和这台机器有关的环境信息(docs/semantics/guide_files/constraints.md 的「本机信息不进仓库」)
 docs/local.md
+# 多机跑法作废后仍留在主工作区的本机状态日志（交接日志已摘进 docs/archive/handover-log-2026-09.md）
 docs/auto_long_work/local.md
 
-# 给读不到 promptcut-dev 技能的工具（codex、agy 等）准备的简版要求，本机生成，不入库
+# 本机自建的 Agent 入口（见 README「给 coding agent 的入口」）：会被各家工具无条件注入，不入库
+/AGENTS.md
+/CLAUDE.md
+# 给读不到本机规则的工具（codex、agy 等）准备的简版要求，由本机生成，不入库
 /my_agent/

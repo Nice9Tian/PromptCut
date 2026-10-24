@@ -1,16 +1,13 @@
-# 开发者指南
+# 语义库
 
-给修改本仓库的开发者（人或 coding agent）的索引。规则本身在 `guide_files/` 里。
+`docs/semantics/` 怎么读：语义分三级，按改动范围该读哪几份。改本仓库时必须守的规则在 `guide_files/` 里。
 
 ## 文件
 
 | 文件 | 管什么 |
 |---|---|
-| `guide_files/suggested_agent_behavior.md` | 协作闭环：原则，以及对齐、执行、验证、汇报的工作流程 |
-| `guide_files/solution_table.md` | 按现有语义做不下去时怎么穷尽解法：解法表、分层、顾问、什么时候停 |
 | `guide_files/constraints.md` | 改代码时必须守的硬性约束 |
 | `guide_files/verification.md` | 基线由哪几项组成、什么改动必跑哪项、验证环境 |
-| `guide_files/multi_agent.md` | 用了子 Agent 之后的协议 |
 | `guide_files/git_and_release.md` | 提交、合并、构建、版本号 |
 
 ## 语义的三级
@@ -26,7 +23,6 @@
 - `product-purpose.md`、`architecture.md` 是三级之上的总纲，改它们按二级办。
 - 同名的 `product/<名>.md` 与 `mechanism/<名>.md` 是一对：机制从属于产品功能，冲突时以产品功能为准。一句话里前半是承诺、后半是机制的，拆成两句分放两本。没有机制内容的，不建 `mechanism/` 那一本。
 - `glossary.md` 每条注明级别。
-- 改语义按阶段走不同的流程，规则见 `guide_files/suggested_agent_behavior.md` 的「对齐」。
 
 ## 按任务读哪些语义
 
