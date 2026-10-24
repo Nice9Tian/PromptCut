@@ -327,12 +327,13 @@ export function startRun(opts) {
     const rawProvider = providerModule.createProvider(cfg, { fetchImpl: retryingFetch });
     const provider = speedBook ? withOutputSpeed(rawProvider, speedBook, cfg.model) : rawProvider;
     /*
-     * 轮次上限:常规 24 轮;「深度自主」开着时换成设置里的「自主轮次」(opts.maxRounds),
+     * 轮次上限:常规 48 轮(2026-10-24 用户定,原先 24 轮;一张复杂自定义卡光写代码就要十几轮,
+     * 24 轮不够走到建卡那一步);「深度自主」开着时换成设置里的「自主轮次」(opts.maxRounds),
      * 那个值为 0 表示不限 —— 在这里变成 Infinity,循环就没有终点了。
      */
     const maxIterations = opts.deepAuto
       ? (opts.maxRounds === 0 ? Infinity : Number(opts.maxRounds) || 300)
-      : 24;
+      : 48;
     // 单次输出上限:配置里的 maxTokens 是上限的上限,真正发的数按模型定(harness/model-limits.mjs,A07 2026-10-22);
     // 再按实测速度压一道(上面的 speedBook),每次请求实际发的数见 `output-speed` 诊断
     safeOnEvent({ type: 'diagnostic', stage: 'configuration', data: { vendor: cfg.vendor, model: cfg.model, effort: cfg.effort || '(默认)', maxTokens: cfg.maxTokens, maxOutput, speedCap: speedBook ? speedBook.capFor(cfg.model) : null, protocol: 'native-tools', schemaCompat, maxRounds: Number.isFinite(maxIterations) ? maxIterations : null, deepAuto: !!opts.deepAuto } });

@@ -1,0 +1,14 @@
+# 看门狗的定时器:两分钟查一次。查本身很轻(一次本地 mTLS 请求),真正重的 rotate 由看门狗按条件触发。
+# 模板 server/hosted/deploy/systemd-promptcut-asset-rotate-watch.timer;
+# 放在 /etc/systemd/system/promptcut-asset-rotate-watch.timer,再 systemctl enable --now 它。
+[Unit]
+Description=PromptCut asset run-assets observer watchdog timer
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=2min
+AccuracySec=15s
+Unit=promptcut-asset-rotate-watch.service
+
+[Install]
+WantedBy=timers.target

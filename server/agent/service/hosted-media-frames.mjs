@@ -191,6 +191,24 @@ export function createMediaFramesTools({
     return out.replace(/[A-Za-z]:\\[^\s'",)]+/g, '<节点目录>');
   }
 
+  /*
+   * `assets.openRead` 的报错翻成模型看得懂的话。图片和视频两条路都走这里,免得其中一条
+   * 把 `project-assets-read-failed` 这种代号原样丢给模型 —— 它看不出该不该重试,只会再试一遍。
+   * 通道整个不可用时明说「重试没用」,模型才会改走别的路。
+   */
+  function mediaFetchError(error, wsDir = null) {
+    const code = error?.code ?? error?.message;
+    const gone = error?.status === 404 || code === 'asset-missing';
+    const shut = ['project-assets-read-failed', 'project-assets-unconfigured', 'project-assets-closed',
+      'run-asset-transport-unconfigured', 'run-asset-response-invalid'].includes(code);
+    const msg = gone ? '素材的字节在素材服务上找不到(上传没完成或已被清理)'
+      : shut ? `这台云节点现在读不了项目素材的字节(素材服务没放行 Agent 读取:${scrub(code, wsDir).slice(0, 60)}),重试也没用。请改看时间轴画面(see_frames 不传 mediaId),或请用户检查云节点上的素材服务。`
+      : error?.status === 403 ? '这一轮没有读这份素材的权限(被停止、转私有或权限已撤)。'
+      : ['asset-size-mismatch', 'asset-hash-mismatch'].includes(code) ? '素材的字节和登记的大小/哈希对不上,这份素材在素材服务上坏了。'
+      : `取素材失败(${scrub(code ?? error, wsDir).slice(0, 120)})`;
+    return new MediaFramesToolError(msg, 'media-fetch-failed', error?.status === 403 ? 403 : shut ? 503 : 404);
+  }
+
   async function resolveWorkspace(context) {
     if (typeof workspace === 'function') return await workspace(context);
     if (workspace && typeof workspace === 'object') return workspace;
@@ -290,7 +308,12 @@ export function createMediaFramesTools({
   }
 
   async function readImageMedia(context, media) {
-    const read = await assets.openRead(context, media.id);
+    let read;
+    try {
+      read = await assets.openRead(context, media.id);
+    } catch (error) {
+      throw mediaFetchError(error);
+    }
     activeStreams.add(read.stream);
     const chunks = [];
     let total = 0;
@@ -384,10 +407,7 @@ export function createMediaFramesTools({
       try {
         read = await assets.openRead(context, mediaId);
       } catch (error) {
-        const msg = error?.status === 404 || error?.code === 'asset-missing' || error?.message === 'asset-missing'
-          ? '素材的字节在素材服务上找不到(上传没完成或已被清理)'
-          : `取素材失败(${scrub(error?.code ?? error?.message ?? error, wsDir).slice(0, 120)})`;
-        throw new MediaFramesToolError(msg, 'media-fetch-failed', error?.status === 403 ? 403 : 404);
+        throw mediaFetchError(error, wsDir);
       }
       const ext = typeof read.assetRef?.ext === 'string' && /^[a-z0-9]{1,8}$/.test(read.assetRef.ext) ? read.assetRef.ext : 'mp4';
       const relMedia = `${relDir}/media.${ext}`;

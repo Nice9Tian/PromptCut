@@ -49,7 +49,12 @@ export function ProjectThumb({ project, onOpen }: { project: VibeProject; onOpen
   );
 }
 
-/** 第一格恒定是它(翻到第几页都在),点了走和侧栏「新建项目」同一条路 */
+/**
+ * 第一格恒定是它(翻到第几页都在),点了走和侧栏「新建项目」同一条路。
+ *
+ * 格子里那行「Create A New」已经说清这一格是干什么的,底下不再重复一句「空白画布」
+ * (issue #10:游客首屏上这句话是冗余的)。项目名那一行留着,一排里的名字才对得齐。
+ */
 export function CreateTile({ onCreate, disabled, title }: { onCreate: () => void; disabled?: boolean; title?: string }): JSX.Element {
   return (
     <button type="button" className="ps-tile ps-tile-new" data-pc="start-create-tile" aria-label="新建项目" disabled={disabled} title={title} onClick={onCreate}>
@@ -58,7 +63,6 @@ export function CreateTile({ onCreate, disabled, title }: { onCreate: () => void
         <span className="ps-tile-new-text">Create A New</span>
       </span>
       <span className="ps-tile-name">新建项目</span>
-      <span className="ps-tile-meta">空白画布</span>
     </button>
   );
 }

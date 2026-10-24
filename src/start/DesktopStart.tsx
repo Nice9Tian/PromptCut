@@ -129,6 +129,31 @@ export function DesktopStart(props: {
   const chats = useMemo(() => (openId ? mergeChats(org, openId, vibe.chats) : []), [org, openId, vibe.chats]);
   const openChat: VibeChat | null = chatPage && openId ? (chats.find((c) => c.id === vibe.tabId) ?? vibe.current) : null;
 
+  /* ---------------- 两栏自己弹开的时机(和在线那一屏同一套,`OnlineStart.tsx`) ---------------- */
+  /**
+   * 手上已经有项目:左侧栏自动展开(issue #11)。桌面版没有登录这一说,有本机项目就算数。
+   * 只弹一次:用户自己动过侧栏之后听他的。
+   */
+  const sideAuto = useRef(false);
+  useEffect(() => {
+    if (sideAuto.current || projects.length === 0) return;
+    sideAuto.current = true;
+    setCollapsed((v) => {
+      if (!v) return v;
+      writeSideCollapsed(false);
+      return false;
+    });
+  }, [projects.length]);
+
+  /** 点进一条对话:右侧拓展栏自动展开(issue #6)。按对话记,同一条里关掉了就不再弹开 */
+  const extAuto = useRef<string | null>(null);
+  useEffect(() => {
+    const id = openChat?.id ?? null;
+    if (!id || extAuto.current === id) return;
+    extAuto.current = id;
+    setPanel(true);
+  }, [openChat?.id]);
+
   /* ---------------- 自动保存 ---------------- */
   const dirty = useStore((s) => s.dirty);
   /** 存一次当前项目。存不下去(只读、盘满)如实说,不吞掉 */
@@ -327,12 +352,14 @@ export function DesktopStart(props: {
           setScope({ kind: "all" });
         }}
         collapsed={collapsed}
-        onToggleSide={() =>
+        onToggleSide={() => {
+          // 用户自己动过了:这一次打开页面里不再替他自动展开(issue #11 那条只弹一次)
+          sideAuto.current = true;
           setCollapsed((v) => {
             writeSideCollapsed(!v);
             return !v;
-          })
-        }
+          });
+        }}
         center={
           openChat ? (
             <div className="ps-top-title">

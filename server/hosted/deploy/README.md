@@ -360,3 +360,39 @@ PROMPTCUT_AGENT_DATA=/var/lib/promptcut/agent node server/agent-service/admin.mj
   4. 没有锁、只是长时间停在 `bound`：那是任务还在跑，或者任务进程放弃了结算正在等文档服务（root 入口日志里的 `slot.settlement.abandoned` / `slot.failure.pending` 会说明），不要动登记目录。
 - **节点重启以后**：记录链钉在这一次开机上，重启后**原来的槽不能接着用**（发布器会报 `agent-scope-boot-transition`）。要给每个槽换一个新的 `expected.authorityId`（或 `slotId`）、换一个空的登记目录，重做第 4～6 步（含重启文档服务）和第 8 步。重启前还没结清的任务结不了，对应的对话要到文档服务里处理。这是现在这套设计的限制，不是配置问题。
 - **回退**：停 `promptcut-agent-root`（任务不再开始，排着的消息留在文档服务里）；主服务停掉后页面的「云端」一项报连不上。文档服务去掉 `PROMPTCUT_DOC_AGENT_RUN_SCOPES_FILE` 并重启就回到「不开这个模式」（那时云端任务领不到分配，不会退回别的跑法）。
+
+## 素材服务的观察通道自愈（2026-10-24）
+
+云端 Agent 读项目素材的字节（`see_frames` 看素材、音频测量、抽帧）走的是 run-assets 这条路。素材服务启动时跟文档服务建**一条**长连接当「观察通道」，这条通道的身份绑在那一个 TLS socket 上（`server/hosted/run-assets-observer-binding.mjs`，用 TLS exporter 材料做证明）。**文档服务一重启，socket 没了，通道就作废**，云端 Agent 从此读不了素材字节，`see_frames` 回 `project-assets-read-failed`。
+
+重建通道只能由 root 在素材服务的 cgroup 之外跑 `asset-root-registry-publisher.mjs --rotate`。这是设计约束（那个文件头第一句就是 "Never run inside the target service cgroup"），素材服务自己重连不了。
+
+原先这一步靠人工记着做。2026-10-23 漏做了一次，而且当时通道一丢就把整个素材服务拖成 not-ready（`runConsumer` 和项目清理器挂在同一个 `consumer` 上，它 sync 失败就让 `ready()` 为假，所有人读素材都 503），只好把 `PROMPTCUT_ASSET_RUN_ENABLED` 改成 `0` 换回素材服务可用，代价是云端 Agent 整整一天看不了素材。下面这套就是为了不再出现这种事。
+
+| 文件 | 放到 | 说明 |
+|---|---|---|
+| `systemd-promptcut-asset-rotate.service` | `/etc/systemd/system/promptcut-asset-rotate.service` | 一次性单元：跑一次 `publisher --rotate` 重建通道。**它会 stop + start 素材服务**，所以只按需触发，不挂高频定时器 |
+| `systemd-promptcut-doc-rotate.dropin.conf` | `/etc/systemd/system/promptcut-doc-v2.service.d/rotate.conf` | 文档服务每次启动完自动触发上面那个单元，`--no-block`（不加会死锁：systemd 在文档服务的启动过程里等一个要动别的服务的单元） |
+| `asset-run-watchdog.mjs` + `systemd-promptcut-asset-rotate-watch.service` / `.timer` | 代码在部署目录里，两个单元放 `/etc/systemd/system/` | 看门狗，两分钟查一次状态口，**只在「配了 run-assets 但 `runAssetsReady` 是 false」时**才触发 rotate。补的是不由文档服务重启引起的断线 |
+| `asset-run-watchdog.example.json` | `/etc/promptcut/asset-root/watchdog.json`（root 0600） | 看门狗的配置：状态口地址、doc 的客户端证书、要触发的单元名、状态文件、冷却时间与最多试几次 |
+
+占位符：`{{NODE}}`（node 可执行文件）、`{{DIR}}`（这份代码的根，和别的单元同一棵树）、`{{PUBLISHER_CONFIG}}`（`/etc/promptcut/asset-root/publisher.json`）、`{{WATCHDOG_CONFIG}}`（上面那份 `watchdog.json`）。
+
+装法：四个文件填好放进 `/etc/systemd/system/`，`systemctl daemon-reload`，再 `systemctl enable --now promptcut-asset-rotate-watch.timer`。rotate 那个单元**不要** enable，它由上面两处按需触发。
+
+看门狗的三条分寸，改它之前先读懂：
+
+- **没配 run-assets 就不管**（状态口 `runAssetsConfigured: false`）。那是部署者有意关的，不是故障，看门狗不会自作主张把它开回来。
+- **有冷却**（缺省 10 分钟）：rotate 会让素材服务断一下，不能连着来。
+- **试够次数（缺省 3 次）就只报警不再试**，日志里留 `"action":"alarm"`。连着 rotate 都救不回来说明是别的问题，继续自动重启只会让所有人反复读不了素材。
+
+核对：
+
+```
+curl -s --cert /etc/promptcut-pki/public/doc.crt --key /var/lib/promptcut-role-keys/doc/doc.key \
+  --cacert /etc/promptcut-pki/public/ca.crt https://127.0.0.1:8794/internal/v2/asset/status
+```
+
+`runAssetsConfigured: true` 且 `runAssetsReady: true` 才算通。看门狗自己的日志在 `journalctl -u promptcut-asset-rotate-watch`，每次一行 JSON。
+
+**换 release 目录时**：`promptcut-doc-v2`、`promptcut-asset-v2`、`promptcut-asset-rotate`、`promptcut-asset-rotate-watch` 四个单元里的 `{{DIR}}` 要一起改（节点上 `/opt/promptcut-v2/` 下没有 `current` 符号链接，路径是写死的版本目录）。
