@@ -97,7 +97,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
 
   const [dragState, setDragState] = useState<{ start: number; end: number; trackId: string; forbidden: boolean } | null>(null);
   const [contextMenu, setContextMenu] = useState<
-    { x: number; y: number; items?: ContextMenuItem[]; head?: { title: string; of?: string; trackKind?: string } } | null
+    { x: number; y: number; items?: ContextMenuItem[]; head?: { title: string; of?: string; trackKind?: string } | null } | null
   >(null);
 
   // 拖动 / 改时长中:告诉 Agent 用户正在编辑这一段(A2;真的动起来才算,只点一下不算)
@@ -297,17 +297,21 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
           title: OVERLAY_KIND_NAME[it.kind],
           action: () => {},
           sub: overlayActions(it),
-          subHead: overlayHead(it),
         }))
       : [{ label: "这一段还没有挂东西", disabled: true, action: () => {} }];
 
-  const overlayHead = (it: OverlayItem) => ({ title: it.name, of: label || "片段", trackKind });
+  /*
+   * 菜单头只在**自己就是整张菜单**的时候写:点带里某一张卡,那一张的菜单是孤零零弹出来的,
+   * 头(填底、底色取那一段的轨道色)是「在动谁」的唯一凭据,而「摘掉」就在下面两行。
+   * 从片段菜单一级一级走下来的那两级不写头 —— 上一级面板还在屏幕上,片段名、卡片名都看得见,
+   * 再写一遍只是占一行(2026-10-24 用户定)。
+   */
   const openOverlayList = (at: { x: number; y: number }) =>
-    setContextMenu({ ...at, head: { title: `叠加卡 ${overlays.length} 张`, of: label || "片段", trackKind }, items: overlayList() });
+    setContextMenu({ ...at, head: null, items: overlayList() });
   const openOverlayOne = (index: number, at: { x: number; y: number }) => {
     const it = overlays[index];
     if (!it) return;
-    setContextMenu({ ...at, head: overlayHead(it), items: overlayActions(it) });
+    setContextMenu({ ...at, head: { title: it.name, of: label || "片段", trackKind }, items: overlayActions(it) });
   };
 
   const clipClasses = [
@@ -423,7 +427,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
           x={contextMenu.x}
           y={contextMenu.y}
           // 带里点出来的菜单自带头和条目(叠加卡那一支);右键片段走下面这份
-          head={contextMenu.head ?? { title: label || "片段" }}
+          head={contextMenu.head === undefined ? { title: label || "片段" } : contextMenu.head ?? undefined}
           onClose={() => setContextMenu(null)}
           items={contextMenu.items ?? [
             /*
@@ -448,7 +452,6 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
               hint: overlays.length ? `${overlays.length} 张` : "还没有",
               action: () => {},
               sub: overlayList(),
-              subHead: { title: `叠加卡 ${overlays.length} 张`, of: label || "片段", trackKind },
             },
             { label: "复制", action: () => actions.duplicateClip(clip.id) },
             ...(hasAudio ? [

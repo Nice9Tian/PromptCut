@@ -139,7 +139,7 @@ function Panel({
     <>
       {body}
       {createPortal(
-        <SubPanel left={open.left} top={open.top} items={items[open.index].sub!} head={items[open.index].subHead} onClose={onClose} onHold={hold} onRelease={release} />,
+        <SubPanel left={open.left} top={open.top} items={items[open.index].sub!} onClose={onClose} onHold={hold} onRelease={release} />,
         document.body,
       )}
     </>
@@ -148,12 +148,11 @@ function Panel({
 
 /** 下一级:位置量完再往回夹,免得戳出窗口 */
 function SubPanel({
-  left, top, items, head, onClose, onHold, onRelease,
+  left, top, items, onClose, onHold, onRelease,
 }: {
   left: number;
   top: number;
   items: ContextMenuItem[];
-  head?: ContextMenuHead;
   onClose: () => void;
   onHold: () => void;
   onRelease: () => void;
@@ -170,7 +169,7 @@ function SubPanel({
   }, [left, top, items.length]);
   return (
     <div onMouseEnter={onHold} onMouseLeave={onRelease}>
-      <Panel ref={ref} left={pos.left} top={pos.top} items={items} head={head} onClose={onClose} nested />
+      <Panel ref={ref} left={pos.left} top={pos.top} items={items} onClose={onClose} nested />
     </div>
   );
 }
