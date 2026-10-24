@@ -80,7 +80,11 @@ export function DetailEdit(props: {
        * 上面的舞台拿剩下的。行高、缩放、剪辑标签都在它自带的那一条工具栏里,这里不再另给一套。
        */}
       <div className="ps-detail-tl" data-pc="start-detail-tl">
-        <TimelineView quoteClip={(clip, label) => props.onQuote(quoteToken({ id: clip.id, label }))} />
+        <TimelineView
+          quoteClip={(clip, label) => props.onQuote(quoteToken({ id: clip.id, label }))}
+          // 叠加卡比片段细一级:一段上挂两张同名的压暗很常见,不指明哪一张 Agent 只能反问
+          quoteOverlay={(clip, item) => props.onQuote(quoteToken({ id: `${clip.id}#${item.kind}:${item.refId}`, label: item.name, kind: "叠加卡" }))}
+        />
       </div>
     </div>
   );

@@ -21,6 +21,7 @@ import { useStartPage } from "../editor/right/chat/StartHero";
 import { useToast } from "./ui";
 import { AgentChatView } from "./AgentChatView";
 import { addQuote, withQuotes, type QuoteRef } from "./agentView";
+import { readQuote } from "../editor/quoteBus";
 
 export function AgentChat(props: {
   tabId: string;
@@ -152,11 +153,9 @@ export function AgentChat(props: {
   useEffect(() => {
     if (!shown) return;
     const onQuote = (ev: Event) => {
-      const d = ((ev as CustomEvent).detail || {}) as { clipId?: unknown; label?: unknown; cardId?: unknown };
-      const id = typeof d.clipId === "string" ? d.clipId : "";
-      if (!id) return;
-      const label = typeof d.label === "string" && d.label ? d.label : typeof d.cardId === "string" && d.cardId ? d.cardId : "未命名";
-      setQuotes((prev) => addQuote(prev, { id, label }));
+      const q = readQuote(ev);
+      if (!q) return;
+      setQuotes((prev) => addQuote(prev, { id: q.id, label: q.label, kind: q.kind }));
       focusInput();
     };
     window.addEventListener("pc-quote-clip", onQuote as EventListener);

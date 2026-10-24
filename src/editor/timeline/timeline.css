@@ -608,3 +608,166 @@
 .pc-volume-actions button { padding: 6px 10px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius, 6px); cursor: pointer; }
 .pc-volume-actions button[type=submit] { background: var(--ui-accent-grad); color: white; }
 .pc-volume-actions button:disabled { opacity: .4; cursor: default; }
+
+/* ── 叠加卡:片段里的那条带(editor/timeline/OverlayBand.tsx、overlays.ts)──────
+   挂在片段上的东西原来时间轴上一个字都不显示,只能到左栏检查器里翻。
+   取色全部跟着片段走:`--clip` 是轨道色、`--clip-ink` 是它的墨色(skins.css 的 .pc-clip)。 */
+
+/* 这一格每个片段都留着,没挂东西时透明 —— 只给挂了东西的片段留,同一行里的名字会一高一低 */
+.pc-ov-band {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  padding: 0 3px;
+  overflow: hidden;
+  background: color-mix(in oklab, var(--clip-ink) 20%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in oklab, var(--clip-ink) 26%, transparent);
+}
+.pc-ov-band.is-empty {
+  background: transparent;
+  box-shadow: none;
+}
+.pc-ov-chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 92px;
+  height: 13px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 3px;
+  background: color-mix(in oklab, var(--clip) 78%, var(--ui-fg));
+  color: var(--clip-ink);
+  font-family: inherit;
+  font-size: 9.5px;
+  line-height: 13px;
+  cursor: pointer;
+}
+.pc-ov-chip:hover { background: color-mix(in oklab, var(--clip) 62%, var(--ui-fg)); }
+.pc-ov-chip:focus-visible { outline: 1.5px solid var(--clip-ink); outline-offset: 1px; }
+.pc-ov-chip .g { font-family: var(--ui-font-mono); opacity: 0.75; }
+.pc-ov-chip .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 带里摆不下的收成 +N:高度不随数量涨,点开挑 */
+.pc-ov-more,
+.pc-ov-pill {
+  flex: none;
+  height: 13px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 3px;
+  background: color-mix(in oklab, var(--clip-ink) 30%, transparent);
+  color: var(--clip-ink);
+  font-family: var(--ui-font-mono);
+  font-size: 9.5px;
+  line-height: 13px;
+  cursor: pointer;
+}
+.pc-ov-more:hover,
+.pc-ov-pill:hover { background: color-mix(in oklab, var(--clip-ink) 46%, transparent); }
+.pc-ov-more:focus-visible,
+.pc-ov-pill:focus-visible { outline: 1.5px solid var(--clip-ink); outline-offset: 1px; }
+/* 小行高那一档没有带:+N 跟在名字后面靠右,和手机版同一个样子 */
+.pc-ov-pill { height: 14px; line-height: 14px; }
+/* 指着片段才出现,平时不占注意力 */
+.pc-ov-add {
+  flex: none;
+  margin-left: auto;
+  width: 13px;
+  height: 13px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--clip-ink);
+  font-family: var(--ui-font-mono);
+  font-size: 11px;
+  line-height: 13px;
+  opacity: 0;
+  cursor: pointer;
+}
+.pc-clip:hover .pc-ov-add,
+.pc-ov-add:focus-visible { opacity: 0.8; }
+.pc-ov-add:hover { background: color-mix(in oklab, var(--clip-ink) 26%, transparent); opacity: 1; }
+
+/* 名字和时长排同一行:分两行的话,中行高扣掉叠加带只剩 23px,标题会被切掉上半截 */
+.pc-clip-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  overflow: hidden;
+}
+.pc-clip-line {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+.pc-clip-line .nm { font-weight: 500; }
+.pc-clip-line .du { opacity: 0.7; }
+
+/* ── 右键菜单:菜单头与下一级 ────────────────────────────────────
+   菜单头是「我现在动的是哪一段 / 哪一张」的唯一凭据,底下就是复制和删除。
+   叠加卡那一侧填底(底色取那一段的轨道色),选错了一眼看得出来;普通片段的菜单不填底。 */
+.pc-tl-ctxhead {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  margin: 0 4px 4px;
+  padding: 4px 8px 6px;
+  border-bottom: 1px solid var(--ui-border);
+}
+.pc-tl-ctxhead b {
+  flex: none;
+  max-width: 60%;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ui-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pc-tl-ctxhead span {
+  min-width: 0;
+  font-size: 11px;
+  color: var(--ui-fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pc-tl-ctxhead.is-fill {
+  --hd: var(--ui-track-text);
+  padding: 5px 8px;
+  border-bottom: 0;
+  border-radius: 5px;
+  background: color-mix(in oklab, var(--hd) 22%, var(--ui-float));
+  box-shadow: inset 2px 0 0 var(--hd);
+}
+.pc-tl-ctxhead.is-fill[data-track-kind="video"] { --hd: var(--ui-track-video); }
+.pc-tl-ctxhead.is-fill[data-track-kind="audio"] { --hd: var(--ui-track-audio); }
+.pc-tl-ctxhead.is-fill[data-track-kind="image"] { --hd: var(--ui-track-image); }
+.pc-tl-ctxhead.is-fill[data-track-kind="fx"] { --hd: var(--ui-track-fx); }
+.pc-tl-ctxhead.is-fill[data-track-kind="transition"] { --hd: var(--ui-track-transition); }
+.pc-tl-ctxhead.is-fill[data-track-kind="sticker"] { --hd: var(--ui-track-sticker); }
+
+.pc-tl-ctxmenu-item { display: flex; align-items: center; gap: 10px; }
+.pc-tl-ctxmenu-item .lb { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pc-tl-ctxmenu-item .hint {
+  flex: none;
+  font-family: var(--ui-font-mono);
+  font-size: 10.5px;
+  color: var(--ui-fg-muted);
+  white-space: nowrap;
+}
+.pc-tl-ctxmenu-item .chev { flex: none; font-family: var(--ui-font-mono); color: var(--ui-fg-muted); }
+.pc-tl-ctxmenu-item.has-sub:hover .chev { color: inherit; }
+.pc-tl-ctxmenu-item.is-danger { color: var(--ui-danger); }

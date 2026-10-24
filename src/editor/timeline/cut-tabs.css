@@ -125,13 +125,14 @@
   background: color-mix(in oklab, var(--ui-fg, #F2F1F6) 8%, transparent);
 }
 
-/* 时间轴上的剪辑段:上下两排胶片齿孔,一眼和素材段分开 */
-/* 最后一层是 skins.css 里 .pc-clip 本来的底色渐变(它写在 background 简写里,这里整组重写要带上它) */
-.pc-clip[data-pc-cut-segment] {
+/* 时间轴上的剪辑段:上下两排胶片齿孔,一眼和素材段分开。
+   齿孔只画在正文那一格里(.pc-clip-body),不穿过上面那条叠加带 ——
+   穿过去的话带本身就成了虚线,和同一行别的片段对不上(2026-10-24 用户看出来的)。
+   底色仍由 skins.css 的 .pc-clip 画,这里不再整组重写 background。 */
+.pc-clip[data-pc-cut-segment] .pc-clip-body {
   background:
     repeating-linear-gradient(90deg, color-mix(in oklab, var(--clip-ink, #000) 40%, transparent) 0 4px, transparent 4px 9px) 0 2px / 100% 3px no-repeat,
-    repeating-linear-gradient(90deg, color-mix(in oklab, var(--clip-ink, #000) 40%, transparent) 0 4px, transparent 4px 9px) 0 calc(100% - 2px) / 100% 3px no-repeat,
-    linear-gradient(180deg, color-mix(in oklab, var(--clip) 92%, white), color-mix(in oklab, var(--clip) 88%, black));
+    repeating-linear-gradient(90deg, color-mix(in oklab, var(--clip-ink, #000) 40%, transparent) 0 4px, transparent 4px 9px) 0 calc(100% - 2px) / 100% 3px no-repeat;
 }
 /* 被引用剪辑事后变短:超出它总时长的那一截透明无声,斜线标出来 */
 .pc-clip-cut-over {
