@@ -37,6 +37,20 @@ export interface OverlayBandProps {
 const at = (e: MouseEvent) => ({ x: e.clientX, y: e.clientY });
 
 /**
+ * 带里的按钮左键右键是同一件事:点哪儿就从哪儿开始。
+ * 右键必须自己接住 —— 不接的话事件冒到片段上,出的是片段的右键菜单,
+ * 用户明明点的是某一张卡,却得从「叠加卡」那一项再走一遍。
+ */
+function press(run: (at: { x: number; y: number }) => void) {
+  const fire = (e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    run(at(e));
+  };
+  return { onClick: fire, onContextMenu: fire };
+}
+
+/**
  * 带里的按钮自己把 pointerdown 吃掉。
  *
  * 片段的拖动(`useDrag`)挂的是**原生**监听、而且一按下就 `setPointerCapture`:
@@ -73,7 +87,7 @@ export function OverlayBand({ items, rowSize, avail, countOnly, frozen, onOpenOn
           className="pc-ov-chip"
           title={`${OVERLAY_KIND_NAME[it.kind]}：${it.name}${it.value ? `（${it.value}）` : ""}`}
           data-pc-overlay={it.kind}
-          onClick={(e) => { e.stopPropagation(); onOpenOne(i, at(e)); }}
+          {...press((p) => onOpenOne(i, p))}
         >
           <span className="g">{overlayGlyph(it)}</span>
           <span className="n">{it.name}</span>
@@ -85,7 +99,7 @@ export function OverlayBand({ items, rowSize, avail, countOnly, frozen, onOpenOn
           className="pc-ov-more"
           title={`${items.length} 张叠加卡，点开挑`}
           data-pc-overlay-more={plan.hidden}
-          onClick={(e) => { e.stopPropagation(); onOpenAll(at(e)); }}
+          {...press(onOpenAll)}
         >
           {`+${plan.hidden}`}
         </button>
@@ -96,7 +110,7 @@ export function OverlayBand({ items, rowSize, avail, countOnly, frozen, onOpenOn
           className="pc-ov-add"
           title="这一段挂着什么"
           aria-label="叠加卡"
-          onClick={(e) => { e.stopPropagation(); onOpenAll(at(e)); }}
+          {...press(onOpenAll)}
         >
           ⋯
         </button>
@@ -118,7 +132,7 @@ export function OverlayPill({ count, onOpenAll }: { count: number; onOpenAll: (a
       className="pc-ov-pill"
       title={`${count} 张叠加卡，点开挑`}
       data-pc-overlay-more={count}
-      onClick={(e) => { e.stopPropagation(); onOpenAll(at(e)); }}
+      {...press(onOpenAll)}
     >
       {`+${count}`}
     </button>
