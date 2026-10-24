@@ -4,7 +4,7 @@ import type { ChatMessage, MessagePart, ToolCallInfo } from "../../../ai/types";
 import { RoleName } from "../RoleAvatar";
 import { LiveMarkdown } from "../../../ai/Markdown";
 import { bareToolName } from "./iconRuns";
-import { isReportTool, parseProgressReport, type ProgressReport } from "../../../ai/progressReport";
+import { isReportTool, parseProgressReport, reportTitle, type ProgressReport } from "../../../ai/progressReport";
 import { isUserMessageCall, sayingsOf } from "../../../ai/userMessages";
 import "./agent.css";
 
@@ -165,6 +165,9 @@ const REPORT_GROUPS = [
  *
  * Agent 的文字回复默认不显示之后,这就是用户读到的「结论」。阶段卡紧凑、退一档;
  * 本轮小结多一圈半透明强调色描边,醒目一点。三组条目空的不显示,全空写一句,别留个空壳。
+ *
+ * blocked 的那一份要和「本轮小结」长得不一样:球在用户那边,他得看一眼就知道这不是做完了,
+ * 而是在等他回话。否则「撞上轮次上限停了」和「在等你」一个样(docs/plan/agent-blind-stop.md)。
  */
 export function ReportCard({ r, enter }: { r: ProgressReport; enter?: boolean }) {
   const groups = REPORT_GROUPS.filter((g) => r[g.field].length > 0);
@@ -175,8 +178,10 @@ export function ReportCard({ r, enter }: { r: ProgressReport; enter?: boolean })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return (
-    <div ref={ref} className={`ai-report${r.final ? " is-final" : ""}`}>
-      <div className="ai-report-head">{r.final ? "本轮小结" : r.stage ? `阶段 · ${r.stage}` : "阶段小结"}</div>
+    <div ref={ref} className={`ai-report${r.final ? " is-final" : ""}${r.blocked ? " is-blocked" : ""}`}>
+      <div className="ai-report-head">
+        {reportTitle(r)}
+      </div>
       {groups.length ? (
         groups.map((g) => (
           <div key={g.field} className={`ai-report-group ${g.cls}`}>

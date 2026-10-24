@@ -47,6 +47,8 @@
  *   2. 打一行 `[render-host] exit {…}`(最后一次诊断);
  *   3. 结束编辑器进程树(含预渲染进程和它的 Chrome)。退出码 0。
  * 编辑器进程自己挂了:退出码 1。
+ * 等不到编辑器就绪(240 秒):打一行 `[render-host] not-ready {…}`,同样结束整棵树,退出码 1。
+ * 这三条路都要走 `finishTree`(结束进程组 + 按记号清逃出去的后代),漏一步就会留下 Chrome。
  *
  * 编辑器进程以独立进程组起(Windows 上 `detached` + `windowsHide`):控制台里的 Ctrl+C 只到本进程,由本进程按上面的顺序收尾,
  * 不会先把预渲染进程打死、来不及放回认领。
@@ -76,6 +78,21 @@ function viteBin() {
 }
 
 const say = (tag, fields) => console.log(`[render-host] ${tag} ${JSON.stringify(fields)}`);
+
+/**
+ * 退出前的收尾,三条退出路径共用:先结束编辑器那个进程组,等它真的走(最多 `waitMs`),再按记号把逃出进程组的后代
+ * (预渲染进程与它的 Chrome)清掉。
+ *
+ * 两步缺一不可。`killTree` 只发给编辑器那一组,而预渲染进程与 Chrome 各自是进程组的组长(`worker.mjs` 的注释),
+ * 收不到那个信号;`sweepTree` 才按记号把它们找出来。2026-10-24 查出来的漏就是漏在这里:等就绪超时那条路只做了
+ * 第一步,于是每起一次工作进程就留下 14 个 Chrome,攒到 400 多个把 inotify 实例占满(上限 128),Vite 建文件监听
+ * 报 EMFILE 起不来,工作进程再也起不来,云端 Agent 的 see_frames 看画面连败。
+ */
+export async function finishTree({ killTree, sweepTree, exited, waitMs = 15_000, race = Promise.race.bind(Promise) }) {
+  killTree();
+  await race([exited, delay(waitMs)]);
+  sweepTree();
+}
 
 /** Diagnostic projection only: never include arbitrary task payloads, URLs or error text.
  * Observer eligibility is the static filter, not proof that the host's lane/claim gate is free.
@@ -185,9 +202,7 @@ async function main() {
     let last = null;
     try { last = (await getJson(`${editorUrl}/api/frames/queue`)).body; } catch { /* 同上 */ }
     say('exit', { released, queue: last });
-    killTree();
-    await Promise.race([exited, delay(15000)]);
-    sweepTree();
+    await finishTree({ killTree, sweepTree, exited });
     process.exit(0);
   };
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGBREAK']) {
@@ -207,7 +222,8 @@ async function main() {
     await delay(500);
   }
   if (stopping) return;
-  if (!ready) { say('not-ready', { port: opts.port }); stopping = true; killTree(); await Promise.race([exited, delay(15000)]); process.exit(1); }
+  // 等就绪超时:和别的退出路径一样要 sweepTree,不然预渲染进程与 Chrome 会留下来(见 finishTree 的说明)
+  if (!ready) { say('not-ready', { port: opts.port }); stopping = true; await finishTree({ killTree, sweepTree, exited }); process.exit(1); }
   let summary = null;
   while (!stopping && Date.now() < deadline) {
     try {

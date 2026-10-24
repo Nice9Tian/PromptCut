@@ -396,3 +396,23 @@ curl -s --cert /etc/promptcut-pki/public/doc.crt --key /var/lib/promptcut-role-k
 `runAssetsConfigured: true` 且 `runAssetsReady: true` 才算通。看门狗自己的日志在 `journalctl -u promptcut-asset-rotate-watch`，每次一行 JSON。
 
 **换 release 目录时**：`promptcut-doc-v2`、`promptcut-asset-v2`、`promptcut-asset-rotate`、`promptcut-asset-rotate-watch` 四个单元里的 `{{DIR}}` 要一起改（节点上 `/opt/promptcut-v2/` 下没有 `current` 符号链接，路径是写死的版本目录）。
+
+### 登记链断了怎么办（2026-10-24 实战补记）
+
+有人在 publisher 之外直接 `systemctl restart promptcut-asset-v2`，这条链就断了：登记里记着那一代的 `unitInvocationId`，重启之后它永远对不上，`--rotate` 必定报 `publisher-previous-instance-mismatch`，试几次都一样（rotate 的 `pinPrevious` 两条分支都要求对得上那一代）。**所以别在 publisher 之外重启素材服务**；要重启就跑一次 rotate，它自己会 stop + start。
+
+真断了只有一条路：换一个空的登记目录重新 `--initialize`。但光换目录不够——文档服务在自己的账本里还有一条**只升不降的高水位** `runAssetCurrentCheckpointV1`（`run-assets-checkpoint.mjs`，防的是「换一条新链来降级重放」），它记着旧链的 epoch，新链从 epoch 1 开始会被挡成 `asset-current-epoch-unaccepted`。v2 协议那条路也绕不开，`run-assets-current-registry-v2.mjs` 只要看见 v1 的键还在就报 `asset-root-v2-v1-migration-required`，不做隐式迁移。
+
+**顺序很要紧，做反了要重来**：
+
+1. 停文档服务，备份它的账本（`<数据目录>/docservice/account-v2.sqlite`，停服务后 wal/shm 已并进主库）。
+2. 以文档服务那个用户的身份，用它自己的 `openAccountLedger().transaction()` 删掉 `runAssetCurrentCheckpointV1`——**不要手写 SQL**，整本账是一段 JSON，走原本的写入路径才有校验。
+3. 起文档服务，**之后不要再重启它**。
+4. 停素材服务，把旧登记目录移开，换一个空的（root:root 0755）。
+5. 跑 `--initialize`。它自己会把素材服务拉起来，观察通道当场建上，文档服务接受 epoch 1。
+
+第 5 步必须是最后一步。先 initialize 再删高水位的话，中间重启文档服务会把通道弄丢，补跑 rotate 虽然能把链修好，但那时已经到 epoch 2，而高水位为空时只收 epoch 1（`previous == null` 那条分支还要求 `record.previous === null`），于是报 `asset-current-anchor-invalid`，只能把链归档了从头再来一次。
+
+删高水位等于**故意拆掉一道防回滚的棘轮**，做之前要有人明确点头，账本也要先备份。
+
+核对：状态口 `runAssetsConfigured: true` 且 `runAssetsReady: true`；看门狗跑一次应回 `{"action":"ok"}`；最后在一个真项目里让云端 Agent 调一次 `see_frames` 看素材，看它说得出图上的内容。
