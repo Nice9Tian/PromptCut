@@ -149,19 +149,34 @@
 .ps-grip:hover::after,
 .ps-grip:focus-visible::after { background: var(--accent); }
 .ps-grip:focus-visible { outline: none; }
-.ps-side-new {
+/*
+ * 面板顶上那一行(用户 2026-10-24:搜索和新建都放进面板,并排一行)。两样都**绝对定位**在这一行里:
+ * 新建键靠右不动,搜索框从它左边起,展开时 `right` 走到 0 **盖住**它。
+ * 只动一个 `right`,两样都不位移、不重排 —— 拿 flex 挤的话新建键会被压扁、字会折行。
+ * 那个 `right` 的收着值由 `ProjectSidebar.tsx` 量出新建键的宽度后给行内样式,这里的 112px 只是量到之前的兜底。
+ */
+.ps-side-head {
+  position: relative;
   flex: 0 0 auto;
-  margin: 2px 12px 10px;
+  height: 32px;
+  margin-bottom: 6px;
+}
+.ps-side-new {
+  position: absolute;
+  right: 0;
+  top: 0;
+  height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: 6px;
+  padding: 0 12px;
   border: 0;
-  border-radius: 10px;
+  border-radius: 8px;
   font-family: inherit;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
   color: var(--on-accent);
   background: var(--ui-accent-grad, linear-gradient(100deg, var(--accent), color-mix(in srgb, var(--accent) 10%, #7b5cff)));
@@ -170,16 +185,46 @@
 .ps-side-new:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 
 .ps-search {
-  flex: 0 0 auto;
-  margin: 0 12px 8px;
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 112px;
+  height: 100%;
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 9px;
+  padding: 0 9px;
   border: 1px solid var(--hairline);
   border-radius: 8px;
+  /* 底色必须是不透明的:展开时它要把新建键整个盖住,透出来就成了两层字叠在一起 */
   background: var(--fill-subtle);
+  transition: right 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+/* 关了动效的人:直接到位,不滑 */
+@media (prefers-reduced-motion: reduce) {
+  .ps-search { transition: none; }
+}
+/* 自带的那颗清空键不要:自己画了一颗(`.ps-search-clear`),两颗叠在一起很怪 */
+.ps-search input[type="search"]::-webkit-search-cancel-button { display: none; }
+.ps-search-clear {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-faint);
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ps-search-clear:hover { background: var(--fill-hover); color: var(--ink); }
+.ps-search-clear:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .ps-search:focus-within { border-color: var(--accent); box-shadow: var(--ui-glow); }
 .ps-search input[type="search"]:focus { box-shadow: none; }
 .ps-search input {
@@ -196,20 +241,27 @@
 
 /*
  * 整栏就是**一张面板**(issue #5,用户原话:「左侧列表栏换成统一的一个面板，不再区分为多个」):
- * 边框、底色、圆角画在能滚的这一层上,分组 / 项目 / 已归档各段在它里面接着往下排。
+ * 边框、底色、圆角画在这一层上;搜索与新建那一行(`.ps-side-head`)钉在它顶上、不跟着滚,
+ * 底下是能滚的列表,分组 / 项目 / 已归档各段接着往下排。
  * 原先是每段各自一张卡(2026-10-23「左侧仿照右侧用模块式」),段与段之间有缝、有各自的边框 —— 那一版已被这条替代。
  * 右边那条拓展栏(`.ps-ext-sec`)不动,它本来就是分开的几段。
  */
-.ps-side-scroll {
+.ps-side-panel {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;
-  /* 左右跟「新建项目」「搜项目和对话」对齐(都是 12px),面板不比它们宽也不比它们窄 */
+  /* 左右各留 12px:和原来那颗新建键、搜索框站的位置一样 */
   margin: 2px 12px 12px;
   padding: 4px;
   border: 1px solid var(--hairline);
   border-radius: 10px;
   background: var(--bg-panel);
+  display: flex;
+  flex-direction: column;
+}
+.ps-side-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
 }

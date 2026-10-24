@@ -19,7 +19,7 @@
 
 | 探针 | 命令 | 结果 |
 |---|---|---|
-| 在线氛围式真跑一遍 | `PROMPTCUT_ACCOUNT_PROVIDER_ROOT=… PROMPTCUT_PASSWORD_ORDER_MODULE=… PROMPTCUT_NO_PORT_FILE=1 node scripts/probes/vibe-start-probe.mjs --dist dist-online --site-root <VisuHive>/site --out <目录>` | **通过**：最后一行 `{"ok":true, … ,"fails":[]}`，13 步全过，`pageErrors` / `serverErrors` 三个角色都是空 |
+| 在线氛围式真跑一遍 | `PROMPTCUT_ACCOUNT_PROVIDER_ROOT=… PROMPTCUT_PASSWORD_ORDER_MODULE=… PROMPTCUT_NO_PORT_FILE=1 node scripts/probes/vibe-start-probe.mjs --dist dist-online --site-root <VisuHive>/site --out <目录>` | **通过**：最后一行 `{"ok":true, … ,"fails":[]}`，13 步全过，`pageErrors` / `serverErrors` 三个角色都是空。跑了两遍：四个 issue 改完之后一遍，搜索与新建并作一行之后又一遍，两遍都过 |
 | 桌面氛围式 | `node scripts/probes/vibe-desktop-probe.mjs --cdp <端口>` | **没跑**：它要先起 Tauri 桌面壳、再连 WebView2 的调试端口，本次改动在壳外的页面里，已改用下面「三、手工验证」在 5203 上逐条看过 |
 
 `vibe-start-probe.mjs` 里原来有一句无条件点「右侧拓展栏」开关；#6 之后拓展栏进会话就自己开了，再点一下反而关上，
@@ -29,6 +29,7 @@
 
 - `PROBE-vibe-ui-issues-shots/10-guest-home.png` —— 游客开始页。就是 issue #10 那一屏：「空白画布」和「这里还没有项目。点第一格的「Create A New」建一个。」都不在了；左侧是**一张**面板（#5）。
 - `PROBE-vibe-ui-issues-shots/11-guest-chat.png` —— 游客进会话之后。探针**没有点**拓展栏开关，右侧「画面 / 修改前 / 修改后」自己就展开了（#6）。
+- `PROBE-vibe-ui-issues-shots/search-open.jpg` —— 搜索框点开之后盖住「新建项目」的样子（手工截，桌面氛围式）。
 
 ## 三、手工验证（桌面氛围式，`npx vite --port 5203`，`/?ui=vibe`）
 
@@ -38,6 +39,7 @@
 | #10 冗余内容 | 看「最近项目」那一排 | 第一格底下只剩「新建项目」，没有「空白画布」；一个项目都没有时不再多一句「这里还没有项目…」。列表还在读、读不到时那句话照样出（`props.empty`） |
 | #6 进会话后右侧拓展栏自动展开 | 新建项目 → 进聊天页 | 没点开关，右侧拓展栏已经开着 |
 | #11 有项目时左侧栏自动展开 | 手动收起侧栏 → 刷新 | 侧栏自己滑开，`localStorage` 的 `pc.start.sideCollapsed` 写回 `0`；再手动收起，当次不再被弹开 |
+| 搜索与新建并作一行、点搜索展开遮住新建（2026-10-24 用户追加） | 点搜索框 → 打字 → 移开焦点 → 点清空 | 搜索框向右滑开盖住「新建项目」（240ms），占位字从「搜索」换成「搜项目和对话」；有字时移开焦点仍不收；点 ✕ 或按 Esc 清空后滑回、新建键原样露出。侧栏拖到最窄 190px 时两样仍并排放得下 |
 
 ## 四、没跑的和为什么
 
