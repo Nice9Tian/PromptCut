@@ -61,6 +61,21 @@ export function toolErrorResult(err) {
   return result;
 }
 
+/**
+ * 一次失败的「身份」：同一个工具、同一个毛病算同一个。连着来几次就该换路子,不该再试。
+ *
+ * 优先用 `code`(工具自己给的代号,最稳);没有代号就拿报错文字的前 60 字当代号 ——
+ * 同一个毛病的文字通常一模一样,而带了具体参数的报错(「缺少必填参数 x」)本来就该算不同的毛病。
+ */
+export function failureKey(name, result) {
+  const of = (v) => `${name}\u0000${v}`;
+  if (typeof result === 'string') return of(result.slice(0, 60));
+  if (!result || typeof result !== 'object') return of('unknown');
+  if (typeof result.code === 'string' && result.code) return of(result.code);
+  if (typeof result.error === 'string' && result.error) return of(result.error.slice(0, 60));
+  return of('unknown');
+}
+
 export class Agent {
   /**
    * maxIterations 允许是 Infinity(深度自主 + 自主轮次填 0)。这时循环没有终点,
@@ -110,13 +125,30 @@ export class Agent {
     const cacheRule = this.codeCache
       ? `单次回复有输出上限：要写很长的源码或文本（几百行以上）时，先分几次写进代码块（code_cache_write 写开头、code_cache_append 接着写），最后在工具参数里整个写成 "${CODE_CACHE_REF}名字" 交给工具；回复被截断时按系统消息的提示接着写。`
       : '';
-    const system = this.system + `\n\n执行规则：${speak}；需要做多件事时，在同一次回复里一次返回多个工具调用，它们会在同一轮内依次执行。依赖上一步返回值的操作留到下一轮。后台作业由工具自动等待，请勿反复启动或紧密轮询。遇到重复错误应改变方法或说明阻碍。工具返回成功后核对一次即可，完成后向用户总结结果。${cacheRule}`;
+    const system = this.system + `\n\n执行规则：${speak}；需要做多件事时，在同一次回复里一次返回多个工具调用，它们会在同一轮内依次执行。依赖上一步返回值的操作留到下一轮。后台作业由工具自动等待，请勿反复启动或紧密轮询。遇到重复错误应改变方法或说明阻碍；某个能力这次拿不到（工具明说用不了、重试没用），而它又是用户这次要求的硬前提时，说明阻碍后停下，不要当它不存在继续做。工具返回成功后核对一次即可，完成后向用户总结结果。${cacheRule}`;
     // truncations：连续几次截断没留下内容；salvaged：这一轮里有几次截断留下了内容；truncTotal：这一轮一共截断几次；cutBlocks：截断时存进的代码块
     // cutCount：truncTotal 里有几次是被网关中途掐断（其余是写到上限），停下时的话按它说
     let summaryReason = '', truncations = 0, salvaged = 0, truncTotal = 0, cutCount = 0;
     const cutBlocks = new Set();
     // 这一轮有没有交过收尾汇报、有没有用 send_message 对用户说过话:说过的话就是给用户的交代,最后一次空回复不算出错
     let reported = false, spoke = false;
+    /*
+     * 轮次预算提示(2026-10-24 用户定)。
+     *
+     * 屏幕上的「第 N/M 轮」是不进模型上下文的(见下面 progress 那一行的注释),所以模型
+     * 按「时间无限」的方式干活:一次实跑里它把一张大卡的源码打磨了 18 轮,`create_card`
+     * 一次没调到就撞了上限,时间轴是空的。过半和只剩四分之一时各提醒一次,让它先把能
+     * 交付的最小版本落下去。deepAuto 下一条都不发 —— 那个开关的全部意思就是不跟模型谈轮次。
+     */
+    const budgetSent = new Set();
+    /*
+     * 同一个工具带着同一个错误连成串:第 2 次给一条硬提示,第 3 次直接停。
+     *
+     * 现有的重复操作检测(下面 `repeats >= 3`)按**整轮**指纹算,一轮里只要还有别的调用、
+     * 指纹就不同,拦不住「同一个能力反复要」。那次实跑里 see_frames 连着两轮拿同一个错误码,
+     * 两道闸都没响,模型就蒙着眼睛做下去了。
+     */
+    const failStreak = new Map();
 
     // The budget counts model/tool round trips, not individual calls.
     for (let round = 1; round <= this.maxIterations + 1; round++) {
@@ -257,6 +289,8 @@ export class Agent {
       // 只收字符串，装不了。要让同一套 history 在三家 API 上都成立，图片就只能作为
       // 跟在工具结果后面的普通内容块出现（下面 append 处还有一段说明为什么不另起一条）。
       const images = [];
+      // 这一轮失败的「身份」→ 给模型看过的那句话。连成串的判定在循环之后做
+      const roundFails = new Map();
       // Preserve declared order for edits: two mutations must not race in the store.
       // Multiple calls still share one model round trip.
       for (const call of calls) {
@@ -299,10 +333,50 @@ export class Agent {
         }
         const output = typeof result === 'string' ? result : JSON.stringify(result ?? null);
         ok ? completed++ : failed++;
+        if (!ok) roundFails.set(failureKey(call.name, result), { tool: call.name, text: output.slice(0, 200) });
         if (ok && isReportTool(call.name) && call.input?.final === true) reported = true;
         if (ok && isUserMessageCall(call.name, call.input)) spoke = true;
         this.onEvent({ type: 'tool_result', callId: call.id, round, name: call.name, ok, summary: output.slice(0, 1000), output: result, durationMs: Date.now() - begin });
         results.push({ type: 'tool_result', tool_use_id: call.id, content: output, is_error: !ok });
+      }
+      /*
+       * 同一个工具 + 同一个毛病连成串。这一轮没再出现的那些清零 —— 中间成功过一次,
+       * 就不算「连着」了。
+       */
+      for (const key of [...failStreak.keys()]) if (!roundFails.has(key)) failStreak.delete(key);
+      const streaked = [];
+      for (const [key, info] of roundFails) {
+        const n = (failStreak.get(key) ?? 0) + 1;
+        failStreak.set(key, n);
+        if (n >= 2) streaked.push({ ...info, n });
+      }
+      const worstStreak = streaked.reduce((max, s) => Math.max(max, s.n), 0);
+      // 第 2 次:一句硬提示,点名这个能力这次用不了,并指回提示词里那张决策表。第 3 次在下面直接停
+      const streakNote = worstStreak === 2
+        ? `${streaked.filter(s => s.n === 2).map(s => s.tool).join('、')} 带着同一个错误连续失败 2 次了：${streaked.find(s => s.n === 2).text}\n`
+          + '不要再用同样的参数调第 3 次。这一次拿不到这个能力：要么换一条路并在收尾汇报里写明这一步没做成，'
+          + '要么——如果它是用户这次要求的硬前提——现在就调 final 为 true 的 report_progress 把阻碍写进 problems、把用户能做的事写进 todo，然后停下。'
+        : '';
+      this.onEvent({ type: 'diagnostic', stage: 'fail-streak', data: { round, streaks: streaked.map(s => ({ tool: s.tool, times: s.n })) } });
+      /*
+       * 轮次预算:过半、只剩四分之一各提醒一次。最后一轮(left 为 0)不提 —— 那一轮本来就要
+       * 收尾,下面那条「已达到 N 轮上限」自己会说清为什么停。这一轮已经判了要停也不提。
+       */
+      let budgetNote = '';
+      if (!this.deepAuto && Number.isFinite(this.maxIterations) && worstStreak < 3) {
+        const left = this.maxIterations - round;
+        const mark = left <= Math.floor(this.maxIterations / 4) ? 'quarter' : left <= Math.floor(this.maxIterations / 2) ? 'half' : null;
+        if (mark && left > 0 && !budgetSent.has(mark)) {
+          budgetSent.add(mark);
+          // 过半那条也补发一次标记,免得一步跨过两道线时收到两条
+          if (mark === 'quarter') budgetSent.add('half');
+          budgetNote = mark === 'half'
+            ? `还剩 ${left} 轮模型往返（一轮 = 你的一次回复，里面调几个工具都算一轮）。`
+              + '从现在起先把能交付的最小版本真正落到项目里（建卡 → add_clip 上时间轴 → 看一眼），再回来打磨；'
+              + '写在代码块里、还没交给工具的东西不算交付。来不及的写进 report_progress 的 todo。'
+            : `只剩 ${left} 轮模型往返了。立刻把手上已经写好的东西提交掉（代码块里的卡片源码 → create_card → add_clip），`
+              + '不要再开新的大块工作；提交完调 final 为 true 的 report_progress 收尾，没做完的逐条写进 todo。';
+        }
       }
       // 图片跟工具结果放在同一条 user 消息里、排在所有 tool_result 之后。
       // 不另起一条的原因：那会造成两条连着的 user 消息，而三家 API 对连续同角色
@@ -315,12 +389,18 @@ export class Agent {
         ] : []),
         // 这一次回复里还有没写完的工具调用(截断):怎么接着写的那段话跟在工具结果后面,同一条消息里
         ...(truncationNote ? [{ type: 'text', text: truncationNote }] : []),
+        ...(streakNote ? [{ type: 'text', text: streakNote }] : []),
+        ...(budgetNote ? [{ type: 'text', text: budgetNote }] : []),
       ] });
       const fingerprint = canonical(calls.map((c, index) => ({ name: c.name, input: c.input, result: results[index].content })));
       recent.push(fingerprint);
       if (recent.length > 6) recent.shift();
       const repeats = recent.filter(f => f === fingerprint).length;
-      if (repeats >= 3) {
+      if (worstStreak >= 3) {
+        const worst = streaked.find(s => s.n === worstStreak);
+        outcome = 'stalled';
+        summaryReason = `${worst.tool} 带着同一个错误连续失败 ${worstStreak} 次，已停止无效重试`;
+      } else if (repeats >= 3) {
         outcome = 'stalled'; summaryReason = '连续出现重复操作且结果没有变化，已停止无效循环';
       } else if (round === this.maxIterations) {
         // 深度自主下不报轮数:这句会作为 user 消息进模型上下文(见循环开头的 summarizing 分支)
