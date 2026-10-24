@@ -357,15 +357,33 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
     // 委托票据有时限；机器很忙时一条测试会跑过它。快到期就凭同一个登录重新要一份（和页面的做法一样）
     // 登录续过一次以后，页面到文档服务的那条连接要跟着重开（旧连接凭的是上一份票据）
     let renewals = 0, pageStale = false;
+    /*
+     * 「快到期」的线。两处都用它:判断要不要续，以及判断续回来的那一份够不够用。
+     *
+     * 文档服务把会话的有效期夹到编辑器凭证的剩余寿命上(`server/docservice/account-hosted.mjs`
+     * 的 `Math.min(principal.expiresAt, now() + 5 * 60_000)`)，而编辑器那份短期凭证只活两分钟
+     * (VisuHive `account/credentials.mjs` 的 `CREDENTIAL_LIMITS.accessMs`)。所以凭证本身走到头时，
+     * 文档服务会一直回「200，但只剩几秒」——不是 401，旧写法当成功收下。
+     * 后果是每次调用都再续一遍，而每次续都要把页面到文档服务的那条连接拆了重报，
+     * 在场表里就出现空隙；模型那一刻发来的 seek / play 落在空隙里，就被判成「发起方不在线」。
+     * 2026-10-24 `cloud-tools-wire-probe` 的「反向通道」三项失败就是这么来的:
+     * 十秒里续了六次票，每次回来都只剩 2 秒，而 seek 正好在那一刻发出。
+     */
+    const RENEW_AT_MS = 30_000;
+    const shortLived = (reply) => !Number.isFinite(reply?.body?.expiresAt) || reply.body.expiresAt - Date.now() < RENEW_AT_MS;
     const tickets = async () => {
-      if (session.body.expiresAt - Date.now() < 30_000) {
+      if (session.body.expiresAt - Date.now() < RENEW_AT_MS) {
         // 向文档服务重新要一份会话。它一时答不上（503：正在办别的事，例如刚收回一批任务）隔一会儿再要；
-        // 编辑器这一侧的短期凭证到期或被换掉了（401）就凭网站登录再换一份，然后再要。最多半分钟。
-        let renewed = null;
+        // 编辑器这一侧的短期凭证到期或被换掉了（401），或者它还没死但已经短得没法用（200 但只剩几秒），
+        // 都凭网站登录再换一份凭证，然后再要。最多半分钟。
+        let renewed = null, reminted = 0;
         for (let attempt = 0; attempt < 60; attempt++) {
           renewed = await doc('session', { projectId, deviceId: `runner-device-${index}`, requestId: `runner-session-${index}-renew-${++renewals}` });
-          if (renewed.status === 200) break;
-          if (renewed.status === 401) {
+          if (renewed.status === 200 && !shortLived(renewed)) break;
+          if (renewed.status === 401 || renewed.status === 200) {
+            // 换过两次凭证还是短的:说明不是凭证两分钟到头这回事(例如网站登录自己快到期了)。
+            // 不再死转，把手上这一份带出去，跟旧写法一样 —— 至少不比以前差。
+            if (renewed.status === 200 && ++reminted > 2) break;
             const again = await site('/editor/session', { deviceId: `runner-device-${index}`, deviceName: 'Runner page', requestId: `runner-editor-${index}-renew-${renewals}` });
             if (again.status !== 200) throw Error(`runner-fixture-editor-session-renew ${again.status}`);
             editor = again; continue;
