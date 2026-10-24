@@ -311,6 +311,8 @@ Google 验签过了、账号认出来了、网站会话建起来了，**四次�
 | `claude/mobile-ui-ref` | **合了** —— 只有 `prototypes/` 下的参考图与 README，不含代码 |
 | `dryrun` | **没合，记待用户项** —— 它删掉 421 行开发规则（`guide_files/` 里 `multi_agent.md`、`solution_table.md` 整份，`suggested_agent_behavior.md` 大半），把指挥 Agent 的内容搬进本机技能。分支名就叫 `dryrun`，看着是摆给用户审的；而且「删文件或功能先确认」正是这些规则自己写的。由用户定 |
 
+〔结案 2026-10-24〕`dryrun` 已由用户授权合入 main（PR #17，合并提交 `e0b95ac9`）。这条待用户项销掉。合入前补了四轮只读交叉审查，末轮零必须修；仓库此后只留项目事实（`docs/semantics/README.md` 与 `guide_files/` 剩三份），协作流程的正本放在本机技能里。上面那段担心是对的，所以这件事确实走了逐条确认：每一处语义改动都以「修改前 / 修改后」给用户过目后才写。
+
 ### 合完之后守门红了三条，是我自己留的坑
 
 `C10-RA-01/02/03` 红。原因：0.7.24 合网盘连接器时，`/api/media/storage/{connect,disconnect,import}` 三条字面量进了在线产物，
