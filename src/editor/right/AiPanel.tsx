@@ -43,6 +43,7 @@ import {
   type QueuedItem,
 } from "../../ai/chatQueue";
 import { rewindAt } from "../../ai/rewind";
+import { readQuote } from "../quoteBus";
 import {
   kindOfName,
   newAttachmentId,
@@ -170,12 +171,12 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   // 这个项目只给了只读权限(游客):输入区整个置灰(Composer 的 readOnly),发送路径也在 handleSend 里兜底
   const ro = useReadOnly();
 
-  // 预览窗口右键卡片时会在 window 上派发 pc-quote-clip,把引用插进输入框
+  // 预览右键卡片、时间轴右键片段或带里的叠加卡,都派发 pc-quote-clip(editor/quoteBus.ts),把引用插进输入框
   useEffect(() => {
     const onQuote = (ev: Event) => {
-      const d = (ev as CustomEvent).detail || {};
-      const label = d.label || d.cardId || "未命名";
-      const ref = `@卡片 ${label}(${d.clipId})`;
+      const q = readQuote(ev);
+      if (!q) return;
+      const ref = q.token;
       const ta = textareaRef.current;
       const pos = ta ? (ta.selectionStart ?? ta.value.length) : -1;
       setInputText((prev) => {

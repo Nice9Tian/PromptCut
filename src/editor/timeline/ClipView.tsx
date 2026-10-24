@@ -13,6 +13,7 @@ import { snapTime, isOccupied, getGap, xOfTime, formatTime, ROW_SIZE_H } from ".
 import { BAND_H, OVERLAY_KIND_NAME, overlayGlyph, overlaysOfClip, planClipLayout, type OverlayItem } from "./overlays";
 import { OverlayBand, OverlayPill } from "./OverlayBand";
 import type { ContextMenuItem } from "./types";
+import { requestQuote } from "../quoteBus";
 import { ShotMarkers } from "./ShotMarkers";
 import { TrackClip, Track } from "../../kernel/project";
 import { useDrag } from "./useDrag";
@@ -281,9 +282,22 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
     };
   };
 
+  /*
+   * 「引用到输入框」两条路:
+   * 氛围式的详细编辑自己有输入框,传 quoteClip / quoteOverlay 进来;
+   * 传统式的输入框在右边的 AI 栏里(本机和云端两块),走 `editor/quoteBus.ts` 那条总线 ——
+   * 预览右键「引用到 AI」用的就是它。两边写出来的引用块是同一份 `quoteToken`。
+   */
+  const quoteThisClip = () =>
+    quoteClip ? quoteClip(clip, label || "片段") : requestQuote({ clipId: clip.id, label: label || "片段" });
+  const quoteThisOverlay = (it: OverlayItem) =>
+    quoteOverlay
+      ? quoteOverlay(clip, it)
+      : requestQuote({ clipId: `${clip.id}#${it.kind}:${it.refId}`, label: it.name, kind: "叠加卡" });
+
   /** 这一张能做的事(菜单最里面那一级) */
   const overlayActions = (it: OverlayItem): ContextMenuItem[] => [
-    ...(quoteOverlay ? [{ label: "引用到输入框", action: () => quoteOverlay(clip, it) }] : []),
+    { label: "引用到输入框", action: () => quoteThisOverlay(it) },
     { label: "改参数…", hint: it.value, action: () => actions.select([clip.id]) },
     detachItem(it),
   ];
@@ -431,11 +445,10 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
           onClose={() => setContextMenu(null)}
           items={contextMenu.items ?? [
             /*
-             * 「引用到输入框」只在氛围式的详细编辑里出现(调用方传了 quoteClip,见 TimelineView)。
-             * 放最上面,而且**只读也给** —— 它不改任何东西,只是把这一段说给 Agent 听,
-             * 恰恰是只读成员唯一能做的事。
+             * 「引用到输入框」放最上面,而且**只读也给** —— 它不改任何东西,只是把这一段说给 Agent 听,
+             * 恰恰是只读成员唯一能做的事。氛围式进 DetailEdit 的输入框,传统式进右边 AI 栏(quoteBus)。
              */
-            ...(quoteClip ? [{ label: "引用到输入框", action: () => quoteClip(clip, label || "片段") }] : []),
+            { label: "引用到输入框", action: quoteThisClip },
             ...(ro.locked ? readOnlyItems : [
             // 转场在最上面:被绑住的时候用户第一件想做的事就是解开它
             ...myTransitions.map((tr) => ({

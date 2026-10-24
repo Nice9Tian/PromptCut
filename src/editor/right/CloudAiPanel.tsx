@@ -37,6 +37,7 @@ import { LIBRARY_KINDS, putInLibrary, type LibraryOutcome } from "./cloudAttachL
 import { CLOUD_CHAT_TEXT } from "../../ai/cloud/chatTexts";
 import { createPoller, type Poller } from "../../ai/cloud/poll";
 import type { CloudChatItem } from "../../ai/cloud/types";
+import { readQuote } from "../quoteBus";
 
 const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
 
@@ -261,12 +262,13 @@ export function CloudAiPanel(props: {
   const installJobs = useInstallJobs();
   const queue = useQueue(qKey);
 
-  // 预览右键卡片「引用到 AI」:与本机 AI 栏同一个事件
+  // 预览右键卡片、时间轴右键片段或叠加卡的「引用到 AI」:与本机 AI 栏同一个事件(editor/quoteBus.ts)
   useEffect(() => {
     const onQuote = (ev: Event) => {
       if (!active) return;
-      const d = (ev as CustomEvent).detail || {};
-      const ref = `@卡片 ${d.label || d.cardId || "未命名"}(${d.clipId}) `;
+      const q = readQuote(ev);
+      if (!q) return;
+      const ref = q.token + " ";
       const ta = textareaRef.current;
       const pos = ta ? (ta.selectionStart ?? ta.value.length) : -1;
       setInputText((prev) => {
